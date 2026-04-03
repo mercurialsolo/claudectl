@@ -1,0 +1,1 @@
+Rust based TUI for monitoring and managing multiple claude code cli agents running across multiple terminals. Shows live status, with token and process utilization and if waiting on input or finished or processing. Shows how long session has been running in terminal. Along with project / folder name - can allow killing of process or sending input directly
