@@ -69,7 +69,7 @@ pub fn render(
     let count = sessions.len();
     let active = sessions
         .iter()
-        .filter(|s| matches!(s.status, crate::session::SessionStatus::Processing | crate::session::SessionStatus::Paused))
+        .filter(|s| matches!(s.status, crate::session::SessionStatus::Processing | crate::session::SessionStatus::NeedsInput))
         .count();
     let total_cost: f64 = sessions.iter().map(|s| s.cost_usd).sum();
     let selected = table_state

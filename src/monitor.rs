@@ -132,14 +132,14 @@ fn infer_status(
     last_stop_reason: &str,
     is_waiting_for_task: bool,
 ) {
-    // Paused:     waiting_for_task event (needs user confirmation to proceed)
+    // NeedsInput: waiting_for_task event or permission prompt
     // Processing: high CPU, or tool_use in progress, or user message pending
     // Waiting:    end_turn + recent (done, needs user's next prompt)
     // Idle:       stale or no data
 
-    // Paused takes priority — Claude is blocked on user confirmation
+    // NeedsInput takes priority — Claude is blocked on user confirmation
     if is_waiting_for_task {
-        session.status = SessionStatus::Paused;
+        session.status = SessionStatus::NeedsInput;
         return;
     }
 
@@ -177,7 +177,7 @@ fn infer_status(
 
         if session.cpu_percent < 2.0 && age_secs > 5 {
             // Low CPU + tool_use was >5s ago = stuck on permission prompt
-            session.status = SessionStatus::Paused;
+            session.status = SessionStatus::NeedsInput;
         } else {
             session.status = SessionStatus::Processing;
         }

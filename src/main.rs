@@ -176,16 +176,16 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, tick_rate: Duratio
                         app.handle_kill();
                     }
                     (KeyCode::Char('y'), _) => {
-                        // Quick approve: send "y" to Paused sessions
+                        // Quick approve: send Enter to NeedsInput sessions
                         app.cancel_pending_kill();
                         if let Some(session) = app.selected_session() {
-                            if session.status == session::SessionStatus::Paused {
+                            if session.status == session::SessionStatus::NeedsInput {
                                 match action::approve_session(session) {
                                     Ok(()) => app.status_msg = format!("Approved {}", session.display_name()),
                                     Err(e) => app.status_msg = format!("Error: {e}"),
                                 }
                             } else {
-                                app.status_msg = "Session is not paused".into();
+                                app.status_msg = "Session is not waiting for input".into();
                             }
                         }
                     }

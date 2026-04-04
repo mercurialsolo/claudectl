@@ -4,7 +4,7 @@ use std::time::Duration;
 #[test]
 fn test_session_status_sort_order() {
     use claudectl::session::SessionStatus;
-    assert!(SessionStatus::Paused.sort_key() < SessionStatus::Processing.sort_key());
+    assert!(SessionStatus::NeedsInput.sort_key() < SessionStatus::Processing.sort_key());
     assert!(SessionStatus::Processing.sort_key() < SessionStatus::WaitingInput.sort_key());
     assert!(SessionStatus::WaitingInput.sort_key() < SessionStatus::Idle.sort_key());
     assert!(SessionStatus::Idle.sort_key() < SessionStatus::Finished.sort_key());
@@ -13,7 +13,7 @@ fn test_session_status_sort_order() {
 #[test]
 fn test_session_status_display() {
     use claudectl::session::SessionStatus;
-    assert_eq!(SessionStatus::Paused.to_string(), "Paused");
+    assert_eq!(SessionStatus::NeedsInput.to_string(), "Needs Input");
     assert_eq!(SessionStatus::Processing.to_string(), "Processing");
     assert_eq!(SessionStatus::WaitingInput.to_string(), "Waiting");
     assert_eq!(SessionStatus::Idle.to_string(), "Idle");

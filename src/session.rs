@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SessionStatus {
-    Paused,      // Waiting for user to confirm/approve a tool use
+    NeedsInput,  // Blocked — waiting for user to approve/confirm (permission prompt)
     Processing,  // Actively generating or executing tools
     WaitingInput,// Done responding, waiting for user's next prompt
     Idle,        // No recent activity, stale session
@@ -16,7 +16,7 @@ pub enum SessionStatus {
 impl fmt::Display for SessionStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Paused => write!(f, "Paused"),
+            Self::NeedsInput => write!(f, "Needs Input"),
             Self::Processing => write!(f, "Processing"),
             Self::WaitingInput => write!(f, "Waiting"),
             Self::Idle => write!(f, "Idle"),
@@ -28,7 +28,7 @@ impl fmt::Display for SessionStatus {
 impl SessionStatus {
     pub fn color(&self) -> ratatui::style::Color {
         match self {
-            Self::Paused => ratatui::style::Color::Magenta,
+            Self::NeedsInput => ratatui::style::Color::Magenta,
             Self::Processing => ratatui::style::Color::Green,
             Self::WaitingInput => ratatui::style::Color::Yellow,
             Self::Idle => ratatui::style::Color::DarkGray,
@@ -38,7 +38,7 @@ impl SessionStatus {
 
     pub fn sort_key(&self) -> u8 {
         match self {
-            Self::Paused => 0,
+            Self::NeedsInput => 0,
             Self::Processing => 1,
             Self::WaitingInput => 2,
             Self::Idle => 3,
