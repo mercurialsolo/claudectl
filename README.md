@@ -77,17 +77,26 @@ Status is inferred from multiple signals:
 
 ## Terminal Support
 
-| Terminal | Tab Switch | Split Pane Focus |
-|----------|-----------|-----------------|
-| **Warp** | Navigation Palette + search | Cmd+] cycling with title detection |
-| **iTerm2** | AppleScript TTY matching | Via tab selection |
-| **Terminal.app** | AppleScript TTY matching | Via tab selection |
+| Terminal | Method | How it works |
+|----------|--------|-------------|
+| **Ghostty** | AppleScript | `every terminal whose working directory contains X` + `focus` — exact TTY matching, best support |
+| **iTerm2** | AppleScript | Iterates windows/tabs/sessions, matches by TTY device |
+| **Kitty** | Remote control | `kitty @ focus-window --match pid:X` — requires `allow_remote_control` in kitty.conf |
+| **WezTerm** | CLI | `wezterm cli list --format json` + `wezterm cli activate-pane --pane-id X` |
+| **Warp** | UI automation | Navigation Palette search + split pane cycling via System Events |
+| **Terminal.app** | AppleScript | Iterates windows/tabs, matches by TTY device |
+| **tmux** | CLI | `tmux list-panes -a` + `tmux select-pane -t X` — works inside any terminal |
 
-**Note:** Warp tab switching requires Accessibility permission (System Settings > Privacy & Security > Accessibility). Warp's search treats `-` as a negation operator, so project names with dashes use a truncated prefix.
+### Terminal-specific notes
+
+- **Ghostty**: Best support. Native AppleScript with working directory and TTY matching. No extra config needed.
+- **Kitty**: Requires `allow_remote_control yes` (or `socket-only`) in `~/.config/kitty/kitty.conf`.
+- **Warp**: Requires Accessibility permission (System Settings > Privacy & Security > Accessibility). Warp's search treats `-` as negation, so project names with dashes use a truncated prefix or resume UUID.
+- **tmux**: Auto-detected when running inside tmux. Works alongside the outer terminal's support.
 
 ## Requirements
 
-- macOS (uses `ps`, AppleScript, and macOS-specific process APIs)
+- macOS (session discovery uses `~/.claude/sessions/` and `ps`)
 - [Claude Code CLI](https://claude.ai/claude-code) installed and running
 - Rust 1.86+ (to build from source)
 
