@@ -81,6 +81,10 @@ pub struct ClaudeSession {
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
     pub cost_usd: f64,
+    pub context_tokens: u64,     // Last API call's input_tokens (= current context window size)
+    pub context_max: u64,        // Model's max context window
+    pub prev_cost_usd: f64,      // Cost at previous tick (for burn rate)
+    pub burn_rate_per_hr: f64,   // $/hr based on cost delta between ticks
 }
 
 impl ClaudeSession {
@@ -121,6 +125,10 @@ impl ClaudeSession {
             cache_read_tokens: 0,
             cache_write_tokens: 0,
             cost_usd: 0.0,
+            context_tokens: 0,
+            context_max: 0,
+            prev_cost_usd: 0.0,
+            burn_rate_per_hr: 0.0,
         }
     }
 
@@ -167,6 +175,44 @@ impl ClaudeSession {
             format!("${:.2}", self.cost_usd)
         } else {
             format!("${:.1}", self.cost_usd)
+        }
+    }
+
+    pub fn context_percent(&self) -> f64 {
+        if self.context_max == 0 || self.context_tokens == 0 {
+            return 0.0;
+        }
+        (self.context_tokens as f64 / self.context_max as f64) * 100.0
+    }
+
+    /// Format context as "450k/1M 45%" or a visual bar
+    pub fn format_context(&self) -> String {
+        if self.context_tokens == 0 {
+            return String::from("-");
+        }
+        let pct = self.context_percent();
+        format!("{}%", pct as u32)
+    }
+
+    /// Visual bar for context usage: ████░░ 62%
+    pub fn format_context_bar(&self, width: usize) -> String {
+        let pct = self.context_percent();
+        if pct == 0.0 {
+            return String::from("-");
+        }
+        let filled = ((pct / 100.0) * width as f64).round() as usize;
+        let empty = width.saturating_sub(filled);
+        format!("{}{} {}%", "█".repeat(filled), "░".repeat(empty), pct as u32)
+    }
+
+    pub fn format_burn_rate(&self) -> String {
+        if self.burn_rate_per_hr < 0.01 {
+            return String::from("-");
+        }
+        if self.burn_rate_per_hr < 1.0 {
+            format!("${:.2}/h", self.burn_rate_per_hr)
+        } else {
+            format!("${:.1}/h", self.burn_rate_per_hr)
         }
     }
 }

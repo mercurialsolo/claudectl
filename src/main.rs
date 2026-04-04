@@ -67,29 +67,29 @@ fn print_list() -> io::Result<()> {
     }
 
     println!(
-        "{:<7} {:<20} {:<12} {:<11} {:<9} {:<10} {:<7} {:<7} {:<8} TOKENS",
-        "PID", "PROJECT", "STATUS", "MODEL", "TTY", "ELAPSED", "CPU%", "MEM", "COST"
+        "{:<7} {:<16} {:<12} {:<8} {:<8} {:<9} {:<10} {:<6} {:<6} TOKENS",
+        "PID", "PROJECT", "STATUS", "CTX%", "COST", "$/HR", "ELAPSED", "CPU%", "MEM"
     );
-    println!("{}", "-".repeat(110));
+    println!("{}", "-".repeat(105));
 
     for s in &app.sessions {
         println!(
-            "{:<7} {:<20} {:<12} {:<11} {:<9} {:<10} {:<7.1} {:<7} {:<8} {}",
+            "{:<7} {:<16} {:<12} {:<8} {:<8} {:<9} {:<10} {:<6.1} {:<6} {}",
             s.pid,
             s.display_name(),
             s.status.to_string(),
-            s.model,
-            s.tty,
+            s.format_context(),
+            s.format_cost(),
+            s.format_burn_rate(),
             s.format_elapsed(),
             s.cpu_percent,
             s.format_mem(),
-            s.format_cost(),
             s.format_tokens(),
         );
     }
 
     let total_cost: f64 = app.sessions.iter().map(|s| s.cost_usd).sum();
-    println!("{}", "-".repeat(110));
+    println!("{}", "-".repeat(105));
     println!("Total cost: ${total_cost:.2}");
 
     Ok(())

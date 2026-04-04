@@ -29,7 +29,7 @@ pub fn render(
     };
 
     let header_cells = [
-        "PID", "Project", "Status", "Model", "TTY", "Elapsed", "CPU%", "MEM", "Cost", "Tokens",
+        "PID", "Project", "Status", "Context", "Cost", "$/hr", "Elapsed", "CPU%", "MEM", "Tokens",
     ]
     .iter()
     .map(|h| Cell::from(*h).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
@@ -39,30 +39,44 @@ pub fn render(
     let rows = sessions.iter().map(|s| {
         let status_style = Style::default().fg(s.status.color());
 
+        // Color context bar based on usage
+        let ctx_pct = s.context_percent();
+        let ctx_color = if ctx_pct > 80.0 {
+            Color::Red
+        } else if ctx_pct > 50.0 {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+
         Row::new(vec![
             Cell::from(s.pid.to_string()),
             Cell::from(s.display_name().to_string()),
             Cell::from(s.status.to_string()).style(status_style),
-            Cell::from(s.model.clone()).style(Style::default().fg(Color::DarkGray)),
-            Cell::from(s.tty.clone()),
+            Cell::from(s.format_context_bar(6)).style(Style::default().fg(ctx_color)),
+            Cell::from(s.format_cost()).style(Style::default().fg(Color::Yellow)),
+            Cell::from(s.format_burn_rate()).style(Style::default().fg(
+                if s.burn_rate_per_hr > 10.0 { Color::Red }
+                else if s.burn_rate_per_hr > 1.0 { Color::Yellow }
+                else { Color::DarkGray }
+            )),
             Cell::from(s.format_elapsed()),
             Cell::from(format!("{:.1}", s.cpu_percent)),
             Cell::from(s.format_mem()),
-            Cell::from(s.format_cost()).style(Style::default().fg(Color::Yellow)),
             Cell::from(s.format_tokens()),
         ])
     });
 
     let widths = [
         Constraint::Length(7),    // PID
-        Constraint::Min(12),      // Project (flex)
+        Constraint::Min(10),      // Project (flex)
         Constraint::Length(12),   // Status
-        Constraint::Length(11),   // Model
-        Constraint::Length(9),    // TTY
-        Constraint::Length(10),   // Elapsed
-        Constraint::Length(7),    // CPU%
-        Constraint::Length(7),    // MEM
+        Constraint::Length(13),   // Context bar
         Constraint::Length(8),    // Cost
+        Constraint::Length(9),    // $/hr
+        Constraint::Length(10),   // Elapsed
+        Constraint::Length(6),    // CPU%
+        Constraint::Length(5),    // MEM
         Constraint::Length(14),   // Tokens
     ];
 

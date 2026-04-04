@@ -101,6 +101,13 @@ pub fn update_tokens(session: &mut ClaudeSession) {
                     session.cache_read_tokens += cache_read;
                     session.cache_write_tokens += cache_create;
 
+                    // Track context window: the input_tokens of the LAST API call
+                    // represents the current prompt/context size
+                    let context_size = input + cache_read + cache_create;
+                    if context_size > 0 {
+                        session.context_tokens = context_size;
+                    }
+
                     if session.model.is_empty() {
                         if let Some(model) = entry
                             .get("message")
@@ -119,6 +126,9 @@ pub fn update_tokens(session: &mut ClaudeSession) {
     if last_ts > 0 {
         session.last_message_ts = last_ts;
     }
+
+    // Set context window max based on model
+    session.context_max = model_context_max(&session.model);
 
     // Compute cost estimate based on model pricing
     session.cost_usd = estimate_cost(session);
@@ -219,6 +229,20 @@ fn estimate_cost(session: &ClaudeSession) -> f64 {
         + (session.total_output_tokens as f64 / 1_000_000.0) * output_per_m
         + (session.cache_read_tokens as f64 / 1_000_000.0) * cache_read_per_m
         + (session.cache_write_tokens as f64 / 1_000_000.0) * cache_write_per_m
+}
+
+/// Max context window tokens by model.
+fn model_context_max(model: &str) -> u64 {
+    if model.contains("opus") {
+        // Opus 4.6 with extended thinking supports up to 1M
+        1_000_000
+    } else if model.contains("sonnet") {
+        200_000
+    } else if model.contains("haiku") {
+        200_000
+    } else {
+        200_000
+    }
 }
 
 /// Extract epoch ms from a JSONL timestamp field like "2026-04-03T20:51:59.169Z"

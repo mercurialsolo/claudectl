@@ -55,9 +55,26 @@ impl App {
         // Resolve JSONL paths AFTER ps data (needs command_args for --resume UUID)
         discovery::resolve_jsonl_paths(&mut sessions);
 
+        // Carry forward previous costs for burn rate calculation
+        let prev_costs: std::collections::HashMap<u32, f64> = self
+            .sessions
+            .iter()
+            .map(|s| (s.pid, s.cost_usd))
+            .collect();
+
         // Read JSONL for tokens + status
         for session in &mut sessions {
             monitor::update_tokens(session);
+
+            // Compute burn rate: cost delta / time delta
+            if let Some(&prev) = prev_costs.get(&session.pid) {
+                session.prev_cost_usd = prev;
+                let delta = session.cost_usd - prev;
+                if delta > 0.0 {
+                    // tick_rate is ~2s, extrapolate to $/hr
+                    session.burn_rate_per_hr = delta * 1800.0; // delta per 2s * 1800 = per hour
+                }
+            }
         }
 
         // Sort: status priority, then elapsed desc
