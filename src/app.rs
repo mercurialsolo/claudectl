@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
-use crate::action;
 use crate::discovery;
 use crate::monitor;
 use crate::process;
 use crate::session::{ClaudeSession, SessionStatus};
+use crate::terminals;
 
 pub const SORT_COLUMNS: &[&str] = &["Status", "Context", "Cost", "$/hr", "Elapsed"];
 
@@ -221,7 +222,7 @@ impl App {
 
         for pid in pids_to_approve {
             if let Some(session) = self.sessions.iter().find(|s| s.pid == pid) {
-                match action::approve_session(session) {
+                match terminals::approve_session(session) {
                     Ok(()) => self.status_msg = format!("Auto-approved {}", session.display_name()),
                     Err(e) => self.status_msg = format!("Auto-approve error: {e}"),
                 }
@@ -307,6 +308,163 @@ impl App {
         if self.pending_kill.is_some() {
             self.pending_kill = None;
             self.status_msg = "Kill cancelled".into();
+        }
+    }
+
+    /// Handle a key event. Returns false if the application should quit.
+    pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        // Help overlay: any key dismisses
+        if self.show_help {
+            self.show_help = false;
+            return true;
+        }
+
+        // Input mode: capture text for sending to a session
+        if self.input_mode {
+            self.handle_input_key(key);
+            return true;
+        }
+
+        // Normal mode
+        self.handle_normal_key(key);
+        !self.should_quit
+    }
+
+    fn handle_input_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                if let Some(pid) = self.input_target_pid {
+                    if let Some(session) = self.sessions.iter().find(|s| s.pid == pid) {
+                        let text = format!("{}\n", self.input_buffer);
+                        match terminals::send_input(session, &text) {
+                            Ok(()) => {
+                                self.status_msg =
+                                    format!("Sent to {}", session.display_name())
+                            }
+                            Err(e) => self.status_msg = format!("Error: {e}"),
+                        }
+                    }
+                }
+                self.input_mode = false;
+                self.input_buffer.clear();
+                self.input_target_pid = None;
+            }
+            KeyCode::Esc => {
+                self.input_mode = false;
+                self.input_buffer.clear();
+                self.input_target_pid = None;
+                self.status_msg = "Input cancelled".into();
+            }
+            KeyCode::Backspace => {
+                self.input_buffer.pop();
+            }
+            KeyCode::Char(c) => {
+                self.input_buffer.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_normal_key(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => {
+                self.should_quit = true;
+            }
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                self.should_quit = true;
+            }
+            (KeyCode::Char('j'), _) | (KeyCode::Down, _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.next();
+            }
+            (KeyCode::Char('k'), _) | (KeyCode::Up, _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.previous();
+            }
+            (KeyCode::Char('r'), _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.refresh();
+            }
+            (KeyCode::Char('d'), _) | (KeyCode::Char('x'), _) => {
+                self.cancel_pending_auto_approve();
+                self.handle_kill();
+            }
+            (KeyCode::Char('y'), _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.handle_approve();
+            }
+            (KeyCode::Char('i'), _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.enter_input_mode();
+            }
+            (KeyCode::Char('?'), _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.show_help = !self.show_help;
+            }
+            (KeyCode::Char('s'), _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.cycle_sort();
+            }
+            (KeyCode::Char('a'), _) => {
+                self.cancel_pending_kill();
+                self.handle_auto_approve();
+            }
+            (KeyCode::Tab, _) | (KeyCode::Enter, _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.handle_switch_terminal();
+            }
+            _ => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+            }
+        }
+    }
+
+    fn handle_approve(&mut self) {
+        if let Some(session) = self.selected_session() {
+            if session.status == SessionStatus::NeedsInput {
+                match terminals::approve_session(session) {
+                    Ok(()) => self.status_msg = format!("Approved {}", session.display_name()),
+                    Err(e) => self.status_msg = format!("Error: {e}"),
+                }
+            } else {
+                self.status_msg = "Session is not waiting for input".into();
+            }
+        }
+    }
+
+    fn enter_input_mode(&mut self) {
+        let info = self
+            .selected_session()
+            .map(|s| (s.pid, s.display_name().to_string()));
+        if let Some((pid, name)) = info {
+            self.input_mode = true;
+            self.input_buffer.clear();
+            self.input_target_pid = Some(pid);
+            self.status_msg = format!("Input to {name} (Enter to send, Esc to cancel): ");
+        }
+    }
+
+    fn handle_switch_terminal(&mut self) {
+        if let Some(session) = self.selected_session() {
+            match terminals::switch_to_terminal(session) {
+                Ok(()) => {
+                    self.status_msg = format!("Switched to {}", session.display_name());
+                }
+                Err(e) => {
+                    self.status_msg = format!("Error: {e}");
+                }
+            }
+        } else {
+            self.status_msg = "No session selected".into();
         }
     }
 }

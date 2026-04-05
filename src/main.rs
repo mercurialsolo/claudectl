@@ -1,9 +1,9 @@
-mod action;
 mod app;
 mod discovery;
 mod monitor;
 mod process;
 mod session;
+mod terminals;
 mod ui;
 
 use std::io;
@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -73,8 +73,7 @@ fn main() -> io::Result<()> {
 fn print_json() -> io::Result<()> {
     let app = App::new();
     let values: Vec<serde_json::Value> = app.sessions.iter().map(|s| s.to_json_value()).collect();
-    let json = serde_json::to_string_pretty(&values)
-        .unwrap_or_else(|_| "[]".to_string());
+    let json = serde_json::to_string_pretty(&values).unwrap_or_else(|_| "[]".to_string());
     println!("{json}");
     Ok(())
 }
@@ -136,143 +135,10 @@ fn run(
 
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                // Help overlay: any key dismisses
-                if app.show_help {
-                    app.show_help = false;
-                    continue;
-                }
-
-                // Input mode: capture text for sending to a session
-                if app.input_mode {
-                    match key.code {
-                        KeyCode::Enter => {
-                            if let Some(pid) = app.input_target_pid {
-                                if let Some(session) = app.sessions.iter().find(|s| s.pid == pid) {
-                                    let text = format!("{}\n", app.input_buffer);
-                                    match action::send_input(session, &text) {
-                                        Ok(()) => app.status_msg = format!("Sent to {}", session.display_name()),
-                                        Err(e) => app.status_msg = format!("Error: {e}"),
-                                    }
-                                }
-                            }
-                            app.input_mode = false;
-                            app.input_buffer.clear();
-                            app.input_target_pid = None;
-                        }
-                        KeyCode::Esc => {
-                            app.input_mode = false;
-                            app.input_buffer.clear();
-                            app.input_target_pid = None;
-                            app.status_msg = "Input cancelled".into();
-                        }
-                        KeyCode::Backspace => {
-                            app.input_buffer.pop();
-                        }
-                        KeyCode::Char(c) => {
-                            app.input_buffer.push(c);
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // Normal mode
-                match (key.code, key.modifiers) {
-                    (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => {
-                        app.should_quit = true;
-                    }
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                        app.should_quit = true;
-                    }
-                    (KeyCode::Char('j'), _) | (KeyCode::Down, _) => {
-                        app.cancel_pending_kill();
-                        app.cancel_pending_auto_approve();
-                        app.next();
-                    }
-                    (KeyCode::Char('k'), _) | (KeyCode::Up, _) => {
-                        app.cancel_pending_kill();
-                        app.cancel_pending_auto_approve();
-                        app.previous();
-                    }
-                    (KeyCode::Char('r'), _) => {
-                        app.cancel_pending_kill();
-                        app.cancel_pending_auto_approve();
-                        app.refresh();
-                    }
-                    (KeyCode::Char('d'), _) | (KeyCode::Char('x'), _) => {
-                        app.cancel_pending_auto_approve();
-                        app.handle_kill();
-                    }
-                    (KeyCode::Char('y'), _) => {
-                        // Quick approve: send Enter to NeedsInput sessions
-                        app.cancel_pending_kill();
-                        app.cancel_pending_auto_approve();
-                        if let Some(session) = app.selected_session() {
-                            if session.status == session::SessionStatus::NeedsInput {
-                                match action::approve_session(session) {
-                                    Ok(()) => app.status_msg = format!("Approved {}", session.display_name()),
-                                    Err(e) => app.status_msg = format!("Error: {e}"),
-                                }
-                            } else {
-                                app.status_msg = "Session is not waiting for input".into();
-                            }
-                        }
-                    }
-                    (KeyCode::Char('i'), _) => {
-                        // Enter input mode to send text to a session
-                        app.cancel_pending_kill();
-                        app.cancel_pending_auto_approve();
-                        let info = app.selected_session().map(|s| (s.pid, s.display_name().to_string()));
-                        if let Some((pid, name)) = info {
-                            app.input_mode = true;
-                            app.input_buffer.clear();
-                            app.input_target_pid = Some(pid);
-                            app.status_msg = format!("Input to {name} (Enter to send, Esc to cancel): ");
-                        }
-                    }
-                    // Feature #26: Help overlay
-                    (KeyCode::Char('?'), _) => {
-                        app.cancel_pending_kill();
-                        app.cancel_pending_auto_approve();
-                        app.show_help = !app.show_help;
-                    }
-                    // Feature #28: Sort by column
-                    (KeyCode::Char('s'), _) => {
-                        app.cancel_pending_kill();
-                        app.cancel_pending_auto_approve();
-                        app.cycle_sort();
-                    }
-                    // Feature #33: Auto-approve toggle
-                    (KeyCode::Char('a'), _) => {
-                        app.cancel_pending_kill();
-                        app.handle_auto_approve();
-                    }
-                    (KeyCode::Tab, _) | (KeyCode::Enter, _) => {
-                        app.cancel_pending_kill();
-                        app.cancel_pending_auto_approve();
-                        if let Some(session) = app.selected_session() {
-                            match action::switch_to_terminal(session) {
-                                Ok(()) => {
-                                    app.status_msg = format!("Switched to {}", session.display_name());
-                                }
-                                Err(e) => {
-                                    app.status_msg = format!("Error: {e}");
-                                }
-                            }
-                        } else {
-                            app.status_msg = "No session selected".into();
-                        }
-                    }
-                    _ => {
-                        app.cancel_pending_kill();
-                        app.cancel_pending_auto_approve();
-                    }
+                if !app.handle_key(key) {
+                    return Ok(());
                 }
             }
-        }
-
-        if app.should_quit {
-            return Ok(());
         }
 
         if last_tick.elapsed() >= tick_rate {
