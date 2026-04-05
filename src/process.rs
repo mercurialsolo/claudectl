@@ -18,11 +18,11 @@ pub fn fetch_and_enrich(sessions: &mut Vec<ClaudeSession>) {
     let output = match output {
         Ok(o) => o,
         Err(_) => {
-            // ps failed — mark all as Finished
+            // ps failed — mark all as Finished (will show tombstone for 30s)
             for s in sessions.iter_mut() {
                 s.status = SessionStatus::Finished;
+                s.cpu_percent = 0.0;
             }
-            sessions.clear();
             return;
         }
     };

@@ -144,7 +144,19 @@ impl App {
             }
             true
         });
-        // Clean up old finished_at entries
+        // Clean up old finished_at entries + their session files
+        let expired: Vec<u32> = self
+            .finished_at
+            .iter()
+            .filter(|(_, t)| now.duration_since(**t).as_secs() >= 60)
+            .map(|(pid, _)| *pid)
+            .collect();
+        for pid in &expired {
+            let session_file = dirs_home()
+                .join(".claude/sessions")
+                .join(format!("{pid}.json"));
+            let _ = std::fs::remove_file(session_file);
+        }
         self.finished_at
             .retain(|_, t| now.duration_since(*t).as_secs() < 60);
 
@@ -309,11 +321,9 @@ impl App {
             match kill_process(pid) {
                 Ok(()) => {
                     self.status_msg = format!("Killed {name} (PID {pid})");
-                    let session_file = dirs_home()
-                        .join(".claude/sessions")
-                        .join(format!("{pid}.json"));
-                    let _ = std::fs::remove_file(session_file);
                     self.auto_approve.remove(&pid);
+                    // Don't delete session file yet — let the Finished tombstone show for 30s.
+                    // The file will be cleaned up when the tombstone expires.
                     self.refresh();
                 }
                 Err(e) => self.status_msg = format!("Kill failed: {e}"),
@@ -491,8 +501,9 @@ impl App {
 }
 
 fn fire_notification(project: &str) {
+    let safe = project.replace('"', "'").replace('\\', "");
     let _ = std::process::Command::new("osascript")
-        .args(["-e", &format!("display notification \"{project} needs input\" with title \"claudectl\"")])
+        .args(["-e", &format!("display notification \"{safe} needs input\" with title \"claudectl\"")])
         .spawn();
 }
 
