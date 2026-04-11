@@ -1,9 +1,9 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Row, Table},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
 
 use crate::app::{App, SORT_COLUMNS};
@@ -33,6 +33,75 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .constraints(constraints)
         .split(area)
         .to_vec();
+
+    // Empty state: show onboarding message when no sessions found
+    if app.sessions.is_empty() {
+        let empty_lines = vec![
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                "No active Claude Code sessions found.",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Press ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "n",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " to launch a new session, or start ",
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    "claude",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " in another terminal.",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Press ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "?",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" for help.", Style::default().fg(Color::DarkGray)),
+            ]),
+        ];
+
+        let block = Block::default()
+            .title(" claudectl ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let empty_widget = Paragraph::new(empty_lines)
+            .block(block)
+            .alignment(Alignment::Center);
+
+        frame.render_widget(empty_widget, chunks[0]);
+
+        if has_status && chunks.len() > 1 {
+            render_status_bar(frame, chunks[1], app);
+        }
+
+        if app.show_help {
+            render_help_overlay(frame, area);
+        }
+        return;
+    }
 
     // Build header with sort indicator
     let header_names = [
@@ -161,12 +230,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Cyan),
         ));
     } else {
-        footer_spans.push(Span::styled(
-            format!(
-                "  q:quit j/k:nav Tab:go y:approve i:input d:kill s:sort({sort_name}) a:auto ?:help"
-            ),
-            Style::default().fg(Color::DarkGray),
-        ));
+        // Contextual hints based on selected session state
+        let hint = match app.selected_session().map(|s| s.status) {
+            Some(SessionStatus::NeedsInput) => {
+                "  y:approve i:type Tab:go d:kill ?:help".to_string()
+            }
+            _ => {
+                format!(
+                    "  q:quit j/k:nav Tab:go y:approve i:input d:kill s:sort({sort_name}) ?:help"
+                )
+            }
+        };
+        footer_spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
     }
 
     let footer = Line::from(footer_spans);
