@@ -4,6 +4,7 @@ mod discovery;
 mod history;
 mod logger;
 mod monitor;
+mod orchestrator;
 mod process;
 mod session;
 mod terminals;
@@ -120,6 +121,14 @@ struct Cli {
     /// Show aggregated session statistics and exit
     #[arg(long)]
     stats: bool,
+
+    /// Run tasks from a JSON file (e.g., claudectl --run tasks.json)
+    #[arg(long)]
+    run: Option<String>,
+
+    /// Run independent tasks in parallel (used with --run)
+    #[arg(long)]
+    parallel: bool,
 }
 
 fn main() -> io::Result<()> {
@@ -165,6 +174,11 @@ fn main() -> io::Result<()> {
     if cli.config {
         cfg.print_resolved();
         return Ok(());
+    }
+
+    if let Some(ref run_file) = cli.run {
+        let task_file = orchestrator::load_tasks(run_file)?;
+        return orchestrator::run_tasks(task_file, cli.parallel);
     }
 
     if cli.history {
