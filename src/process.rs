@@ -2,7 +2,7 @@ use crate::session::{ClaudeSession, SessionStatus};
 
 /// Check which PIDs are alive and fetch TTY, CPU%, MEM, command args — all via `ps`.
 /// No sysinfo dependency needed.
-pub fn fetch_and_enrich(sessions: &mut Vec<ClaudeSession>) {
+pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
     if sessions.is_empty() {
         return;
     }

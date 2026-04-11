@@ -36,18 +36,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     // Build header with sort indicator
     let header_names = [
-        "PID", "Project", "Status", "Context", "Cost", "$/hr", "Elapsed", "CPU%", "MEM",
-        "In/Out", "Activity",
+        "PID", "Project", "Status", "Context", "Cost", "$/hr", "Elapsed", "CPU%", "MEM", "In/Out",
+        "Activity",
     ];
 
     // Map sort_column index to header index:
     // 0=Status->2, 1=Context->3, 2=Cost->4, 3=$/hr->5, 4=Elapsed->6
     let sort_header_idx = match app.sort_column {
-        0 => 2,  // Status
-        1 => 3,  // Context
-        2 => 4,  // Cost
-        3 => 5,  // $/hr
-        4 => 6,  // Elapsed
+        0 => 2, // Status
+        1 => 3, // Context
+        2 => 4, // Cost
+        3 => 5, // $/hr
+        4 => 6, // Elapsed
         _ => usize::MAX,
     };
 
@@ -78,7 +78,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             };
             let header_text = format!(
                 "{} ({} sessions, {} active, {}, ctx {:.0}%)",
-                group.name, group.session_count, group.active_count, cost_str, group.avg_context_pct
+                group.name,
+                group.session_count,
+                group.active_count,
+                cost_str,
+                group.avg_context_pct
             );
             let mut cells: Vec<Cell> = vec![
                 Cell::from(""),
@@ -121,7 +125,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let active = app
         .sessions
         .iter()
-        .filter(|s| matches!(s.status, SessionStatus::Processing | SessionStatus::NeedsInput))
+        .filter(|s| {
+            matches!(
+                s.status,
+                SessionStatus::Processing | SessionStatus::NeedsInput
+            )
+        })
         .count();
     let total_cost: f64 = app.sessions.iter().map(|s| s.cost_usd).sum();
     let selected = app.table_state.selected().map(|i| i + 1).unwrap_or(0);

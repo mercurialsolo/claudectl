@@ -19,10 +19,7 @@ pub fn switch(session: &ClaudeSession) -> Result<(), String> {
     if let Some(panes) = json.as_array() {
         for pane in panes {
             let pane_cwd = pane.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
-            let pane_tty = pane
-                .get("tty_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let pane_tty = pane.get("tty_name").and_then(|v| v.as_str()).unwrap_or("");
 
             if pane_cwd.contains(&session.project_name) || pane_tty.contains(&session.tty) {
                 if let Some(pane_id) = pane.get("pane_id").and_then(|v| v.as_u64()) {

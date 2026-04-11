@@ -243,7 +243,6 @@ fn model_context_max(model: &str) -> u64 {
     }
 }
 
-
 fn shorten_model(model: &str) -> String {
     if model.contains("opus") {
         if model.contains("4-6") {

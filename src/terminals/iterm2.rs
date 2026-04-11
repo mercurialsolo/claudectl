@@ -1,5 +1,5 @@
-use crate::session::ClaudeSession;
 use super::run_osascript;
+use crate::session::ClaudeSession;
 
 pub fn switch(session: &ClaudeSession) -> Result<(), String> {
     let script = format!(

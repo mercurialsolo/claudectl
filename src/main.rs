@@ -20,7 +20,11 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use app::App;
 
 #[derive(Parser)]
-#[command(name = "claudectl", version, about = "Monitor and manage Claude Code CLI agents")]
+#[command(
+    name = "claudectl",
+    version,
+    about = "Monitor and manage Claude Code CLI agents"
+)]
 struct Cli {
     /// Refresh interval in milliseconds
     #[arg(short, long, default_value_t = 2000)]
@@ -43,7 +47,10 @@ struct Cli {
     watch: bool,
 
     /// Output format for watch mode. Placeholders: {pid}, {project}, {status}, {cost}, {context}
-    #[arg(long, default_value = "{pid} {project}: {status} (${cost}, ctx {context}%)")]
+    #[arg(
+        long,
+        default_value = "{pid} {project}: {status} (${cost}, ctx {context}%)"
+    )]
     format: String,
 
     /// Enable debug mode: show timing metrics in the footer
@@ -111,11 +118,7 @@ fn main() -> io::Result<()> {
     }
 
     if cli.watch {
-        return run_watch(
-            Duration::from_millis(cli.interval),
-            cli.json,
-            &cli.format,
-        );
+        return run_watch(Duration::from_millis(cli.interval), cli.json, &cli.format);
     }
 
     let tick_rate = Duration::from_millis(cli.interval);
@@ -273,12 +276,20 @@ fn print_summary(since: &str) -> io::Result<()> {
         // Token summary
         let total_tokens = s.total_input_tokens + s.total_output_tokens;
         if total_tokens > 0 {
-            println!("  Tokens: {} in / {} out", format_count(s.total_input_tokens), format_count(s.total_output_tokens));
+            println!(
+                "  Tokens: {} in / {} out",
+                format_count(s.total_input_tokens),
+                format_count(s.total_output_tokens)
+            );
         }
 
         // Model and context
         if !s.model.is_empty() {
-            println!("  Model: {} (context: {}%)", s.model, s.context_percent() as u32);
+            println!(
+                "  Model: {} (context: {}%)",
+                s.model,
+                s.context_percent() as u32
+            );
         }
 
         if s.subagent_count > 0 {
@@ -350,15 +361,12 @@ fn print_list() -> io::Result<()> {
 }
 
 fn run_watch(tick_rate: Duration, json_mode: bool, format_str: &str) -> io::Result<()> {
-    use std::collections::HashMap;
     use crate::session::SessionStatus;
+    use std::collections::HashMap;
 
     let mut app = App::new();
-    let mut prev_statuses: HashMap<u32, SessionStatus> = app
-        .sessions
-        .iter()
-        .map(|s| (s.pid, s.status))
-        .collect();
+    let mut prev_statuses: HashMap<u32, SessionStatus> =
+        app.sessions.iter().map(|s| (s.pid, s.status)).collect();
 
     // Print initial state for all sessions
     for s in &app.sessions {
@@ -419,6 +427,7 @@ fn format_session(fmt: &str, s: &session::ClaudeSession) -> String {
         .replace("{context}", &format!("{}", s.context_percent() as u32))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     tick_rate: Duration,

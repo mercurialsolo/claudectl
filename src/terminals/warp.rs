@@ -1,5 +1,5 @@
-use crate::session::ClaudeSession;
 use super::run_osascript;
+use crate::session::ClaudeSession;
 
 pub fn switch(session: &ClaudeSession) -> Result<(), String> {
     let search = build_search_term(session);
@@ -48,7 +48,10 @@ pub fn build_search_term(session: &ClaudeSession) -> String {
     if session.command_args.contains("--resume") {
         if let Some(id_start) = session.command_args.find("--resume ") {
             let after = &session.command_args[id_start + 9..];
-            let hex_prefix: String = after.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            let hex_prefix: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_hexdigit())
+                .collect();
             if hex_prefix.len() >= 6 {
                 return hex_prefix;
             }

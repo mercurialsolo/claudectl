@@ -125,10 +125,7 @@ pub fn scan_subagents(sessions: &mut [ClaudeSession]) {
 
     for session in sessions.iter_mut() {
         let slug = cwd_to_slug(&session.cwd);
-        let tasks_dir = tmp_base
-            .join(&slug)
-            .join(&session.session_id)
-            .join("tasks");
+        let tasks_dir = tmp_base.join(&slug).join(&session.session_id).join("tasks");
 
         if !tasks_dir.exists() {
             continue;
@@ -137,12 +134,7 @@ pub fn scan_subagents(sessions: &mut [ClaudeSession]) {
         let count = match fs::read_dir(&tasks_dir) {
             Ok(entries) => entries
                 .flatten()
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        == Some("jsonl")
-                })
+                .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
                 .count(),
             Err(_) => 0,
         };
@@ -161,23 +153,35 @@ fn cleanup_stale_sessions(dir: &std::path::Path) {
     const MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
     let now = std::time::SystemTime::now();
 
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
 
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
-        let Ok(pid) = stem.parse::<u32>() else { continue };
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(pid) = stem.parse::<u32>() else {
+            continue;
+        };
 
         if pid_alive(pid) {
             continue;
         }
 
-        let Ok(metadata) = entry.metadata() else { continue };
-        let Ok(modified) = metadata.modified() else { continue };
-        let Ok(age) = now.duration_since(modified) else { continue };
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
 
         if age > MAX_AGE {
             let _ = fs::remove_file(&path);

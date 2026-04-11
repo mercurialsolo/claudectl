@@ -6,11 +6,11 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SessionStatus {
-    NeedsInput,  // Blocked — waiting for user to approve/confirm (permission prompt)
-    Processing,  // Actively generating or executing tools
-    WaitingInput,// Done responding, waiting for user's next prompt
-    Idle,        // No recent activity, stale session
-    Finished,    // Process exited
+    NeedsInput,   // Blocked — waiting for user to approve/confirm (permission prompt)
+    Processing,   // Actively generating or executing tools
+    WaitingInput, // Done responding, waiting for user's next prompt
+    Idle,         // No recent activity, stale session
+    Finished,     // Process exited
 }
 
 impl fmt::Display for SessionStatus {
@@ -69,7 +69,7 @@ pub struct ClaudeSession {
     pub tty: String,
     pub status: SessionStatus,
     pub cpu_percent: f32,
-    pub cpu_history: Vec<f32>,   // Last N CPU readings for smoothing
+    pub cpu_history: Vec<f32>, // Last N CPU readings for smoothing
     pub mem_mb: f64,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
@@ -92,12 +92,7 @@ pub struct ClaudeSession {
 
 impl ClaudeSession {
     pub fn from_raw(raw: RawSession) -> Self {
-        let project_name = raw
-            .cwd
-            .rsplit('/')
-            .next()
-            .unwrap_or("unknown")
-            .to_string();
+        let project_name = raw.cwd.rsplit('/').next().unwrap_or("unknown").to_string();
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -156,7 +151,10 @@ impl ClaudeSession {
 
     /// Render the sparkline as unicode block characters.
     pub fn format_sparkline(&self) -> String {
-        const BLOCKS: &[char] = &[' ', '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}', '\u{2588}'];
+        const BLOCKS: &[char] = &[
+            ' ', '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}',
+            '\u{2587}', '\u{2588}',
+        ];
         if self.activity_history.is_empty() {
             return String::from("-");
         }
@@ -236,7 +234,12 @@ impl ClaudeSession {
         }
         let filled = ((pct / 100.0) * width as f64).round() as usize;
         let empty = width.saturating_sub(filled);
-        format!("{}{} {}%", "█".repeat(filled), "░".repeat(empty), pct as u32)
+        format!(
+            "{}{} {}%",
+            "█".repeat(filled),
+            "░".repeat(empty),
+            pct as u32
+        )
     }
 
     /// Produce a JSON-serializable value for --json export.

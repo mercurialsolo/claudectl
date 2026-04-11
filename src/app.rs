@@ -33,12 +33,12 @@ pub struct App {
     pub detail_panel: bool, // Show expanded detail for selected session
     pub webhook_url: Option<String>,
     pub webhook_filter: Option<Vec<String>>, // Only fire on these status names
-    pub launch_mode: bool,  // Capturing directory path for new session
+    pub launch_mode: bool,                   // Capturing directory path for new session
     pub launch_buffer: String,
     pub budget_usd: Option<f64>,     // Per-session budget
-    pub kill_on_budget: bool,         // Auto-kill when budget exceeded
-    pub budget_warned: HashSet<u32>,  // PIDs that have been warned at 80%
-    pub budget_killed: HashSet<u32>,  // PIDs that have been killed
+    pub kill_on_budget: bool,        // Auto-kill when budget exceeded
+    pub budget_warned: HashSet<u32>, // PIDs that have been warned at 80%
+    pub budget_killed: HashSet<u32>, // PIDs that have been killed
 }
 
 #[derive(Default, Clone)]
@@ -135,11 +135,8 @@ impl App {
         let scan_elapsed = scan_start.elapsed();
 
         // Build a map of existing sessions by PID for state preservation
-        let mut existing: HashMap<u32, ClaudeSession> = self
-            .sessions
-            .drain(..)
-            .map(|s| (s.pid, s))
-            .collect();
+        let mut existing: HashMap<u32, ClaudeSession> =
+            self.sessions.drain(..).map(|s| (s.pid, s)).collect();
 
         // Merge: reuse existing session state (jsonl_offset, tokens, cost, cpu_history)
         // or create new from discovered
@@ -208,7 +205,7 @@ impl App {
                 let pct = session.cost_usd / budget * 100.0;
 
                 // Warn at 80%
-                if pct >= 80.0 && pct < 100.0 && !self.budget_warned.contains(&session.pid) {
+                if (80.0..100.0).contains(&pct) && !self.budget_warned.contains(&session.pid) {
                     self.budget_warned.insert(session.pid);
                     self.status_msg = format!(
                         "BUDGET WARNING: {} at {:.0}% (${:.2}/${:.2})",
@@ -217,11 +214,7 @@ impl App {
                         session.cost_usd,
                         budget
                     );
-                    fire_notification(&format!(
-                        "{} budget {:.0}%",
-                        session.display_name(),
-                        pct
-                    ));
+                    fire_notification(&format!("{} budget {:.0}%", session.display_name(), pct));
                 }
 
                 // Kill at 100%
@@ -243,10 +236,7 @@ impl App {
                             budget
                         );
                     }
-                    fire_notification(&format!(
-                        "{} exceeded budget!",
-                        session.display_name()
-                    ));
+                    fire_notification(&format!("{} exceeded budget!", session.display_name()));
                 }
             }
         }
@@ -420,7 +410,9 @@ impl App {
     }
 
     pub fn handle_auto_approve(&mut self) {
-        let Some(session) = self.selected_session() else { return };
+        let Some(session) = self.selected_session() else {
+            return;
+        };
         let pid = session.pid;
         let name = session.display_name().to_string();
 
@@ -435,7 +427,11 @@ impl App {
             self.pending_auto_approve = None;
         } else {
             self.pending_auto_approve = Some(pid);
-            let action = if self.auto_approve.contains(&pid) { "disable" } else { "enable" };
+            let action = if self.auto_approve.contains(&pid) {
+                "disable"
+            } else {
+                "enable"
+            };
             self.status_msg = format!("Press a again to {action} auto-approve for {name}");
         }
     }
@@ -445,7 +441,9 @@ impl App {
     }
 
     pub fn next(&mut self) {
-        if self.sessions.is_empty() { return }
+        if self.sessions.is_empty() {
+            return;
+        }
         let i = match self.table_state.selected() {
             Some(i) if i >= self.sessions.len() - 1 => 0,
             Some(i) => i + 1,
@@ -455,7 +453,9 @@ impl App {
     }
 
     pub fn previous(&mut self) {
-        if self.sessions.is_empty() { return }
+        if self.sessions.is_empty() {
+            return;
+        }
         let i = match self.table_state.selected() {
             Some(0) => self.sessions.len() - 1,
             Some(i) => i - 1,
@@ -465,11 +465,15 @@ impl App {
     }
 
     pub fn selected_session(&self) -> Option<&ClaudeSession> {
-        self.table_state.selected().and_then(|i| self.sessions.get(i))
+        self.table_state
+            .selected()
+            .and_then(|i| self.sessions.get(i))
     }
 
     pub fn handle_kill(&mut self) {
-        let Some(session) = self.selected_session() else { return };
+        let Some(session) = self.selected_session() else {
+            return;
+        };
         let pid = session.pid;
         let name = session.display_name().to_string();
 
@@ -531,8 +535,7 @@ impl App {
                         let text = format!("{}\n", self.input_buffer);
                         match terminals::send_input(session, &text) {
                             Ok(()) => {
-                                self.status_msg =
-                                    format!("Sent to {}", session.display_name())
+                                self.status_msg = format!("Sent to {}", session.display_name())
                             }
                             Err(e) => self.status_msg = format!("Error: {e}"),
                         }
@@ -614,7 +617,8 @@ impl App {
                 self.cancel_pending_auto_approve();
                 self.launch_mode = true;
                 self.launch_buffer.clear();
-                self.status_msg = "New session — enter directory path (Enter to launch, Esc to cancel): ".into();
+                self.status_msg =
+                    "New session — enter directory path (Enter to launch, Esc to cancel): ".into();
             }
             (KeyCode::Char('g'), _) => {
                 self.cancel_pending_kill();
@@ -744,10 +748,7 @@ impl App {
     pub fn project_groups(&self) -> Vec<ProjectGroup> {
         let mut groups: HashMap<String, Vec<&ClaudeSession>> = HashMap::new();
         for s in &self.sessions {
-            groups
-                .entry(s.project_name.clone())
-                .or_default()
-                .push(s);
+            groups.entry(s.project_name.clone()).or_default().push(s);
         }
 
         let mut result: Vec<ProjectGroup> = groups
@@ -885,7 +886,10 @@ fn fire_notification(project: &str) {
     let safe = project.replace('"', "'").replace('\\', "");
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("osascript")
-        .args(["-e", &format!("display notification \"{safe} needs input\" with title \"claudectl\"")])
+        .args([
+            "-e",
+            &format!("display notification \"{safe} needs input\" with title \"claudectl\""),
+        ])
         .spawn();
     #[cfg(target_os = "linux")]
     let _ = std::process::Command::new("notify-send")
