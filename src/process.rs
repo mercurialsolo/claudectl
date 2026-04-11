@@ -17,7 +17,8 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
 
     let output = match output {
         Ok(o) => o,
-        Err(_) => {
+        Err(e) => {
+            crate::logger::log("ERROR", &format!("ps command failed: {e}"));
             // ps failed — mark all as Finished (will show tombstone for 30s)
             for s in sessions.iter_mut() {
                 s.status = SessionStatus::Finished;

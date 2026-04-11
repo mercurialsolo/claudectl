@@ -35,12 +35,24 @@ pub fn scan_sessions() -> Vec<ClaudeSession> {
 
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => {
+                crate::logger::log(
+                    "WARN",
+                    &format!("session file read error: {}: {e}", path.display()),
+                );
+                continue;
+            }
         };
 
         let raw: RawSession = match serde_json::from_str(&content) {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(e) => {
+                crate::logger::log(
+                    "WARN",
+                    &format!("session file parse error: {}: {e}", path.display()),
+                );
+                continue;
+            }
         };
 
         // JSONL path resolved later by resolve_jsonl_paths() after command_args are populated
@@ -184,6 +196,13 @@ fn cleanup_stale_sessions(dir: &std::path::Path) {
         };
 
         if age > MAX_AGE {
+            crate::logger::log(
+                "DEBUG",
+                &format!(
+                    "cleaning stale session file: {} (PID {pid})",
+                    path.display()
+                ),
+            );
             let _ = fs::remove_file(&path);
         }
     }

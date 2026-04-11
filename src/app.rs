@@ -292,6 +292,16 @@ impl App {
                 continue;
             }
 
+            crate::logger::log(
+                "DEBUG",
+                &format!(
+                    "session {}: status {} -> {}",
+                    session.display_name(),
+                    prev.unwrap(),
+                    session.status
+                ),
+            );
+
             // Desktop notification on NeedsInput
             if self.notify && session.status == SessionStatus::NeedsInput {
                 fire_notification(&session.project_name);
@@ -305,6 +315,14 @@ impl App {
                     None => true,
                 };
                 if should_fire {
+                    crate::logger::log(
+                        "DEBUG",
+                        &format!(
+                            "webhook fired for {} -> {}",
+                            session.display_name(),
+                            new_status
+                        ),
+                    );
                     fire_webhook(
                         url,
                         session,

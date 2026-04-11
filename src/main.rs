@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod discovery;
+mod logger;
 mod monitor;
 mod process;
 mod session;
@@ -106,10 +107,21 @@ struct Cli {
     /// Color theme: dark, light, or none (respects NO_COLOR env var)
     #[arg(long)]
     theme: Option<String>,
+
+    /// Write diagnostic logs to a file (for debugging/bug reports)
+    #[arg(long)]
+    log: Option<String>,
 }
 
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
+
+    // Initialize diagnostic logger if --log is set
+    if let Some(ref log_path) = cli.log {
+        if let Err(e) = logger::init(log_path) {
+            eprintln!("Warning: could not open log file {log_path}: {e}");
+        }
+    }
 
     // Load config from files, then let CLI flags override
     let mut cfg = config::Config::load();

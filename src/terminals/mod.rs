@@ -23,6 +23,19 @@ pub enum Terminal {
     Unknown(String),
 }
 
+fn terminal_name(t: &Terminal) -> &str {
+    match t {
+        Terminal::Ghostty => "Ghostty",
+        Terminal::Warp => "Warp",
+        Terminal::ITerm2 => "iTerm2",
+        Terminal::Kitty => "Kitty",
+        Terminal::WezTerm => "WezTerm",
+        Terminal::Apple => "Apple Terminal",
+        Terminal::Tmux => "tmux",
+        Terminal::Unknown(name) => name,
+    }
+}
+
 pub fn detect_terminal() -> Terminal {
     if std::env::var("TMUX").is_ok() {
         return Terminal::Tmux;
@@ -58,7 +71,18 @@ pub fn switch_to_terminal(session: &ClaudeSession) -> Result<(), String> {
         return Err("No TTY associated with this session".into());
     }
 
-    match detect_terminal() {
+    let terminal = detect_terminal();
+    crate::logger::log(
+        "DEBUG",
+        &format!(
+            "terminal switch: {} (tty={}) via {:?}",
+            session.display_name(),
+            session.tty,
+            terminal_name(&terminal)
+        ),
+    );
+
+    match terminal {
         Terminal::Kitty => kitty::switch(session),
         Terminal::WezTerm => wezterm::switch(session),
         Terminal::Tmux => tmux::switch(session),
