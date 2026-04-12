@@ -9,6 +9,7 @@ pub mod app;
 pub mod config;
 pub mod discovery;
 pub mod history;
+pub mod hooks;
 pub mod logger;
 pub mod monitor;
 pub mod orchestrator;

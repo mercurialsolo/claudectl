@@ -9,6 +9,7 @@ mod app;
 mod config;
 mod discovery;
 mod history;
+mod hooks;
 mod logger;
 mod monitor;
 mod orchestrator;
@@ -121,6 +122,10 @@ struct Cli {
     #[arg(long)]
     log: Option<String>,
 
+    /// List configured event hooks and exit
+    #[arg(long)]
+    hooks: bool,
+
     /// Show history of completed sessions and exit
     #[arg(long)]
     history: bool,
@@ -178,8 +183,16 @@ fn main() -> io::Result<()> {
         });
     }
 
+    // Load event hooks from config
+    let hook_registry = config::load_hooks();
+
     if cli.config {
         cfg.print_resolved();
+        return Ok(());
+    }
+
+    if cli.hooks {
+        hook_registry.print_list();
         return Ok(());
     }
 
@@ -232,7 +245,7 @@ fn main() -> io::Result<()> {
     let app_theme = theme::Theme::from_mode(theme_mode);
 
     // Run app
-    let result = run(&mut terminal, tick_rate, &cfg, app_theme);
+    let result = run(&mut terminal, tick_rate, &cfg, app_theme, hook_registry);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -520,6 +533,7 @@ fn run(
     tick_rate: Duration,
     cfg: &config::Config,
     app_theme: theme::Theme,
+    hook_registry: hooks::HookRegistry,
 ) -> io::Result<()> {
     let mut app = App::new();
     app.notify = cfg.notify;
@@ -530,6 +544,7 @@ fn run(
     app.kill_on_budget = cfg.kill_on_budget;
     app.grouped_view = cfg.grouped;
     app.theme = app_theme;
+    app.hooks = hook_registry;
     let mut last_tick = Instant::now();
 
     loop {

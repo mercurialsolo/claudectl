@@ -222,6 +222,57 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
     Some(raw)
 }
 
+/// Load hooks from global and project config files.
+pub fn load_hooks() -> crate::hooks::HookRegistry {
+    let mut registry = crate::hooks::HookRegistry::new();
+
+    if let Some(global) = global_config_path() {
+        parse_hooks_from_file(&global, &mut registry);
+    }
+    parse_hooks_from_file(&PathBuf::from(".claudectl.toml"), &mut registry);
+
+    registry
+}
+
+fn parse_hooks_from_file(path: &PathBuf, registry: &mut crate::hooks::HookRegistry) {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let mut section = String::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') {
+            section = line[1..line.len() - 1].trim().to_string();
+            continue;
+        }
+
+        // Only process hooks sections
+        if !section.starts_with("hooks.") {
+            continue;
+        }
+
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        let value = value.split('#').next().unwrap_or(value).trim();
+
+        if key == "run" {
+            if let Some(event) = crate::hooks::HookEvent::from_section(&section) {
+                registry.add(event, unquote(value));
+            }
+        }
+    }
+}
+
 fn parse_bool(s: &str) -> Option<bool> {
     match s {
         "true" => Some(true),

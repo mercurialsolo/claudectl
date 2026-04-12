@@ -4,6 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
 use crate::discovery;
+use crate::hooks::{HookEvent, HookRegistry};
 use crate::monitor;
 use crate::process;
 use crate::session::{ClaudeSession, SessionStatus};
@@ -43,6 +44,7 @@ pub struct App {
     pub theme: Theme,
     pub weekly_summary: crate::history::WeeklySummary,
     pub weekly_summary_tick: u32, // Refresh every N ticks
+    pub hooks: HookRegistry,
 }
 
 #[derive(Default, Clone)]
@@ -125,6 +127,7 @@ impl App {
             theme: Theme::from_mode(crate::theme::ThemeMode::Dark),
             weekly_summary: crate::history::weekly_summary(),
             weekly_summary_tick: 0,
+            hooks: HookRegistry::new(),
         };
         app.refresh();
         if !app.sessions.is_empty() {
@@ -147,6 +150,7 @@ impl App {
 
         // Merge: reuse existing session state (jsonl_offset, tokens, cost, cpu_history)
         // or create new from discovered
+        let mut new_pids: Vec<u32> = Vec::new();
         let mut sessions: Vec<ClaudeSession> = discovered
             .into_iter()
             .map(|new| {
@@ -158,6 +162,7 @@ impl App {
                     prev
                 } else {
                     // Brand new session
+                    new_pids.push(new.pid);
                     new
                 }
             })
@@ -222,6 +227,7 @@ impl App {
                         budget
                     );
                     fire_notification(&format!("{} budget {:.0}%", session.display_name(), pct));
+                    self.hooks.fire(HookEvent::BudgetWarning, session);
                 }
 
                 // Kill at 100%
@@ -244,6 +250,7 @@ impl App {
                         );
                     }
                     fire_notification(&format!("{} exceeded budget!", session.display_name()));
+                    self.hooks.fire(HookEvent::BudgetExceeded, session);
                 }
             }
         }
@@ -338,6 +345,32 @@ impl App {
                     );
                 }
             }
+
+            // Event hooks
+            self.hooks.fire_with_status(
+                HookEvent::StatusChange,
+                session,
+                &prev.unwrap().to_string(),
+                &session.status.to_string(),
+            );
+
+            match session.status {
+                SessionStatus::NeedsInput => {
+                    self.hooks.fire(HookEvent::NeedsInput, session);
+                }
+                SessionStatus::Finished => {
+                    self.hooks.fire(HookEvent::Finished, session);
+                }
+                SessionStatus::Idle => {
+                    self.hooks.fire(HookEvent::Idle, session);
+                }
+                _ => {}
+            }
+        }
+
+        // Fire hooks for newly discovered sessions
+        for session in sessions.iter().filter(|s| new_pids.contains(&s.pid)) {
+            self.hooks.fire(HookEvent::SessionStart, session);
         }
 
         // Update prev_statuses
