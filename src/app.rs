@@ -291,6 +291,11 @@ pub struct App {
     pub needs_input_since: HashMap<u32, std::time::Instant>, // When each PID entered NeedsInput
     pub conflict_pids: HashSet<u32>,  // PIDs that share a working directory with another session
     pub conflict_alerted: HashSet<String>, // cwds that have already triggered a conflict alert
+    pub file_conflict_pids: HashSet<u32>, // PIDs involved in file-level conflicts
+    pub file_conflicts: HashMap<String, Vec<u32>>, // file path → PIDs that modified it
+    pub file_conflict_alerted: HashSet<String>, // Files already alerted
+    pub file_conflicts_enabled: bool, // Config: detect file-level conflicts
+    pub auto_deny_file_conflicts: bool, // Config: auto-deny conflicting writes
     pub demo_mode: bool,
     pub demo_tick: u32,
     pub session_recordings: HashMap<u32, String>, // pid -> output_path for active recordings
@@ -397,6 +402,11 @@ impl App {
             needs_input_since: HashMap::new(),
             conflict_pids: HashSet::new(),
             conflict_alerted: HashSet::new(),
+            file_conflict_pids: HashSet::new(),
+            file_conflicts: HashMap::new(),
+            file_conflict_alerted: HashSet::new(),
+            file_conflicts_enabled: true,
+            auto_deny_file_conflicts: false,
             demo_mode: false,
             demo_tick: 0,
             session_recordings: HashMap::new(),
@@ -747,6 +757,84 @@ impl App {
                 .unwrap_or(false)
         });
 
+        // File-level conflict detection: find files edited by multiple sessions
+        self.file_conflict_pids.clear();
+        self.file_conflicts.clear();
+        // Reset has_file_conflict on all sessions
+        for session in &mut sessions {
+            session.has_file_conflict = false;
+        }
+
+        if self.file_conflicts_enabled {
+            // Build file → PIDs map from files_modified across active sessions
+            let mut file_pids: HashMap<String, Vec<u32>> = HashMap::new();
+            for session in &sessions {
+                if session.status == SessionStatus::Finished {
+                    continue;
+                }
+                for file in session.files_modified.keys() {
+                    file_pids.entry(file.clone()).or_default().push(session.pid);
+                }
+                // Also consider pending file edits (predictive conflict)
+                if let Some(ref pending) = session.pending_file_path {
+                    file_pids
+                        .entry(pending.clone())
+                        .or_default()
+                        .push(session.pid);
+                }
+            }
+
+            // Deduplicate PIDs per file (a session may appear twice if it both modified and is pending)
+            for pids in file_pids.values_mut() {
+                pids.sort_unstable();
+                pids.dedup();
+            }
+
+            // Record conflicts where 2+ sessions touch the same file
+            for (file, pids) in &file_pids {
+                if pids.len() >= 2 {
+                    for &pid in pids {
+                        self.file_conflict_pids.insert(pid);
+                    }
+                    self.file_conflicts.insert(file.clone(), pids.clone());
+
+                    // Mark sessions with pending file conflicts
+                    for session in &mut sessions {
+                        if let Some(ref pending) = session.pending_file_path {
+                            if pending == file && pids.contains(&session.pid) {
+                                session.has_file_conflict = true;
+                            }
+                        }
+                    }
+
+                    // Fire alert once per conflicting file
+                    if !self.file_conflict_alerted.contains(file) {
+                        self.file_conflict_alerted.insert(file.clone());
+                        let names: Vec<&str> = pids
+                            .iter()
+                            .filter_map(|pid| {
+                                sessions
+                                    .iter()
+                                    .find(|s| s.pid == *pid)
+                                    .map(|s| s.display_name())
+                            })
+                            .collect();
+                        let short = file.rsplit('/').next().unwrap_or(file);
+                        self.status_msg =
+                            format!("FILE CONFLICT: {} edited by {}", short, names.join(", "));
+                        fire_notification(&format!("File conflict: {short}"));
+                        if let Some(session) = sessions.iter().find(|s| s.pid == pids[0]) {
+                            self.hooks.fire(HookEvent::ConflictDetected, session);
+                        }
+                    }
+                }
+            }
+
+            // Clear alerts for files no longer in conflict
+            self.file_conflict_alerted
+                .retain(|f| self.file_conflicts.contains_key(f));
+        }
+
         // Update prev_statuses
         self.prev_statuses = sessions.iter().map(|s| (s.pid, s.status)).collect();
 
@@ -1064,6 +1152,62 @@ impl App {
                 match terminals::approve_session(session) {
                     Ok(()) => self.status_msg = format!("Auto-approved {}", session.display_name()),
                     Err(e) => self.status_msg = format!("Auto-approve error: {e}"),
+                }
+            }
+        }
+
+        // Built-in file conflict auto-deny: deny writes to files being edited by another session
+        if self.auto_deny_file_conflicts {
+            let conflict_candidates: Vec<(u32, String, String)> = self
+                .sessions
+                .iter()
+                .filter(|s| {
+                    s.status == SessionStatus::NeedsInput
+                        && s.has_file_conflict
+                        && s.pending_file_path.is_some()
+                })
+                .filter_map(|s| {
+                    let file = s.pending_file_path.as_ref()?;
+                    let other_pids = self.file_conflicts.get(file)?;
+                    let other_name = other_pids
+                        .iter()
+                        .filter(|&&p| p != s.pid)
+                        .find_map(|pid| {
+                            self.sessions
+                                .iter()
+                                .find(|o| o.pid == *pid)
+                                .map(|o| format!("{} (PID {})", o.display_name(), o.pid))
+                        })
+                        .unwrap_or_else(|| "another session".into());
+                    Some((s.pid, file.clone(), other_name))
+                })
+                .collect();
+
+            for (pid, file, other) in conflict_candidates {
+                // Debounce
+                if let Some(last) = self.auto_actions_fired.get(&pid) {
+                    if last.elapsed().as_secs() < 5 {
+                        continue;
+                    }
+                }
+                if let Some(session) = self.sessions.iter().find(|s| s.pid == pid) {
+                    let short = file.rsplit('/').next().unwrap_or(&file);
+                    let msg = format!("File {short} is being edited by {other}");
+                    match terminals::send_input(session, &msg) {
+                        Ok(()) => {
+                            let status = format!(
+                                "File conflict: denied {} edit to {short}",
+                                session.display_name()
+                            );
+                            crate::logger::log("CONFLICT", &status);
+                            self.status_msg = status;
+                        }
+                        Err(e) => {
+                            self.status_msg = format!("File conflict deny error: {e}");
+                        }
+                    }
+                    self.auto_actions_fired
+                        .insert(pid, std::time::Instant::now());
                 }
             }
         }

@@ -57,6 +57,7 @@ pub struct AutoRule {
     pub match_project: Vec<String>,
     pub match_cost_above: Option<f64>,
     pub match_last_error: Option<bool>,
+    pub match_file_conflict: Option<bool>,
     pub action: RuleAction,
     pub message: Option<String>,
 }
@@ -71,6 +72,7 @@ impl AutoRule {
             match_project: Vec::new(),
             match_cost_above: None,
             match_last_error: None,
+            match_file_conflict: None,
             action,
             message: None,
         }
@@ -173,6 +175,12 @@ fn matches_rule(rule: &AutoRule, session: &ClaudeSession) -> bool {
 
     if let Some(expected) = rule.match_last_error {
         if session.last_tool_error != expected {
+            return false;
+        }
+    }
+
+    if let Some(expected) = rule.match_file_conflict {
+        if session.has_file_conflict != expected {
             return false;
         }
     }
@@ -397,6 +405,29 @@ mod tests {
         let mut rule2 = approve_rule("no_error");
         rule2.match_last_error = Some(false);
         assert!(evaluate(&[rule2], &s).is_none());
+    }
+
+    #[test]
+    fn match_file_conflict() {
+        let mut s = make_session();
+        s.has_file_conflict = true;
+
+        let mut rule = deny_rule("deny_conflict");
+        rule.match_file_conflict = Some(true);
+        assert!(evaluate(&[rule], &s).is_some());
+
+        let mut rule2 = approve_rule("no_conflict");
+        rule2.match_file_conflict = Some(false);
+        assert!(evaluate(&[rule2], &s).is_none());
+    }
+
+    #[test]
+    fn match_file_conflict_false_matches_clean() {
+        let s = make_session(); // has_file_conflict defaults to false
+
+        let mut rule = approve_rule("clean");
+        rule.match_file_conflict = Some(false);
+        assert!(evaluate(&[rule], &s).is_some());
     }
 
     #[test]

@@ -57,6 +57,7 @@ claudectl --run tasks.json --parallel     # Orchestrate multiple sessions
 | Know which session is blocked | Tab-hunt | **At a glance** |
 | Track cost per session | Manually | **Live $/hr burn rate** |
 | Enforce spend budgets | No | **Auto-kill at limit** |
+| File conflict detection | No | **Auto-detect + auto-deny** |
 | Auto-rule engine | No | **Match by tool/command/project/cost** |
 | Approve prompts without switching | No | **Press `y`** |
 | Get notified on stalls/blocks | No | **Desktop + webhook** |
@@ -149,6 +150,31 @@ claudectl continuously checks each session for problems and surfaces them with s
 - **Context saturation** — warns when a session approaches its context window limit
 
 Health issues appear as icons in the session table and as a summary in the status bar. No configuration needed.
+
+## File Conflict Detection
+
+When multiple sessions edit the same file, claudectl detects the conflict and flags it:
+
+- **`!F` prefix** in the session table for sessions with file-level conflicts
+- **File Conflicts section** in the detail panel showing which files conflict and with which sessions
+- **Predictive detection** — flags pending Edit/Write calls targeting files another session has already modified
+- **Auto-deny** — optionally deny writes to conflicting files with an actionable message
+
+```toml
+# .claudectl.toml
+[orchestrate]
+file_conflicts = true              # Detect file-level conflicts (default: on)
+auto_deny_file_conflicts = true    # Auto-deny conflicting writes (default: off)
+```
+
+File conflicts can also be matched in auto-rules:
+
+```toml
+[rules.deny_conflicts]
+match_file_conflict = true
+action = "deny"
+message = "Another session is editing this file"
+```
 
 ## Launch and Resume Sessions
 

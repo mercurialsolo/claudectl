@@ -477,13 +477,16 @@ fn session_row(s: &ClaudeSession, app: &App) -> Row<'static> {
         s.status.to_string()
     };
 
-    let conflict = app.conflict_pids.contains(&s.pid);
+    let file_conflict = app.file_conflict_pids.contains(&s.pid);
+    let wt_conflict = app.conflict_pids.contains(&s.pid);
     let recording = app.session_recordings.contains_key(&s.pid);
-    let prefix = match (conflict, recording) {
-        (true, true) => "!! REC ",
-        (true, false) => "!! ",
-        (false, true) => "REC ",
-        (false, false) => "",
+    let prefix = match (file_conflict, wt_conflict, recording) {
+        (true, _, true) => "!F REC ",
+        (true, _, false) => "!F ",
+        (false, true, true) => "!! REC ",
+        (false, true, false) => "!! ",
+        (false, false, true) => "REC ",
+        (false, false, false) => "",
     };
     let health_icon = crate::health::status_icon(s, &app.health_thresholds);
     let health_suffix = if health_icon.is_empty() {

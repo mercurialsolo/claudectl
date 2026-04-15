@@ -2,6 +2,26 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.25.0] - 2026-04-15
+
+### Added
+- File-level conflict detection: detects when multiple sessions edit the same file, with `!F` indicator in dashboard and per-file detail in the expanded panel
+- Predictive conflict detection: flags pending Edit/Write tool calls that target files already modified by another session
+- Auto-deny for file conflicts: `[orchestrate] auto_deny_file_conflicts = true` automatically denies writes to files being edited by another session, with actionable error message naming the conflicting session
+- `match_file_conflict` rule condition: match sessions with pending file conflicts in the auto-rule engine
+- `pending_file_path` tracking: Edit/Write/NotebookEdit tool calls now track the target file path for conflict detection
+- `[orchestrate]` config section with `file_conflicts` (default true) and `auto_deny_file_conflicts` (default false)
+- Configurable health check thresholds via `[health]` TOML section — all 5 checks (cache, cost spike, loop, stall, context) accept user-defined thresholds
+- Capture actual error messages from tool results — detail panel shows "Recent Errors" section with tool name and message text
+- `--config-template` flag prints a fully annotated `.claudectl.toml` with all available settings
+- CLI flags grouped by purpose in `--help`: Dashboard, Output Modes, Filtering, Session Management, Budget & Notifications, Brain, Orchestration, Recording, Cleanup, History & Diagnostics
+
+### Fixed
+- Brain connection failure now shows in the TUI status bar instead of being lost to stderr
+
+### Changed
+- Orchestrator shows task plan at launch, uses `[n/total]` progress fractions and terminal-width-aware status line
+
 ## [0.24.0] - 2026-04-15
 
 ### Added

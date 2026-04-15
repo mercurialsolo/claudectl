@@ -24,6 +24,8 @@ pub struct Config {
     pub model_overrides: Vec<ModelOverride>,
     pub rules: Vec<AutoRule>,
     pub health: HealthThresholds,
+    pub file_conflicts: bool, // Detect file-level conflicts across sessions
+    pub auto_deny_file_conflicts: bool, // Auto-deny writes to conflicting files
     pub brain: Option<BrainConfig>,
     pub agents: Vec<AgentConfig>,
 }
@@ -127,6 +129,8 @@ impl Default for Config {
             model_overrides: Vec::new(),
             rules: Vec::new(),
             health: HealthThresholds::default(),
+            file_conflicts: true,
+            auto_deny_file_conflicts: false,
             brain: None,
             agents: Vec::new(),
         }
@@ -151,6 +155,8 @@ struct RawConfig {
     model_overrides: Vec<ModelOverride>,
     rules: Vec<AutoRule>,
     health: Option<RawHealthThresholds>,
+    file_conflicts: Option<bool>,
+    auto_deny_file_conflicts: Option<bool>,
     brain: Option<BrainConfig>,
     agents: Vec<AgentConfig>,
 }
@@ -245,6 +251,12 @@ impl Config {
                 self.health.context_warning_pct = v;
             }
         }
+        if let Some(v) = raw.file_conflicts {
+            self.file_conflicts = v;
+        }
+        if let Some(v) = raw.auto_deny_file_conflicts {
+            self.auto_deny_file_conflicts = v;
+        }
         for override_ in raw.model_overrides {
             upsert_model_override(&mut self.model_overrides, override_);
         }
@@ -328,6 +340,13 @@ impl Config {
                 .unwrap_or_else(|| "none".into())
         );
         println!("  context_warn: {}%", self.context_warn_threshold);
+        println!();
+        println!("  [orchestrate]");
+        println!("  file_conflicts:           {}", self.file_conflicts);
+        println!(
+            "  auto_deny_file_conflicts: {}",
+            self.auto_deny_file_conflicts
+        );
         println!();
         println!("  [health]");
         println!(
@@ -423,6 +442,15 @@ impl Config {
 [context]
 # Fire on_context_high hook when context usage crosses this percentage
 # warn_threshold = 75
+
+# ── Orchestration ───────────────────────────────────────────────────
+
+[orchestrate]
+# Detect file-level conflicts when multiple sessions edit the same file
+# file_conflicts = true
+
+# Auto-deny writes to files being edited by another session
+# auto_deny_file_conflicts = false
 
 # ── Health Check Thresholds ─────────────────────────────────────────
 
@@ -595,6 +623,12 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
             ("context", "warn_threshold") => {
                 raw.context_warn_threshold = value.parse().ok();
             }
+            ("orchestrate", "file_conflicts") => {
+                raw.file_conflicts = parse_bool(value);
+            }
+            ("orchestrate", "auto_deny_file_conflicts") => {
+                raw.auto_deny_file_conflicts = parse_bool(value);
+            }
             ("health", key) => {
                 let h = raw.health.get_or_insert_with(RawHealthThresholds::default);
                 match key {
@@ -649,6 +683,7 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     "match_project" => rule.match_project = parse_string_array(value),
                     "match_cost_above" => rule.match_cost_above = value.parse().ok(),
                     "match_last_error" => rule.match_last_error = parse_bool(value),
+                    "match_file_conflict" => rule.match_file_conflict = parse_bool(value),
                     "action" => {
                         if let Some(a) = RuleAction::parse(&unquote(value)) {
                             rule.action = a;
@@ -1142,5 +1177,32 @@ context_warning_pct = 85.0
         });
         assert_eq!(config.health.cache_critical_pct, 5.0); // overridden
         assert_eq!(config.health.cache_warning_pct, 30.0); // unchanged default
+    }
+
+    #[test]
+    fn test_parse_orchestrate_config() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[orchestrate]
+file_conflicts = true
+auto_deny_file_conflicts = true
+"#
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        let raw = parse_config_file(&file.path().to_path_buf()).unwrap();
+        assert_eq!(raw.file_conflicts, Some(true));
+        assert_eq!(raw.auto_deny_file_conflicts, Some(true));
+    }
+
+    #[test]
+    fn test_orchestrate_defaults() {
+        let config = Config::default();
+        assert!(config.file_conflicts); // on by default
+        assert!(!config.auto_deny_file_conflicts); // off by default
     }
 }

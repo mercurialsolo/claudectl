@@ -163,6 +163,18 @@ pub fn update_tokens(session: &mut ClaudeSession) {
                                                 .get("command")
                                                 .and_then(|v| v.as_str())
                                                 .map(|s| s.to_string());
+                                            // Track pending file path for conflict detection
+                                            session.pending_file_path = if matches!(
+                                                name.as_str(),
+                                                "Edit" | "Write" | "NotebookEdit"
+                                            ) {
+                                                input
+                                                    .get("file_path")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string())
+                                            } else {
+                                                None
+                                            };
                                         }
                                         TranscriptBlock::ToolResult {
                                             is_error, content, ..
@@ -195,6 +207,7 @@ pub fn update_tokens(session: &mut ClaudeSession) {
                                             // Tool was executed — no longer pending
                                             session.pending_tool_name = None;
                                             session.pending_tool_input = None;
+                                            session.pending_file_path = None;
                                         }
                                         _ => {}
                                     }

@@ -141,6 +141,41 @@ pub fn render_detail_panel(frame: &mut Frame, area: Rect, session: &ClaudeSessio
         }
     }
 
+    // File conflicts section
+    {
+        let pid = session.pid;
+        let conflicting_files: Vec<(&String, &Vec<u32>)> = app
+            .file_conflicts
+            .iter()
+            .filter(|(_, pids)| pids.contains(&pid))
+            .collect();
+        if !conflicting_files.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(" File Conflicts ({})", conflicting_files.len()),
+                Style::default().fg(t.error).add_modifier(Modifier::BOLD),
+            )));
+            for (file, pids) in conflicting_files.iter().take(10) {
+                let others: Vec<&str> = pids
+                    .iter()
+                    .filter(|&&p| p != pid)
+                    .filter_map(|p| {
+                        app.sessions
+                            .iter()
+                            .find(|s| s.pid == *p)
+                            .map(|s| s.display_name())
+                    })
+                    .collect();
+                let short = file.rsplit('/').next().unwrap_or(file);
+                lines.push(detail_line(
+                    &format!("  {short}"),
+                    &format!("also edited by {}", others.join(", ")),
+                    t,
+                ));
+            }
+        }
+    }
+
     // Tool usage section
     if !session.tool_usage.is_empty() {
         lines.push(Line::from(""));

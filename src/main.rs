@@ -1107,6 +1107,8 @@ fn run_tui<W: io::Write>(
     app.context_warn_threshold = cfg.context_warn_threshold;
     app.rules = cfg.rules.clone();
     app.health_thresholds = cfg.health.clone();
+    app.file_conflicts_enabled = cfg.file_conflicts;
+    app.auto_deny_file_conflicts = cfg.auto_deny_file_conflicts;
     app.brain_config = cfg.brain.clone();
     if let Some(ref brain_cfg) = cfg.brain {
         if brain_cfg.enabled {

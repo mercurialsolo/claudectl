@@ -142,6 +142,8 @@ pub struct ClaudeSession {
     /// Pending tool call details for rule-based auto-actions.
     pub pending_tool_name: Option<String>,
     pub pending_tool_input: Option<String>, // Extracted command string (for Bash)
+    pub pending_file_path: Option<String>,  // File path for pending Edit/Write/NotebookEdit
+    pub has_file_conflict: bool,            // Pending file edit conflicts with another session
     pub last_tool_error: bool,
     pub last_error_message: Option<String>,
     pub recent_errors: Vec<ErrorEntry>, // Last 5 errors (ring buffer)
@@ -319,6 +321,8 @@ impl ClaudeSession {
             is_waiting_for_task: false,
             pending_tool_name: None,
             pending_tool_input: None,
+            pending_file_path: None,
+            has_file_conflict: false,
             last_tool_error: false,
             last_error_message: None,
             recent_errors: Vec::new(),
