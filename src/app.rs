@@ -310,6 +310,21 @@ pub struct App {
     pub idle_mode_active: bool,
     pub idle_tasks_launched: Vec<String>,
     pub idle_report: Vec<String>,
+    // Coordination layer (feature-gated)
+    #[cfg(feature = "coord")]
+    pub coord_leases: Vec<crate::coord::types::Lease>,
+    #[cfg(feature = "coord")]
+    pub coord_handoffs: Vec<crate::coord::types::Handoff>,
+    #[cfg(feature = "coord")]
+    pub coord_lease_sessions: HashSet<String>,
+    #[cfg(feature = "coord")]
+    pub coord_handoff_sessions: HashSet<String>,
+    #[cfg(feature = "coord")]
+    pub coord_interrupt_targets: HashSet<String>,
+    #[cfg(feature = "coord")]
+    pub coord_pending_interrupts: Vec<crate::coord::types::Interrupt>,
+    #[cfg(feature = "coord")]
+    pub coord_tick: u32,
 }
 
 #[derive(Default, Clone)]
@@ -426,7 +441,23 @@ impl App {
             idle_mode_active: false,
             idle_tasks_launched: Vec::new(),
             idle_report: Vec::new(),
+            #[cfg(feature = "coord")]
+            coord_leases: Vec::new(),
+            #[cfg(feature = "coord")]
+            coord_handoffs: Vec::new(),
+            #[cfg(feature = "coord")]
+            coord_lease_sessions: HashSet::new(),
+            #[cfg(feature = "coord")]
+            coord_handoff_sessions: HashSet::new(),
+            #[cfg(feature = "coord")]
+            coord_interrupt_targets: HashSet::new(),
+            #[cfg(feature = "coord")]
+            coord_pending_interrupts: Vec::new(),
+            #[cfg(feature = "coord")]
+            coord_tick: 0,
         };
+        #[cfg(feature = "coord")]
+        app.coord_refresh();
         app.refresh();
         if app.visible_session_count() > 0 {
             app.table_state.select(Some(0));
@@ -1032,6 +1063,16 @@ impl App {
             self.weekly_summary = crate::history::weekly_summary();
             self.check_aggregate_budgets();
         }
+
+        // Refresh coordination state every ~6s (3 ticks at 2s interval)
+        #[cfg(feature = "coord")]
+        {
+            self.coord_tick += 1;
+            if self.coord_tick >= 3 {
+                self.coord_tick = 0;
+                self.coord_refresh();
+            }
+        }
     }
 
     /// Get how long a session has been waiting for input, if applicable.
@@ -1050,6 +1091,64 @@ impl App {
         } else {
             Some(format!("{}m {}s", secs / 60, secs % 60))
         }
+    }
+
+    /// Refresh cached coordination state from SQLite.
+    #[cfg(feature = "coord")]
+    pub fn coord_refresh(&mut self) {
+        let conn = match crate::coord::store::open() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let _ = crate::coord::store::expire_stale_leases(&conn);
+        self.coord_leases =
+            crate::coord::store::list_leases(&conn, Some(crate::coord::types::LeaseStatus::Active))
+                .unwrap_or_default();
+        self.coord_handoffs = crate::coord::store::list_pending_handoffs(&conn).unwrap_or_default();
+
+        self.coord_lease_sessions = self
+            .coord_leases
+            .iter()
+            .map(|l| l.owner_session_id.clone())
+            .collect();
+        self.coord_handoff_sessions = self
+            .coord_handoffs
+            .iter()
+            .flat_map(|h| {
+                let mut ids = vec![h.from_session_id.clone()];
+                if let Some(ref to) = h.to_session_id {
+                    ids.push(to.clone());
+                }
+                ids
+            })
+            .collect();
+
+        let _ = crate::coord::store::expire_stale_interrupts(&conn);
+        self.coord_pending_interrupts = crate::coord::store::list_interrupts(
+            &conn,
+            Some(crate::coord::types::InterruptState::Pending),
+        )
+        .unwrap_or_default();
+        self.coord_interrupt_targets = self
+            .coord_pending_interrupts
+            .iter()
+            .map(|i| i.target_session_id.clone())
+            .collect();
+    }
+
+    #[cfg(feature = "coord")]
+    pub fn session_has_lease(&self, session_id: &str) -> bool {
+        self.coord_lease_sessions.contains(session_id)
+    }
+
+    #[cfg(feature = "coord")]
+    pub fn session_has_handoff(&self, session_id: &str) -> bool {
+        self.coord_handoff_sessions.contains(session_id)
+    }
+
+    #[cfg(feature = "coord")]
+    pub fn session_has_interrupt(&self, session_id: &str) -> bool {
+        self.coord_interrupt_targets.contains(session_id)
     }
 
     /// Compute budget exhaustion ETA based on current burn rate.
@@ -1355,6 +1454,19 @@ impl App {
             for (_pid, msg) in deliveries {
                 crate::logger::log("MAILBOX", &msg);
                 self.status_msg = msg;
+            }
+        }
+
+        // Deliver pending typed interrupts from the coordination bus
+        #[cfg(feature = "coord")]
+        {
+            if let Ok(conn) = crate::coord::store::open() {
+                let deliveries =
+                    crate::coord::interrupt_bus::deliver_pending(&conn, &self.sessions);
+                for (_intr_id, msg) in deliveries {
+                    crate::logger::log("INTERRUPT", &msg);
+                    self.status_msg = msg;
+                }
             }
         }
     }

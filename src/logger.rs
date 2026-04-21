@@ -48,7 +48,7 @@ fn chrono_now() -> String {
 }
 
 /// Convert days since epoch to (year, month, day). Simplified civil calendar.
-fn days_to_date(days: u64) -> (u64, u64, u64) {
+pub fn days_to_date(days: u64) -> (u64, u64, u64) {
     // Algorithm from http://howardhinnant.github.io/date_algorithms.html
     let z = days + 719468;
     let era = z / 146097;

@@ -357,6 +357,13 @@ impl BrainEngine {
             brain_ctx.few_shot_examples = super::decisions::format_few_shot_examples(&similar);
         }
 
+        // Inject coordination context (leases, blockers, handoffs, memory)
+        #[cfg(feature = "coord")]
+        {
+            brain_ctx.coordination_context =
+                crate::coord::injection::build_coordination_context(session);
+        }
+
         let prompt = context::format_brain_prompt(&brain_ctx);
 
         self.inflight.insert(pid);

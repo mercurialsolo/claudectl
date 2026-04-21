@@ -251,6 +251,97 @@ pub fn render_detail_panel(frame: &mut Frame, area: Rect, session: &ClaudeSessio
         }
     }
 
+    // Coordination section (leases and handoffs for this session)
+    #[cfg(feature = "coord")]
+    {
+        let session_leases: Vec<&crate::coord::types::Lease> = app
+            .coord_leases
+            .iter()
+            .filter(|l| l.owner_session_id == session.session_id)
+            .collect();
+
+        let session_handoffs: Vec<&crate::coord::types::Handoff> = app
+            .coord_handoffs
+            .iter()
+            .filter(|h| {
+                h.from_session_id == session.session_id
+                    || h.to_session_id.as_deref() == Some(&*session.session_id)
+            })
+            .collect();
+
+        if !session_leases.is_empty() || !session_handoffs.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                " Coordination",
+                Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+            )));
+
+            if !session_leases.is_empty() {
+                lines.push(detail_line(
+                    "  Leases",
+                    &format!("{} active", session_leases.len()),
+                    t,
+                ));
+                for lease in session_leases.iter().take(5) {
+                    let resource = format!("{}:{}", lease.resource_kind, lease.resource_value);
+                    let expires = lease.expires_at.as_deref().unwrap_or("no expiry");
+                    lines.push(detail_line(
+                        &format!("    {}", lease.mode),
+                        &format!("{resource} ({expires})"),
+                        t,
+                    ));
+                }
+            }
+
+            if !session_handoffs.is_empty() {
+                lines.push(detail_line(
+                    "  Handoffs",
+                    &format!("{} pending", session_handoffs.len()),
+                    t,
+                ));
+                for handoff in session_handoffs.iter().take(5) {
+                    let direction = if handoff.from_session_id == session.session_id {
+                        "to"
+                    } else {
+                        "from"
+                    };
+                    let other = if direction == "to" {
+                        handoff.to_session_id.as_deref().unwrap_or("unassigned")
+                    } else {
+                        &handoff.from_session_id
+                    };
+                    lines.push(detail_line(
+                        &format!("    {direction} {other}"),
+                        &handoff.summary,
+                        t,
+                    ));
+                }
+            }
+
+            // Pending interrupts targeting this session
+            let session_interrupts: Vec<&crate::coord::types::Interrupt> = app
+                .coord_pending_interrupts
+                .iter()
+                .filter(|i| i.target_session_id == session.session_id)
+                .collect();
+
+            if !session_interrupts.is_empty() {
+                lines.push(detail_line(
+                    "  Interrupts",
+                    &format!("{} pending", session_interrupts.len()),
+                    t,
+                ));
+                for intr in session_interrupts.iter().take(5) {
+                    lines.push(detail_line(
+                        &format!("    {} [{}]", intr.interrupt_type, intr.priority),
+                        &intr.reason,
+                        t,
+                    ));
+                }
+            }
+        }
+    }
+
     // Tool usage section
     if !session.tool_usage.is_empty() {
         lines.push(Line::from(""));

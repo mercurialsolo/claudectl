@@ -407,6 +407,13 @@ fn maybe_distill_background() {
                 if decisions.len() >= MIN_PROJECT_DECISIONS {
                     let proj_prefs = distill_preferences(decisions);
                     let _ = save_project_preferences(project, &proj_prefs);
+
+                    // Promote high-confidence patterns to coordination memory
+                    #[cfg(feature = "coord")]
+                    {
+                        let _ =
+                            crate::coord::promotion::promote_from_preferences(project, &proj_prefs);
+                    }
                 }
             }
 

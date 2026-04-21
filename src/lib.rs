@@ -8,6 +8,8 @@
 pub mod app;
 pub mod brain;
 pub mod config;
+#[cfg(feature = "coord")]
+pub mod coord;
 pub mod demo;
 pub mod discovery;
 pub mod health;

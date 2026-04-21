@@ -8,6 +8,8 @@
 mod app;
 mod brain;
 mod config;
+#[cfg(feature = "coord")]
+mod coord;
 mod demo;
 mod discovery;
 mod health;
@@ -223,6 +225,12 @@ struct Cli {
     /// Run independent tasks in parallel (used with --run)
     #[arg(long, help_heading = "Orchestration")]
     parallel: bool,
+
+    // ── Coordination ──────────────────────────────────────────────────
+    /// Coordination layer inspection (events, leases, blockers, handoffs, interrupts, memory)
+    #[cfg(feature = "coord")]
+    #[arg(long, help_heading = "Coordination")]
+    coord: Option<String>,
 
     // ── Recording ──────────────────────────────────────────────────────
     /// Record the TUI session as an asciicast v2 file (e.g., --record demo.cast)
@@ -447,6 +455,11 @@ fn run_main(cli: Cli) -> io::Result<()> {
     if let Some(ref subcommand) = cli.brain_stats {
         brain::metrics::dispatch(subcommand);
         return Ok(());
+    }
+
+    #[cfg(feature = "coord")]
+    if let Some(ref sub) = cli.coord {
+        return coord::cli::dispatch(sub, cli.json);
     }
 
     if cli.brain_query {
