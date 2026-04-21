@@ -2,6 +2,27 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.33.0] - 2026-04-21
+
+### Added
+- **Coordination layer** -- local-first coordination plane for multi-agent coding workflows (`--features coord`) (#180, #181, #182, #183)
+  - **Phase 0: Event Log** -- SQLite-backed event store with typed records for leases, blockers, interrupts, handoffs, and memory. FTS5 full-text search. 19 CLI subcommands under `--coord`
+  - **Phase 1: Ownership and Handoffs** -- `claim`/`release` with exclusive conflict detection, structured handoff packets with goal/artifacts/next_steps, TUI badges (`L`/`H`/`I`) and detail panel coordination section
+  - **Phase 2: Interrupt Bus** -- typed interrupt delivery with 4 modes (immediate, safe_boundary, waiting_only, manual_review), deduplication, expiry, full lifecycle tracking (pending -> delivered -> acknowledged), wired into app tick loop
+  - **Phase 3: Memory Promotion and Injection** -- promotes high-confidence brain patterns into typed memory records, injects compact coordination context (leases, conflicts, blockers, handoffs, memory) into brain prompts before every decision
+  - **Phase 4: External Agent Adapters** -- `AgentAdapter` trait with capability negotiation, Claude Code adapter wrapping existing discovery/terminal code, Codex stub adapter
+  - **Evaluation layer** -- 10 coordination eval scenarios, metrics engine computing conflict rate, handoff completion rate, interrupt delivery rate, blocker resolution time from the event log
+- **`--headless` mode** -- run the full autonomous stack (brain + coordination + context rot prevention) without a TUI. Attach a dashboard from another terminal. Emits structured JSON events to stdout
+  - Automatic context rot intervention: raises `compact` interrupts at decay >= 50, `stop` at >= 85
+  - Periodic coordination summaries every ~30s
+  - Usage: `claudectl --headless --brain --auto-run`
+
+### Technical details
+- Feature-gated behind `--features coord` -- default build is unaffected (zero cost for users who don't need coordination)
+- 12 new source files in `src/coord/` (adapter, CLI, evals, injection, interrupt bus, metrics, promotion, store, types)
+- SQLite with WAL mode for concurrent access between headless and TUI processes
+- 454 tests passing across both build configurations
+
 ## [0.32.0] - 2026-04-20
 
 ### Added
