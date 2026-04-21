@@ -90,6 +90,11 @@ pub(crate) struct Cli {
     #[arg(short, long, help_heading = "Output Modes")]
     pub(crate) watch: bool,
 
+    /// Run headless with brain, coordination, and context rot prevention active (no TUI).
+    /// Attach a dashboard with `claudectl` in another terminal.
+    #[arg(long, help_heading = "Output Modes")]
+    pub(crate) headless: bool,
+
     /// Output format for watch mode. Placeholders: {pid}, {project}, {status}, {cost}, {context}
     #[arg(
         long,
@@ -533,6 +538,10 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if cli.summary {
         return commands::print_summary(&cli.since);
+    }
+
+    if cli.headless {
+        return commands::run_headless(Duration::from_millis(cfg.interval), &cfg, cli.json);
     }
 
     if cli.json && !cli.watch {

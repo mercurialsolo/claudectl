@@ -710,6 +710,263 @@ pub(crate) fn run_watch(
     }
 }
 
+/// Run headless with brain, coordination, and context rot prevention active.
+/// The full autonomous stack runs in a loop, emitting structured JSON events.
+/// A TUI dashboard can be attached in another terminal -- both share state
+/// via the coordination SQLite store and brain decision logs.
+pub(crate) fn run_headless(
+    tick_rate: Duration,
+    cfg: &crate::config::Config,
+    json_mode: bool,
+) -> io::Result<()> {
+    use crate::session::SessionStatus;
+    use std::collections::HashMap;
+
+    let mut app = App::new();
+
+    // Configure the full stack (same as TUI setup in main.rs)
+    app.hooks = crate::config::load_hooks();
+    app.rules = cfg.rules.clone();
+    app.health_thresholds = cfg.health.clone();
+    app.file_conflicts_enabled = cfg.file_conflicts;
+    app.auto_deny_file_conflicts = cfg.auto_deny_file_conflicts;
+    app.idle_config = cfg.idle.clone();
+    app.brain_config = cfg.brain.clone();
+    app.budget_usd = cfg.budget;
+    app.kill_on_budget = cfg.kill_on_budget;
+    app.notify = cfg.notify;
+    app.context_warn_threshold = cfg.context_warn_threshold;
+    app.daily_limit = cfg.daily_limit;
+    app.weekly_limit = cfg.weekly_limit;
+
+    // Initialize brain engine
+    if let Some(ref brain_cfg) = cfg.brain {
+        if brain_cfg.enabled {
+            if check_brain_endpoint(&brain_cfg.endpoint, brain_cfg.timeout_ms) {
+                app.brain_engine = Some(crate::brain::engine::BrainEngine::new(brain_cfg.clone()));
+                emit_headless_event(
+                    "startup",
+                    serde_json::json!({
+                        "brain": true,
+                        "endpoint": brain_cfg.endpoint,
+                        "model": brain_cfg.model,
+                        "auto_mode": brain_cfg.auto_mode,
+                    }),
+                    json_mode,
+                );
+            } else {
+                eprintln!(
+                    "Warning: brain endpoint {} not reachable -- running without brain",
+                    brain_cfg.endpoint
+                );
+                emit_headless_event(
+                    "startup",
+                    serde_json::json!({"brain": false, "reason": "endpoint not reachable"}),
+                    json_mode,
+                );
+            }
+        }
+    } else {
+        emit_headless_event(
+            "startup",
+            serde_json::json!({"brain": false, "reason": "not configured"}),
+            json_mode,
+        );
+    }
+
+    emit_headless_event(
+        "startup",
+        serde_json::json!({
+            "rules": app.rules.len(),
+            "sessions": app.sessions.len(),
+            "interval_ms": tick_rate.as_millis(),
+        }),
+        json_mode,
+    );
+
+    let mut prev_statuses: HashMap<u32, SessionStatus> =
+        app.sessions.iter().map(|s| (s.pid, s.status)).collect();
+    #[allow(unused_variables, unused_mut)]
+    let mut tick_count: u64 = 0;
+
+    loop {
+        std::thread::sleep(tick_rate);
+        app.tick();
+        tick_count += 1;
+
+        // Emit status change events
+        for s in &app.sessions {
+            let prev = prev_statuses.get(&s.pid).copied();
+            let changed = prev.is_none_or(|p| p != s.status);
+            if changed {
+                emit_headless_event(
+                    "status_change",
+                    serde_json::json!({
+                        "pid": s.pid,
+                        "project": s.display_name(),
+                        "old_status": prev.map(|p| p.to_string()),
+                        "new_status": s.status.to_string(),
+                        "cost_usd": s.cost_usd,
+                        "context_pct": s.context_percent(),
+                        "decay_score": s.decay_score,
+                    }),
+                    json_mode,
+                );
+            }
+        }
+
+        // Emit brain action events (from status_msg which brain updates)
+        if !app.status_msg.is_empty()
+            && (app.status_msg.starts_with("Brain:")
+                || app.status_msg.starts_with("Interrupt")
+                || app.status_msg.starts_with("MAILBOX"))
+        {
+            emit_headless_event(
+                "action",
+                serde_json::json!({"detail": app.status_msg}),
+                json_mode,
+            );
+        }
+
+        // Context rot prevention
+        #[cfg(feature = "coord")]
+        check_context_rot(&app, json_mode);
+
+        // Periodic coordination summary (every ~30s)
+        #[cfg(feature = "coord")]
+        if tick_count % 15 == 0 {
+            emit_headless_event(
+                "coord_summary",
+                serde_json::json!({
+                    "active_leases": app.coord_leases.len(),
+                    "pending_handoffs": app.coord_handoffs.len(),
+                    "pending_interrupts": app.coord_pending_interrupts.len(),
+                    "sessions": app.sessions.len(),
+                }),
+                json_mode,
+            );
+        }
+
+        prev_statuses = app.sessions.iter().map(|s| (s.pid, s.status)).collect();
+    }
+}
+
+fn emit_headless_event(event: &str, data: serde_json::Value, json_mode: bool) {
+    let ts = crate::logger::timestamp_now();
+    if json_mode {
+        let obj = serde_json::json!({"ts": ts, "event": event, "data": data});
+        println!("{}", serde_json::to_string(&obj).unwrap_or_default());
+    } else {
+        // Compact human-readable format
+        let detail = if let Some(obj) = data.as_object() {
+            obj.iter()
+                .map(|(k, v)| {
+                    let val = match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    format!("{k}={val}")
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            data.to_string()
+        };
+        println!("[{ts}] {event}: {detail}");
+    }
+}
+
+/// Check for context rot and raise typed interrupts for decaying sessions.
+#[cfg(feature = "coord")]
+fn check_context_rot(app: &App, json_mode: bool) {
+    let conn = match crate::coord::store::open() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    for session in &app.sessions {
+        if session.decay_score == 0 || !session.has_usage_metrics() {
+            continue;
+        }
+
+        let dedupe_key = format!("decay:{}", session.session_id);
+
+        // Check if we already have a pending interrupt for this session
+        if let Ok(Some(_)) = crate::coord::store::find_duplicate_interrupt(&conn, &dedupe_key) {
+            continue;
+        }
+
+        let (interrupt_type, priority) = if session.decay_score >= 85 {
+            (
+                crate::coord::types::InterruptType::Stop,
+                "critical".to_string(),
+            )
+        } else if session.decay_score as f64 >= app.health_thresholds.decay_compaction_pct {
+            (
+                crate::coord::types::InterruptType::Compact,
+                "high".to_string(),
+            )
+        } else {
+            continue;
+        };
+
+        let reason = format!(
+            "Context rot detected: decay_score={}/100, context={}%",
+            session.decay_score,
+            session.context_percent() as u32
+        );
+
+        let intr = crate::coord::types::Interrupt {
+            id: crate::coord::store::gen_id("intr"),
+            interrupt_type,
+            priority: priority.clone(),
+            target_session_id: session.session_id.clone(),
+            reason: reason.clone(),
+            payload: Some(serde_json::json!({
+                "decay_score": session.decay_score,
+                "context_pct": session.context_percent(),
+                "pid": session.pid,
+            })),
+            delivery_mode: "safe_boundary".into(),
+            max_retries: 3,
+            expires_at: None,
+            dedupe_key: Some(dedupe_key),
+            state: crate::coord::types::InterruptState::Pending,
+            created_at: crate::logger::timestamp_now(),
+            delivered_at: None,
+            acknowledged_at: None,
+        };
+
+        let _ = crate::coord::store::insert_interrupt(&conn, &intr);
+        let _ = crate::coord::store::append_event(
+            &conn,
+            &crate::coord::types::CoordEvent {
+                id: None,
+                event_type: crate::coord::types::EventType::InterruptRaised,
+                timestamp: crate::logger::timestamp_now(),
+                session_id: Some(session.session_id.clone()),
+                payload: serde_json::json!({
+                    "interrupt_id": intr.id,
+                    "type": interrupt_type.as_str(),
+                    "decay_score": session.decay_score,
+                }),
+            },
+        );
+
+        emit_headless_event(
+            "context_rot",
+            serde_json::json!({
+                "pid": session.pid,
+                "project": session.display_name(),
+                "decay_score": session.decay_score,
+                "action": interrupt_type.as_str(),
+                "priority": priority,
+            }),
+            json_mode,
+        );
+    }
+}
+
 pub(crate) fn format_session(fmt: &str, s: &session::ClaudeSession) -> String {
     let cost = if s.has_usage_metrics() {
         format!("{:.2}", s.cost_usd)
