@@ -1,6 +1,6 @@
 [package]
 name = "claudectl"
-version = "0.32.0"
+version = "0.32.1"
 edition = "2024"
 description = "Auto-pilot for Claude Code — a local model watches every session and decides what to approve"
 license = "MIT"

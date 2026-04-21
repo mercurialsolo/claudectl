@@ -1,12 +1,16 @@
 pub mod agents;
+pub mod baseline;
 pub mod client;
 pub mod context;
 pub mod decisions;
+pub mod detectors;
 pub mod engine;
 pub mod evals;
 pub mod insights;
 pub mod mailbox;
 pub mod metrics;
+pub mod pref_store;
 pub mod preferences;
 pub mod prompts;
 pub mod retrieval;
+pub mod risk;
