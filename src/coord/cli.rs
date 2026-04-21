@@ -21,6 +21,7 @@ pub fn dispatch(subcommand: &str, json_mode: bool) -> io::Result<()> {
         "claim" => cmd_claim(&parts, json_mode),
         "release" => cmd_release(&parts, json_mode),
         "handoff" => cmd_handoff(&parts, json_mode),
+        "accept" => cmd_accept_handoff(&parts, json_mode),
         "raise" => cmd_raise(&parts, json_mode),
         "ack" => cmd_ack(&parts, json_mode),
         "promote" => cmd_promote(&parts, json_mode),
@@ -509,6 +510,60 @@ fn cmd_handoff(parts: &[&str], json_mode: bool) -> io::Result<()> {
     Ok(())
 }
 
+// -- Accept Handoff ------------------------------------------------------------
+
+fn cmd_accept_handoff(parts: &[&str], json_mode: bool) -> io::Result<()> {
+    let Some(handoff_id) = parts.get(1) else {
+        eprintln!("Usage: claudectl --coord \"accept <handoff_id>\"");
+        return Err(io::Error::other("missing handoff_id"));
+    };
+
+    let conn = open_or_exit();
+
+    let Some(handoff) = store::get_handoff(&conn, handoff_id).map_err(io::Error::other)? else {
+        let msg = format!("Handoff not found: {handoff_id}");
+        if json_mode {
+            println!("{}", serde_json::json!({"error": msg}));
+        } else {
+            eprintln!("{msg}");
+        }
+        return Err(io::Error::other("not found"));
+    };
+
+    if handoff.acknowledged_at.is_some() {
+        let msg = format!("Handoff {handoff_id} is already accepted");
+        if json_mode {
+            println!("{}", serde_json::json!({"error": msg}));
+        } else {
+            eprintln!("{msg}");
+        }
+        return Err(io::Error::other("already accepted"));
+    }
+
+    store::accept_handoff(&conn, handoff_id).map_err(io::Error::other)?;
+
+    let now = crate::logger::timestamp_now();
+    let event = CoordEvent {
+        id: None,
+        event_type: EventType::HandoffAccepted,
+        timestamp: now,
+        session_id: handoff.to_session_id.clone(),
+        payload: serde_json::json!({
+            "handoff_id": handoff_id,
+            "from": handoff.from_session_id,
+            "task_id": handoff.task_id,
+        }),
+    };
+    let _ = store::append_event(&conn, &event);
+
+    if json_mode {
+        println!("{}", serde_json::json!({"accepted": handoff_id}));
+    } else {
+        println!("Handoff accepted: {handoff_id}");
+    }
+    Ok(())
+}
+
 // -- Raise Interrupt -----------------------------------------------------------
 
 fn cmd_raise(parts: &[&str], json_mode: bool) -> io::Result<()> {
@@ -894,6 +949,7 @@ fn print_help() -> io::Result<()> {
     println!(
         "  raise --type <type> --target <session> --reason <text> [--priority high] [--delivery safe_boundary] [--dedupe key] [--expires secs]"
     );
+    println!("  accept <handoff_id>");
     println!("  ack <interrupt_id>");
     println!("  promote --project <name>  Promote brain patterns to coordination memory");
     println!();

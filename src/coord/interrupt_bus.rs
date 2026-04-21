@@ -84,7 +84,9 @@ fn can_deliver(interrupt: &Interrupt, session: &ClaudeSession) -> bool {
     match interrupt.delivery_mode.as_str() {
         "immediate" => true,
         "safe_boundary" => {
-            // Deliver unless the session is actively processing a tool call
+            // Deliver if the session is NOT processing, OR if it IS processing but
+            // between tool calls (pending_tool_name is None). Both represent a safe
+            // boundary -- the agent is not mid-tool-execution.
             session.status != SessionStatus::Processing || session.pending_tool_name.is_none()
         }
         "waiting_only" => session.status == SessionStatus::WaitingInput,

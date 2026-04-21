@@ -892,13 +892,6 @@ fn check_context_rot(app: &App, json_mode: bool) {
             continue;
         }
 
-        let dedupe_key = format!("decay:{}", session.session_id);
-
-        // Check if we already have a pending interrupt for this session
-        if let Ok(Some(_)) = crate::coord::store::find_duplicate_interrupt(&conn, &dedupe_key) {
-            continue;
-        }
-
         let (interrupt_type, priority) = if session.decay_score >= 85 {
             (
                 crate::coord::types::InterruptType::Stop,
@@ -912,6 +905,13 @@ fn check_context_rot(app: &App, json_mode: bool) {
         } else {
             continue;
         };
+
+        // Severity-specific dedupe key so compact doesn't block escalation to stop
+        let dedupe_key = format!("decay:{}:{}", interrupt_type.as_str(), session.session_id);
+
+        if let Ok(Some(_)) = crate::coord::store::find_duplicate_interrupt(&conn, &dedupe_key) {
+            continue;
+        }
 
         let reason = format!(
             "Context rot detected: decay_score={}/100, context={}%",

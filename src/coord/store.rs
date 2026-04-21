@@ -430,36 +430,65 @@ pub fn get_lease(conn: &Connection, lease_id: &str) -> Result<Option<Lease>, Str
     }
 }
 
+/// Find an active exclusive lease that conflicts with the given resource.
+/// Handles path overlap: `src/**` conflicts with `src/app.rs`, and vice versa.
 pub fn find_conflicting_lease(
     conn: &Connection,
     resource_kind: &str,
     resource_value: &str,
     exclude_session: &str,
 ) -> Result<Option<Lease>, String> {
+    // Query all active exclusive leases by other sessions in the same resource kind
     let mut stmt = conn
         .prepare(
             "SELECT id, owner_session_id, owner_agent, resource_kind, resource_value,
                     mode, reason, acquired_at, expires_at, status
              FROM leases
-             WHERE resource_kind = ?1 AND resource_value = ?2
+             WHERE resource_kind = ?1
                AND status = 'active' AND mode = 'exclusive'
-               AND owner_session_id != ?3
-             LIMIT 1",
+               AND owner_session_id != ?2",
         )
         .map_err(|e| format!("prepare: {e}"))?;
 
-    let mut rows = stmt
-        .query_map(
-            params![resource_kind, resource_value, exclude_session],
-            row_to_lease,
-        )
+    let rows = stmt
+        .query_map(params![resource_kind, exclude_session], row_to_lease)
         .map_err(|e| format!("query: {e}"))?;
 
-    match rows.next() {
-        Some(Ok(lease)) => Ok(Some(lease)),
-        Some(Err(e)) => Err(format!("row: {e}")),
-        None => Ok(None),
+    for row in rows {
+        let lease = row.map_err(|e| format!("row: {e}"))?;
+        if paths_overlap(&lease.resource_value, resource_value) {
+            return Ok(Some(lease));
+        }
     }
+    Ok(None)
+}
+
+/// Check if two path patterns overlap.
+/// A glob like `src/**` overlaps with `src/app.rs`.
+/// A specific path `src/app.rs` overlaps with `src/**` or `src/app.rs`.
+fn paths_overlap(existing: &str, requested: &str) -> bool {
+    // Exact match
+    if existing == requested {
+        return true;
+    }
+    // Glob: existing is a prefix pattern (ends with ** or /*)
+    let existing_dir = existing
+        .trim_end_matches("**")
+        .trim_end_matches('*')
+        .trim_end_matches('/');
+    let requested_dir = requested
+        .trim_end_matches("**")
+        .trim_end_matches('*')
+        .trim_end_matches('/');
+
+    // One is a prefix of the other (directory containment)
+    if !existing_dir.is_empty() && requested.starts_with(existing_dir) {
+        return true;
+    }
+    if !requested_dir.is_empty() && existing.starts_with(requested_dir) {
+        return true;
+    }
+    false
 }
 
 pub fn release_lease(conn: &Connection, lease_id: &str) -> Result<bool, String> {
@@ -511,6 +540,36 @@ pub fn list_pending_handoffs(conn: &Connection) -> Result<Vec<Handoff>, String> 
         handoffs.push(row.map_err(|e| format!("row: {e}"))?);
     }
     Ok(handoffs)
+}
+
+pub fn get_handoff(conn: &Connection, handoff_id: &str) -> Result<Option<Handoff>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, from_session_id, to_session_id, task_id, summary,
+                    state_json, priority, created_at, acknowledged_at
+             FROM handoffs WHERE id = ?1",
+        )
+        .map_err(|e| format!("prepare: {e}"))?;
+
+    let mut rows = stmt
+        .query_map(params![handoff_id], row_to_handoff)
+        .map_err(|e| format!("query: {e}"))?;
+
+    match rows.next() {
+        Some(Ok(h)) => Ok(Some(h)),
+        Some(Err(e)) => Err(format!("row: {e}")),
+        None => Ok(None),
+    }
+}
+
+pub fn accept_handoff(conn: &Connection, handoff_id: &str) -> Result<bool, String> {
+    let now = now_iso();
+    conn.execute(
+        "UPDATE handoffs SET acknowledged_at = ?1 WHERE id = ?2 AND acknowledged_at IS NULL",
+        params![now, handoff_id],
+    )
+    .map_err(|e| format!("accept handoff: {e}"))?;
+    Ok(conn.changes() > 0)
 }
 
 // -- Blockers ------------------------------------------------------------------
@@ -1242,6 +1301,83 @@ mod tests {
         let id2 = gen_id("test");
         assert_ne!(id1, id2);
         assert!(id1.starts_with("test_"));
+    }
+
+    #[test]
+    fn paths_overlap_exact_match() {
+        assert!(paths_overlap("src/app.rs", "src/app.rs"));
+    }
+
+    #[test]
+    fn paths_overlap_glob_contains_file() {
+        assert!(paths_overlap("src/**", "src/app.rs"));
+        assert!(paths_overlap("src/*", "src/app.rs"));
+        assert!(paths_overlap("src/brain/**", "src/brain/engine.rs"));
+    }
+
+    #[test]
+    fn paths_overlap_file_under_glob() {
+        assert!(paths_overlap("src/app.rs", "src/**"));
+    }
+
+    #[test]
+    fn paths_overlap_disjoint() {
+        assert!(!paths_overlap("tests/**", "src/app.rs"));
+        assert!(!paths_overlap("src/app.rs", "tests/test.rs"));
+    }
+
+    #[test]
+    fn find_conflicting_lease_detects_glob_overlap() {
+        let conn = open_memory();
+        let lease = Lease {
+            id: "l_glob".into(),
+            owner_session_id: "sess_1".into(),
+            owner_agent: "claude-code".into(),
+            resource_kind: "path_glob".into(),
+            resource_value: "src/**".into(),
+            mode: LeaseMode::Exclusive,
+            reason: "editing".into(),
+            acquired_at: "2026-04-20T10:00:00Z".into(),
+            expires_at: None,
+            status: LeaseStatus::Active,
+        };
+        upsert_lease(&conn, &lease).unwrap();
+
+        // A specific file under the glob should conflict
+        let conflict = find_conflicting_lease(&conn, "path_glob", "src/app.rs", "sess_2").unwrap();
+        assert!(conflict.is_some());
+    }
+
+    #[test]
+    fn accept_handoff_sets_acknowledged() {
+        let conn = open_memory();
+        let h = Handoff {
+            id: "h_acc".into(),
+            from_session_id: "sess_1".into(),
+            to_session_id: Some("sess_2".into()),
+            task_id: "task_1".into(),
+            summary: "Test".into(),
+            state: HandoffState {
+                goal: "Test".into(),
+                artifacts: vec![],
+                attempted: vec![],
+                next_steps: vec![],
+            },
+            priority: "medium".into(),
+            created_at: "2026-04-20T10:00:00Z".into(),
+            acknowledged_at: None,
+        };
+        insert_handoff(&conn, &h).unwrap();
+
+        let ok = accept_handoff(&conn, "h_acc").unwrap();
+        assert!(ok);
+
+        let after = get_handoff(&conn, "h_acc").unwrap().unwrap();
+        assert!(after.acknowledged_at.is_some());
+
+        // Accepting again should return false (already accepted)
+        let ok2 = accept_handoff(&conn, "h_acc").unwrap();
+        assert!(!ok2);
     }
 
     fn make_test_lease(id: &str, session: &str, resource: &str, mode: LeaseMode) -> Lease {
