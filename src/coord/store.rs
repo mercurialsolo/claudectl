@@ -471,6 +471,10 @@ fn paths_overlap(existing: &str, requested: &str) -> bool {
     if existing == requested {
         return true;
     }
+    // Match-all glob overlaps with everything
+    if existing == "**" || requested == "**" {
+        return true;
+    }
     // Glob: existing is a prefix pattern (ends with ** or /*)
     let existing_dir = existing
         .trim_end_matches("**")
@@ -1454,6 +1458,13 @@ mod tests {
     fn paths_overlap_disjoint() {
         assert!(!paths_overlap("tests/**", "src/app.rs"));
         assert!(!paths_overlap("src/app.rs", "tests/test.rs"));
+    }
+
+    #[test]
+    fn paths_overlap_match_all_glob() {
+        assert!(paths_overlap("**", "src/app.rs"));
+        assert!(paths_overlap("src/app.rs", "**"));
+        assert!(paths_overlap("**", "**"));
     }
 
     #[test]

@@ -232,14 +232,23 @@ fn compute_median_delta(
         return None;
     }
 
-    // Pair by matching entity ID in payload
+    // Pair by matching entity ID in payload (handoff_id, interrupt_id, etc.)
+    // Falls back to session_id if no entity ID is found in payload.
     let mut deltas = Vec::new();
     for start in &starts {
         let start_ts = parse_iso_epoch(&start.timestamp)?;
+        let start_entity = extract_entity_id(&start.payload);
 
-        // Find the matching end event (same session_id, after start)
         for end in &ends {
-            if end.session_id == start.session_id {
+            let end_entity = extract_entity_id(&end.payload);
+
+            // Match by entity ID if both events have one, otherwise by session_id
+            let matched = match (&start_entity, &end_entity) {
+                (Some(s), Some(e)) => s == e,
+                _ => end.session_id == start.session_id,
+            };
+
+            if matched {
                 if let Some(end_ts) = parse_iso_epoch(&end.timestamp) {
                     if end_ts >= start_ts {
                         deltas.push((end_ts - start_ts) as f64);
@@ -257,6 +266,17 @@ fn compute_median_delta(
     deltas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = deltas.len() / 2;
     Some(deltas[mid])
+}
+
+/// Extract the entity ID from an event payload (handoff_id, interrupt_id, blocker_id, lease_id).
+fn extract_entity_id(payload: &serde_json::Value) -> Option<String> {
+    let obj = payload.as_object()?;
+    for key in ["handoff_id", "interrupt_id", "blocker_id", "lease_id"] {
+        if let Some(serde_json::Value::String(id)) = obj.get(key) {
+            return Some(id.clone());
+        }
+    }
+    None
 }
 
 /// Parse an ISO 8601 timestamp to epoch seconds (simplified, UTC only).

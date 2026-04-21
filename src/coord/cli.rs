@@ -22,6 +22,8 @@ pub fn dispatch(subcommand: &str, json_mode: bool) -> io::Result<()> {
         "release" => cmd_release(&parts, json_mode),
         "handoff" => cmd_handoff(&parts, json_mode),
         "accept" => cmd_accept_handoff(&parts, json_mode),
+        "block" => cmd_open_blocker(&parts, json_mode),
+        "unblock" => cmd_resolve_blocker(&parts, json_mode),
         "raise" => cmd_raise(&parts, json_mode),
         "ack" => cmd_ack(&parts, json_mode),
         "promote" => cmd_promote(&parts, json_mode),
@@ -559,6 +561,115 @@ fn cmd_accept_handoff(parts: &[&str], json_mode: bool) -> io::Result<()> {
     Ok(())
 }
 
+// -- Blockers ------------------------------------------------------------------
+
+fn cmd_open_blocker(parts: &[&str], json_mode: bool) -> io::Result<()> {
+    let task = extract_flag(parts, "task");
+    let waiting_for = extract_flag_rest(parts, "waiting-for");
+    let session = extract_flag(parts, "session");
+
+    let (Some(task_id), Some(waiting_text), Some(session_id)) = (task, waiting_for, session) else {
+        eprintln!(
+            "Usage: claudectl --coord \"block --task <id> --session <id> --waiting-for <text> [--depends-on <task_id>]\""
+        );
+        return Err(io::Error::other("missing required flags"));
+    };
+
+    let depends_on = extract_flag(parts, "depends-on").map(|s| s.to_string());
+    let conn = open_or_exit();
+    let blocker_id = store::gen_id("blocker");
+    let now = crate::logger::timestamp_now();
+
+    let blocker = Blocker {
+        id: blocker_id.clone(),
+        task_id: task_id.to_string(),
+        depends_on,
+        waiting_for: waiting_text,
+        status: BlockerStatus::Open,
+        owner_session_id: session_id.to_string(),
+        created_at: now.clone(),
+        resolved_at: None,
+    };
+
+    store::insert_blocker(&conn, &blocker).map_err(io::Error::other)?;
+
+    let event = CoordEvent {
+        id: None,
+        event_type: EventType::BlockerOpened,
+        timestamp: now,
+        session_id: Some(session_id.to_string()),
+        payload: serde_json::json!({
+            "blocker_id": blocker_id,
+            "task_id": task_id,
+        }),
+    };
+    let _ = store::append_event(&conn, &event);
+
+    if json_mode {
+        let json = serde_json::to_string_pretty(&blocker).unwrap_or_default();
+        println!("{json}");
+    } else {
+        println!("Blocker opened: {blocker_id}");
+        println!("  Task:        {task_id}");
+        println!("  Waiting for: {}", blocker.waiting_for);
+    }
+    Ok(())
+}
+
+fn cmd_resolve_blocker(parts: &[&str], json_mode: bool) -> io::Result<()> {
+    let Some(blocker_id) = parts.get(1) else {
+        eprintln!("Usage: claudectl --coord \"unblock <blocker_id>\"");
+        return Err(io::Error::other("missing blocker_id"));
+    };
+
+    let conn = open_or_exit();
+
+    let blockers = store::list_blockers(&conn, None).map_err(io::Error::other)?;
+    let blocker = blockers.iter().find(|b| b.id == *blocker_id);
+
+    let Some(blocker) = blocker else {
+        let msg = format!("Blocker not found: {blocker_id}");
+        if json_mode {
+            println!("{}", serde_json::json!({"error": msg}));
+        } else {
+            eprintln!("{msg}");
+        }
+        return Err(io::Error::other("not found"));
+    };
+
+    if blocker.status == BlockerStatus::Resolved {
+        let msg = format!("Blocker {blocker_id} is already resolved");
+        if json_mode {
+            println!("{}", serde_json::json!({"error": msg}));
+        } else {
+            eprintln!("{msg}");
+        }
+        return Err(io::Error::other("already resolved"));
+    }
+
+    store::resolve_blocker(&conn, blocker_id).map_err(io::Error::other)?;
+
+    let now = crate::logger::timestamp_now();
+    let event = CoordEvent {
+        id: None,
+        event_type: EventType::BlockerResolved,
+        timestamp: now,
+        session_id: Some(blocker.owner_session_id.clone()),
+        payload: serde_json::json!({
+            "blocker_id": blocker_id,
+            "task_id": blocker.task_id,
+        }),
+    };
+    let _ = store::append_event(&conn, &event);
+
+    if json_mode {
+        println!("{}", serde_json::json!({"resolved": blocker_id}));
+    } else {
+        println!("Blocker resolved: {blocker_id}");
+    }
+    Ok(())
+}
+
 // -- Raise Interrupt -----------------------------------------------------------
 
 fn cmd_raise(parts: &[&str], json_mode: bool) -> io::Result<()> {
@@ -971,6 +1082,8 @@ fn print_help() -> io::Result<()> {
         "  raise --type <type> --target <session> --reason <text> [--priority high] [--delivery safe_boundary] [--dedupe key] [--expires secs]"
     );
     println!("  accept <handoff_id>");
+    println!("  block --task <id> --session <id> --waiting-for <text> [--depends-on <task_id>]");
+    println!("  unblock <blocker_id>");
     println!("  ack <interrupt_id>");
     println!("  promote --project <name>  Promote brain patterns to coordination memory");
     println!();
