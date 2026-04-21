@@ -786,13 +786,16 @@ pub(crate) fn run_headless(
 
     let mut prev_statuses: HashMap<u32, SessionStatus> =
         app.sessions.iter().map(|s| (s.pid, s.status)).collect();
-    #[allow(unused_variables, unused_mut, unused_assignments)]
+    #[cfg(feature = "coord")]
     let mut tick_count: u64 = 0;
 
     loop {
         std::thread::sleep(tick_rate);
         app.tick();
-        tick_count += 1;
+        #[cfg(feature = "coord")]
+        {
+            tick_count += 1;
+        }
 
         // Emit status change events
         for s in &app.sessions {
