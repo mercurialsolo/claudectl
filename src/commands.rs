@@ -850,6 +850,22 @@ pub(crate) fn run_headless(
             );
         }
 
+        // Auto-prune old coordination data (every ~1 hour = 1800 ticks at 2s)
+        #[cfg(feature = "coord")]
+        if tick_count % 1800 == 0 && tick_count > 0 {
+            if let Ok(conn) = crate::coord::store::open() {
+                if let Ok(pruned) = crate::coord::store::prune(&conn, None) {
+                    if pruned > 0 {
+                        emit_headless_event(
+                            "pruned",
+                            serde_json::json!({"rows_deleted": pruned}),
+                            json_mode,
+                        );
+                    }
+                }
+            }
+        }
+
         prev_statuses = app.sessions.iter().map(|s| (s.pid, s.status)).collect();
     }
 }

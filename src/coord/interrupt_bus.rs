@@ -72,6 +72,30 @@ pub fn deliver_pending(conn: &Connection, sessions: &[ClaudeSession]) -> Vec<(St
                     "INTERRUPT_BUS",
                     &format!("Delivery failed for {}: {e}", interrupt.id),
                 );
+                // Set a 5-minute expiry on interrupts that fail delivery,
+                // so they don't persist forever in the pending queue.
+                if interrupt.expires_at.is_none() {
+                    let expiry = {
+                        let epoch = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            + 300; // 5 minutes
+                        let d = epoch / 86400;
+                        let s = epoch % 86400;
+                        let (y, m, day) = crate::logger::days_to_date(d);
+                        format!(
+                            "{y:04}-{m:02}-{day:02}T{:02}:{:02}:{:02}Z",
+                            s / 3600,
+                            (s % 3600) / 60,
+                            s % 60
+                        )
+                    };
+                    let _ = conn.execute(
+                        "UPDATE interrupts SET expires_at = ?1 WHERE id = ?2 AND expires_at IS NULL",
+                        rusqlite::params![expiry, interrupt.id],
+                    );
+                }
             }
         }
     }

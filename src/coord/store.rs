@@ -491,6 +491,52 @@ fn paths_overlap(existing: &str, requested: &str) -> bool {
     false
 }
 
+/// Atomically check for conflicts and claim a lease in a single transaction.
+/// Returns Ok(None) on success, Ok(Some(conflict)) if a conflicting lease exists.
+pub fn claim_lease_atomic(conn: &Connection, lease: &Lease) -> Result<Option<Lease>, String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("begin tx: {e}"))?;
+
+    // Check for conflicts within the transaction
+    if lease.mode == LeaseMode::Exclusive {
+        let conflict = find_conflicting_lease(
+            &tx,
+            &lease.resource_kind,
+            &lease.resource_value,
+            &lease.owner_session_id,
+        )?;
+        if let Some(c) = conflict {
+            tx.rollback().map_err(|e| format!("rollback: {e}"))?;
+            return Ok(Some(c));
+        }
+    }
+
+    // No conflict -- insert the lease
+    tx.execute(
+        "INSERT OR REPLACE INTO leases
+         (id, owner_session_id, owner_agent, resource_kind, resource_value,
+          mode, reason, acquired_at, expires_at, status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            lease.id,
+            lease.owner_session_id,
+            lease.owner_agent,
+            lease.resource_kind,
+            lease.resource_value,
+            lease.mode.as_str(),
+            lease.reason,
+            lease.acquired_at,
+            lease.expires_at,
+            lease.status.as_str(),
+        ],
+    )
+    .map_err(|e| format!("insert lease: {e}"))?;
+
+    tx.commit().map_err(|e| format!("commit: {e}"))?;
+    Ok(None)
+}
+
 pub fn release_lease(conn: &Connection, lease_id: &str) -> Result<bool, String> {
     conn.execute(
         "UPDATE leases SET status = 'released' WHERE id = ?1 AND status = 'active'",
@@ -1032,6 +1078,90 @@ fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<MemoryRecord> {
         expires_at: row.get(10)?,
         tags: serde_json::from_str(&tags_str).unwrap_or_default(),
     })
+}
+
+// -- Retention -----------------------------------------------------------------
+
+/// Default retention: keep events for 30 days.
+const DEFAULT_RETENTION_DAYS: u64 = 30;
+/// Default max events to keep (safety cap).
+const DEFAULT_MAX_EVENTS: u64 = 100_000;
+
+/// Prune old events, resolved blockers, expired leases, and terminal interrupts.
+/// Returns the total number of rows deleted.
+pub fn prune(conn: &Connection, retention_days: Option<u64>) -> Result<u64, String> {
+    let days = retention_days.unwrap_or(DEFAULT_RETENTION_DAYS);
+    let cutoff = {
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(days * 86400);
+        let d = epoch / 86400;
+        let (year, month, day) = crate::logger::days_to_date(d);
+        format!("{year:04}-{month:02}-{day:02}T00:00:00Z")
+    };
+
+    let mut total = 0u64;
+
+    // Prune old events
+    let n = conn
+        .execute("DELETE FROM events WHERE timestamp < ?1", params![cutoff])
+        .map_err(|e| format!("prune events: {e}"))?;
+    total += n as u64;
+
+    // Prune resolved/expired blockers older than cutoff
+    let n = conn
+        .execute(
+            "DELETE FROM blockers WHERE status IN ('resolved') AND created_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| format!("prune blockers: {e}"))?;
+    total += n as u64;
+
+    // Prune released/expired leases older than cutoff
+    let n = conn
+        .execute(
+            "DELETE FROM leases WHERE status IN ('released', 'expired') AND acquired_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| format!("prune leases: {e}"))?;
+    total += n as u64;
+
+    // Prune terminal interrupts (acknowledged, expired, dismissed) older than cutoff
+    let n = conn
+        .execute(
+            "DELETE FROM interrupts WHERE state IN ('acknowledged', 'expired', 'dismissed') AND created_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| format!("prune interrupts: {e}"))?;
+    total += n as u64;
+
+    // Prune acknowledged handoffs older than cutoff
+    let n = conn
+        .execute(
+            "DELETE FROM handoffs WHERE acknowledged_at IS NOT NULL AND created_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| format!("prune handoffs: {e}"))?;
+    total += n as u64;
+
+    // Safety cap: if events table exceeds max, keep only the most recent
+    let event_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap_or(0);
+    if event_count > DEFAULT_MAX_EVENTS as i64 {
+        let excess = event_count - DEFAULT_MAX_EVENTS as i64;
+        let n = conn
+            .execute(
+                "DELETE FROM events WHERE id IN (SELECT id FROM events ORDER BY id ASC LIMIT ?1)",
+                params![excess],
+            )
+            .map_err(|e| format!("cap events: {e}"))?;
+        total += n as u64;
+    }
+
+    Ok(total)
 }
 
 // -- Tests ---------------------------------------------------------------------

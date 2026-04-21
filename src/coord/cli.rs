@@ -29,6 +29,7 @@ pub fn dispatch(subcommand: &str, json_mode: bool) -> io::Result<()> {
         "adapters" => cmd_adapters(&parts, json_mode),
         "metrics" => cmd_metrics(&parts, json_mode),
         "eval" => cmd_eval(json_mode),
+        "prune" => cmd_prune(&parts, json_mode),
         "help" | "" => print_help(),
         _ => {
             eprintln!("Unknown coord subcommand: '{cmd}'");
@@ -325,28 +326,6 @@ fn cmd_claim(parts: &[&str], json_mode: bool) -> io::Result<()> {
     let conn = open_or_exit();
     let _ = store::expire_stale_leases(&conn);
 
-    // Check for conflicting exclusive leases
-    if mode == LeaseMode::Exclusive {
-        if let Ok(Some(conflict)) =
-            store::find_conflicting_lease(&conn, "path_glob", resource, session_id)
-        {
-            let msg = format!(
-                "Conflict: {} already holds exclusive lease on {} (lease {})",
-                conflict.owner_session_id, resource, conflict.id
-            );
-            if json_mode {
-                let json = serde_json::json!({"error": msg, "conflicting_lease": conflict.id});
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json).unwrap_or_default()
-                );
-            } else {
-                eprintln!("{msg}");
-            }
-            return Err(io::Error::other("lease conflict"));
-        }
-    }
-
     let lease_id = store::gen_id("lease");
     let now = crate::logger::timestamp_now();
     let lease = Lease {
@@ -362,7 +341,23 @@ fn cmd_claim(parts: &[&str], json_mode: bool) -> io::Result<()> {
         status: LeaseStatus::Active,
     };
 
-    store::upsert_lease(&conn, &lease).map_err(io::Error::other)?;
+    // Atomic check-and-claim in a single transaction
+    if let Some(conflict) = store::claim_lease_atomic(&conn, &lease).map_err(io::Error::other)? {
+        let msg = format!(
+            "Conflict: {} already holds exclusive lease on {} (lease {})",
+            conflict.owner_session_id, resource, conflict.id
+        );
+        if json_mode {
+            let json = serde_json::json!({"error": msg, "conflicting_lease": conflict.id});
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).unwrap_or_default()
+            );
+        } else {
+            eprintln!("{msg}");
+        }
+        return Err(io::Error::other("lease conflict"));
+    }
 
     let event = CoordEvent {
         id: None,
@@ -921,6 +916,32 @@ fn cmd_eval(json_mode: bool) -> io::Result<()> {
     Ok(())
 }
 
+// -- Prune ---------------------------------------------------------------------
+
+fn cmd_prune(parts: &[&str], json_mode: bool) -> io::Result<()> {
+    let days: Option<u64> = extract_flag(parts, "days").and_then(|s| s.parse().ok());
+    let conn = open_or_exit();
+
+    match store::prune(&conn, days) {
+        Ok(count) => {
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({"pruned": count, "retention_days": days.unwrap_or(30)})
+                );
+            } else {
+                let d = days.unwrap_or(30);
+                println!("Pruned {count} rows (retention: {d} days).");
+            }
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Prune failed: {e}");
+            Err(io::Error::other(e))
+        }
+    }
+}
+
 // -- Help ----------------------------------------------------------------------
 
 fn print_help() -> io::Result<()> {
@@ -959,6 +980,11 @@ fn print_help() -> io::Result<()> {
     println!("Evaluation:");
     println!("  metrics [--since ts]  Show coordination metrics from event log");
     println!("  eval                  Run coordination eval scenarios");
+    println!();
+    println!("Maintenance:");
+    println!(
+        "  prune [--days N]      Delete old events, resolved blockers, expired leases (default: 30 days)"
+    );
     println!();
     println!("  help                Show this help");
     println!();

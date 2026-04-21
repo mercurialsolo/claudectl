@@ -1,13 +1,58 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::Instant;
+
 use crate::session::ClaudeSession;
 
 use super::store;
 use super::types::*;
 
+/// TTL for cached coordination context (10 seconds).
+const CACHE_TTL_SECS: u64 = 10;
+
+struct CacheEntry {
+    context: String,
+    created: Instant,
+}
+
+static CONTEXT_CACHE: Mutex<Option<HashMap<String, CacheEntry>>> = Mutex::new(None);
+
 /// Build a compact coordination context string for injection into a brain prompt.
-/// Queries the coord store for relevant state and memory.
+/// Results are cached per session_id with a 10-second TTL to reduce database queries.
 pub fn build_coordination_context(session: &ClaudeSession) -> String {
+    // Check cache first
+    if let Ok(guard) = CONTEXT_CACHE.lock() {
+        if let Some(ref cache) = *guard {
+            if let Some(entry) = cache.get(&session.session_id) {
+                if entry.created.elapsed().as_secs() < CACHE_TTL_SECS {
+                    return entry.context.clone();
+                }
+            }
+        }
+    }
+
+    let result = build_coordination_context_uncached(session);
+
+    // Update cache
+    if let Ok(mut guard) = CONTEXT_CACHE.lock() {
+        let cache = guard.get_or_insert_with(HashMap::new);
+        cache.insert(
+            session.session_id.clone(),
+            CacheEntry {
+                context: result.clone(),
+                created: Instant::now(),
+            },
+        );
+        // Evict stale entries to prevent unbounded growth
+        cache.retain(|_, e| e.created.elapsed().as_secs() < CACHE_TTL_SECS * 6);
+    }
+
+    result
+}
+
+fn build_coordination_context_uncached(session: &ClaudeSession) -> String {
     let conn = match store::open() {
         Ok(c) => c,
         Err(_) => return String::new(),
