@@ -93,7 +93,7 @@ The brain observes all your sessions and makes real-time decisions:
 ollama pull gemma4:e4b && ollama serve    # One-time setup
 claudectl --brain                         # Advisory mode (default)
 claudectl --brain --auto-run              # Auto mode: brain executes without asking
-claudectl --mode auto                     # Or toggle mid-session
+claudectl --mode auto                     # Or toggle mid-session (Ctrl+b in TUI)
 ```
 
 Works with any OpenAI-compatible endpoint: [ollama](https://ollama.com), [llama.cpp](https://github.com/ggerganov/llama.cpp), [vLLM](https://github.com/vllm-project/vllm), [LM Studio](https://lmstudio.ai).
@@ -128,7 +128,7 @@ Integrates the brain directly into Claude Code sessions — no TUI required.
 | Component | What it does |
 |-----------|-------------|
 | **Brain gate hook** | Queries the brain before every Bash/Write/Edit call |
-| `/brain on\|off\|auto` | Toggle brain mode mid-session |
+| `/brain on\|off\|auto` | Toggle brain mode mid-session (or `Ctrl+b` in TUI) |
 | `/sessions` | Show all active sessions with status, cost, health |
 | `/spend` | Cost breakdown by project and time window |
 | `/brain-stats` | Brain learning metrics and accuracy |
