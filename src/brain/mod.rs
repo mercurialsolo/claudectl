@@ -20,7 +20,10 @@ use std::path::PathBuf;
 /// Path to the brain gate mode file (`~/.claudectl/brain/gate-mode`).
 pub fn gate_mode_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join(".claudectl").join("brain").join("gate-mode")
+    PathBuf::from(home)
+        .join(".claudectl")
+        .join("brain")
+        .join("gate-mode")
 }
 
 /// Read the current brain gate mode from disk. Returns `"on"` if no file exists.
