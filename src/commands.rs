@@ -786,7 +786,7 @@ pub(crate) fn run_headless(
 
     let mut prev_statuses: HashMap<u32, SessionStatus> =
         app.sessions.iter().map(|s| (s.pid, s.status)).collect();
-    #[allow(unused_variables, unused_mut)]
+    #[allow(unused_variables, unused_mut, unused_assignments)]
     let mut tick_count: u64 = 0;
 
     loop {
