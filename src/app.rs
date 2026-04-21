@@ -1720,6 +1720,11 @@ impl App {
                 self.cancel_pending_auto_approve();
                 self.handle_approve();
             }
+            (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.toggle_brain_gate();
+            }
             (KeyCode::Char('b'), _) => {
                 self.cancel_pending_kill();
                 self.cancel_pending_auto_approve();
@@ -2095,6 +2100,36 @@ impl App {
         } else {
             self.status_msg = "No brain suggestion pending for this session".into();
         }
+    }
+
+    fn toggle_brain_gate(&mut self) {
+        let current = crate::brain::read_gate_mode();
+        let next = match current.as_str() {
+            "on" => "off",
+            "off" => "on",
+            "auto" => "off",
+            _ => "on",
+        };
+
+        let path = crate::brain::gate_mode_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        if next == "on" {
+            // "on" is the default — remove the file so absence = on
+            let _ = std::fs::remove_file(&path);
+        } else {
+            let _ = std::fs::write(&path, next);
+        }
+
+        let description = match next {
+            "on" => "active — evaluating tool calls",
+            "off" => "disabled — normal permission flow",
+            _ => unreachable!(),
+        };
+        self.status_msg = format!("Brain: {description}");
+        crate::logger::log("BRAIN", &format!("Gate mode toggled: {current} → {next}"));
     }
 
     fn toggle_session_recording(&mut self) {

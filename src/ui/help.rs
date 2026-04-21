@@ -95,6 +95,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw("  Record session highlight reel (toggle)"),
         ]),
         Line::from(vec![
+            Span::styled("  Ctrl+b         ", Style::default().fg(t.highlight_key)),
+            Span::raw("  Toggle brain on/off"),
+        ]),
+        Line::from(vec![
             Span::styled("  g              ", Style::default().fg(t.highlight_key)),
             Span::raw("  Toggle grouped view by project"),
         ]),
