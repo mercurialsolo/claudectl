@@ -22,6 +22,23 @@ fn now_iso() -> String {
     crate::logger::timestamp_now()
 }
 
+fn iso_after_secs(secs_from_now: u64) -> String {
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_add(secs_from_now);
+    let d = epoch / 86400;
+    let s = epoch % 86400;
+    let (y, m, day) = crate::logger::days_to_date(d);
+    format!(
+        "{y:04}-{m:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        s / 3600,
+        (s % 3600) / 60,
+        s % 60
+    )
+}
+
 /// Generate a simple unique ID: `{prefix}_{epoch_secs}_{counter}`.
 pub fn gen_id(prefix: &str) -> String {
     let epoch = std::time::SystemTime::now()
@@ -122,6 +139,8 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             payload_json      TEXT,
             delivery_mode     TEXT NOT NULL DEFAULT 'safe_boundary',
             max_retries       INTEGER NOT NULL DEFAULT 3,
+            retry_count       INTEGER NOT NULL DEFAULT 0,
+            next_retry_at     TEXT,
             expires_at        TEXT,
             dedupe_key        TEXT,
             state             TEXT NOT NULL DEFAULT 'pending',
@@ -149,6 +168,18 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             tags        TEXT NOT NULL DEFAULT '[]'
         );
         ",
+    )?;
+
+    ensure_column(
+        conn,
+        "interrupts",
+        "retry_count",
+        "retry_count INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(conn, "interrupts", "next_retry_at", "next_retry_at TEXT")?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_interrupts_retry ON interrupts(state, next_retry_at)",
+        [],
     )?;
 
     // FTS5 virtual table -- CREATE VIRTUAL TABLE IF NOT EXISTS is supported
@@ -196,6 +227,25 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         )?;
     }
 
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    column_def: &str,
+) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+
+    for existing in columns {
+        if existing? == column {
+            return Ok(());
+        }
+    }
+
+    conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column_def}"), [])?;
     Ok(())
 }
 
@@ -774,9 +824,9 @@ pub fn insert_interrupt(conn: &Connection, interrupt: &Interrupt) -> Result<(), 
     conn.execute(
         "INSERT OR REPLACE INTO interrupts
          (id, interrupt_type, priority, target_session_id, reason, payload_json,
-          delivery_mode, max_retries, expires_at, dedupe_key, state,
-          created_at, delivered_at, acknowledged_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+          delivery_mode, max_retries, retry_count, next_retry_at, expires_at,
+          dedupe_key, state, created_at, delivered_at, acknowledged_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             interrupt.id,
             interrupt.interrupt_type.as_str(),
@@ -786,6 +836,8 @@ pub fn insert_interrupt(conn: &Connection, interrupt: &Interrupt) -> Result<(), 
             payload_str,
             interrupt.delivery_mode,
             interrupt.max_retries,
+            interrupt.retry_count,
+            interrupt.next_retry_at,
             interrupt.expires_at,
             interrupt.dedupe_key,
             interrupt.state.as_str(),
@@ -805,12 +857,12 @@ pub fn list_interrupts(
     let sql = if state.is_some() {
         "SELECT id, interrupt_type, priority, target_session_id, reason, payload_json,
                 delivery_mode, max_retries, expires_at, dedupe_key, state,
-                created_at, delivered_at, acknowledged_at
+                created_at, delivered_at, acknowledged_at, retry_count, next_retry_at
          FROM interrupts WHERE state = ?1 ORDER BY created_at DESC"
     } else {
         "SELECT id, interrupt_type, priority, target_session_id, reason, payload_json,
                 delivery_mode, max_retries, expires_at, dedupe_key, state,
-                created_at, delivered_at, acknowledged_at
+                created_at, delivered_at, acknowledged_at, retry_count, next_retry_at
          FROM interrupts ORDER BY created_at DESC"
     };
 
@@ -843,6 +895,8 @@ fn row_to_interrupt(row: &rusqlite::Row) -> rusqlite::Result<Interrupt> {
         payload: payload_str.and_then(|s| serde_json::from_str(&s).ok()),
         delivery_mode: row.get(6)?,
         max_retries: row.get::<_, u32>(7)?,
+        retry_count: row.get(14)?,
+        next_retry_at: row.get(15)?,
         expires_at: row.get(8)?,
         dedupe_key: row.get(9)?,
         state: InterruptState::parse(&state_str).unwrap_or(InterruptState::Pending),
@@ -857,7 +911,7 @@ pub fn get_interrupt(conn: &Connection, interrupt_id: &str) -> Result<Option<Int
         .prepare(
             "SELECT id, interrupt_type, priority, target_session_id, reason, payload_json,
                     delivery_mode, max_retries, expires_at, dedupe_key, state,
-                    created_at, delivered_at, acknowledged_at
+                    created_at, delivered_at, acknowledged_at, retry_count, next_retry_at
              FROM interrupts WHERE id = ?1",
         )
         .map_err(|e| format!("prepare: {e}"))?;
@@ -879,10 +933,12 @@ pub fn list_deliverable_interrupts(conn: &Connection) -> Result<Vec<Interrupt>, 
         .prepare(
             "SELECT id, interrupt_type, priority, target_session_id, reason, payload_json,
                     delivery_mode, max_retries, expires_at, dedupe_key, state,
-                    created_at, delivered_at, acknowledged_at
+                    created_at, delivered_at, acknowledged_at, retry_count, next_retry_at
              FROM interrupts
              WHERE state = 'pending'
                AND (expires_at IS NULL OR expires_at > ?1)
+               AND (next_retry_at IS NULL OR next_retry_at <= ?1)
+               AND retry_count < max_retries
              ORDER BY
                CASE priority
                  WHEN 'critical' THEN 0
@@ -909,11 +965,65 @@ pub fn list_deliverable_interrupts(conn: &Connection) -> Result<Vec<Interrupt>, 
 pub fn mark_interrupt_delivered(conn: &Connection, interrupt_id: &str) -> Result<bool, String> {
     let now = now_iso();
     conn.execute(
-        "UPDATE interrupts SET state = 'delivered', delivered_at = ?1 WHERE id = ?2 AND state = 'pending'",
+        "UPDATE interrupts
+         SET state = 'delivered', delivered_at = ?1, next_retry_at = NULL
+         WHERE id = ?2 AND state = 'pending'",
         params![now, interrupt_id],
     )
     .map_err(|e| format!("mark delivered: {e}"))?;
     Ok(conn.changes() > 0)
+}
+
+pub fn record_interrupt_delivery_failure(
+    conn: &Connection,
+    interrupt_id: &str,
+) -> Result<Option<Interrupt>, String> {
+    let Some(interrupt) = get_interrupt(conn, interrupt_id)? else {
+        return Ok(None);
+    };
+
+    if interrupt.state != InterruptState::Pending {
+        return Ok(Some(interrupt));
+    }
+
+    let retry_count = interrupt.retry_count.saturating_add(1);
+    if retry_count >= interrupt.max_retries {
+        conn.execute(
+            "UPDATE interrupts
+             SET retry_count = ?1, state = 'expired', next_retry_at = NULL
+             WHERE id = ?2 AND state = 'pending'",
+            params![retry_count, interrupt_id],
+        )
+        .map_err(|e| format!("record delivery failure: {e}"))?;
+    } else {
+        let next_retry_at = iso_after_secs(retry_backoff_secs(retry_count));
+        conn.execute(
+            "UPDATE interrupts
+             SET retry_count = ?1, next_retry_at = ?2
+             WHERE id = ?3 AND state = 'pending'",
+            params![retry_count, next_retry_at, interrupt_id],
+        )
+        .map_err(|e| format!("record delivery failure: {e}"))?;
+    }
+
+    get_interrupt(conn, interrupt_id)
+}
+
+pub fn expire_exhausted_interrupts(conn: &Connection) -> Result<u64, String> {
+    let count = conn
+        .execute(
+            "UPDATE interrupts
+             SET state = 'expired', next_retry_at = NULL
+             WHERE state = 'pending' AND retry_count >= max_retries",
+            [],
+        )
+        .map_err(|e| format!("expire exhausted interrupts: {e}"))?;
+    Ok(count as u64)
+}
+
+fn retry_backoff_secs(retry_count: u32) -> u64 {
+    let shift = retry_count.saturating_sub(1).min(4);
+    30 * (1u64 << shift)
 }
 
 pub fn mark_interrupt_acknowledged(conn: &Connection, interrupt_id: &str) -> Result<bool, String> {
@@ -956,7 +1066,7 @@ pub fn find_duplicate_interrupt(
         .prepare(
             "SELECT id, interrupt_type, priority, target_session_id, reason, payload_json,
                     delivery_mode, max_retries, expires_at, dedupe_key, state,
-                    created_at, delivered_at, acknowledged_at
+                    created_at, delivered_at, acknowledged_at, retry_count, next_retry_at
              FROM interrupts
              WHERE dedupe_key = ?1 AND state IN ('pending', 'delivered')
              LIMIT 1",
@@ -1345,6 +1455,8 @@ mod tests {
             payload: Some(serde_json::json!({"resource": "src/app.rs"})),
             delivery_mode: "safe_boundary".into(),
             max_retries: 3,
+            retry_count: 0,
+            next_retry_at: None,
             expires_at: Some("2026-04-20T10:20:00Z".into()),
             dedupe_key: Some("lease:src/app.rs".into()),
             state: InterruptState::Pending,
@@ -1679,6 +1791,8 @@ mod tests {
             payload: None,
             delivery_mode: "safe_boundary".into(),
             max_retries: 3,
+            retry_count: 0,
+            next_retry_at: None,
             expires_at: None,
             dedupe_key: None,
             state: InterruptState::Pending,
@@ -1735,6 +1849,69 @@ mod tests {
     }
 
     #[test]
+    fn list_deliverable_excludes_interrupts_in_backoff() {
+        let conn = open_memory();
+        let mut intr = make_test_interrupt("intr_backoff", "sess_1", InterruptType::Compact);
+        intr.retry_count = 1;
+        intr.next_retry_at = Some("2099-01-01T00:00:00Z".into());
+        insert_interrupt(&conn, &intr).unwrap();
+
+        let deliverable = list_deliverable_interrupts(&conn).unwrap();
+        assert!(deliverable.is_empty());
+    }
+
+    #[test]
+    fn record_interrupt_delivery_failure_schedules_retry() {
+        let conn = open_memory();
+        let intr = make_test_interrupt("intr_retry", "sess_1", InterruptType::Pause);
+        insert_interrupt(&conn, &intr).unwrap();
+
+        let updated = record_interrupt_delivery_failure(&conn, "intr_retry")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(updated.retry_count, 1);
+        assert_eq!(updated.state, InterruptState::Pending);
+        assert!(updated.next_retry_at.is_some());
+        assert!(list_deliverable_interrupts(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn record_interrupt_delivery_failure_expires_at_max_retries() {
+        let conn = open_memory();
+        let mut intr = make_test_interrupt("intr_retry_max", "sess_1", InterruptType::Pause);
+        intr.max_retries = 2;
+        insert_interrupt(&conn, &intr).unwrap();
+
+        let first = record_interrupt_delivery_failure(&conn, "intr_retry_max")
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.retry_count, 1);
+        assert_eq!(first.state, InterruptState::Pending);
+
+        let second = record_interrupt_delivery_failure(&conn, "intr_retry_max")
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.retry_count, 2);
+        assert_eq!(second.state, InterruptState::Expired);
+        assert!(second.next_retry_at.is_none());
+    }
+
+    #[test]
+    fn expire_exhausted_interrupts_marks_pending_as_expired() {
+        let conn = open_memory();
+        let mut intr = make_test_interrupt("intr_exhausted", "sess_1", InterruptType::Pause);
+        intr.retry_count = 3;
+        insert_interrupt(&conn, &intr).unwrap();
+
+        let count = expire_exhausted_interrupts(&conn).unwrap();
+        assert_eq!(count, 1);
+
+        let after = get_interrupt(&conn, "intr_exhausted").unwrap().unwrap();
+        assert_eq!(after.state, InterruptState::Expired);
+    }
+
+    #[test]
     fn mark_interrupt_delivered_transitions_state() {
         let conn = open_memory();
         let intr = make_test_interrupt("intr_del", "sess_1", InterruptType::Pause);
@@ -1779,6 +1956,44 @@ mod tests {
 
         let after = get_interrupt(&conn, "intr_stale").unwrap().unwrap();
         assert_eq!(after.state, InterruptState::Expired);
+    }
+
+    #[test]
+    fn migrate_adds_retry_columns_to_existing_interrupts_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE interrupts (
+                id                TEXT PRIMARY KEY,
+                interrupt_type    TEXT NOT NULL,
+                priority          TEXT NOT NULL,
+                target_session_id TEXT NOT NULL,
+                reason            TEXT NOT NULL,
+                payload_json      TEXT,
+                delivery_mode     TEXT NOT NULL DEFAULT 'safe_boundary',
+                max_retries       INTEGER NOT NULL DEFAULT 3,
+                expires_at        TEXT,
+                dedupe_key        TEXT,
+                state             TEXT NOT NULL DEFAULT 'pending',
+                created_at        TEXT NOT NULL,
+                delivered_at      TEXT,
+                acknowledged_at   TEXT
+            );
+            ",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let mut stmt = conn.prepare("PRAGMA table_info(interrupts)").unwrap();
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        assert!(columns.contains(&"retry_count".to_string()));
+        assert!(columns.contains(&"next_retry_at".to_string()));
     }
 
     #[test]

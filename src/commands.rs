@@ -948,6 +948,8 @@ fn check_context_rot(app: &App, json_mode: bool) {
             })),
             delivery_mode: "safe_boundary".into(),
             max_retries: 3,
+            retry_count: 0,
+            next_retry_at: None,
             expires_at: None,
             dedupe_key: Some(dedupe_key),
             state: crate::coord::types::InterruptState::Pending,

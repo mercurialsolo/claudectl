@@ -741,6 +741,8 @@ fn cmd_raise(parts: &[&str], json_mode: bool) -> io::Result<()> {
         payload: None,
         delivery_mode: delivery.to_string(),
         max_retries: 3,
+        retry_count: 0,
+        next_retry_at: None,
         expires_at,
         dedupe_key,
         state: InterruptState::Pending,

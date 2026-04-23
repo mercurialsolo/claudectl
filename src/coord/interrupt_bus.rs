@@ -12,6 +12,7 @@ use super::types::*;
 /// Returns a list of (interrupt_id, status_message) for deliveries made or skipped.
 pub fn deliver_pending(conn: &Connection, sessions: &[ClaudeSession]) -> Vec<(String, String)> {
     let _ = store::expire_stale_interrupts(conn);
+    let _ = store::expire_exhausted_interrupts(conn);
 
     let interrupts = match store::list_deliverable_interrupts(conn) {
         Ok(list) => list,
@@ -72,29 +73,31 @@ pub fn deliver_pending(conn: &Connection, sessions: &[ClaudeSession]) -> Vec<(St
                     "INTERRUPT_BUS",
                     &format!("Delivery failed for {}: {e}", interrupt.id),
                 );
-                // Set a 5-minute expiry on interrupts that fail delivery,
-                // so they don't persist forever in the pending queue.
-                if interrupt.expires_at.is_none() {
-                    let expiry = {
-                        let epoch = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs()
-                            + 300; // 5 minutes
-                        let d = epoch / 86400;
-                        let s = epoch % 86400;
-                        let (y, m, day) = crate::logger::days_to_date(d);
-                        format!(
-                            "{y:04}-{m:02}-{day:02}T{:02}:{:02}:{:02}Z",
-                            s / 3600,
-                            (s % 3600) / 60,
-                            s % 60
-                        )
-                    };
-                    let _ = conn.execute(
-                        "UPDATE interrupts SET expires_at = ?1 WHERE id = ?2 AND expires_at IS NULL",
-                        rusqlite::params![expiry, interrupt.id],
-                    );
+                match store::record_interrupt_delivery_failure(conn, &interrupt.id) {
+                    Ok(Some(updated)) if updated.state == InterruptState::Expired => {
+                        results.push((
+                            interrupt.id.clone(),
+                            format!(
+                                "Interrupt expired after {}/{} delivery attempts: {}",
+                                updated.retry_count, updated.max_retries, interrupt.id
+                            ),
+                        ));
+                    }
+                    Ok(Some(updated)) => {
+                        let next = updated.next_retry_at.as_deref().unwrap_or("next tick");
+                        results.push((
+                            interrupt.id.clone(),
+                            format!(
+                                "Interrupt delivery failed ({}/{}); retry after {next}",
+                                updated.retry_count, updated.max_retries
+                            ),
+                        ));
+                    }
+                    Ok(None) => {}
+                    Err(err) => crate::logger::log(
+                        "INTERRUPT_BUS",
+                        &format!("Failed to record retry for {}: {err}", interrupt.id),
+                    ),
                 }
             }
         }
@@ -170,6 +173,8 @@ mod tests {
             payload: None,
             delivery_mode: delivery_mode.into(),
             max_retries: 3,
+            retry_count: 0,
+            next_retry_at: None,
             expires_at: None,
             dedupe_key: None,
             state: InterruptState::Pending,
@@ -223,6 +228,8 @@ mod tests {
             payload: None,
             delivery_mode: "safe_boundary".into(),
             max_retries: 3,
+            retry_count: 0,
+            next_retry_at: None,
             expires_at: None,
             dedupe_key: None,
             state: InterruptState::Pending,
@@ -248,6 +255,8 @@ mod tests {
             payload: Some(serde_json::json!({"resource": "src/app.rs", "owner": "sess_9"})),
             delivery_mode: "safe_boundary".into(),
             max_retries: 3,
+            retry_count: 0,
+            next_retry_at: None,
             expires_at: None,
             dedupe_key: None,
             state: InterruptState::Pending,

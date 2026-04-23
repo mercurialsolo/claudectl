@@ -331,6 +331,10 @@ pub struct Interrupt {
     pub payload: Option<serde_json::Value>,
     pub delivery_mode: String,
     pub max_retries: u32,
+    #[serde(default)]
+    pub retry_count: u32,
+    #[serde(default)]
+    pub next_retry_at: Option<String>,
     pub expires_at: Option<String>,
     pub dedupe_key: Option<String>,
     pub state: InterruptState,

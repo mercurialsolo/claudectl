@@ -18,6 +18,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-targets
+      - run: cargo check --all-targets --features coord
 
   fmt:
     name: Format
@@ -39,6 +40,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features coord -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -51,3 +53,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-targets
+      - run: cargo test --all-targets --features coord
