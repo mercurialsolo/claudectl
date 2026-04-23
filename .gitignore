@@ -17,3 +17,5 @@ social/
 .claude/worktrees/
 docs/reddit*
 site/
+outputs/reddit-outreach-20260421/
+gws-credentials.json
