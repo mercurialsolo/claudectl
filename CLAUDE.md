@@ -33,7 +33,7 @@ cargo fmt --check            # Check formatting
 - `session_recorder.rs` — Per-session highlight reel recording (extracts edits, commands, errors; strips idle time)
 - `transcript.rs` — JSONL transcript parser (messages, tool use, tool results, usage data)
 - `metrics.rs` — Brain effectiveness metrics: learning curve, accuracy breakdown, rules baseline comparison, false-approve rate
-- `demo.rs` — Deterministic fake sessions for screenshots, recordings, and demos
+- `demo.rs` — Deterministic fake sessions for screenshots, recordings, and demos. Includes `DemoHighlightState` which drip-feeds scripted JSONL events so session recording works in demo mode.
 - `theme.rs` — Color theming (dark/light/monochrome, respects NO_COLOR)
 - `logger.rs` — Structured diagnostic logging
 - `init.rs` — `--init` / `--uninstall`: writes/removes Claude Code hooks in `.claude/settings.json`

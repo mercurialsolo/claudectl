@@ -723,6 +723,9 @@ fn run_tui<W: io::Write>(
                 for (_, rec) in sess_recs.iter_mut() {
                     let _ = rec.finish();
                 }
+                if let Some(ref hl) = app.demo_highlight {
+                    hl.cleanup();
+                }
                 return Ok(());
             }
         }
@@ -740,6 +743,9 @@ fn run_tui<W: io::Write>(
                     // Finish all session recordings on quit
                     for (_, rec) in sess_recs.iter_mut() {
                         let _ = rec.finish();
+                    }
+                    if let Some(ref hl) = app.demo_highlight {
+                        hl.cleanup();
                     }
                     return Ok(());
                 }

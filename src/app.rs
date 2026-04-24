@@ -301,6 +301,7 @@ pub struct App {
     pub auto_deny_file_conflicts: bool, // Config: auto-deny conflicting writes
     pub demo_mode: bool,
     pub demo_tick: u32,
+    pub demo_highlight: Option<crate::demo::DemoHighlightState>,
     pub session_recordings: HashMap<u32, String>, // pid -> output_path for active recordings
     pub rules: Vec<crate::rules::AutoRule>,
     pub auto_actions_fired: HashMap<u32, std::time::Instant>, // Debounce: pid -> last action time
@@ -432,6 +433,7 @@ impl App {
             auto_deny_file_conflicts: false,
             demo_mode: false,
             demo_tick: 0,
+            demo_highlight: None,
             session_recordings: HashMap::new(),
             rules: Vec::new(),
             auto_actions_fired: HashMap::new(),
@@ -1027,6 +1029,35 @@ impl App {
                         },
                     );
                 }
+            }
+        }
+
+        // ── Demo highlight reel support ────────────────────────────────
+        // Ensure demo sessions have JSONL paths so the session recorder can attach.
+        // Drip-feed scripted events for sessions that are actively being recorded.
+        let highlight = self
+            .demo_highlight
+            .get_or_insert_with(crate::demo::DemoHighlightState::new);
+
+        for session in &mut sessions {
+            let path = highlight.ensure_jsonl(session.pid).clone();
+            session.jsonl_path = Some(path);
+        }
+
+        // Feed new JSONL events only into sessions being recorded.
+        // When the script is exhausted, mark the PID for auto-stop.
+        let recording_pids: Vec<u32> = self.session_recordings.keys().copied().collect();
+        let mut finished_pids: Vec<u32> = Vec::new();
+        for pid in recording_pids {
+            if !highlight.drip_feed(pid) {
+                finished_pids.push(pid);
+            }
+        }
+
+        // Auto-stop recordings whose scripts are done
+        for pid in finished_pids {
+            if let Some(path) = self.session_recordings.remove(&pid) {
+                self.status_msg = format!("Recording complete → {path}");
             }
         }
 

@@ -52,7 +52,7 @@ You'll see every session in a live table with status, cost, context usage, burn 
 claudectl --demo
 ```
 
-Runs with fake sessions so you can explore the dashboard, keybindings, and features without any live sessions.
+Runs with fake sessions so you can explore the dashboard, keybindings, and features without any live sessions. Press `R` on any session to record a highlight reel — demo mode drip-feeds a scripted coding session (reading files, writing code, fixing errors, running tests) so you can see the session recorder in action.
 
 ## Key actions from the dashboard
 

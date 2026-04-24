@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::session::{ClaudeSession, RawSession, SessionStatus, TelemetryStatus, ToolStats};
@@ -460,4 +462,341 @@ pub fn demo_rules() -> Vec<crate::rules::AutoRule> {
             r
         },
     ]
+}
+
+// ── Demo highlight reel JSONL ──────────────────────────────────────
+
+/// A scripted JSONL transcript simulating a realistic Claude Code session.
+/// Each entry is one JSONL line that the SessionRecorder can parse.
+/// Tells the story: "Add JWT auth middleware to acme-api".
+fn demo_highlight_script() -> Vec<String> {
+    let lines: Vec<serde_json::Value> = vec![
+        // 1. Assistant reads the existing code
+        assistant_msg(
+            "Let me read the current auth setup to understand the existing patterns before making changes.",
+            Some((
+                "Read",
+                serde_json::json!({"file_path": "/Users/dev/projects/acme-api/src/auth.rs"}),
+            )),
+        ),
+        // 2. Tool result from Read
+        user_tool_result(
+            "pub fn check_token(token: &str) -> bool {\n    // TODO: implement real auth\n    token == \"hardcoded-dev-token\"\n}",
+            false,
+        ),
+        // 3. Assistant reads the router
+        assistant_msg(
+            "Now let me check how routes are set up to see where middleware gets applied.",
+            Some((
+                "Read",
+                serde_json::json!({"file_path": "/Users/dev/projects/acme-api/src/router.rs"}),
+            )),
+        ),
+        // 4. Tool result
+        user_tool_result(
+            "pub fn routes() -> Router {\n    Router::new()\n        .route(\"/api/users\", get(list_users))\n        .route(\"/api/users/:id\", get(get_user))\n        .route(\"/health\", get(health_check))\n}",
+            false,
+        ),
+        // 5. Grep for existing middleware patterns
+        assistant_msg(
+            "Checking if there are any existing middleware patterns in the codebase I should follow.",
+            Some((
+                "Grep",
+                serde_json::json!({"pattern": "middleware|layer|Extension", "path": "/Users/dev/projects/acme-api/src"}),
+            )),
+        ),
+        // 6. Grep result
+        user_tool_result(
+            "src/main.rs:  .layer(CorsLayer::permissive())\nsrc/main.rs:  .layer(TraceLayer::new_for_http())",
+            false,
+        ),
+        // 7. Write the JWT auth module
+        assistant_msg(
+            "I'll create the JWT middleware module following the existing layer pattern from main.rs.",
+            Some((
+                "Write",
+                serde_json::json!({
+                    "file_path": "/Users/dev/projects/acme-api/src/middleware/jwt.rs",
+                    "content": "use axum::{extract::Request, middleware::Next, response::Response};\nuse jsonwebtoken::{decode, DecodingKey, Validation};\n\npub async fn require_auth(\n    request: Request,\n    next: Next,\n) -> Result<Response, AuthError> {\n    let token = request\n        .headers()\n        .get(\"Authorization\")\n        .and_then(|v| v.to_str().ok())\n        .and_then(|v| v.strip_prefix(\"Bearer \"))\n        .ok_or(AuthError::MissingToken)?;\n\n    let claims = decode::<Claims>(\n        token,\n        &DecodingKey::from_secret(std::env::var(\"JWT_SECRET\")?.as_ref()),\n        &Validation::default(),\n    ).map_err(|_| AuthError::InvalidToken)?;\n\n    request.extensions_mut().insert(claims.claims);\n    Ok(next.run(request).await)\n}"
+                }),
+            )),
+        ),
+        // 8. Write result
+        user_tool_result("", false),
+        // 9. Edit the router to add middleware
+        assistant_msg(
+            "Now I'll wire the JWT middleware into the router, keeping /health unprotected.",
+            Some((
+                "Edit",
+                serde_json::json!({
+                    "file_path": "/Users/dev/projects/acme-api/src/router.rs",
+                    "old_string": "pub fn routes() -> Router {\n    Router::new()\n        .route(\"/api/users\", get(list_users))\n        .route(\"/api/users/:id\", get(get_user))\n        .route(\"/health\", get(health_check))\n}",
+                    "new_string": "pub fn routes() -> Router {\n    let protected = Router::new()\n        .route(\"/api/users\", get(list_users))\n        .route(\"/api/users/:id\", get(get_user))\n        .layer(middleware::from_fn(jwt::require_auth));\n\n    let public = Router::new()\n        .route(\"/health\", get(health_check));\n\n    Router::new().merge(protected).merge(public)\n}"
+                }),
+            )),
+        ),
+        // 10. Edit result
+        user_tool_result("", false),
+        // 11. Edit Cargo.toml to add jsonwebtoken dep
+        assistant_msg(
+            "Adding the jsonwebtoken dependency to Cargo.toml.",
+            Some((
+                "Edit",
+                serde_json::json!({
+                    "file_path": "/Users/dev/projects/acme-api/Cargo.toml",
+                    "old_string": "[dependencies]\naxum = \"0.7\"",
+                    "new_string": "[dependencies]\naxum = \"0.7\"\njsonwebtoken = \"9\""
+                }),
+            )),
+        ),
+        // 12. Edit result
+        user_tool_result("", false),
+        // 13. Run cargo check
+        assistant_msg(
+            "Let me verify everything compiles before writing tests.",
+            Some((
+                "Bash",
+                serde_json::json!({"command": "cargo check --workspace"}),
+            )),
+        ),
+        // 14. Cargo check result — error!
+        user_tool_result(
+            "error[E0433]: failed to resolve: use of undeclared type `AuthError`\n  --> src/middleware/jwt.rs:8:37\n   |\n8  | ) -> Result<Response, AuthError> {\n   |                      ^^^^^^^^^ not found in this scope\n\nerror: aborting due to 1 previous error",
+            true,
+        ),
+        // 15. Fix the error
+        assistant_msg(
+            "I forgot to define the AuthError type. Let me add it to the JWT module.",
+            Some((
+                "Edit",
+                serde_json::json!({
+                    "file_path": "/Users/dev/projects/acme-api/src/middleware/jwt.rs",
+                    "old_string": "use axum::{extract::Request, middleware::Next, response::Response};",
+                    "new_string": "use axum::{\n    extract::Request,\n    http::StatusCode,\n    middleware::Next,\n    response::{IntoResponse, Response},\n};\n\n#[derive(Debug)]\npub enum AuthError {\n    MissingToken,\n    InvalidToken,\n}\n\nimpl IntoResponse for AuthError {\n    fn into_response(self) -> Response {\n        let status = match self {\n            Self::MissingToken => StatusCode::UNAUTHORIZED,\n            Self::InvalidToken => StatusCode::FORBIDDEN,\n        };\n        status.into_response()\n    }\n}"
+                }),
+            )),
+        ),
+        // 16. Fix result
+        user_tool_result("", false),
+        // 17. Cargo check again
+        assistant_msg(
+            "Checking if the compilation error is fixed.",
+            Some((
+                "Bash",
+                serde_json::json!({"command": "cargo check --workspace"}),
+            )),
+        ),
+        // 18. Success
+        user_tool_result(
+            "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.34s",
+            false,
+        ),
+        // 19. Write tests
+        assistant_msg(
+            "Compilation passes. Now I'll write tests for the auth middleware.",
+            Some((
+                "Write",
+                serde_json::json!({
+                    "file_path": "/Users/dev/projects/acme-api/tests/auth_test.rs",
+                    "content": "#[tokio::test]\nasync fn rejects_missing_token() {\n    let app = test_app();\n    let resp = app.get(\"/api/users\").send().await;\n    assert_eq!(resp.status(), 401);\n}\n\n#[tokio::test]\nasync fn rejects_invalid_token() {\n    let app = test_app();\n    let resp = app.get(\"/api/users\")\n        .header(\"Authorization\", \"Bearer invalid\")\n        .send().await;\n    assert_eq!(resp.status(), 403);\n}\n\n#[tokio::test]\nasync fn accepts_valid_token() {\n    let app = test_app();\n    let token = make_test_jwt();\n    let resp = app.get(\"/api/users\")\n        .header(\"Authorization\", format!(\"Bearer {token}\"))\n        .send().await;\n    assert_eq!(resp.status(), 200);\n}\n\n#[tokio::test]\nasync fn health_is_public() {\n    let app = test_app();\n    let resp = app.get(\"/health\").send().await;\n    assert_eq!(resp.status(), 200);\n}"
+                }),
+            )),
+        ),
+        // 20. Test write result
+        user_tool_result("", false),
+        // 21. Run tests
+        assistant_msg(
+            "Running the full test suite to verify the auth middleware works correctly.",
+            Some((
+                "Bash",
+                serde_json::json!({"command": "cargo test --workspace"}),
+            )),
+        ),
+        // 22. Tests pass
+        user_tool_result(
+            "running 4 tests\ntest rejects_missing_token ... ok\ntest rejects_invalid_token ... ok\ntest accepts_valid_token ... ok\ntest health_is_public ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored",
+            false,
+        ),
+        // 23. Final summary
+        assistant_msg(
+            "All 4 tests pass. The JWT auth middleware is working — protected routes require a valid Bearer token, and /health remains public.",
+            None,
+        ),
+    ];
+
+    lines
+        .iter()
+        .map(|v| serde_json::to_string(v).unwrap())
+        .collect()
+}
+
+/// Build an assistant message JSONL entry.
+fn assistant_msg(text: &str, tool: Option<(&str, serde_json::Value)>) -> serde_json::Value {
+    let mut content = vec![serde_json::json!({"type": "text", "text": text})];
+    if let Some((name, input)) = tool {
+        content.push(serde_json::json!({
+            "type": "tool_use",
+            "name": name,
+            "input": input,
+        }));
+    }
+    serde_json::json!({
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6-20260401",
+            "stop_reason": if content.len() > 1 { "tool_use" } else { "end_turn" },
+            "content": content,
+        }
+    })
+}
+
+/// Build a user tool-result JSONL entry.
+fn user_tool_result(output: &str, is_error: bool) -> serde_json::Value {
+    serde_json::json!({
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "content": output,
+                "is_error": is_error,
+            }]
+        }
+    })
+}
+
+/// State for drip-feeding JSONL events during demo mode.
+pub struct DemoHighlightState {
+    /// Per-session: (temp JSONL path, next line index to write)
+    sessions: HashMap<u32, (PathBuf, usize)>,
+    /// The scripted JSONL lines (shared across sessions)
+    script: Vec<String>,
+}
+
+impl Default for DemoHighlightState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DemoHighlightState {
+    pub fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            script: demo_highlight_script(),
+        }
+    }
+
+    /// Ensure a temp JSONL file exists for the given PID. Returns the path.
+    pub fn ensure_jsonl(&mut self, pid: u32) -> &PathBuf {
+        let entry = self.sessions.entry(pid).or_insert_with(|| {
+            let mut path = std::env::temp_dir();
+            path.push(format!("claudectl-demo-{pid}.jsonl"));
+            // Create empty file (or truncate if leftover from previous run)
+            let _ = std::fs::File::create(&path);
+            (path, 0)
+        });
+        &entry.0
+    }
+
+    /// Drip-feed the next JSONL event for a session that is being recorded.
+    /// Called on each tick. Writes 2 lines per tick (one exchange) for pacing.
+    pub fn drip_feed(&mut self, pid: u32) -> bool {
+        let Some((path, idx)) = self.sessions.get_mut(&pid) else {
+            return false;
+        };
+
+        if *idx >= self.script.len() {
+            return false; // Script exhausted
+        }
+
+        // Write 2 lines per tick (assistant + tool result = one exchange)
+        let end = (*idx + 2).min(self.script.len());
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&*path) {
+            for line in &self.script[*idx..end] {
+                let _ = writeln!(f, "{}", line);
+            }
+        }
+        *idx = end;
+        true
+    }
+
+    /// Clean up temp files on exit.
+    pub fn cleanup(&self) {
+        for (path, _) in self.sessions.values() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod highlight_tests {
+    use super::*;
+    use crate::transcript::{TranscriptEvent, parse_line};
+
+    #[test]
+    fn demo_highlight_generates_valid_jsonl() {
+        let script = demo_highlight_script();
+        assert!(!script.is_empty(), "script should have events");
+
+        let mut assistant_count = 0;
+        let mut tool_result_count = 0;
+        let mut error_count = 0;
+
+        for (i, line) in script.iter().enumerate() {
+            // Every line must be valid JSON
+            let _: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("line {i} is not valid JSON: {e}"));
+
+            // Every line must parse via the transcript parser
+            let event = parse_line(line)
+                .unwrap_or_else(|| panic!("line {i} failed to parse as TranscriptEvent"));
+
+            if let TranscriptEvent::Message(msg) = event {
+                match msg.role {
+                    crate::transcript::TranscriptRole::Assistant => assistant_count += 1,
+                    crate::transcript::TranscriptRole::User => {
+                        for block in &msg.content {
+                            if let crate::transcript::TranscriptBlock::ToolResult {
+                                is_error, ..
+                            } = block
+                            {
+                                tool_result_count += 1;
+                                if *is_error {
+                                    error_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sanity checks on script content
+        assert!(
+            assistant_count >= 10,
+            "should have >=10 assistant msgs, got {assistant_count}"
+        );
+        assert!(
+            tool_result_count >= 5,
+            "should have >=5 tool results, got {tool_result_count}"
+        );
+        assert!(error_count >= 1, "should have >=1 error, got {error_count}");
+    }
+
+    #[test]
+    fn demo_highlight_state_creates_and_cleans_up() {
+        let mut state = DemoHighlightState::new();
+        let path = state.ensure_jsonl(12345).clone();
+
+        assert!(path.exists(), "temp JSONL file should be created");
+
+        // Drip feed should write events
+        assert!(state.drip_feed(12345), "first drip should succeed");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.is_empty(), "file should have content after drip");
+
+        // Cleanup should remove the file
+        state.cleanup();
+        assert!(!path.exists(), "temp file should be removed after cleanup");
+    }
 }
