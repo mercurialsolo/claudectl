@@ -687,7 +687,7 @@ pub fn run_autopsy(jsonl_path: &Path) -> Result<AutopsyReport, String> {
     findings.extend(detect_context_bloat(&walker));
 
     // Sort by severity descending
-    findings.sort_by(|a, b| b.severity.cmp(&a.severity));
+    findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
 
     let cost = compute_cost_breakdown(&walker);
     let quality = compute_quality_score(&walker);
@@ -936,7 +936,7 @@ mod tests {
 
     #[test]
     fn walker_parses_basic_transcript() {
-        let lines = vec![
+        let lines = [
             make_assistant_with_tool_use("Bash", r#"{"command":"ls"}"#),
             make_user_with_result(false, "file1.rs file2.rs"),
             make_assistant_with_tool_use("Read", r#"{"file_path":"/src/main.rs"}"#),
@@ -955,7 +955,7 @@ mod tests {
 
     #[test]
     fn detect_error_cascade_basic() {
-        let lines = vec![
+        let lines = [
             make_assistant_with_tool_use("Bash", r#"{"command":"cargo build"}"#),
             make_user_with_result(true, "error: compilation failed"),
             make_assistant_with_tool_use("Bash", r#"{"command":"cargo build"}"#),
@@ -974,7 +974,7 @@ mod tests {
 
     #[test]
     fn no_cascade_on_single_error() {
-        let lines = vec![
+        let lines = [
             make_assistant_with_tool_use("Bash", r#"{"command":"cargo build"}"#),
             make_user_with_result(true, "error"),
             make_assistant_with_tool_use("Bash", r#"{"command":"cargo test"}"#),
@@ -1007,7 +1007,7 @@ mod tests {
 
     #[test]
     fn reads_before_edit_not_flagged() {
-        let lines = vec![
+        let lines = [
             make_assistant_with_tool_use("Read", r#"{"file_path":"/src/lib.rs"}"#),
             make_user_with_result(false, "old content"),
             make_assistant_with_tool_use(
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[test]
     fn detect_undo_redo_basic() {
-        let lines = vec![
+        let lines = [
             // Edit 1
             make_assistant_with_tool_use(
                 "Edit",
@@ -1062,7 +1062,7 @@ mod tests {
 
     #[test]
     fn cost_efficiency_all_success() {
-        let lines = vec![
+        let lines = [
             make_assistant_with_tool_use("Bash", r#"{"command":"ls"}"#),
             make_user_with_result(false, "ok"),
             make_assistant_with_tool_use(
@@ -1084,7 +1084,7 @@ mod tests {
 
     #[test]
     fn cost_efficiency_half_errors() {
-        let lines = vec![
+        let lines = [
             make_assistant_with_tool_use("Bash", r#"{"command":"cargo build"}"#),
             make_user_with_result(true, "error"),
             make_assistant_with_tool_use("Bash", r#"{"command":"cargo build"}"#),
@@ -1100,7 +1100,7 @@ mod tests {
 
     #[test]
     fn quality_score_with_passing_tests() {
-        let lines = vec![
+        let lines = [
             make_assistant_with_tool_use("Bash", r#"{"command":"cargo test"}"#),
             make_user_with_result(false, "test result: ok. 10 passed"),
             make_assistant_with_tool_use("Bash", r#"{"command":"cargo clippy"}"#),
@@ -1118,7 +1118,7 @@ mod tests {
 
     #[test]
     fn quality_score_no_tests() {
-        let lines = vec![
+        let lines = [
             make_assistant_with_tool_use(
                 "Edit",
                 r#"{"file_path":"/a.rs","old_string":"x","new_string":"y"}"#,
