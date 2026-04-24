@@ -8,6 +8,7 @@ pub const ADVISORY: &str = "advisory";
 pub const ORCHESTRATION: &str = "orchestration";
 pub const SUMMARIZE: &str = "summarize";
 pub const DECOMPOSITION: &str = "decomposition";
+pub const AUTOPSY: &str = "autopsy";
 
 /// Load a prompt template by name. Checks user overrides first, falls back to built-in.
 pub fn load(name: &str) -> String {
@@ -52,6 +53,7 @@ fn builtin(name: &str) -> &'static str {
         ORCHESTRATION => ORCHESTRATION_PROMPT,
         SUMMARIZE => SUMMARIZE_PROMPT,
         DECOMPOSITION => DECOMPOSITION_PROMPT,
+        AUTOPSY => AUTOPSY_PROMPT,
         _ => {
             "Respond with JSON: {\"action\": \"deny\", \"reasoning\": \"unknown prompt\", \"confidence\": 0.0}"
         }
@@ -60,7 +62,7 @@ fn builtin(name: &str) -> &'static str {
 
 /// List all available prompt names and their source (builtin vs user override).
 pub fn list_prompts() -> Vec<(String, String)> {
-    let names = [ADVISORY, ORCHESTRATION, SUMMARIZE, DECOMPOSITION];
+    let names = [ADVISORY, ORCHESTRATION, SUMMARIZE, DECOMPOSITION, AUTOPSY];
     names
         .iter()
         .map(|name| {
@@ -129,6 +131,21 @@ Keep ONLY what's relevant to the target task. Be concise — this will be inject
 Output to summarize:
 {{source_output}}"#;
 
+const AUTOPSY_PROMPT: &str = r#"You are analyzing a completed Claude Code session post-mortem. Given the session statistics and detected issues, suggest what the session should have done differently.
+
+## Session Summary
+{{session_summary}}
+
+## Detected Issues
+{{findings}}
+
+## Cost Breakdown
+{{cost_breakdown}}
+
+Provide 3-5 concise, actionable suggestions for what the session should have done differently. Focus on strategy, not syntax. Each suggestion should be one sentence.
+
+Respond with JSON: {"suggestions": ["...", "..."]}"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +172,14 @@ mod tests {
     }
 
     #[test]
+    fn builtin_autopsy_exists() {
+        let prompt = builtin(AUTOPSY);
+        assert!(prompt.contains("post-mortem"));
+        assert!(prompt.contains("{{session_summary}}"));
+        assert!(prompt.contains("{{findings}}"));
+    }
+
+    #[test]
     fn expand_replaces_variables() {
         let template = "Hello {{name}}, you have {{count}} items.";
         let result = expand(template, &[("name", "Alice"), ("count", "3")]);
@@ -178,11 +203,12 @@ mod tests {
     #[test]
     fn list_prompts_returns_all() {
         let prompts = list_prompts();
-        assert_eq!(prompts.len(), 4);
+        assert_eq!(prompts.len(), 5);
         assert!(prompts.iter().any(|(n, _)| n == ADVISORY));
         assert!(prompts.iter().any(|(n, _)| n == ORCHESTRATION));
         assert!(prompts.iter().any(|(n, _)| n == SUMMARIZE));
         assert!(prompts.iter().any(|(n, _)| n == DECOMPOSITION));
+        assert!(prompts.iter().any(|(n, _)| n == AUTOPSY));
     }
 
     #[test]

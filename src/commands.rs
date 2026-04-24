@@ -284,6 +284,118 @@ pub(crate) fn apply_filters(app: &mut App, filters: &ViewFilters) {
     }
 }
 
+/// Run a post-mortem autopsy on a completed session transcript.
+/// Resolves the session from: direct JSONL path, session ID, or most recent.
+pub(crate) fn run_autopsy(session_arg: Option<&str>, json_output: bool) -> io::Result<()> {
+    let jsonl_path = resolve_jsonl_for_autopsy(session_arg)?;
+
+    eprintln!("Analyzing: {}", jsonl_path.display());
+
+    let mut report = brain::autopsy::run_autopsy(&jsonl_path).map_err(io::Error::other)?;
+
+    // Try to infer project from directory name
+    if let Some(parent) = jsonl_path.parent() {
+        if let Some(name) = parent.file_name().and_then(|n| n.to_str()) {
+            report.project = name.to_string();
+        }
+    }
+
+    if json_output {
+        let json = brain::autopsy::report_to_json(&report);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap_or_default()
+        );
+    } else {
+        print!("{}", brain::autopsy::format_report(&report));
+    }
+
+    // Save the report
+    match brain::autopsy::save_report(&report) {
+        Ok(path) => eprintln!("Saved: {}", path.display()),
+        Err(e) => eprintln!("Warning: could not save autopsy report: {e}"),
+    }
+
+    Ok(())
+}
+
+/// Resolve a session reference to a JSONL path.
+/// Accepts: a .jsonl file path, a session ID, or None (most recent).
+fn resolve_jsonl_for_autopsy(session_arg: Option<&str>) -> io::Result<std::path::PathBuf> {
+    if let Some(arg) = session_arg {
+        // Direct path?
+        let path = std::path::PathBuf::from(arg);
+        if arg.ends_with(".jsonl") && path.exists() {
+            return Ok(path);
+        }
+
+        // Search for session ID across all project directories
+        let projects_dir = discovery::projects_dir();
+        if projects_dir.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&projects_dir) {
+                for entry in entries.flatten() {
+                    let dir = entry.path();
+                    if !dir.is_dir() {
+                        continue;
+                    }
+                    let candidate = dir.join(format!("{arg}.jsonl"));
+                    if candidate.exists() {
+                        return Ok(candidate);
+                    }
+                }
+            }
+        }
+
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Session not found: {arg}"),
+        ));
+    }
+
+    // No argument: find the most recently modified JSONL
+    find_most_recent_jsonl()
+}
+
+/// Find the most recently modified JSONL file across all project directories.
+fn find_most_recent_jsonl() -> io::Result<std::path::PathBuf> {
+    let projects_dir = discovery::projects_dir();
+    let mut best: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
+
+    if projects_dir.is_dir() {
+        if let Ok(project_entries) = std::fs::read_dir(&projects_dir) {
+            for project_entry in project_entries.flatten() {
+                let dir = project_entry.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                if let Ok(files) = std::fs::read_dir(&dir) {
+                    for file_entry in files.flatten() {
+                        let path = file_entry.path();
+                        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                            continue;
+                        }
+                        if let Ok(meta) = file_entry.metadata() {
+                            if let Ok(modified) = meta.modified() {
+                                let dominated = best.as_ref().is_none_or(|(_, t)| modified > *t);
+                                if dominated {
+                                    best = Some((path, modified));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    best.map(|(p, _)| p).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "No JSONL transcripts found. Run some Claude Code sessions first.",
+        )
+    })
+}
+
 pub(crate) fn run_clean(
     older_than: Option<&str>,
     finished_only: bool,
