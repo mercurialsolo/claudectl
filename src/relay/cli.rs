@@ -69,7 +69,7 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
         .map_err(|e| io::Error::other(format!("invalid addr: {e}")))?;
 
     let registry = Arc::new(Mutex::new(PeerRegistry::new(30)));
-    let listener = RelayListener::start(addr, Arc::clone(&registry), identity.clone())?;
+    let listener = RelayListener::start(addr, Arc::clone(&registry), identity.clone(), 8)?;
 
     println!("Relay listening on {} as {}", listener.addr, identity);
     println!("Press Ctrl+C to stop.");
@@ -192,6 +192,64 @@ fn cmd_accept(args: &[&str]) -> io::Result<()> {
     Ok(())
 }
 
+/// Shared event loop for a connected peer. Blocks until Ctrl+C.
+fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
+    let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let r = Arc::clone(&running);
+    let _ = ctrlc::set_handler(move || {
+        r.store(false, std::sync::atomic::Ordering::Relaxed);
+    });
+
+    while running.load(std::sync::atomic::Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if let Ok(mut reg) = registry.lock() {
+            let messages = reg.drain_messages();
+            for (peer_id, msg) in &messages {
+                match msg.msg_type {
+                    super::MessageType::Heartbeat => {
+                        reg.handle_heartbeat(peer_id);
+                    }
+                    _ => {
+                        println!(
+                            "[{}] {:?} from {}",
+                            crate::logger::timestamp_now(),
+                            msg.msg_type,
+                            peer_id
+                        );
+                    }
+                }
+            }
+            let events = reg.tick(identity);
+            for event in events {
+                if let super::mesh::MeshEvent::PeerDisconnected(id) = event {
+                    println!("Peer {} disconnected", id);
+                }
+            }
+        }
+    }
+    println!("\nDisconnected.");
+}
+
+/// Try to connect using a specific PSK. Returns Ok(registry) on success.
+fn try_connect(
+    addr: SocketAddr,
+    psk: &[u8; 32],
+    identity: &super::PeerId,
+) -> Result<(String, Arc<Mutex<PeerRegistry>>), String> {
+    let registry = Arc::new(Mutex::new(PeerRegistry::new(30)));
+    let tx = {
+        let reg = registry.lock().unwrap();
+        reg.message_tx()
+    };
+
+    let conn = PeerConnection::connect(addr, psk, identity, tx)?;
+    let remote_id = conn.peer_id.0.clone();
+    if let Ok(mut reg) = registry.lock() {
+        reg.add_peer(conn);
+    }
+    Ok((remote_id, registry))
+}
+
 /// `claudectl relay connect <host:port>`
 /// Connect to a remote relay.
 fn cmd_connect(args: &[&str]) -> io::Result<()> {
@@ -206,138 +264,43 @@ fn cmd_connect(args: &[&str]) -> io::Result<()> {
 
     let identity = load_or_create_identity();
 
-    // Find a PSK to use — try all known peers
-    let known = list_known_peers();
-    let mut connected = false;
-
-    for peer_id in &known {
+    // Try all known peer PSKs
+    for peer_id in &list_known_peers() {
         if let Some(psk) = load_peer_psk(peer_id) {
-            let registry = Arc::new(Mutex::new(PeerRegistry::new(30)));
-            let tx = {
-                let reg = registry.lock().unwrap();
-                reg.message_tx()
-            };
+            if let Ok((remote_id, registry)) = try_connect(addr, &psk, &identity) {
+                println!("Connected to {} ({})", remote_id, addr);
+                let _ = super::save_peer_meta(&remote_id, &addr.to_string());
+                run_connect_loop(&registry, identity.as_str());
+                return Ok(());
+            }
+        }
+    }
 
-            match PeerConnection::connect(addr, &psk, &identity, tx) {
-                Ok(conn) => {
-                    let remote_id = conn.peer_id.0.clone();
+    // Try the pending pair key
+    let pending_path = super::peers_dir().join("_pending.key");
+    if let Ok(hex) = std::fs::read_to_string(&pending_path) {
+        if let Ok(bytes) = crypto::hex_decode(hex.trim()) {
+            if bytes.len() == 32 {
+                let mut psk = [0u8; 32];
+                psk.copy_from_slice(&bytes);
+
+                if let Ok((remote_id, registry)) = try_connect(addr, &psk, &identity) {
                     println!("Connected to {} ({})", remote_id, addr);
-                    if let Ok(mut reg) = registry.lock() {
-                        reg.add_peer(conn);
-                    }
-                    connected = true;
-
-                    // Save the address for future auto-connect
+                    let _ = save_peer_psk(&remote_id, &psk);
                     let _ = super::save_peer_meta(&remote_id, &addr.to_string());
-
-                    // Keep connection alive until Ctrl+C
-                    let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
-                    let r = Arc::clone(&running);
-                    let _ = ctrlc::set_handler(move || {
-                        r.store(false, std::sync::atomic::Ordering::Relaxed);
-                    });
-
-                    while running.load(std::sync::atomic::Ordering::Relaxed) {
-                        std::thread::sleep(std::time::Duration::from_secs(1));
-                        if let Ok(mut reg) = registry.lock() {
-                            let messages = reg.drain_messages();
-                            for (peer_id, msg) in &messages {
-                                match msg.msg_type {
-                                    super::MessageType::Heartbeat => {
-                                        reg.handle_heartbeat(peer_id);
-                                    }
-                                    _ => {
-                                        println!(
-                                            "[{}] {:?} from {}",
-                                            crate::logger::timestamp_now(),
-                                            msg.msg_type,
-                                            peer_id
-                                        );
-                                    }
-                                }
-                            }
-                            let events = reg.tick(identity.as_str());
-                            for event in events {
-                                if let super::mesh::MeshEvent::PeerDisconnected(id) = event {
-                                    println!("Peer {} disconnected", id);
-                                }
-                            }
-                        }
-                    }
-
-                    println!("\nDisconnected.");
-                    break;
-                }
-                Err(_) => continue, // Try next PSK
-            }
-        }
-    }
-
-    // Also try the pending pair key
-    if !connected {
-        let pending_path = super::peers_dir().join("_pending.key");
-        if let Ok(hex) = std::fs::read_to_string(&pending_path) {
-            if let Ok(bytes) = crypto::hex_decode(hex.trim()) {
-                if bytes.len() == 32 {
-                    let mut psk = [0u8; 32];
-                    psk.copy_from_slice(&bytes);
-
-                    let registry = Arc::new(Mutex::new(PeerRegistry::new(30)));
-                    let tx = {
-                        let reg = registry.lock().unwrap();
-                        reg.message_tx()
-                    };
-
-                    match PeerConnection::connect(addr, &psk, &identity, tx) {
-                        Ok(conn) => {
-                            let remote_id = conn.peer_id.0.clone();
-                            println!("Connected to {} ({})", remote_id, addr);
-
-                            // Now that we know the peer_id, save the PSK properly
-                            let _ = save_peer_psk(&remote_id, &psk);
-                            let _ = super::save_peer_meta(&remote_id, &addr.to_string());
-                            let _ = std::fs::remove_file(&pending_path);
-
-                            if let Ok(mut reg) = registry.lock() {
-                                reg.add_peer(conn);
-                            }
-                            connected = true;
-
-                            println!("Press Ctrl+C to disconnect.");
-                            let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
-                            let r = Arc::clone(&running);
-                            let _ = ctrlc::set_handler(move || {
-                                r.store(false, std::sync::atomic::Ordering::Relaxed);
-                            });
-
-                            while running.load(std::sync::atomic::Ordering::Relaxed) {
-                                std::thread::sleep(std::time::Duration::from_secs(1));
-                                if let Ok(mut reg) = registry.lock() {
-                                    let _messages = reg.drain_messages();
-                                    let _events = reg.tick(identity.as_str());
-                                }
-                            }
-
-                            println!("\nDisconnected.");
-                        }
-                        Err(e) => {
-                            eprintln!("Connection failed with pending key: {e}");
-                        }
-                    }
+                    let _ = std::fs::remove_file(&pending_path);
+                    run_connect_loop(&registry, identity.as_str());
+                    return Ok(());
                 }
             }
         }
     }
 
-    if !connected {
-        eprintln!("Could not connect to {}", args[0]);
-        eprintln!("Make sure you have paired with this peer first:");
-        eprintln!("  1. Remote runs: claudectl --relay pair");
-        eprintln!("  2. You run:     claudectl --relay \"accept <code> <peer-id>\"");
-        return Err(io::Error::other("connection failed"));
-    }
-
-    Ok(())
+    eprintln!("Could not connect to {}", args[0]);
+    eprintln!("Make sure you have paired with this peer first:");
+    eprintln!("  1. Remote runs: claudectl --relay pair");
+    eprintln!("  2. You run:     claudectl --relay \"accept <code> <peer-id>\"");
+    Err(io::Error::other("connection failed"))
 }
 
 /// `claudectl relay peers [--json]`

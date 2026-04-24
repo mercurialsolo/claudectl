@@ -159,11 +159,12 @@ impl HiveStore {
         self.units.is_empty()
     }
 
-    /// Save the entire store to disk (rewrite).
+    /// Save the entire store to disk (atomic rewrite via temp file + rename).
     pub fn save(&self) -> std::io::Result<()> {
         let dir = hive_dir();
         fs::create_dir_all(&dir)?;
         let path = knowledge_path();
+        let tmp_path = path.with_extension("jsonl.tmp");
 
         let lines: Vec<String> = self
             .units
@@ -171,7 +172,8 @@ impl HiveStore {
             .filter_map(|u| serde_json::to_string(u).ok())
             .collect();
 
-        fs::write(&path, lines.join("\n") + "\n")
+        fs::write(&tmp_path, lines.join("\n") + "\n")?;
+        fs::rename(&tmp_path, &path)
     }
 
     /// Save to a specific path (for testing).

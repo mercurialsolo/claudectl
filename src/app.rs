@@ -332,8 +332,12 @@ pub struct App {
     // Relay peers panel (feature-gated)
     #[cfg(feature = "relay")]
     pub show_peers_panel: bool,
+    // relay_peers is populated when relay serve is active and rendered by
+    // ui::peers::render_peers_panel when show_peers_panel is true. Currently
+    // a stub — rendering integration is wired when the relay serve loop runs
+    // inside the TUI (not yet connected to the TUI render loop).
     #[cfg(feature = "relay")]
-    #[allow(dead_code)] // wired into TUI rendering when relay serve is active
+    #[allow(dead_code)]
     pub relay_peers: Vec<crate::ui::peers::PeerDisplayInfo>,
 }
 

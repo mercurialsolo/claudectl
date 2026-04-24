@@ -159,7 +159,11 @@ pub fn generate_psk() -> [u8; 32] {
         }
     }
 
-    // Fallback: seed from timestamps and pid
+    // Fallback: seed from timestamps and pid.
+    // WARNING: This fallback is NOT cryptographically secure — an attacker who knows
+    // the process start time, PID, and thread ID can predict the key. Only used when
+    // /dev/urandom is unavailable (sandboxed/exotic environments). On Linux/macOS this
+    // path should never be reached.
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -172,6 +176,11 @@ pub fn generate_psk() -> [u8; 32] {
 }
 
 /// Format a 32-byte PSK as a human-friendly code: `xxxx-xxxx-xxxx-xxxx`.
+///
+/// SECURITY NOTE: The code only encodes the first 8 bytes (64 bits of entropy).
+/// The remaining 24 bytes are derived deterministically via SHA-256 in `parse_psk`.
+/// This is acceptable for short-lived pairing codes shared out-of-band on a LAN,
+/// but the effective key strength for brute-force is 2^64, not 2^256.
 pub fn format_psk(psk: &[u8; 32]) -> String {
     let hex = hex_encode(&psk[..8]); // Use first 8 bytes = 16 hex chars
     // Group into 4-char chunks separated by dashes

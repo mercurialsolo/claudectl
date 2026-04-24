@@ -149,10 +149,12 @@ pub fn epoch_secs() -> u64 {
 use std::sync::Mutex;
 
 /// Global sender for signaling the relay that new knowledge is available.
-/// Set during relay startup; the distillation thread sends a unit count through it.
+/// Set once during relay startup; the distillation thread sends a unit count through it.
+/// Uses Mutex because mpsc::Sender is Send but not Sync — the Mutex is only contended
+/// during initialization and the rare distillation cycle (every 10 decisions).
 static HIVE_BROADCAST_TX: Mutex<Option<std::sync::mpsc::Sender<u32>>> = Mutex::new(None);
 
-/// Set the broadcast channel (called during relay/TUI startup).
+/// Set the broadcast channel (called once during relay/TUI startup).
 pub fn set_broadcast_channel(tx: std::sync::mpsc::Sender<u32>) {
     if let Ok(mut guard) = HIVE_BROADCAST_TX.lock() {
         *guard = Some(tx);

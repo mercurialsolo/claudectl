@@ -65,9 +65,10 @@ pub fn merge_unit(
             // Both are from peers — compare quality
             let existing_score = existing.confidence * existing.evidence_count as f64;
             let incoming_score = incoming.confidence * incoming.evidence_count as f64;
+            let scores_equal = (incoming_score - existing_score).abs() < 1e-9;
 
             if incoming_score > existing_score
-                || (incoming_score == existing_score && incoming.version > existing.version)
+                || (scores_equal && incoming.version > existing.version)
             {
                 // Incoming is better — update
                 store.insert(incoming.clone());

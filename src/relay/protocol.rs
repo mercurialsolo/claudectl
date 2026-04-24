@@ -1,6 +1,6 @@
 // NDJSON wire protocol and HMAC challenge-response authentication.
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufReader, Write};
 use std::net::TcpStream;
 
 use super::crypto;
@@ -23,18 +23,40 @@ pub fn write_message(stream: &mut TcpStream, msg: &RelayMessage) -> io::Result<(
 }
 
 /// Read one RelayMessage from a buffered reader. Returns None on EOF.
-/// Rejects lines exceeding MAX_LINE_SIZE.
+/// Reads byte-by-byte up to MAX_LINE_SIZE to prevent OOM from malicious peers.
 pub fn read_message(reader: &mut BufReader<TcpStream>) -> io::Result<Option<RelayMessage>> {
-    let mut line = String::new();
-    let n = reader.read_line(&mut line)?;
-    if n == 0 {
-        return Ok(None); // EOF
+    let mut line = Vec::with_capacity(4096);
+    let mut byte = [0u8; 1];
+
+    loop {
+        use std::io::Read;
+        match reader.read(&mut byte) {
+            Ok(0) => {
+                if line.is_empty() {
+                    return Ok(None); // EOF
+                }
+                break; // EOF mid-line, try to parse what we have
+            }
+            Ok(_) => {
+                if byte[0] == b'\n' {
+                    break;
+                }
+                line.push(byte[0]);
+                if line.len() > MAX_LINE_SIZE {
+                    return Err(io::Error::other("message exceeds 1MB size limit"));
+                }
+            }
+            Err(e) => return Err(e),
+        }
     }
-    if n > MAX_LINE_SIZE {
-        return Err(io::Error::other("message exceeds 1MB size limit"));
+
+    if line.is_empty() {
+        return Ok(None);
     }
+
+    let text = String::from_utf8(line).map_err(|e| io::Error::other(format!("utf8: {e}")))?;
     let msg: RelayMessage =
-        serde_json::from_str(line.trim()).map_err(|e| io::Error::other(format!("parse: {e}")))?;
+        serde_json::from_str(text.trim()).map_err(|e| io::Error::other(format!("parse: {e}")))?;
     Ok(Some(msg))
 }
 

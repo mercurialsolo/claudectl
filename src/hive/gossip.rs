@@ -247,8 +247,7 @@ impl GossipEngine {
             let unsent: Vec<KnowledgeUnit> = propagatable
                 .iter()
                 .filter(|u| !sync_state.units_sent.contains(&u.id))
-                .cloned()
-                .cloned()
+                .map(|u| (*u).clone())
                 .collect();
 
             if unsent.is_empty() {
