@@ -90,6 +90,14 @@ pub enum KnowledgeContent {
 // Semantic key — used for dedup and merge
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Truncate a string to at most `max_chars` characters, safe for multi-byte UTF-8.
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
 /// Compute a semantic key for dedup/merge.
 /// Same knowledge from different peers produces the same semantic key.
 pub fn semantic_key(unit: &KnowledgeUnit) -> String {
@@ -109,15 +117,15 @@ pub fn semantic_key(unit: &KnowledgeUnit) -> String {
         }
         KnowledgeContent::ToolAccuracy { tool, .. } => format!("accuracy:{tool}"),
         KnowledgeContent::Temporal { description, .. } => {
-            format!("temporal:{}", &description[..description.len().min(40)])
+            format!("temporal:{}", truncate_chars(description, 40))
         }
         KnowledgeContent::Insight {
             category, summary, ..
         } => {
-            format!("insight:{category}:{}", &summary[..summary.len().min(40)])
+            format!("insight:{category}:{}", truncate_chars(summary, 40))
         }
         KnowledgeContent::PromotedRule { rule, .. } => {
-            format!("rule:{}", &rule[..rule.len().min(40)])
+            format!("rule:{}", truncate_chars(rule, 40))
         }
     };
     format!("{scope_part}/{content_part}")
@@ -349,5 +357,54 @@ mod tests {
         let b = gen_ku_id();
         assert_ne!(a, b);
         assert!(a.starts_with("ku_"));
+    }
+
+    #[test]
+    fn semantic_key_multibyte_utf8_no_panic() {
+        // CJK characters are 3 bytes each — 14 chars = 42 bytes, truncation at
+        // char boundary 40 would panic with byte-offset slicing
+        let long_cjk = "这是一个用来测试多字节截断的临时模式描述文本超长";
+        let unit = KnowledgeUnit {
+            id: "ku_utf8".into(),
+            scope: KnowledgeScope::Universal,
+            content: KnowledgeContent::Temporal {
+                description: long_cjk.to_string(),
+                strength: 0.9,
+            },
+            evidence_count: 5,
+            confidence: 0.9,
+            source_peer: "peer-a".into(),
+            originated_at: 1000,
+            last_validated_at: 2000,
+            propagation_count: 0,
+            version: 1,
+        };
+        // Must not panic — truncates at char boundary, not byte boundary
+        let key = semantic_key(&unit);
+        assert!(key.starts_with("universal/temporal:"));
+    }
+
+    #[test]
+    fn semantic_key_emoji_no_panic() {
+        let emoji_text = "Error streak detected in tests 🎉🎊🎈🎁🎆🎇 more text here";
+        let unit = KnowledgeUnit {
+            id: "ku_emoji".into(),
+            scope: KnowledgeScope::Universal,
+            content: KnowledgeContent::Insight {
+                category: "error_loop".into(),
+                severity: "warning".into(),
+                summary: emoji_text.to_string(),
+                suggestion: None,
+            },
+            evidence_count: 3,
+            confidence: 0.7,
+            source_peer: "peer-b".into(),
+            originated_at: 1000,
+            last_validated_at: 2000,
+            propagation_count: 0,
+            version: 1,
+        };
+        let key = semantic_key(&unit);
+        assert!(key.starts_with("universal/insight:error_loop:"));
     }
 }

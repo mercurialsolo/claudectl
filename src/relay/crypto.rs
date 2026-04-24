@@ -326,8 +326,14 @@ mod tests {
         assert_eq!(code.matches('-').count(), 3);
 
         let parsed = parse_psk(&code).unwrap();
-        // First 8 bytes should match
+        // First 8 bytes match the original random PSK
         assert_eq!(&parsed[..8], &psk[..8]);
+
+        // Canonical round-trip: parse_psk(format_psk(x)) is idempotent
+        // Both sides of a pairing must use parse_psk to get the canonical key
+        let code2 = format_psk(&parsed);
+        let parsed2 = parse_psk(&code2).unwrap();
+        assert_eq!(parsed, parsed2); // full 32-byte match
     }
 
     #[test]

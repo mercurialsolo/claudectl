@@ -63,13 +63,30 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
         i += 1;
     }
 
-    let identity = load_or_create_identity();
-    let addr: SocketAddr = format!("0.0.0.0:{port}")
-        .parse()
-        .map_err(|e| io::Error::other(format!("invalid addr: {e}")))?;
+    // Load config for relay/hive settings
+    let cfg = crate::config::Config::load();
+    let relay_cfg = cfg.relay.unwrap_or_default();
+    let hive_cfg = cfg.hive.unwrap_or_default();
 
-    let registry = Arc::new(Mutex::new(PeerRegistry::new(30)));
-    let listener = RelayListener::start(addr, Arc::clone(&registry), identity.clone(), 8)?;
+    let identity = load_or_create_identity();
+    // CLI --port overrides config; config overrides default
+    if port == 9847 {
+        port = relay_cfg.listen_port;
+    }
+    let listen_addr = format!("{}:{port}", relay_cfg.listen_addr);
+    let addr: SocketAddr = listen_addr
+        .parse()
+        .map_err(|e| io::Error::other(format!("invalid addr '{listen_addr}': {e}")))?;
+
+    let registry = Arc::new(Mutex::new(PeerRegistry::new(
+        relay_cfg.heartbeat_interval_secs,
+    )));
+    let listener = RelayListener::start(
+        addr,
+        Arc::clone(&registry),
+        identity.clone(),
+        relay_cfg.max_peers,
+    )?;
 
     println!("Relay listening on {} as {}", listener.addr, identity);
     println!("Press Ctrl+C to stop.");
@@ -77,7 +94,15 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
     // Initialize worker and gossip engine for message dispatch
     let mut worker = super::worker::RemoteWorker::new(identity.as_str());
     let mut hive_store = crate::hive::store::HiveStore::load();
-    let mut gossip = crate::hive::gossip::GossipEngine::new(identity.as_str(), 5, 30);
+    let mut gossip = crate::hive::gossip::GossipEngine::new(
+        identity.as_str(),
+        hive_cfg.max_propagation,
+        hive_cfg.knowledge_ttl_days,
+    );
+
+    // Wire the broadcast channel so brain distillation can trigger gossip
+    let (broadcast_tx, broadcast_rx) = std::sync::mpsc::channel::<u32>();
+    crate::hive::set_broadcast_channel(broadcast_tx);
 
     // Block on Ctrl+C
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -206,6 +231,15 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
                 let _ = reg.send_to(&target_peer, &msg);
             }
 
+            // Check if brain distillation produced new knowledge to gossip
+            while broadcast_rx.try_recv().is_ok() {
+                let connected = reg.connected_peers();
+                let sync_msgs = gossip.generate_sync_messages(&hive_store, &connected);
+                for (target, sync_msg) in sync_msgs {
+                    let _ = reg.send_to(target.as_str(), &sync_msg);
+                }
+            }
+
             let events = reg.tick(identity.as_str());
             for event in events {
                 match event {
@@ -253,13 +287,14 @@ fn cmd_pair(json_mode: bool) -> io::Result<()> {
         );
     }
 
-    // Store the PSK locally too — we'll need it to verify their handshake.
-    // But we don't know their peer_id yet. Save it under a temp name,
-    // and the accept command on the other side will pair properly.
-    // For now, save under our own identity as a "pending pair".
+    // Store the canonical (code-derived) PSK locally — both sides must derive the
+    // same key from the code. The raw `psk` has 32 random bytes but format_psk only
+    // encodes 8 bytes; parse_psk derives the remaining 24 deterministically. We must
+    // store the canonical form so both sides match during HMAC verification.
+    let canonical_psk = crypto::parse_psk(&code).expect("just-generated code must parse");
     let pending_path = super::peers_dir().join("_pending.key");
     let _ = std::fs::create_dir_all(super::peers_dir());
-    let _ = std::fs::write(&pending_path, crypto::hex_encode(&psk));
+    let _ = std::fs::write(&pending_path, crypto::hex_encode(&canonical_psk));
 
     Ok(())
 }
