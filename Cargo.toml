@@ -13,6 +13,7 @@ exclude = ["*.gif", "*.cast", "claude-demo.*", "CLAUDE.md", ".github/"]
 [features]
 default = []
 coord = ["rusqlite"]
+relay = []
 
 [[bin]]
 name = "claudectl"

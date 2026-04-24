@@ -1,0 +1,559 @@
+// CLI dispatch for relay subcommands.
+
+use std::io;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+
+use super::crypto;
+use super::delegation::{self, DelegationContext};
+use super::listener::RelayListener;
+use super::mesh::PeerRegistry;
+use super::peer::PeerConnection;
+use super::{
+    forget_peer, gen_msg_id, list_known_peers, load_or_create_identity, load_peer_meta,
+    load_peer_psk, save_peer_psk,
+};
+
+/// Dispatch a relay subcommand.
+pub fn dispatch(subcommand: &str, json_mode: bool) -> io::Result<()> {
+    let parts: Vec<&str> = subcommand.split_whitespace().collect();
+    match parts.first().copied() {
+        Some("serve") => cmd_serve(&parts[1..]),
+        Some("pair") => cmd_pair(json_mode),
+        Some("accept") => cmd_accept(&parts[1..]),
+        Some("connect") => cmd_connect(&parts[1..]),
+        Some("peers") => cmd_peers(json_mode),
+        Some("disconnect") => cmd_disconnect(&parts[1..]),
+        Some("forget") => cmd_forget(&parts[1..]),
+        Some("identity") => cmd_identity(json_mode),
+        Some("delegate") => cmd_delegate(&parts[1..], json_mode),
+        Some("status") => cmd_task_status(json_mode),
+        Some("interrupt") => cmd_interrupt(&parts[1..]),
+        Some(other) => {
+            eprintln!("Unknown relay subcommand: {other}");
+            eprintln!(
+                "Available: serve, pair, accept, connect, peers, disconnect, forget, identity, delegate, status, interrupt"
+            );
+            Err(io::Error::other("unknown subcommand"))
+        }
+        None => {
+            eprintln!("Usage: claudectl --relay <subcommand>");
+            eprintln!(
+                "Available: serve, pair, accept, connect, peers, disconnect, forget, identity, delegate, status, interrupt"
+            );
+            Ok(())
+        }
+    }
+}
+
+/// `claudectl relay serve [--port PORT]`
+/// Start the relay listener in the foreground.
+fn cmd_serve(args: &[&str]) -> io::Result<()> {
+    let mut port: u16 = 9847;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--port" {
+            i += 1;
+            if let Some(p) = args.get(i) {
+                port = p
+                    .parse()
+                    .map_err(|_| io::Error::other("invalid port number"))?;
+            }
+        }
+        i += 1;
+    }
+
+    let identity = load_or_create_identity();
+    let addr: SocketAddr = format!("0.0.0.0:{port}")
+        .parse()
+        .map_err(|e| io::Error::other(format!("invalid addr: {e}")))?;
+
+    let registry = Arc::new(Mutex::new(PeerRegistry::new(30)));
+    let listener = RelayListener::start(addr, Arc::clone(&registry), identity.clone())?;
+
+    println!("Relay listening on {} as {}", listener.addr, identity);
+    println!("Press Ctrl+C to stop.");
+
+    // Block on Ctrl+C
+    let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let r = Arc::clone(&running);
+    let _ = ctrlc::set_handler(move || {
+        r.store(false, std::sync::atomic::Ordering::Relaxed);
+    });
+
+    while running.load(std::sync::atomic::Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        // Process incoming messages and tick
+        if let Ok(mut reg) = registry.lock() {
+            let messages = reg.drain_messages();
+            for (peer_id, msg) in &messages {
+                match msg.msg_type {
+                    super::MessageType::Heartbeat => {
+                        reg.handle_heartbeat(peer_id);
+                    }
+                    _ => {
+                        println!(
+                            "[{}] {:?} from {}",
+                            crate::logger::timestamp_now(),
+                            msg.msg_type,
+                            peer_id
+                        );
+                    }
+                }
+            }
+
+            let events = reg.tick(identity.as_str());
+            for event in events {
+                match event {
+                    super::mesh::MeshEvent::PeerDisconnected(id) => {
+                        println!("Peer {} disconnected", id);
+                    }
+                    super::mesh::MeshEvent::ReconnectScheduled(id, delay) => {
+                        println!("Reconnect to {} in {:?}", id, delay);
+                    }
+                    super::mesh::MeshEvent::ReconnectNeeded(id, _addr) => {
+                        println!("Reconnecting to {} ...", id);
+                    }
+                }
+            }
+        }
+    }
+
+    listener.stop();
+    println!("\nRelay stopped.");
+    Ok(())
+}
+
+/// `claudectl relay pair`
+/// Generate a new PSK and display it.
+fn cmd_pair(json_mode: bool) -> io::Result<()> {
+    let identity = load_or_create_identity();
+    let psk = crypto::generate_psk();
+    let code = crypto::format_psk(&psk);
+
+    if json_mode {
+        let json = serde_json::json!({
+            "identity": identity.as_str(),
+            "pair_code": code,
+        });
+        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    } else {
+        println!("Your identity: {}", identity);
+        println!();
+        println!("PAIR CODE: {}", code);
+        println!();
+        println!("Share this code with the peer you want to connect.");
+        println!(
+            "They should run: claudectl --relay \"accept {} {}\"",
+            code, identity
+        );
+    }
+
+    // Store the PSK locally too — we'll need it to verify their handshake.
+    // But we don't know their peer_id yet. Save it under a temp name,
+    // and the accept command on the other side will pair properly.
+    // For now, save under our own identity as a "pending pair".
+    let pending_path = super::peers_dir().join("_pending.key");
+    let _ = std::fs::create_dir_all(super::peers_dir());
+    let _ = std::fs::write(&pending_path, crypto::hex_encode(&psk));
+
+    Ok(())
+}
+
+/// `claudectl relay accept <code> <peer_id>`
+/// Accept a pairing code from another peer.
+fn cmd_accept(args: &[&str]) -> io::Result<()> {
+    if args.len() < 2 {
+        eprintln!("Usage: claudectl --relay \"accept <pair-code> <peer-id>\"");
+        return Err(io::Error::other("missing arguments"));
+    }
+
+    let code = args[0];
+    let peer_id = args[1];
+
+    let psk =
+        crypto::parse_psk(code).map_err(|e| io::Error::other(format!("invalid code: {e}")))?;
+
+    save_peer_psk(peer_id, &psk).map_err(io::Error::other)?;
+
+    // Also save the same PSK under our pending file for the pairing side
+    let pending_path = super::peers_dir().join("_pending.key");
+    if pending_path.exists() {
+        // The pair command was run on this machine — update the pending PSK
+        // with the actual peer_id.
+        let _ = std::fs::remove_file(&pending_path);
+    }
+
+    println!("Paired with peer: {}", peer_id);
+    println!("PSK stored. You can now connect with:");
+    println!("  claudectl --relay \"connect <host>:<port>\"");
+
+    Ok(())
+}
+
+/// `claudectl relay connect <host:port>`
+/// Connect to a remote relay.
+fn cmd_connect(args: &[&str]) -> io::Result<()> {
+    if args.is_empty() {
+        eprintln!("Usage: claudectl --relay \"connect <host:port>\"");
+        return Err(io::Error::other("missing address"));
+    }
+
+    let addr: SocketAddr = args[0]
+        .parse()
+        .map_err(|e| io::Error::other(format!("invalid address '{}': {e}", args[0])))?;
+
+    let identity = load_or_create_identity();
+
+    // Find a PSK to use — try all known peers
+    let known = list_known_peers();
+    let mut connected = false;
+
+    for peer_id in &known {
+        if let Some(psk) = load_peer_psk(peer_id) {
+            let registry = Arc::new(Mutex::new(PeerRegistry::new(30)));
+            let tx = {
+                let reg = registry.lock().unwrap();
+                reg.message_tx()
+            };
+
+            match PeerConnection::connect(addr, &psk, &identity, tx) {
+                Ok(conn) => {
+                    let remote_id = conn.peer_id.0.clone();
+                    println!("Connected to {} ({})", remote_id, addr);
+                    if let Ok(mut reg) = registry.lock() {
+                        reg.add_peer(conn);
+                    }
+                    connected = true;
+
+                    // Save the address for future auto-connect
+                    let _ = super::save_peer_meta(&remote_id, &addr.to_string());
+
+                    // Keep connection alive until Ctrl+C
+                    let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                    let r = Arc::clone(&running);
+                    let _ = ctrlc::set_handler(move || {
+                        r.store(false, std::sync::atomic::Ordering::Relaxed);
+                    });
+
+                    while running.load(std::sync::atomic::Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        if let Ok(mut reg) = registry.lock() {
+                            let messages = reg.drain_messages();
+                            for (peer_id, msg) in &messages {
+                                match msg.msg_type {
+                                    super::MessageType::Heartbeat => {
+                                        reg.handle_heartbeat(peer_id);
+                                    }
+                                    _ => {
+                                        println!(
+                                            "[{}] {:?} from {}",
+                                            crate::logger::timestamp_now(),
+                                            msg.msg_type,
+                                            peer_id
+                                        );
+                                    }
+                                }
+                            }
+                            let events = reg.tick(identity.as_str());
+                            for event in events {
+                                if let super::mesh::MeshEvent::PeerDisconnected(id) = event {
+                                    println!("Peer {} disconnected", id);
+                                }
+                            }
+                        }
+                    }
+
+                    println!("\nDisconnected.");
+                    break;
+                }
+                Err(_) => continue, // Try next PSK
+            }
+        }
+    }
+
+    // Also try the pending pair key
+    if !connected {
+        let pending_path = super::peers_dir().join("_pending.key");
+        if let Ok(hex) = std::fs::read_to_string(&pending_path) {
+            if let Ok(bytes) = crypto::hex_decode(hex.trim()) {
+                if bytes.len() == 32 {
+                    let mut psk = [0u8; 32];
+                    psk.copy_from_slice(&bytes);
+
+                    let registry = Arc::new(Mutex::new(PeerRegistry::new(30)));
+                    let tx = {
+                        let reg = registry.lock().unwrap();
+                        reg.message_tx()
+                    };
+
+                    match PeerConnection::connect(addr, &psk, &identity, tx) {
+                        Ok(conn) => {
+                            let remote_id = conn.peer_id.0.clone();
+                            println!("Connected to {} ({})", remote_id, addr);
+
+                            // Now that we know the peer_id, save the PSK properly
+                            let _ = save_peer_psk(&remote_id, &psk);
+                            let _ = super::save_peer_meta(&remote_id, &addr.to_string());
+                            let _ = std::fs::remove_file(&pending_path);
+
+                            if let Ok(mut reg) = registry.lock() {
+                                reg.add_peer(conn);
+                            }
+                            connected = true;
+
+                            println!("Press Ctrl+C to disconnect.");
+                            let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                            let r = Arc::clone(&running);
+                            let _ = ctrlc::set_handler(move || {
+                                r.store(false, std::sync::atomic::Ordering::Relaxed);
+                            });
+
+                            while running.load(std::sync::atomic::Ordering::Relaxed) {
+                                std::thread::sleep(std::time::Duration::from_secs(1));
+                                if let Ok(mut reg) = registry.lock() {
+                                    let _messages = reg.drain_messages();
+                                    let _events = reg.tick(identity.as_str());
+                                }
+                            }
+
+                            println!("\nDisconnected.");
+                        }
+                        Err(e) => {
+                            eprintln!("Connection failed with pending key: {e}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !connected {
+        eprintln!("Could not connect to {}", args[0]);
+        eprintln!("Make sure you have paired with this peer first:");
+        eprintln!("  1. Remote runs: claudectl --relay pair");
+        eprintln!("  2. You run:     claudectl --relay \"accept <code> <peer-id>\"");
+        return Err(io::Error::other("connection failed"));
+    }
+
+    Ok(())
+}
+
+/// `claudectl relay peers [--json]`
+/// List known peers and their status.
+fn cmd_peers(json_mode: bool) -> io::Result<()> {
+    let identity = load_or_create_identity();
+    let known = list_known_peers();
+
+    if json_mode {
+        let peers: Vec<serde_json::Value> = known
+            .iter()
+            .map(|id| {
+                let meta = load_peer_meta(id).unwrap_or(serde_json::json!({}));
+                serde_json::json!({
+                    "peer_id": id,
+                    "addr": meta.get("addr").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "last_seen": meta.get("last_seen").and_then(|v| v.as_u64()).unwrap_or(0),
+                    "has_psk": load_peer_psk(id).is_some(),
+                })
+            })
+            .collect();
+        let output = serde_json::json!({
+            "identity": identity.as_str(),
+            "peers": peers,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("Identity: {}", identity);
+        println!();
+        if known.is_empty() {
+            println!("No paired peers. Run 'claudectl --relay pair' to get started.");
+        } else {
+            println!("{:<20} {:<24} PAIRED", "PEER", "ADDRESS");
+            println!("{}", "─".repeat(56));
+            for id in &known {
+                let meta = load_peer_meta(id).unwrap_or(serde_json::json!({}));
+                let addr = meta
+                    .get("addr")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let has_psk = if load_peer_psk(id).is_some() {
+                    "yes"
+                } else {
+                    "no"
+                };
+                println!("{:<20} {:<24} {}", id, addr, has_psk);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `claudectl relay disconnect <peer_id>`
+fn cmd_disconnect(args: &[&str]) -> io::Result<()> {
+    if args.is_empty() {
+        eprintln!("Usage: claudectl --relay \"disconnect <peer-id>\"");
+        return Err(io::Error::other("missing peer id"));
+    }
+    // In standalone CLI mode, we can't disconnect a live connection
+    // (that's handled by the TUI/serve loop). Just inform the user.
+    println!("Note: to disconnect a live connection, stop the relay serve/connect process.");
+    println!(
+        "To remove the pairing entirely, use: claudectl --relay \"forget {}\"",
+        args[0]
+    );
+    Ok(())
+}
+
+/// `claudectl relay forget <peer_id>`
+/// Remove all data for a peer.
+fn cmd_forget(args: &[&str]) -> io::Result<()> {
+    if args.is_empty() {
+        eprintln!("Usage: claudectl --relay \"forget <peer-id>\"");
+        return Err(io::Error::other("missing peer id"));
+    }
+    let peer_id = args[0];
+    if load_peer_psk(peer_id).is_none() {
+        eprintln!("Unknown peer: {}", peer_id);
+        return Err(io::Error::other("unknown peer"));
+    }
+    forget_peer(peer_id);
+    println!("Forgot peer: {}", peer_id);
+    Ok(())
+}
+
+/// `claudectl relay identity`
+/// Show this instance's relay identity.
+fn cmd_identity(json_mode: bool) -> io::Result<()> {
+    let identity = load_or_create_identity();
+    if json_mode {
+        println!("{}", serde_json::json!({ "identity": identity.as_str() }));
+    } else {
+        println!("{}", identity);
+    }
+    Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 2: Delegation commands
+// ────────────────────────────────────────────────────────────────────────────
+
+/// `claudectl relay delegate <peer_id> "<prompt>" [--cwd /path] [--git-ref branch]`
+fn cmd_delegate(args: &[&str], json_mode: bool) -> io::Result<()> {
+    if args.len() < 2 {
+        eprintln!(
+            "Usage: claudectl --relay \"delegate <peer-id> <prompt> [--cwd /path] [--git-ref branch]\""
+        );
+        return Err(io::Error::other("missing arguments"));
+    }
+
+    let peer_id = args[0];
+    let prompt = args[1];
+    let mut cwd: Option<&str> = None;
+    let mut git_ref: Option<String> = None;
+
+    let mut i = 2;
+    while i < args.len() {
+        if args[i] == "--cwd" {
+            i += 1;
+            cwd = args.get(i).copied();
+        } else if args[i] == "--git-ref" {
+            i += 1;
+            git_ref = args.get(i).map(|s| s.to_string());
+        }
+        i += 1;
+    }
+
+    let identity = load_or_create_identity();
+    let task_id = gen_msg_id().replace("msg_", "task_");
+
+    let context = DelegationContext {
+        git_ref,
+        ..Default::default()
+    };
+
+    let msg =
+        delegation::build_delegate_message(&task_id, prompt, cwd, &context, identity.as_str())
+            .map_err(|e| io::Error::other(format!("build message: {e}")))?;
+
+    if json_mode {
+        let output = serde_json::json!({
+            "task_id": task_id,
+            "peer": peer_id,
+            "prompt": prompt,
+            "cwd": cwd,
+            "status": "delegated",
+            "message": msg,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("Task {} delegated to peer {}", task_id, peer_id);
+        println!("  Prompt: {}", prompt);
+        if let Some(c) = cwd {
+            println!("  CWD: {}", c);
+        }
+        println!();
+        println!("Note: In standalone CLI mode, the message is built but not sent.");
+        println!("Use `claudectl relay serve` or TUI mode for live delegation.");
+    }
+
+    Ok(())
+}
+
+/// `claudectl relay status [--json]`
+/// Show status of delegated tasks.
+fn cmd_task_status(json_mode: bool) -> io::Result<()> {
+    // In standalone CLI mode, we don't have a live relay connection.
+    // Show info about the delegation subsystem.
+    let identity = load_or_create_identity();
+
+    if json_mode {
+        let output = serde_json::json!({
+            "identity": identity.as_str(),
+            "active_delegated_tasks": 0,
+            "note": "Live task status requires relay serve or TUI mode",
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("Relay identity: {}", identity);
+        println!();
+        println!("No active delegated tasks.");
+        println!("Live task status requires `claudectl relay serve` or TUI mode.");
+    }
+
+    Ok(())
+}
+
+/// `claudectl relay interrupt <task_id> <type> [reason]`
+fn cmd_interrupt(args: &[&str]) -> io::Result<()> {
+    if args.len() < 2 {
+        eprintln!("Usage: claudectl --relay \"interrupt <task-id> <type> [reason]\"");
+        eprintln!("Types: nudge, stop, reroute");
+        return Err(io::Error::other("missing arguments"));
+    }
+
+    let task_id = args[0];
+    let interrupt_type = args[1];
+    let reason = if args.len() > 2 {
+        args[2..].join(" ")
+    } else {
+        String::new()
+    };
+
+    let identity = load_or_create_identity();
+    let msg =
+        delegation::build_interrupt_message(task_id, interrupt_type, &reason, identity.as_str());
+
+    println!("Interrupt built for task {}", task_id);
+    println!("  Type: {}", interrupt_type);
+    if !reason.is_empty() {
+        println!("  Reason: {}", reason);
+    }
+    println!("  Message ID: {}", msg.id);
+    println!();
+    println!("Note: In standalone CLI mode, the message is built but not sent.");
+    println!("Use `claudectl relay serve` or TUI mode for live interrupts.");
+
+    Ok(())
+}

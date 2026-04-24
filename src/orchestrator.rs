@@ -26,6 +26,9 @@ pub struct TaskDef {
     pub resume: Option<String>,
     #[serde(default)]
     pub retries: Option<u32>,
+    /// Remote peer to delegate this task to (None = local execution).
+    #[serde(default)]
+    pub peer: Option<String>,
 }
 
 /// Task file containing a list of tasks.
@@ -180,6 +183,7 @@ pub fn decomposition_to_task_file(
                 depends_on: t.depends_on,
                 resume: None,
                 retries: None,
+                peer: None,
             })
             .collect(),
         retries: None,
@@ -1243,6 +1247,7 @@ mod tests {
                 depends_on: vec!["nonexistent".into()],
                 resume: None,
                 retries: None,
+                peer: None,
             }],
             retries: None,
         };
@@ -1264,6 +1269,7 @@ mod tests {
                     depends_on: vec!["task2".into()],
                     resume: None,
                     retries: None,
+                    peer: None,
                 },
                 TaskDef {
                     name: "task2".into(),
@@ -1272,6 +1278,7 @@ mod tests {
                     depends_on: vec!["task1".into()],
                     resume: None,
                     retries: None,
+                    peer: None,
                 },
             ],
             retries: None,
@@ -1338,6 +1345,7 @@ mod tests {
                 depends_on: vec![],
                 resume: None,
                 retries: None,
+                peer: None,
             },
             TaskDef {
                 name: "fix".into(),
@@ -1346,6 +1354,7 @@ mod tests {
                 depends_on: vec!["analyze".into()],
                 resume: None,
                 retries: None,
+                peer: None,
             },
         ];
         assert!(validate_template_references(&tasks).is_ok());
@@ -1360,6 +1369,7 @@ mod tests {
             depends_on: vec![],
             resume: None,
             retries: None,
+            peer: None,
         }];
         let err = validate_template_references(&tasks).unwrap_err();
         assert!(err.to_string().contains("doesn't exist"));
@@ -1375,6 +1385,7 @@ mod tests {
                 depends_on: vec![],
                 resume: None,
                 retries: None,
+                peer: None,
             },
             TaskDef {
                 name: "fix".into(),
@@ -1383,6 +1394,7 @@ mod tests {
                 depends_on: vec![], // Missing dependency
                 resume: None,
                 retries: None,
+                peer: None,
             },
         ];
         let err = validate_template_references(&tasks).unwrap_err();
@@ -1399,6 +1411,7 @@ mod tests {
                 depends_on: vec![],
                 resume: None,
                 retries: None,
+                peer: None,
             },
             TaskDef {
                 name: "b".into(),
@@ -1407,6 +1420,7 @@ mod tests {
                 depends_on: vec!["a".into()],
                 resume: None,
                 retries: None,
+                peer: None,
             },
         ];
         let err = validate_template_references(&tasks).unwrap_err();

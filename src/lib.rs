@@ -15,6 +15,8 @@ pub mod discovery;
 pub mod health;
 pub mod helpers;
 pub mod history;
+#[cfg(feature = "relay")]
+pub mod hive;
 pub mod hooks;
 pub mod init;
 pub mod launch;
@@ -24,6 +26,8 @@ pub mod monitor;
 pub mod orchestrator;
 pub mod process;
 pub mod recorder;
+#[cfg(feature = "relay")]
+pub mod relay;
 pub mod rules;
 pub mod session;
 pub mod session_recorder;

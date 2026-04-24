@@ -329,6 +329,12 @@ pub struct App {
     pub coord_pending_interrupts: Vec<crate::coord::types::Interrupt>,
     #[cfg(feature = "coord")]
     pub coord_tick: u32,
+    // Relay peers panel (feature-gated)
+    #[cfg(feature = "relay")]
+    pub show_peers_panel: bool,
+    #[cfg(feature = "relay")]
+    #[allow(dead_code)] // wired into TUI rendering when relay serve is active
+    pub relay_peers: Vec<crate::ui::peers::PeerDisplayInfo>,
 }
 
 #[derive(Default, Clone)]
@@ -460,6 +466,10 @@ impl App {
             coord_pending_interrupts: Vec::new(),
             #[cfg(feature = "coord")]
             coord_tick: 0,
+            #[cfg(feature = "relay")]
+            show_peers_panel: false,
+            #[cfg(feature = "relay")]
+            relay_peers: Vec::new(),
         };
         #[cfg(feature = "coord")]
         app.coord_refresh();
@@ -1834,6 +1844,17 @@ impl App {
                 self.cancel_pending_kill();
                 self.cancel_pending_auto_approve();
                 self.handle_switch_terminal();
+            }
+            #[cfg(feature = "relay")]
+            (KeyCode::Char('p'), KeyModifiers::NONE) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.show_peers_panel = !self.show_peers_panel;
+                self.status_msg = if self.show_peers_panel {
+                    "Peers panel enabled".into()
+                } else {
+                    "Peers panel disabled".into()
+                };
             }
             _ => {
                 self.cancel_pending_kill();

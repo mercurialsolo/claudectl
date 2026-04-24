@@ -103,6 +103,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw("  Toggle grouped view by project"),
         ]),
         Line::from(vec![
+            Span::styled("  p              ", Style::default().fg(t.highlight_key)),
+            Span::raw("  Toggle peers panel (relay feature)"),
+        ]),
+        Line::from(vec![
             Span::styled("  r              ", Style::default().fg(t.highlight_key)),
             Span::raw("  Force refresh"),
         ]),

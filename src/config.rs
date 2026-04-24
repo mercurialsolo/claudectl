@@ -27,6 +27,8 @@ pub struct Config {
     pub file_conflicts: bool, // Detect file-level conflicts across sessions
     pub auto_deny_file_conflicts: bool, // Auto-deny writes to conflicting files
     pub brain: Option<BrainConfig>,
+    pub relay: Option<RelayConfig>,
+    pub hive: Option<HiveConfig>,
     pub lifecycle: LifecycleConfig,
     pub idle: IdleConfig,
     pub agents: Vec<AgentConfig>,
@@ -174,6 +176,60 @@ impl Default for IdleConfig {
     }
 }
 
+/// Configuration for relay transport (cross-machine collaboration).
+#[derive(Debug, Clone)]
+pub struct RelayConfig {
+    pub enabled: bool,
+    pub listen_port: u16,
+    pub listen_addr: String,
+    pub max_peers: u8,
+    pub heartbeat_interval_secs: u64,
+    pub reconnect_max_secs: u64,
+    pub auto_connect: Vec<String>,
+}
+
+impl Default for RelayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_port: 9847,
+            listen_addr: "0.0.0.0".into(),
+            max_peers: 8,
+            heartbeat_interval_secs: 30,
+            reconnect_max_secs: 60,
+            auto_connect: Vec::new(),
+        }
+    }
+}
+
+/// Configuration for hive mind knowledge sharing.
+#[derive(Debug, Clone)]
+pub struct HiveConfig {
+    pub enabled: bool,
+    pub default_trust: f64,
+    pub auto_trust_drift: bool,
+    pub max_propagation: u32,
+    pub export_min_evidence: u32,
+    pub export_min_tool_decisions: u32,
+    pub knowledge_ttl_days: u32,
+    pub inject_unverified: bool,
+}
+
+impl Default for HiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_trust: 0.5,
+            auto_trust_drift: true,
+            max_propagation: 5,
+            export_min_evidence: 5,
+            export_min_tool_decisions: 10,
+            knowledge_ttl_days: 30,
+            inject_unverified: true,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -195,6 +251,8 @@ impl Default for Config {
             file_conflicts: true,
             auto_deny_file_conflicts: false,
             brain: None,
+            relay: None,
+            hive: None,
             lifecycle: LifecycleConfig::default(),
             idle: IdleConfig::default(),
             agents: Vec::new(),
@@ -223,6 +281,8 @@ struct RawConfig {
     file_conflicts: Option<bool>,
     auto_deny_file_conflicts: Option<bool>,
     brain: Option<BrainConfig>,
+    relay: Option<RelayConfig>,
+    hive: Option<HiveConfig>,
     lifecycle: Option<RawLifecycleConfig>,
     idle: Option<RawIdleConfig>,
     agents: Vec<AgentConfig>,
@@ -364,6 +424,12 @@ impl Config {
         }
         if let Some(brain) = raw.brain {
             self.brain = Some(brain);
+        }
+        if let Some(relay) = raw.relay {
+            self.relay = Some(relay);
+        }
+        if let Some(hive) = raw.hive {
+            self.hive = Some(hive);
         }
         if let Some(lc) = raw.lifecycle {
             if let Some(v) = lc.auto_restart {
@@ -895,6 +961,87 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     "orchestrate_interval" => {
                         if let Ok(v) = value.parse() {
                             brain.orchestrate_interval_secs = v;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            ("relay", _) => {
+                let relay = raw.relay.get_or_insert_with(RelayConfig::default);
+                match key {
+                    "enabled" => {
+                        if let Some(v) = parse_bool(value) {
+                            relay.enabled = v;
+                        }
+                    }
+                    "listen_port" | "port" => {
+                        if let Ok(v) = value.parse() {
+                            relay.listen_port = v;
+                        }
+                    }
+                    "listen_addr" | "addr" => relay.listen_addr = unquote(value),
+                    "max_peers" => {
+                        if let Ok(v) = value.parse() {
+                            relay.max_peers = v;
+                        }
+                    }
+                    "heartbeat_interval" | "heartbeat_interval_secs" => {
+                        if let Ok(v) = value.parse() {
+                            relay.heartbeat_interval_secs = v;
+                        }
+                    }
+                    "reconnect_max" | "reconnect_max_secs" => {
+                        if let Ok(v) = value.parse() {
+                            relay.reconnect_max_secs = v;
+                        }
+                    }
+                    "auto_connect" => {
+                        relay.auto_connect = parse_string_array(value);
+                    }
+                    _ => {}
+                }
+            }
+            ("hive", _) => {
+                let hive = raw.hive.get_or_insert_with(HiveConfig::default);
+                match key {
+                    "enabled" => {
+                        if let Some(v) = parse_bool(value) {
+                            hive.enabled = v;
+                        }
+                    }
+                    "default_trust" => {
+                        if let Ok(v) = value.parse() {
+                            hive.default_trust = v;
+                        }
+                    }
+                    "auto_trust_drift" => {
+                        if let Some(v) = parse_bool(value) {
+                            hive.auto_trust_drift = v;
+                        }
+                    }
+                    "max_propagation" => {
+                        if let Ok(v) = value.parse() {
+                            hive.max_propagation = v;
+                        }
+                    }
+                    "export_min_evidence" => {
+                        if let Ok(v) = value.parse() {
+                            hive.export_min_evidence = v;
+                        }
+                    }
+                    "export_min_tool_decisions" => {
+                        if let Ok(v) = value.parse() {
+                            hive.export_min_tool_decisions = v;
+                        }
+                    }
+                    "knowledge_ttl_days" => {
+                        if let Ok(v) = value.parse() {
+                            hive.knowledge_ttl_days = v;
+                        }
+                    }
+                    "inject_unverified" => {
+                        if let Some(v) = parse_bool(value) {
+                            hive.inject_unverified = v;
                         }
                     }
                     _ => {}

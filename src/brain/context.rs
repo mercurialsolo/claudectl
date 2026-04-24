@@ -29,6 +29,8 @@ pub struct BrainContext {
     pub git_context: String,
     /// Coordination context: leases, blockers, handoffs, memory (empty if coord feature off).
     pub coordination_context: String,
+    /// Hive knowledge context: peer knowledge with trust labels (empty if relay feature off).
+    pub hive_context: String,
 }
 
 /// Build a compact context for the brain from a session's state and JSONL transcript.
@@ -54,6 +56,7 @@ pub fn build_context(
         global_session_map,
         git_context,
         coordination_context: String::new(), // Set by engine from coord store
+        hive_context: String::new(),         // Set by engine from hive store
     }
 }
 
@@ -483,6 +486,12 @@ pub fn format_brain_prompt(ctx: &BrainContext) -> String {
         format!("\n\n## Coordination Context\n{}", ctx.coordination_context)
     };
 
+    let hive_section = if ctx.hive_context.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", ctx.hive_context)
+    };
+
     let template = super::prompts::load(super::prompts::ADVISORY);
     super::prompts::expand(
         &template,
@@ -491,6 +500,7 @@ pub fn format_brain_prompt(ctx: &BrainContext) -> String {
             ("git_context", &git_section),
             ("global_session_map", &global_map),
             ("coordination_context", &coord_section),
+            ("hive_context", &hive_section),
             ("recent_transcript", &ctx.recent_transcript),
             ("few_shot_examples", &learning_section),
             ("decision_prompt", &ctx.decision_prompt),
@@ -603,6 +613,7 @@ mod tests {
             global_session_map: String::new(),
             git_context: String::new(),
             coordination_context: String::new(),
+            hive_context: String::new(),
         };
         let prompt = format_brain_prompt(&ctx);
         assert!(prompt.contains("summary"));
@@ -644,6 +655,7 @@ mod tests {
             global_session_map: "- session1: Processing\n- session2: Idle".into(),
             git_context: String::new(),
             coordination_context: String::new(),
+            hive_context: String::new(),
         };
         let prompt = format_brain_prompt(&ctx);
         assert!(prompt.contains("All Active Sessions"));
@@ -679,6 +691,7 @@ mod tests {
             global_session_map: String::new(),
             git_context: "Git state:\n  Branch: main\n  Uncommitted: 3 files".into(),
             coordination_context: String::new(),
+            hive_context: String::new(),
         };
         let prompt = format_brain_prompt(&ctx);
         assert!(prompt.contains("Repository State"));
@@ -696,6 +709,7 @@ mod tests {
             global_session_map: String::new(),
             git_context: String::new(),
             coordination_context: String::new(),
+            hive_context: String::new(),
         };
         let prompt = format_brain_prompt(&ctx);
         assert!(!prompt.contains("Repository State"));

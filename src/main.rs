@@ -16,6 +16,8 @@ mod discovery;
 mod health;
 mod helpers;
 mod history;
+#[cfg(feature = "relay")]
+mod hive;
 mod hooks;
 mod init;
 mod launch;
@@ -25,6 +27,8 @@ mod monitor;
 mod orchestrator;
 mod process;
 mod recorder;
+#[cfg(feature = "relay")]
+mod relay;
 mod rules;
 mod session;
 mod session_recorder;
@@ -238,6 +242,17 @@ pub(crate) struct Cli {
     #[cfg(feature = "coord")]
     #[arg(long, help_heading = "Coordination")]
     coord: Option<String>,
+
+    // ── Relay ─────────────────────────────────────────────────────────
+    /// Relay transport (serve, pair, accept, connect, peers, disconnect, forget)
+    #[cfg(feature = "relay")]
+    #[arg(long, help_heading = "Relay")]
+    relay: Option<String>,
+
+    /// Hive mind knowledge sharing (status, knowledge, export, import, forget)
+    #[cfg(feature = "relay")]
+    #[arg(long, help_heading = "Relay")]
+    hive: Option<String>,
 
     // ── Recording ──────────────────────────────────────────────────────
     /// Record the TUI session as an asciicast v2 file (e.g., --record demo.cast)
@@ -475,6 +490,16 @@ fn run_main(cli: Cli) -> io::Result<()> {
     #[cfg(feature = "coord")]
     if let Some(ref sub) = cli.coord {
         return coord::cli::dispatch(sub, cli.json);
+    }
+
+    #[cfg(feature = "relay")]
+    if let Some(ref sub) = cli.relay {
+        return relay::cli::dispatch(sub, cli.json);
+    }
+
+    #[cfg(feature = "relay")]
+    if let Some(ref sub) = cli.hive {
+        return hive::cli::dispatch(sub, cli.json);
     }
 
     if cli.brain_query {

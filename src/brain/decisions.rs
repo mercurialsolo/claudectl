@@ -424,6 +424,31 @@ fn maybe_distill_background() {
                 let _ = super::insights::merge_insights(insights, &mut state);
                 let _ = super::insights::save_state(&state);
             }
+
+            // Export knowledge units to hive store for sharing
+            #[cfg(feature = "relay")]
+            {
+                let thresholds = crate::hive::distiller::ExportThresholds::default();
+                let peer_id = crate::relay::load_or_create_identity();
+                let mut store = crate::hive::store::HiveStore::load();
+                let units = crate::hive::distiller::distill_to_knowledge_stable(
+                    &prefs,
+                    peer_id.as_str(),
+                    None,
+                    &thresholds,
+                    &store,
+                );
+                let count = units.len() as u32;
+                for unit in units {
+                    store.insert(unit);
+                }
+                let _ = store.save();
+
+                // Signal the relay to broadcast new knowledge to peers
+                if count > 0 {
+                    crate::hive::signal_new_knowledge(count);
+                }
+            }
         }
         DISTILLING.store(false, Ordering::Release);
     });
