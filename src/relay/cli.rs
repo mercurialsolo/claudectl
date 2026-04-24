@@ -74,6 +74,11 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
     println!("Relay listening on {} as {}", listener.addr, identity);
     println!("Press Ctrl+C to stop.");
 
+    // Initialize worker and gossip engine for message dispatch
+    let mut worker = super::worker::RemoteWorker::new(identity.as_str());
+    let mut hive_store = crate::hive::store::HiveStore::load();
+    let mut gossip = crate::hive::gossip::GossipEngine::new(identity.as_str(), 5, 30);
+
     // Block on Ctrl+C
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = Arc::clone(&running);
@@ -87,20 +92,118 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
         // Process incoming messages and tick
         if let Ok(mut reg) = registry.lock() {
             let messages = reg.drain_messages();
-            for (peer_id, msg) in &messages {
+            for (from_peer, msg) in messages {
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
-                        reg.handle_heartbeat(peer_id);
+                        reg.handle_heartbeat(&from_peer);
+                    }
+                    super::MessageType::DelegateTask => {
+                        match super::delegation::parse_delegate_message(&msg) {
+                            Ok((task_id, prompt, cwd, context)) => {
+                                println!(
+                                    "[{}] DelegateTask '{}' from {}",
+                                    crate::logger::timestamp_now(),
+                                    task_id,
+                                    from_peer
+                                );
+                                match worker.accept_task(
+                                    &task_id,
+                                    &prompt,
+                                    cwd.as_deref(),
+                                    context,
+                                    from_peer.as_str(),
+                                ) {
+                                    Ok(status_msg) => {
+                                        let _ = reg.send_to(from_peer.as_str(), &status_msg);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("  Failed to accept task: {e}");
+                                    }
+                                }
+                            }
+                            Err(e) => eprintln!("  Bad DelegateTask message: {e}"),
+                        }
+                    }
+                    super::MessageType::TaskInterrupt => {
+                        match super::delegation::parse_interrupt_message(&msg) {
+                            Ok((task_id, itype, reason)) => {
+                                println!(
+                                    "[{}] TaskInterrupt '{}' ({}) from {}",
+                                    crate::logger::timestamp_now(),
+                                    task_id,
+                                    itype,
+                                    from_peer
+                                );
+                                if let Some(resp) =
+                                    worker.handle_interrupt(&task_id, &itype, &reason)
+                                {
+                                    let _ = reg.send_to(from_peer.as_str(), &resp);
+                                }
+                            }
+                            Err(e) => eprintln!("  Bad TaskInterrupt message: {e}"),
+                        }
+                    }
+                    super::MessageType::TaskStatus | super::MessageType::TaskHandoff => {
+                        println!(
+                            "[{}] {:?} from {}",
+                            crate::logger::timestamp_now(),
+                            msg.msg_type,
+                            from_peer
+                        );
+                    }
+                    super::MessageType::KnowledgeSync => {
+                        let (stats, accepted) = gossip.handle_sync(&mut hive_store, &msg);
+                        println!(
+                            "[{}] KnowledgeSync from {}: {} accepted, {} rejected",
+                            crate::logger::timestamp_now(),
+                            from_peer,
+                            stats.accepted,
+                            stats.rejected
+                        );
+                        // Propagate accepted units to other peers
+                        if !accepted.is_empty() {
+                            let connected = reg.connected_peers();
+                            let prop_msgs = gossip.propagate(&accepted, &from_peer, &connected);
+                            for (target, prop_msg) in prop_msgs {
+                                let _ = reg.send_to(target.as_str(), &prop_msg);
+                            }
+                        }
+                    }
+                    super::MessageType::KnowledgeRequest => {
+                        println!(
+                            "[{}] KnowledgeRequest from {}",
+                            crate::logger::timestamp_now(),
+                            from_peer
+                        );
+                        let snapshots = gossip.handle_request(&hive_store, &msg);
+                        for snap in snapshots {
+                            let _ = reg.send_to(from_peer.as_str(), &snap);
+                        }
+                    }
+                    super::MessageType::KnowledgeSnapshot => {
+                        let stats = gossip.handle_snapshot(&mut hive_store, &msg);
+                        println!(
+                            "[{}] KnowledgeSnapshot from {}: {} accepted",
+                            crate::logger::timestamp_now(),
+                            from_peer,
+                            stats.accepted
+                        );
                     }
                     _ => {
                         println!(
                             "[{}] {:?} from {}",
                             crate::logger::timestamp_now(),
                             msg.msg_type,
-                            peer_id
+                            from_peer
                         );
                     }
                 }
+            }
+
+            // Tick worker — send status updates back to controllers
+            let worker_msgs = worker.tick();
+            for (target_peer, msg) in worker_msgs {
+                let _ = reg.send_to(&target_peer, &msg);
             }
 
             let events = reg.tick(identity.as_str());

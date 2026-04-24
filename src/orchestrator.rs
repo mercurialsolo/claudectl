@@ -302,6 +302,19 @@ pub fn run_tasks(task_file: TaskFile, parallel: bool) -> io::Result<()> {
                 break;
             }
 
+            // Skip tasks targeted at a remote peer — the relay handles these
+            if task.def.peer.is_some() {
+                let peer = task.def.peer.as_deref().unwrap_or("unknown");
+                task.state = TaskState::Skipped(format!(
+                    "remote delegation to peer '{peer}' requires relay serve mode"
+                ));
+                println!(
+                    "  Skipped: {} (remote peer '{peer}' — use relay serve for delegation)",
+                    task.def.name
+                );
+                continue;
+            }
+
             let attempt = task.attempts_started + 1;
 
             // Expand {{name.stdout}} templates in the prompt

@@ -755,7 +755,29 @@ fn run_tui<W: io::Write>(
             }
         }
         terminal.draw(|frame| {
-            ui::table::render(frame, frame.area(), &app);
+            let area = frame.area();
+
+            #[cfg(feature = "relay")]
+            let main_area = if app.show_peers_panel {
+                let chunks = ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Vertical)
+                    .constraints([
+                        ratatui::layout::Constraint::Min(5),
+                        ratatui::layout::Constraint::Length(
+                            (app.relay_peers.len() as u16 + 2).min(8),
+                        ),
+                    ])
+                    .split(area);
+                ui::peers::render_peers_panel(frame, chunks[1], &app.relay_peers, &app.theme);
+                chunks[0]
+            } else {
+                area
+            };
+
+            #[cfg(not(feature = "relay"))]
+            let main_area = area;
+
+            ui::table::render(frame, main_area, &app);
         })?;
 
         let timeout = tick_rate
