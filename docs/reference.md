@@ -133,6 +133,8 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 | `--record <path>` | Record the TUI as an asciicast v2 file (e.g., `--record demo.cast`) |
 | `--duration <secs>` | Auto-quit after N seconds (useful with `--demo --record`) |
 
+Press `R` on any session to record a per-session highlight reel (edits, commands, errors — idle time stripped). In `--demo` mode, a scripted coding session is drip-fed so recording works without live sessions.
+
 ### Cleanup
 
 | Flag | Description |
