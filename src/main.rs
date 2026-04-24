@@ -266,6 +266,14 @@ pub(crate) struct Cli {
     pub(crate) dry_run: bool,
 
     // ── History & Diagnostics ──────────────────────────────────────────
+    /// Run post-mortem analysis on a completed session transcript
+    #[arg(long, help_heading = "History & Diagnostics")]
+    pub(crate) autopsy: bool,
+
+    /// Session ID or JSONL path for --autopsy (defaults to most recent session)
+    #[arg(long, help_heading = "History & Diagnostics")]
+    pub(crate) session: Option<String>,
+
     /// Show history of completed sessions and exit
     #[arg(long, help_heading = "History & Diagnostics")]
     pub(crate) history: bool,
@@ -516,6 +524,10 @@ fn run_main(cli: Cli) -> io::Result<()> {
     if let Some(ref run_file) = cli.run {
         let task_file = orchestrator::load_tasks(run_file)?;
         return orchestrator::run_tasks(task_file, cli.parallel);
+    }
+
+    if cli.autopsy {
+        return commands::run_autopsy(cli.session.as_deref(), cli.json);
     }
 
     if cli.clean {
