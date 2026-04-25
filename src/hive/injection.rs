@@ -12,33 +12,51 @@ use super::trust::{TrustStore, TrustTier};
 /// Build the hive knowledge section for brain prompt injection.
 /// Returns a formatted string with trust-labeled knowledge entries.
 /// Units from ignored peers (trust < 0.2) are excluded unless inject_unverified is true.
+/// Build the hive knowledge section for brain prompt injection.
+/// `max_units` caps how many units are injected (0 = unlimited).
 pub fn build_hive_context(
     store: &HiveStore,
     trust_store: &TrustStore,
     inject_unverified: bool,
+    max_units: usize,
 ) -> String {
     let all = store.all_units();
     if all.is_empty() {
         return String::new();
     }
 
+    // Score and sort: higher confidence * evidence first
+    let mut scored: Vec<(&super::KnowledgeUnit, f64, TrustTier)> = all
+        .iter()
+        .filter_map(|unit| {
+            let tier = trust_store
+                .get(&unit.source_peer)
+                .map(|t| t.tier())
+                .unwrap_or(TrustTier::Suggested);
+
+            if tier == TrustTier::Ignored && !inject_unverified {
+                return None;
+            }
+
+            let score = unit.confidence * unit.evidence_count as f64;
+            Some((*unit, score, tier))
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Apply max_units cap
+    let limit = if max_units > 0 {
+        max_units
+    } else {
+        scored.len()
+    };
+
     let mut lines = Vec::new();
     let mut peer_count = std::collections::HashSet::new();
-    let mut included = 0;
 
-    for unit in &all {
-        let tier = trust_store
-            .get(&unit.source_peer)
-            .map(|t| t.tier())
-            .unwrap_or(TrustTier::Suggested); // unknown peers default to suggested
-
-        // Skip ignored peers unless inject_unverified overrides
-        if tier == TrustTier::Ignored && !inject_unverified {
-            continue;
-        }
-
+    for (unit, _, tier) in scored.iter().take(limit) {
         peer_count.insert(unit.source_peer.clone());
-        included += 1;
 
         let label = tier.label();
         let summary = unit.content.summary_line();
@@ -54,10 +72,19 @@ pub fn build_hive_context(
         return String::new();
     }
 
+    let total = scored.len();
+    let shown = lines.len();
+    let truncated = if shown < total {
+        format!(" (showing top {shown} of {total})")
+    } else {
+        String::new()
+    };
+
     let header = format!(
-        "## Hive Knowledge ({} peers, {} units)\n",
+        "## Hive Knowledge ({} peers, {} units{})\n",
         peer_count.len(),
-        included
+        shown,
+        truncated,
     );
     header + &lines.join("\n")
 }
@@ -178,7 +205,7 @@ mod tests {
     fn build_context_empty_store() {
         let store = empty_store();
         let trust_store = TrustStore::load_with_default(0.5);
-        let ctx = build_hive_context(&store, &trust_store, true);
+        let ctx = build_hive_context(&store, &trust_store, true, 0);
         assert!(ctx.is_empty());
     }
 
@@ -195,7 +222,7 @@ mod tests {
         store.insert(make_pattern_unit("ku_2", "Write", None, "deny", "peer-b"));
 
         let trust_store = TrustStore::load_with_default(0.5);
-        let ctx = build_hive_context(&store, &trust_store, true);
+        let ctx = build_hive_context(&store, &trust_store, true, 0);
 
         assert!(ctx.contains("## Hive Knowledge"));
         assert!(ctx.contains("2 units"));
@@ -216,7 +243,7 @@ mod tests {
         let mut trust_store = TrustStore::load_with_default(0.5);
         trust_store.set_trust("peer-a", 0.9);
 
-        let ctx = build_hive_context(&store, &trust_store, true);
+        let ctx = build_hive_context(&store, &trust_store, true, 0);
         assert!(ctx.contains("[hive]")); // 0.9 = Confirmed
         assert!(!ctx.contains("[hive, suggested]"));
     }
@@ -236,11 +263,11 @@ mod tests {
         trust_store.set_trust("peer-a", 0.1); // Ignored tier
 
         // Without inject_unverified: excluded
-        let ctx = build_hive_context(&store, &trust_store, false);
+        let ctx = build_hive_context(&store, &trust_store, false, 0);
         assert!(ctx.is_empty());
 
         // With inject_unverified: included
-        let ctx = build_hive_context(&store, &trust_store, true);
+        let ctx = build_hive_context(&store, &trust_store, true, 0);
         assert!(ctx.contains("[hive, ignored]"));
     }
 

@@ -32,12 +32,21 @@ pub fn dispatch(subcommand: &str, _json_mode: bool) -> io::Result<()> {
 fn cmd_status(json_mode: bool) -> io::Result<()> {
     let store = HiveStore::load();
     let all = store.all_units();
+    let cfg = crate::config::Config::load();
+    let hive_cfg = cfg.hive.unwrap_or_default();
 
     // Count by source
     let mut sources: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut by_category: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for unit in &all {
         *sources.entry(unit.source_peer.clone()).or_insert(0) += 1;
+        *by_category
+            .entry(unit.category.label().to_string())
+            .or_insert(0) += 1;
     }
+
+    // Count conflicts
+    let conflict_count = conflict_line_count();
 
     // Load gossip sync state
     let local_id = crate::relay::load_or_create_identity();
@@ -48,7 +57,10 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
         let output = serde_json::json!({
             "identity": local_id.as_str(),
             "total_units": all.len(),
+            "max_units": hive_cfg.max_units,
             "sources": sources,
+            "categories": by_category,
+            "conflicts": conflict_count,
             "sync_states": sync_states,
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
@@ -56,7 +68,13 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
         println!("Hive Knowledge Store");
         println!();
         println!("  Identity: {}", local_id);
-        println!("  Total units: {}", all.len());
+        println!("  Total units: {} / {} max", all.len(), hive_cfg.max_units);
+        if !by_category.is_empty() {
+            println!("  Categories:");
+            for (cat, count) in &by_category {
+                println!("    {cat}: {count}");
+            }
+        }
         if sources.is_empty() {
             println!("  No knowledge units yet.");
             println!("  Knowledge is generated automatically during brain distillation.");
@@ -65,6 +83,10 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
             for (peer, count) in &sources {
                 println!("    {peer}: {count} units");
             }
+        }
+        if conflict_count > 0 {
+            println!();
+            println!("  Merge conflicts: {conflict_count} (see ~/.claudectl/hive/conflicts.jsonl)");
         }
         if !sync_states.is_empty() {
             println!();
@@ -80,6 +102,18 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+/// Count lines in the conflicts log.
+fn conflict_line_count() -> usize {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let path = std::path::PathBuf::from(home)
+        .join(".claudectl")
+        .join("hive")
+        .join("conflicts.jsonl");
+    std::fs::read_to_string(&path)
+        .map(|c| c.lines().filter(|l| !l.is_empty()).count())
+        .unwrap_or(0)
 }
 
 /// `claudectl hive knowledge [--scope X] [--from peer] [--json]`

@@ -376,6 +376,7 @@ impl BrainEngine {
                     &store,
                     &trust_store,
                     hive_cfg.inject_unverified,
+                    hive_cfg.max_prompt_units,
                 );
             }
         }

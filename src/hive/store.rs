@@ -159,6 +159,78 @@ impl HiveStore {
         self.units.is_empty()
     }
 
+    /// Compact the store: remove expired units, prune stale peers, enforce max_units cap.
+    /// Returns the number of units evicted.
+    pub fn compact(
+        &mut self,
+        ttl_days: u32,
+        max_units: usize,
+        stale_peer_days: u32,
+        trust_store: Option<&super::trust::TrustStore>,
+    ) -> usize {
+        let now = super::epoch_secs();
+        let ttl_secs = ttl_days as u64 * 86400;
+        let stale_secs = stale_peer_days as u64 * 86400;
+        let before = self.units.len();
+
+        // 1. Remove expired units (past TTL without revalidation)
+        let expired_ids: Vec<String> = self
+            .units
+            .values()
+            .filter(|u| {
+                let age = now.saturating_sub(u.last_validated_at);
+                age > ttl_secs
+            })
+            .map(|u| u.id.clone())
+            .collect();
+        for id in &expired_ids {
+            self.remove(id);
+        }
+
+        // 2. Prune knowledge from stale peers (not seen in stale_peer_days)
+        if let Some(ts) = trust_store {
+            let stale_peers: Vec<String> = self
+                .units
+                .values()
+                .map(|u| u.source_peer.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .filter(|peer| {
+                    ts.get(peer)
+                        .is_some_and(|t| now.saturating_sub(t.last_sync) > stale_secs)
+                })
+                .collect();
+            for peer in &stale_peers {
+                let peer_unit_ids: Vec<String> = self
+                    .units
+                    .values()
+                    .filter(|u| &u.source_peer == peer)
+                    .map(|u| u.id.clone())
+                    .collect();
+                for id in &peer_unit_ids {
+                    self.remove(id);
+                }
+            }
+        }
+
+        // 3. Enforce max_units cap — evict lowest confidence * evidence score
+        if max_units > 0 && self.units.len() > max_units {
+            let mut scored: Vec<(String, f64)> = self
+                .units
+                .values()
+                .map(|u| (u.id.clone(), u.confidence * u.evidence_count as f64))
+                .collect();
+            scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let to_evict = self.units.len() - max_units;
+            for (id, _) in scored.into_iter().take(to_evict) {
+                self.remove(&id);
+            }
+        }
+
+        before - self.units.len()
+    }
+
     /// Save the entire store to disk (atomic rewrite via temp file + rename).
     pub fn save(&self) -> std::io::Result<()> {
         let dir = hive_dir();

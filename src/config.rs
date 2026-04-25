@@ -220,6 +220,12 @@ pub struct HiveConfig {
     pub exclude_tools: Vec<String>,
     /// Command patterns to exclude from sharing (substring match).
     pub exclude_commands: Vec<String>,
+    /// Maximum knowledge units to keep in the store. Oldest/lowest-confidence evicted.
+    pub max_units: usize,
+    /// Maximum knowledge units to inject into the brain prompt per evaluation.
+    pub max_prompt_units: usize,
+    /// Days after which a peer's knowledge is pruned if the peer hasn't been seen.
+    pub stale_peer_days: u32,
 }
 
 impl Default for HiveConfig {
@@ -233,9 +239,12 @@ impl Default for HiveConfig {
             export_min_tool_decisions: 10,
             knowledge_ttl_days: 30,
             inject_unverified: true,
-            share_categories: Vec::new(), // empty = share all shareable
+            share_categories: Vec::new(),
             exclude_tools: Vec::new(),
             exclude_commands: Vec::new(),
+            max_units: 500,
+            max_prompt_units: 20,
+            stale_peer_days: 90,
         }
     }
 }
@@ -322,6 +331,9 @@ struct RawHiveConfig {
     share_categories: Vec<String>,
     exclude_tools: Vec<String>,
     exclude_commands: Vec<String>,
+    max_units: Option<usize>,
+    max_prompt_units: Option<usize>,
+    stale_peer_days: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -519,6 +531,15 @@ impl Config {
             }
             if !raw_hive.exclude_commands.is_empty() {
                 hive.exclude_commands = raw_hive.exclude_commands;
+            }
+            if let Some(v) = raw_hive.max_units {
+                hive.max_units = v;
+            }
+            if let Some(v) = raw_hive.max_prompt_units {
+                hive.max_prompt_units = v;
+            }
+            if let Some(v) = raw_hive.stale_peer_days {
+                hive.stale_peer_days = v;
             }
         }
         if let Some(lc) = raw.lifecycle {
@@ -1137,6 +1158,15 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     }
                     "exclude_commands" => {
                         hive.exclude_commands = parse_string_array(value);
+                    }
+                    "max_units" => {
+                        hive.max_units = value.parse().ok();
+                    }
+                    "max_prompt_units" => {
+                        hive.max_prompt_units = value.parse().ok();
+                    }
+                    "stale_peer_days" => {
+                        hive.stale_peer_days = value.parse().ok();
                     }
                     _ => {}
                 }

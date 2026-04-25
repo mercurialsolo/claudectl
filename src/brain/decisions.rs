@@ -448,6 +448,26 @@ fn maybe_distill_background() {
                     for unit in units {
                         store.insert(unit);
                     }
+
+                    // Compact: enforce TTL, max_units, stale peer cleanup
+                    let trust_store =
+                        crate::hive::trust::TrustStore::load_with_default(hive_cfg.default_trust);
+                    let evicted = store.compact(
+                        hive_cfg.knowledge_ttl_days,
+                        hive_cfg.max_units,
+                        hive_cfg.stale_peer_days,
+                        Some(&trust_store),
+                    );
+                    if evicted > 0 {
+                        crate::logger::log(
+                            "HIVE",
+                            &format!(
+                                "compacted: evicted {evicted} units (max {})",
+                                hive_cfg.max_units
+                            ),
+                        );
+                    }
+
                     let _ = store.save();
 
                     // Signal the relay to broadcast new knowledge to peers
