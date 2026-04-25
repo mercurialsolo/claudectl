@@ -30,18 +30,19 @@ pub fn dispatch(subcommand: &str, json_mode: bool) -> io::Result<()> {
         Some("delegate") => cmd_delegate(&parts[1..], json_mode),
         Some("status") => cmd_task_status(json_mode),
         Some("interrupt") => cmd_interrupt(&parts[1..]),
+        Some("invite") => cmd_invite(&parts[1..], json_mode),
+        Some("join") => cmd_join(&parts[1..]),
+        Some("discover") => cmd_discover(json_mode),
         Some(other) => {
             eprintln!("Unknown relay subcommand: {other}");
-            eprintln!(
-                "Available: serve, pair, accept, connect, peers, disconnect, forget, identity, delegate, status, interrupt"
-            );
+            eprintln!("Available: serve, pair, accept, connect, peers, disconnect, forget,");
+            eprintln!("          identity, delegate, status, interrupt, invite, join, discover");
             Err(io::Error::other("unknown subcommand"))
         }
         None => {
             eprintln!("Usage: claudectl --relay <subcommand>");
-            eprintln!(
-                "Available: serve, pair, accept, connect, peers, disconnect, forget, identity, delegate, status, interrupt"
-            );
+            eprintln!("Available: serve, pair, accept, connect, peers, disconnect, forget,");
+            eprintln!("          identity, delegate, status, interrupt, invite, join, discover");
             Ok(())
         }
     }
@@ -729,4 +730,214 @@ fn cmd_interrupt(args: &[&str]) -> io::Result<()> {
     println!("Use `claudectl relay serve` or TUI mode for live interrupts.");
 
     Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Discovery commands: invite, join, discover
+// ────────────────────────────────────────────────────────────────────────────
+
+/// `claudectl relay invite [--qr] [--words] [--json]`
+fn cmd_invite(args: &[&str], json_mode: bool) -> io::Result<()> {
+    let show_qr = args.contains(&"--qr");
+    let show_words = args.contains(&"--words");
+
+    let identity = load_or_create_identity();
+    let cfg = crate::config::Config::load();
+    let relay_cfg = cfg.relay.unwrap_or_default();
+
+    // Detect our LAN IP
+    let ip = detect_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = relay_cfg.listen_port;
+    let addr: std::net::SocketAddr = format!("{ip}:{port}")
+        .parse()
+        .map_err(|e| io::Error::other(format!("invalid addr: {e}")))?;
+
+    // Generate a canonical PSK
+    let raw_psk = crypto::generate_psk();
+    let code = crypto::format_psk(&raw_psk);
+    let canonical_psk = crypto::parse_psk(&code).expect("just-generated code must parse");
+
+    // Build all formats
+    let invite_link = super::invite::build_invite_link(identity.as_str(), &addr, &canonical_psk);
+    let relay_code = super::invite::encode_relay_code(&addr, &canonical_psk);
+    let word_phrase = super::invite::encode_words(&addr, &canonical_psk);
+
+    if json_mode {
+        let output = serde_json::json!({
+            "identity": identity.as_str(),
+            "invite_link": invite_link,
+            "relay_code": relay_code,
+            "word_phrase": word_phrase,
+            "addr": addr.to_string(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return Ok(());
+    }
+
+    println!("Your identity: {}", identity);
+    println!();
+
+    // Relay code (short, speakable)
+    println!("  RELAY CODE:  {}", relay_code);
+    println!();
+
+    // Word phrase (memorable)
+    if show_words {
+        println!("  WORD PHRASE: {}", word_phrase);
+        println!();
+    }
+
+    // Invite link (full)
+    println!("  INVITE LINK: {}", invite_link);
+    println!();
+
+    // Join instructions
+    println!("Share any of the above with your peer. They run:");
+    println!();
+    println!("  claudectl --relay \"join {}\"", relay_code);
+    if show_words {
+        println!("  claudectl --relay \"join {}\"", word_phrase);
+    }
+    println!("  claudectl --relay \"join {}\"", invite_link);
+    println!();
+
+    // QR code
+    if show_qr {
+        println!("QR Code (scan to join):");
+        println!();
+        println!("{}", super::invite::render_qr(&invite_link));
+    }
+
+    // Also store as pending (for the serve side to accept)
+    let pending_path = super::peers_dir().join("_pending.key");
+    let _ = std::fs::create_dir_all(super::peers_dir());
+    let _ = std::fs::write(&pending_path, crypto::hex_encode(&canonical_psk));
+
+    Ok(())
+}
+
+/// `claudectl relay join <code|link|words>`
+fn cmd_join(args: &[&str]) -> io::Result<()> {
+    if args.is_empty() {
+        eprintln!("Usage: claudectl --relay \"join <relay-code | invite-link | word-phrase>\"");
+        return Err(io::Error::other("missing argument"));
+    }
+
+    let input = args.join(" ");
+    let identity = load_or_create_identity();
+
+    // Detect format and parse
+    let (addr, psk, remote_identity) = if input.starts_with("cctl://") {
+        // Invite link
+        let (id, addr, psk) = super::invite::parse_invite_link(&input)
+            .map_err(|e| io::Error::other(format!("invalid invite link: {e}")))?;
+        (addr, psk, Some(id))
+    } else if input.contains('-')
+        && input
+            .split('-')
+            .all(|w| w.len() <= 5 && w.chars().all(|c| c.is_ascii_alphabetic()))
+    {
+        // Word phrase (all segments are short alphabetic words)
+        let (addr, psk) = super::invite::decode_words(&input)
+            .map_err(|e| io::Error::other(format!("invalid word phrase: {e}")))?;
+        (addr, psk, None)
+    } else {
+        // Relay code (base32 alphanumeric)
+        let (addr, psk) = super::invite::decode_relay_code(&input)
+            .map_err(|e| io::Error::other(format!("invalid relay code: {e}")))?;
+        (addr, psk, None)
+    };
+
+    println!("Connecting to {}...", addr);
+
+    // Try connecting
+    let (remote_id, registry) = try_connect(addr, &psk, &identity)
+        .map_err(|e| io::Error::other(format!("connection failed: {e}")))?;
+
+    // Verify identity if provided in the link
+    if let Some(ref expected) = remote_identity {
+        if remote_id != *expected {
+            println!(
+                "Warning: expected peer '{}' but connected to '{}'",
+                expected, remote_id
+            );
+        }
+    }
+
+    println!("Paired with {} ({})", remote_id, addr);
+
+    // Save PSK and metadata
+    let _ = save_peer_psk(&remote_id, &psk);
+    let _ = super::save_peer_meta(&remote_id, &addr.to_string());
+
+    // Run the connection loop
+    run_connect_loop(&registry, identity.as_str());
+
+    Ok(())
+}
+
+/// `claudectl relay discover [--json]`
+fn cmd_discover(json_mode: bool) -> io::Result<()> {
+    let identity = load_or_create_identity();
+
+    println!("Scanning LAN for claudectl instances (3 seconds)...");
+    println!();
+
+    let peers = super::lan::scan_lan(std::time::Duration::from_secs(3), identity.as_str());
+
+    if json_mode {
+        let json_peers: Vec<serde_json::Value> = peers
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "identity": p.identity,
+                    "addr": p.relay_addr().to_string(),
+                    "version": p.version,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json_peers).unwrap());
+        return Ok(());
+    }
+
+    if peers.is_empty() {
+        println!("No claudectl instances found on the local network.");
+        println!();
+        println!("Make sure peers are running: claudectl --relay serve");
+        println!("Or use invite codes: claudectl --relay invite");
+    } else {
+        println!("Found {} instance(s):", peers.len());
+        println!();
+        println!("  {:<20} {:<24} VERSION", "IDENTITY", "ADDRESS");
+        println!("  {}", "─".repeat(56));
+        for peer in &peers {
+            let paired = if load_peer_psk(&peer.identity).is_some() {
+                " (paired)"
+            } else {
+                ""
+            };
+            println!(
+                "  {:<20} {:<24} {}{}",
+                peer.identity,
+                peer.relay_addr().to_string(),
+                peer.version,
+                paired,
+            );
+        }
+        println!();
+        println!("To pair, run: claudectl --relay \"invite\" on the remote machine,");
+        println!("then:         claudectl --relay \"join <code>\" here.");
+    }
+
+    Ok(())
+}
+
+/// Detect the local LAN IP address (not loopback).
+fn detect_local_ip() -> Option<String> {
+    // Connect a UDP socket to a public address to determine our LAN IP
+    // (No actual data is sent — this just triggers route lookup)
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let local_addr = socket.local_addr().ok()?;
+    Some(local_addr.ip().to_string())
 }

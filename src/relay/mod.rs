@@ -3,6 +3,8 @@
 pub mod cli;
 pub mod crypto;
 pub mod delegation;
+pub mod invite;
+pub mod lan;
 pub mod listener;
 pub mod mesh;
 pub mod peer;
