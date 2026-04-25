@@ -76,6 +76,9 @@ pub enum HiveCommand {
         /// Target directory (default: ~/.claude)
         #[arg(long)]
         target: Option<String>,
+        /// Force install even if compatibility checks fail
+        #[arg(long)]
+        force: bool,
     },
 
     /// List available shared skills, commands, and hooks from peers
@@ -108,9 +111,11 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
             path,
             scope,
         } => cmd_share(content_type, path, scope, json_mode),
-        HiveCommand::Install { unit_id, target } => {
-            cmd_install(unit_id, target.as_deref(), json_mode)
-        }
+        HiveCommand::Install {
+            unit_id,
+            target,
+            force,
+        } => cmd_install(unit_id, target.as_deref(), *force, json_mode),
         HiveCommand::Shared {
             content_type,
             show_ignored,
@@ -445,6 +450,34 @@ fn parse_frontmatter(content: &str) -> std::collections::HashMap<String, String>
 // Share, Install, Shared commands
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Build `ArtifactRequires` from frontmatter overrides + auto-detection.
+/// Frontmatter keys: `requires_cli`, `requires_os`, `requires_min_version`.
+fn build_requires(
+    fm: &std::collections::HashMap<String, String>,
+    body: &str,
+) -> super::ArtifactRequires {
+    // Frontmatter overrides take priority
+    let cli = if let Some(val) = fm.get("requires_cli") {
+        val.split(',').map(|s| s.trim().to_string()).collect()
+    } else {
+        super::detect_cli_deps(body)
+    };
+
+    let os = if let Some(val) = fm.get("requires_os") {
+        val.split(',').map(|s| s.trim().to_string()).collect()
+    } else {
+        super::detect_os_deps(body)
+    };
+
+    let min_version = fm.get("requires_min_version").cloned();
+
+    super::ArtifactRequires {
+        cli,
+        os,
+        min_version,
+    }
+}
+
 /// `claudectl hive share <type> <path> [--scope X]`
 fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -> io::Result<()> {
     let body =
@@ -473,11 +506,13 @@ fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -
                 .cloned()
                 .unwrap_or_else(|| name.clone());
             let version = fm.get("version").cloned().unwrap_or_else(|| "0.0.0".into());
+            let requires = build_requires(&fm, &body);
             super::KnowledgeContent::Skill {
                 name,
                 description,
                 version,
                 body,
+                requires,
             }
         }
         "command" => {
@@ -498,11 +533,13 @@ fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -
                 .cloned()
                 .unwrap_or_else(|| name.clone());
             let args = fm.get("args").cloned();
+            let requires = build_requires(&fm, &body);
             super::KnowledgeContent::Command {
                 name,
                 description,
                 args,
                 body,
+                requires,
             }
         }
         "hook" => {
@@ -535,11 +572,21 @@ fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -
 
             let sanitized = super::sanitize_hook_config(&body);
 
+            // For hooks: extract command binary as a CLI dep
+            let mut requires = super::ArtifactRequires::default();
+            if let Some(cmd) = parsed.get("command").and_then(|v| v.as_str()) {
+                let binary = cmd.rsplit('/').next().unwrap_or(cmd);
+                if !binary.is_empty() {
+                    requires.cli.push(binary.to_string());
+                }
+            }
+
             super::KnowledgeContent::HookConfig {
                 event,
                 matcher,
                 description,
                 config_json: sanitized,
+                requires,
             }
         }
         other => {
@@ -597,8 +644,13 @@ fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -
     Ok(())
 }
 
-/// `claudectl hive install <unit_id> [--target dir]`
-fn cmd_install(unit_id: &str, target: Option<&str>, json_mode: bool) -> io::Result<()> {
+/// `claudectl hive install <unit_id> [--target dir] [--force]`
+fn cmd_install(
+    unit_id: &str,
+    target: Option<&str>,
+    force: bool,
+    json_mode: bool,
+) -> io::Result<()> {
     let store = HiveStore::load();
     let unit = store
         .get(unit_id)
@@ -617,6 +669,26 @@ fn cmd_install(unit_id: &str, target: Option<&str>, json_mode: bool) -> io::Resu
              Set higher trust first: claudectl hive trust {} 0.5",
             unit.source_peer, unit.source_peer,
         )));
+    }
+
+    // Check compatibility
+    if let Some(requires) = super::get_requires(&unit.content) {
+        let issues = super::check_compatibility(requires);
+        if !issues.is_empty() {
+            let has_blocking = issues.iter().any(|i| i.is_blocking());
+            for issue in &issues {
+                if issue.is_blocking() {
+                    eprintln!("Error: {issue}");
+                } else {
+                    eprintln!("Warning: {issue}");
+                }
+            }
+            if has_blocking && !force {
+                return Err(io::Error::other(
+                    "compatibility check failed. Use --force to install anyway.",
+                ));
+            }
+        }
     }
 
     let base_dir = match target {
@@ -785,14 +857,20 @@ fn cmd_shared(
         let items: Vec<serde_json::Value> = units
             .iter()
             .map(|(unit, tier)| {
-                serde_json::json!({
+                let compat = super::compat_label(&unit.content);
+                let mut obj = serde_json::json!({
                     "id": unit.id,
                     "type": content_type_label(&unit.content),
                     "name": content_name(&unit.content),
                     "source_peer": unit.source_peer,
                     "trust_tier": tier.label(),
+                    "compat": compat,
                     "summary": unit.content.summary_line(),
-                })
+                });
+                if let Some(req) = super::get_requires(&unit.content) {
+                    obj["requires"] = serde_json::json!(req);
+                }
+                obj
             })
             .collect();
         println!("{}", serde_json::to_string_pretty(&items).unwrap());
@@ -801,10 +879,10 @@ fn cmd_shared(
         println!("Share content with: claudectl hive share <skill|command|hook> <path>");
     } else {
         println!(
-            "{:<12} {:<8} {:<20} {:<16} CONTENT",
-            "ID", "TYPE", "SOURCE", "TRUST"
+            "{:<12} {:<8} {:<16} {:<16} {:<6} CONTENT",
+            "ID", "TYPE", "SOURCE", "TRUST", "COMPAT"
         );
-        println!("{}", "─".repeat(80));
+        println!("{}", "─".repeat(90));
         for (unit, tier) in &units {
             let id_short = if unit.id.len() > 11 {
                 &unit.id[..11]
@@ -812,12 +890,14 @@ fn cmd_shared(
                 &unit.id
             };
             let type_label = content_type_label(&unit.content);
+            let compat = super::compat_label(&unit.content);
             println!(
-                "{:<12} {:<8} {:<20} {:<16} {}",
+                "{:<12} {:<8} {:<16} {:<16} {:<6} {}",
                 id_short,
                 type_label,
                 unit.source_peer,
                 tier.label(),
+                compat,
                 unit.content.summary_line(),
             );
         }

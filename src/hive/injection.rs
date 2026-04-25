@@ -383,6 +383,7 @@ mod tests {
                 description: "Monitors sessions".into(),
                 version: "0.31.0".into(),
                 body: "Full skill body here".into(),
+                requires: crate::hive::ArtifactRequires::default(),
             },
             evidence_count: 1,
             confidence: 1.0,

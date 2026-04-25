@@ -115,6 +115,20 @@ pub const MAX_COMMAND_BYTES: usize = 16 * 1024;
 /// Maximum size for a shared hook config JSON (4 KB).
 pub const MAX_HOOK_CONFIG_BYTES: usize = 4 * 1024;
 
+/// Compatibility requirements for a shared artifact.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ArtifactRequires {
+    /// CLI binaries that must be on PATH (e.g., ["claudectl", "jq"]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cli: Vec<String>,
+    /// Target OS labels (e.g., ["macos", "linux"]). Empty = any OS.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub os: Vec<String>,
+    /// Minimum claudectl version (e.g., "0.42.0"). None = any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_version: Option<String>,
+}
+
 /// The actual knowledge payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -153,6 +167,9 @@ pub enum KnowledgeContent {
         version: String,
         /// Full markdown content (frontmatter + body). Capped at MAX_SKILL_BYTES.
         body: String,
+        /// Compatibility requirements (CLIs, OS, version).
+        #[serde(default)]
+        requires: ArtifactRequires,
     },
     /// A shared slash command (markdown with YAML frontmatter).
     Command {
@@ -161,6 +178,9 @@ pub enum KnowledgeContent {
         args: Option<String>,
         /// Full markdown content (frontmatter + body). Capped at MAX_COMMAND_BYTES.
         body: String,
+        /// Compatibility requirements (CLIs, OS, version).
+        #[serde(default)]
+        requires: ArtifactRequires,
     },
     /// A shared hook configuration (declarative JSON, no executables).
     HookConfig {
@@ -171,6 +191,9 @@ pub enum KnowledgeContent {
         description: String,
         /// Sanitized hook config JSON (no secrets). Capped at MAX_HOOK_CONFIG_BYTES.
         config_json: String,
+        /// Compatibility requirements (CLIs, OS, version).
+        #[serde(default)]
+        requires: ArtifactRequires,
     },
 }
 
@@ -558,6 +581,287 @@ fn sanitize_user_paths(input: &str) -> String {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Compatibility checking
+// ────────────────────────────────────────────────────────────────────────────
+
+/// A compatibility issue found when checking an artifact against the local environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompatIssue {
+    /// A required CLI binary is not on PATH.
+    MissingCli(String),
+    /// The artifact targets a different OS.
+    WrongOs {
+        current: String,
+        required: Vec<String>,
+    },
+    /// The local claudectl version is too old.
+    VersionTooOld { current: String, required: String },
+}
+
+impl CompatIssue {
+    /// Short label for display in the COMPAT column.
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::MissingCli(_) => "!cli",
+            Self::WrongOs { .. } => "!os",
+            Self::VersionTooOld { .. } => "!ver",
+        }
+    }
+
+    /// Whether this issue should block installation (vs just warn).
+    pub fn is_blocking(&self) -> bool {
+        matches!(self, Self::WrongOs { .. } | Self::VersionTooOld { .. })
+    }
+}
+
+impl std::fmt::Display for CompatIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingCli(cli) => write!(f, "missing CLI: {cli}"),
+            Self::WrongOs { current, required } => {
+                write!(
+                    f,
+                    "OS mismatch: running {current}, requires {}",
+                    required.join("/")
+                )
+            }
+            Self::VersionTooOld { current, required } => {
+                write!(f, "claudectl {current} too old, requires >= {required}")
+            }
+        }
+    }
+}
+
+/// Check an artifact's requirements against the local environment.
+pub fn check_compatibility(requires: &ArtifactRequires) -> Vec<CompatIssue> {
+    let mut issues = Vec::new();
+
+    for cli in &requires.cli {
+        if !is_cli_available(cli) {
+            issues.push(CompatIssue::MissingCli(cli.clone()));
+        }
+    }
+
+    if !requires.os.is_empty() {
+        let current = current_os_label();
+        if !requires.os.iter().any(|o| o == current) {
+            issues.push(CompatIssue::WrongOs {
+                current: current.to_string(),
+                required: requires.os.clone(),
+            });
+        }
+    }
+
+    if let Some(min_ver) = &requires.min_version {
+        let current = env!("CARGO_PKG_VERSION");
+        if !version_gte(current, min_ver) {
+            issues.push(CompatIssue::VersionTooOld {
+                current: current.to_string(),
+                required: min_ver.clone(),
+            });
+        }
+    }
+
+    issues
+}
+
+/// Check if a CLI binary is available on PATH.
+pub fn is_cli_available(name: &str) -> bool {
+    // Reject names with path separators or shell metacharacters
+    if name.contains('/') || name.contains('\\') || name.contains(';') || name.is_empty() {
+        return false;
+    }
+    std::process::Command::new("which")
+        .arg(name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Current OS label for compatibility matching.
+pub fn current_os_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "unknown"
+    }
+}
+
+/// Simple semver comparison: is `current` >= `required`?
+/// Compares major.minor.patch numerically. Non-numeric parts are treated as 0.
+fn version_gte(current: &str, required: &str) -> bool {
+    let parse = |s: &str| -> (u32, u32, u32) {
+        let parts: Vec<u32> = s
+            .split('.')
+            .take(3)
+            .map(|p| p.parse().unwrap_or(0))
+            .collect();
+        (
+            parts.first().copied().unwrap_or(0),
+            parts.get(1).copied().unwrap_or(0),
+            parts.get(2).copied().unwrap_or(0),
+        )
+    };
+    parse(current) >= parse(required)
+}
+
+/// Shell builtins and common shell syntax tokens to exclude from CLI detection.
+const SHELL_BUILTINS: &[&str] = &[
+    "if", "then", "else", "fi", "for", "do", "done", "while", "until", "case", "esac", "in",
+    "echo", "printf", "cd", "export", "set", "unset", "local", "return", "exit", "source", ".",
+    "true", "false", "test", "[", "[[", "read", "shift", "eval", "exec", "trap", "wait", "sleep",
+    "cat", "head", "tail", "grep", "sed", "awk", "tr", "cut", "sort", "uniq", "wc", "tee", "mkdir",
+    "rm", "cp", "mv", "ls", "touch", "chmod", "chown", "ln", "find", "xargs",
+];
+
+/// Detect CLI dependencies by scanning bash code blocks in a markdown body.
+pub fn detect_cli_deps(body: &str) -> Vec<String> {
+    let mut deps = std::collections::BTreeSet::new();
+    let mut in_bash_block = false;
+
+    for line in body.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("```bash") || trimmed.starts_with("```sh") {
+            in_bash_block = true;
+            continue;
+        }
+        if trimmed.starts_with("```") && in_bash_block {
+            in_bash_block = false;
+            continue;
+        }
+
+        if !in_bash_block {
+            continue;
+        }
+
+        // Skip comments and empty lines
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        // Extract the first token (the command being run)
+        // Handle pipes: each segment after | is a new command
+        for segment in trimmed.split('|') {
+            let segment = segment.trim();
+            // Strip leading env var assignments (KEY=val cmd)
+            let cmd_part = skip_env_assignments(segment);
+            if let Some(cmd) = cmd_part.split_whitespace().next() {
+                // Strip path prefix if present
+                let base = cmd.rsplit('/').next().unwrap_or(cmd);
+                if !base.is_empty()
+                    && !SHELL_BUILTINS.contains(&base)
+                    && base
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                {
+                    deps.insert(base.to_string());
+                }
+            }
+        }
+    }
+
+    deps.into_iter().collect()
+}
+
+/// Skip leading `KEY=value` assignments to find the actual command.
+fn skip_env_assignments(s: &str) -> &str {
+    let mut rest = s;
+    loop {
+        let trimmed = rest.trim_start();
+        // Check for KEY=... pattern (uppercase start, has =)
+        if let Some(eq_pos) = trimmed.find('=') {
+            let key = &trimmed[..eq_pos];
+            if !key.is_empty()
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            {
+                // Skip past the value
+                let after_eq = &trimmed[eq_pos + 1..];
+                // Quoted value
+                if let Some(inner) = after_eq.strip_prefix('"') {
+                    if let Some(end) = inner.find('"') {
+                        rest = &inner[end + 1..];
+                        continue;
+                    }
+                } else if let Some(inner) = after_eq.strip_prefix('\'') {
+                    if let Some(end) = inner.find('\'') {
+                        rest = &inner[end + 1..];
+                        continue;
+                    }
+                } else {
+                    // Unquoted — next whitespace
+                    let end = after_eq.find(char::is_whitespace).unwrap_or(after_eq.len());
+                    rest = &after_eq[end..];
+                    continue;
+                }
+            }
+        }
+        return trimmed;
+    }
+}
+
+/// Detect OS requirements from body content heuristics.
+pub fn detect_os_deps(body: &str) -> Vec<String> {
+    let mut os_set = std::collections::BTreeSet::new();
+
+    let lower = body.to_lowercase();
+
+    // macOS signals
+    if lower.contains("brew ") || lower.contains("brew install") || lower.contains("/usr/local/bin")
+    {
+        os_set.insert("macos".to_string());
+    }
+
+    // Linux signals
+    if lower.contains("apt-get")
+        || lower.contains("apt install")
+        || lower.contains("systemctl")
+        || lower.contains("yum install")
+        || lower.contains("dnf install")
+    {
+        os_set.insert("linux".to_string());
+    }
+
+    os_set.into_iter().collect()
+}
+
+/// Get the `requires` field from a KnowledgeContent, if it's an artifact type.
+pub fn get_requires(content: &KnowledgeContent) -> Option<&ArtifactRequires> {
+    match content {
+        KnowledgeContent::Skill { requires, .. }
+        | KnowledgeContent::Command { requires, .. }
+        | KnowledgeContent::HookConfig { requires, .. } => Some(requires),
+        _ => None,
+    }
+}
+
+/// Compute a short compatibility label for display.
+/// Returns "ok", "!cli", "!os", "!ver", or "?" (no requirements declared).
+pub fn compat_label(content: &KnowledgeContent) -> &'static str {
+    match get_requires(content) {
+        None => "—",
+        Some(req) if req.cli.is_empty() && req.os.is_empty() && req.min_version.is_none() => "?",
+        Some(req) => {
+            let issues = check_compatibility(req);
+            if issues.is_empty() {
+                "ok"
+            } else {
+                // Return the first (most important) issue label
+                issues[0].short_label()
+            }
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Display helpers
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -826,6 +1130,7 @@ mod tests {
                 description: "Monitors sessions".into(),
                 version: "0.31.0".into(),
                 body: "---\nname: Session Monitoring\n---\nContent here".into(),
+                requires: ArtifactRequires::default(),
             },
             evidence_count: 1,
             confidence: 1.0,
@@ -847,6 +1152,7 @@ mod tests {
                 description: "Toggle brain gate".into(),
                 args: Some("[on|off|auto|status]".into()),
                 body: "---\nname: brain\n---\nContent".into(),
+                requires: ArtifactRequires::default(),
             },
             evidence_count: 1,
             confidence: 1.0,
@@ -868,6 +1174,7 @@ mod tests {
                 matcher: "Bash|Write|Edit".into(),
                 description: "Brain gate hook".into(),
                 config_json: r#"{"command": "brain-gate.sh", "timeout": 5000}"#.into(),
+                requires: ArtifactRequires::default(),
             },
             evidence_count: 1,
             confidence: 1.0,
@@ -924,6 +1231,7 @@ mod tests {
             description: "List sessions".into(),
             args: None,
             body: "body".into(),
+            requires: ArtifactRequires::default(),
         };
         let line = content.summary_line();
         assert_eq!(line, "command: /sessions");
@@ -1090,5 +1398,245 @@ mod tests {
         let input = r#"{"command": "brain-gate.sh", "timeout": 5000}"#;
         let result = sanitize_hook_config(input);
         assert_eq!(result, input);
+    }
+
+    // ── Compatibility tests ────────────────────────────────────────────
+
+    #[test]
+    fn artifact_requires_serde_roundtrip() {
+        let req = ArtifactRequires {
+            cli: vec!["claudectl".into(), "jq".into()],
+            os: vec!["macos".into()],
+            min_version: Some("0.42.0".into()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ArtifactRequires = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cli, vec!["claudectl", "jq"]);
+        assert_eq!(back.os, vec!["macos"]);
+        assert_eq!(back.min_version.as_deref(), Some("0.42.0"));
+    }
+
+    #[test]
+    fn artifact_requires_default_empty() {
+        let req = ArtifactRequires::default();
+        assert!(req.cli.is_empty());
+        assert!(req.os.is_empty());
+        assert!(req.min_version.is_none());
+    }
+
+    #[test]
+    fn artifact_requires_skips_empty_on_serialize() {
+        let req = ArtifactRequires::default();
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, "{}");
+    }
+
+    #[test]
+    fn artifact_requires_backward_compat_deserialize() {
+        // Old units without `requires` should deserialize with empty default
+        let json =
+            r#"{"type":"skill","name":"Test","description":"Test","version":"1.0","body":"x"}"#;
+        let content: KnowledgeContent = serde_json::from_str(json).unwrap();
+        if let KnowledgeContent::Skill { requires, .. } = content {
+            assert!(requires.cli.is_empty());
+            assert!(requires.os.is_empty());
+        } else {
+            panic!("expected Skill");
+        }
+    }
+
+    #[test]
+    fn version_gte_basic() {
+        assert!(version_gte("0.42.0", "0.42.0"));
+        assert!(version_gte("0.43.0", "0.42.0"));
+        assert!(version_gte("1.0.0", "0.99.99"));
+        assert!(!version_gte("0.41.0", "0.42.0"));
+        assert!(!version_gte("0.42.0", "0.42.1"));
+    }
+
+    #[test]
+    fn version_gte_partial() {
+        assert!(version_gte("1.0", "0.42.0"));
+        assert!(version_gte("1", "0"));
+    }
+
+    #[test]
+    fn current_os_label_not_unknown() {
+        let label = current_os_label();
+        assert!(label == "macos" || label == "linux" || label == "windows");
+    }
+
+    #[test]
+    fn is_cli_available_rejects_path_traversal() {
+        assert!(!is_cli_available("../../../etc/passwd"));
+        assert!(!is_cli_available("foo;rm -rf /"));
+        assert!(!is_cli_available(""));
+    }
+
+    #[test]
+    fn detect_cli_deps_basic() {
+        let body = r#"
+# Usage
+
+```bash
+claudectl --list
+jq '.sessions[]' output.json
+cargo test --all
+```
+
+Some text.
+"#;
+        let deps = detect_cli_deps(body);
+        assert!(deps.contains(&"claudectl".to_string()));
+        assert!(deps.contains(&"jq".to_string()));
+        assert!(deps.contains(&"cargo".to_string()));
+    }
+
+    #[test]
+    fn detect_cli_deps_skips_builtins() {
+        let body = r#"
+```bash
+echo "hello"
+cd /tmp
+export FOO=bar
+if [ -f test ]; then echo ok; fi
+```
+"#;
+        let deps = detect_cli_deps(body);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn detect_cli_deps_handles_pipes() {
+        let body = r#"
+```bash
+claudectl --json | jq '.[] | .cost'
+```
+"#;
+        let deps = detect_cli_deps(body);
+        assert!(deps.contains(&"claudectl".to_string()));
+        assert!(deps.contains(&"jq".to_string()));
+    }
+
+    #[test]
+    fn detect_cli_deps_skips_non_bash_blocks() {
+        let body = r#"
+```python
+import json
+```
+
+```bash
+claudectl --list
+```
+
+```rust
+fn main() {}
+```
+"#;
+        let deps = detect_cli_deps(body);
+        assert_eq!(deps, vec!["claudectl"]);
+    }
+
+    #[test]
+    fn detect_cli_deps_handles_env_assignments() {
+        let body = r#"
+```bash
+FOO=bar claudectl --list
+```
+"#;
+        let deps = detect_cli_deps(body);
+        assert!(deps.contains(&"claudectl".to_string()));
+    }
+
+    #[test]
+    fn detect_os_deps_macos() {
+        let body = "Install with: brew install claudectl";
+        assert_eq!(detect_os_deps(body), vec!["macos"]);
+    }
+
+    #[test]
+    fn detect_os_deps_linux() {
+        let body = "Install with: apt-get install tool";
+        assert_eq!(detect_os_deps(body), vec!["linux"]);
+    }
+
+    #[test]
+    fn detect_os_deps_none() {
+        let body = "Just run claudectl";
+        assert!(detect_os_deps(body).is_empty());
+    }
+
+    #[test]
+    fn compat_issue_display() {
+        let issue = CompatIssue::MissingCli("jq".into());
+        assert_eq!(format!("{issue}"), "missing CLI: jq");
+        assert_eq!(issue.short_label(), "!cli");
+        assert!(!issue.is_blocking());
+
+        let issue = CompatIssue::WrongOs {
+            current: "macos".into(),
+            required: vec!["linux".into()],
+        };
+        assert!(issue.is_blocking());
+        assert_eq!(issue.short_label(), "!os");
+    }
+
+    #[test]
+    fn check_compatibility_no_requirements() {
+        let req = ArtifactRequires::default();
+        assert!(check_compatibility(&req).is_empty());
+    }
+
+    #[test]
+    fn check_compatibility_missing_cli() {
+        let req = ArtifactRequires {
+            cli: vec!["this_binary_surely_does_not_exist_xyz".into()],
+            ..Default::default()
+        };
+        let issues = check_compatibility(&req);
+        assert_eq!(issues.len(), 1);
+        assert!(
+            matches!(&issues[0], CompatIssue::MissingCli(s) if s == "this_binary_surely_does_not_exist_xyz")
+        );
+    }
+
+    #[test]
+    fn check_compatibility_version_ok() {
+        let req = ArtifactRequires {
+            min_version: Some("0.1.0".into()),
+            ..Default::default()
+        };
+        // Current version is always >= 0.1.0
+        assert!(check_compatibility(&req).is_empty());
+    }
+
+    #[test]
+    fn check_compatibility_version_too_high() {
+        let req = ArtifactRequires {
+            min_version: Some("99.99.99".into()),
+            ..Default::default()
+        };
+        let issues = check_compatibility(&req);
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(&issues[0], CompatIssue::VersionTooOld { .. }));
+    }
+
+    #[test]
+    fn get_requires_returns_none_for_pattern() {
+        let unit = sample_pattern_unit("Bash", Some("test"));
+        assert!(get_requires(&unit.content).is_none());
+    }
+
+    #[test]
+    fn get_requires_returns_some_for_skill() {
+        let unit = sample_skill_unit();
+        assert!(get_requires(&unit.content).is_some());
+    }
+
+    #[test]
+    fn compat_label_no_requirements() {
+        let unit = sample_skill_unit();
+        // Default requires is empty — should show "?"
+        assert_eq!(compat_label(&unit.content), "?");
     }
 }
