@@ -110,7 +110,6 @@ pub fn merge_batch(
 mod tests {
     use super::*;
     use crate::hive::{KnowledgeContent, KnowledgeScope};
-    use std::collections::HashMap;
 
     fn make_unit(
         id: &str,

@@ -76,8 +76,8 @@ impl RemoteWorker {
             .args(["--print", prompt])
             .current_dir(work_dir)
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("spawn claude: {e}"))?;
 

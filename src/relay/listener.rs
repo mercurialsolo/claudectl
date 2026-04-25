@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 use super::mesh::PeerRegistry;
 use super::peer::PeerConnection;
 use super::protocol;
-use super::{PeerId, list_known_peers, load_peer_psk};
+use super::{
+    PENDING_PEER_ID, PeerId, clear_pending_psk, is_valid_peer_id, load_peer_psk, load_pending_psk,
+    save_peer_psk,
+};
 
 /// Maximum concurrent auth threads (prevents connection flood).
 const MAX_AUTH_THREADS: usize = 16;
@@ -201,40 +204,62 @@ fn handle_incoming(
         }
     };
 
-    // Step 3: Try each known PSK until one works
-    let known_peers = list_known_peers();
-    let mut authed_peer_id = None;
-
-    for known_id in &known_peers {
-        if let Some(psk) = load_peer_psk(known_id) {
-            if let Ok(remote_id) = protocol::verify_handshake(&handshake_msg, &nonce, &psk) {
-                authed_peer_id = Some(remote_id);
-                break;
-            }
-        }
+    // Step 3: Authenticate using only the key stored for the claimed peer ID.
+    // A peer that knows one valid PSK must not be able to authenticate as a
+    // different peer by changing the from_peer field.
+    let claimed_peer = handshake_msg.from_peer.clone();
+    if !is_valid_peer_id(&claimed_peer) || claimed_peer == PENDING_PEER_ID {
+        let _ = protocol::send_handshake_ack(&mut write_stream, identity.as_str(), "denied");
+        crate::logger::log(
+            "RELAY",
+            &format!("auth failed from {peer_addr}: invalid peer id '{claimed_peer}'"),
+        );
+        return false;
     }
 
-    let remote_peer_id = match authed_peer_id {
-        Some(id) => id,
-        None => {
-            // Try using the from_peer field as the peer ID to look up the PSK
-            if let Some(psk) = load_peer_psk(&handshake_msg.from_peer) {
-                match protocol::verify_handshake(&handshake_msg, &nonce, &psk) {
-                    Ok(id) => id,
-                    Err(_) => {
-                        let _ = protocol::send_handshake_ack(
-                            &mut write_stream,
-                            identity.as_str(),
-                            "denied",
-                        );
-                        crate::logger::log(
-                            "RELAY",
-                            &format!("auth failed from {peer_addr}: no matching PSK"),
-                        );
-                        return false;
-                    }
+    let remote_peer_id = if let Some(psk) = load_peer_psk(&claimed_peer) {
+        match protocol::verify_handshake(&handshake_msg, &nonce, &psk) {
+            Ok(id) if id == claimed_peer => id,
+            Ok(id) => {
+                let _ =
+                    protocol::send_handshake_ack(&mut write_stream, identity.as_str(), "denied");
+                crate::logger::log(
+                    "RELAY",
+                    &format!(
+                        "auth failed from {peer_addr}: peer id mismatch '{id}' != '{claimed_peer}'"
+                    ),
+                );
+                return false;
+            }
+            Err(_) => {
+                let _ =
+                    protocol::send_handshake_ack(&mut write_stream, identity.as_str(), "denied");
+                crate::logger::log(
+                    "RELAY",
+                    &format!("auth failed from {peer_addr}: no matching PSK"),
+                );
+                return false;
+            }
+        }
+    } else if let Some(psk) = load_pending_psk() {
+        match protocol::verify_handshake(&handshake_msg, &nonce, &psk) {
+            Ok(id) if id == claimed_peer => {
+                if let Err(e) = save_peer_psk(&claimed_peer, &psk) {
+                    let _ = protocol::send_handshake_ack(
+                        &mut write_stream,
+                        identity.as_str(),
+                        "denied",
+                    );
+                    crate::logger::log(
+                        "RELAY",
+                        &format!("auth failed from {peer_addr}: could not save peer key: {e}"),
+                    );
+                    return false;
                 }
-            } else {
+                clear_pending_psk();
+                id
+            }
+            _ => {
                 let _ =
                     protocol::send_handshake_ack(&mut write_stream, identity.as_str(), "denied");
                 crate::logger::log(
@@ -244,6 +269,13 @@ fn handle_incoming(
                 return false;
             }
         }
+    } else {
+        let _ = protocol::send_handshake_ack(&mut write_stream, identity.as_str(), "denied");
+        crate::logger::log(
+            "RELAY",
+            &format!("auth failed from {peer_addr}: unknown peer"),
+        );
+        return false;
     };
 
     // Step 4: Send ack

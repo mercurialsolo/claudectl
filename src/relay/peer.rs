@@ -211,7 +211,6 @@ impl PeerConnection {
     pub fn schedule_reconnect(&mut self) {
         self.reconnect_attempts += 1;
         self.next_reconnect_at = Some(Instant::now() + self.reconnect_delay());
-        self.state = PeerState::Connecting;
     }
 
     /// Reset reconnect state after a successful connection.
@@ -339,5 +338,26 @@ mod tests {
             }
         };
         assert!(conn2.should_reconnect());
+    }
+
+    #[test]
+    fn schedule_reconnect_keeps_peer_retriable() {
+        let mut conn = PeerConnection {
+            peer_id: PeerId("test".into()),
+            state: PeerState::Disconnected,
+            addr: None,
+            stream: None,
+            reader_handle: None,
+            last_heartbeat_sent: Instant::now(),
+            last_heartbeat_recv: Instant::now(),
+            missed_heartbeats: 0,
+            is_initiator: true,
+            reconnect_attempts: 0,
+            next_reconnect_at: None,
+        };
+
+        conn.schedule_reconnect();
+        assert_eq!(conn.state, PeerState::Disconnected);
+        assert!(conn.next_reconnect_at.is_some());
     }
 }

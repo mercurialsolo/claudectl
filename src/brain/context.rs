@@ -663,6 +663,24 @@ mod tests {
     }
 
     #[test]
+    fn hive_context_in_prompt_when_present() {
+        let ctx = BrainContext {
+            session_summary: "summary".into(),
+            recent_transcript: "transcript".into(),
+            decision_prompt: "decide".into(),
+            few_shot_examples: String::new(),
+            preference_summary: String::new(),
+            global_session_map: String::new(),
+            git_context: String::new(),
+            coordination_context: String::new(),
+            hive_context: "## Hive Knowledge\n- [hive] approve cargo test".into(),
+        };
+        let prompt = format_brain_prompt(&ctx);
+        assert!(prompt.contains("Hive Knowledge"));
+        assert!(prompt.contains("approve cargo test"));
+    }
+
+    #[test]
     fn git_context_in_git_repo() {
         let cwd = env!("CARGO_MANIFEST_DIR");
         let ctx = build_git_context_uncached(cwd);

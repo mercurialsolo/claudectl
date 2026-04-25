@@ -10,8 +10,9 @@ use super::listener::RelayListener;
 use super::mesh::PeerRegistry;
 use super::peer::PeerConnection;
 use super::{
-    forget_peer, gen_msg_id, list_known_peers, load_or_create_identity, load_peer_meta,
-    load_peer_psk, save_peer_psk,
+    PENDING_PEER_ID, clear_pending_psk, forget_peer, gen_msg_id, is_valid_peer_id,
+    list_known_peers, load_or_create_identity, load_peer_meta, load_peer_psk, load_pending_psk,
+    save_peer_psk, save_pending_psk,
 };
 
 /// Dispatch a relay subcommand.
@@ -93,16 +94,24 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
 
     // Initialize worker and gossip engine for message dispatch
     let mut worker = super::worker::RemoteWorker::new(identity.as_str());
-    let mut hive_store = crate::hive::store::HiveStore::load();
-    let mut gossip = crate::hive::gossip::GossipEngine::new(
-        identity.as_str(),
-        hive_cfg.max_propagation,
-        hive_cfg.knowledge_ttl_days,
-    );
+    let hive_enabled = hive_cfg.enabled;
+    let mut hive_store = hive_enabled.then(crate::hive::store::HiveStore::load);
+    let mut gossip = hive_enabled.then(|| {
+        crate::hive::gossip::GossipEngine::new(
+            identity.as_str(),
+            hive_cfg.max_propagation,
+            hive_cfg.knowledge_ttl_days,
+        )
+    });
 
     // Wire the broadcast channel so brain distillation can trigger gossip
-    let (broadcast_tx, broadcast_rx) = std::sync::mpsc::channel::<u32>();
-    crate::hive::set_broadcast_channel(broadcast_tx);
+    let broadcast_rx = if hive_enabled {
+        let (broadcast_tx, broadcast_rx) = std::sync::mpsc::channel::<u32>();
+        crate::hive::set_broadcast_channel(broadcast_tx);
+        Some(broadcast_rx)
+    } else {
+        None
+    };
 
     // Block on Ctrl+C
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -177,21 +186,31 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
                         );
                     }
                     super::MessageType::KnowledgeSync => {
-                        let (stats, accepted) = gossip.handle_sync(&mut hive_store, &msg);
-                        println!(
-                            "[{}] KnowledgeSync from {}: {} accepted, {} rejected",
-                            crate::logger::timestamp_now(),
-                            from_peer,
-                            stats.accepted,
-                            stats.rejected
-                        );
-                        // Propagate accepted units to other peers
-                        if !accepted.is_empty() {
-                            let connected = reg.connected_peers();
-                            let prop_msgs = gossip.propagate(&accepted, &from_peer, &connected);
-                            for (target, prop_msg) in prop_msgs {
-                                let _ = reg.send_to(target.as_str(), &prop_msg);
+                        if let (Some(gossip), Some(hive_store)) =
+                            (gossip.as_mut(), hive_store.as_mut())
+                        {
+                            let (stats, accepted) = gossip.handle_sync(hive_store, &msg);
+                            println!(
+                                "[{}] KnowledgeSync from {}: {} accepted, {} rejected",
+                                crate::logger::timestamp_now(),
+                                from_peer,
+                                stats.accepted,
+                                stats.rejected
+                            );
+                            // Propagate accepted units to other peers
+                            if !accepted.is_empty() {
+                                let connected = reg.connected_peers();
+                                let prop_msgs = gossip.propagate(&accepted, &from_peer, &connected);
+                                for (target, prop_msg) in prop_msgs {
+                                    let _ = reg.send_to(target.as_str(), &prop_msg);
+                                }
                             }
+                        } else {
+                            println!(
+                                "[{}] Ignored KnowledgeSync from {} (hive disabled)",
+                                crate::logger::timestamp_now(),
+                                from_peer
+                            );
                         }
                     }
                     super::MessageType::KnowledgeRequest => {
@@ -200,19 +219,27 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
                             crate::logger::timestamp_now(),
                             from_peer
                         );
-                        let snapshots = gossip.handle_request(&hive_store, &msg);
-                        for snap in snapshots {
-                            let _ = reg.send_to(from_peer.as_str(), &snap);
+                        if let (Some(gossip), Some(hive_store)) =
+                            (gossip.as_ref(), hive_store.as_ref())
+                        {
+                            let snapshots = gossip.handle_request(hive_store, &msg);
+                            for snap in snapshots {
+                                let _ = reg.send_to(from_peer.as_str(), &snap);
+                            }
                         }
                     }
                     super::MessageType::KnowledgeSnapshot => {
-                        let stats = gossip.handle_snapshot(&mut hive_store, &msg);
-                        println!(
-                            "[{}] KnowledgeSnapshot from {}: {} accepted",
-                            crate::logger::timestamp_now(),
-                            from_peer,
-                            stats.accepted
-                        );
+                        if let (Some(gossip), Some(hive_store)) =
+                            (gossip.as_mut(), hive_store.as_mut())
+                        {
+                            let stats = gossip.handle_snapshot(hive_store, &msg);
+                            println!(
+                                "[{}] KnowledgeSnapshot from {}: {} accepted",
+                                crate::logger::timestamp_now(),
+                                from_peer,
+                                stats.accepted
+                            );
+                        }
                     }
                     _ => {
                         println!(
@@ -232,11 +259,15 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
             }
 
             // Check if brain distillation produced new knowledge to gossip
-            while broadcast_rx.try_recv().is_ok() {
-                let connected = reg.connected_peers();
-                let sync_msgs = gossip.generate_sync_messages(&hive_store, &connected);
-                for (target, sync_msg) in sync_msgs {
-                    let _ = reg.send_to(target.as_str(), &sync_msg);
+            if let (Some(broadcast_rx), Some(gossip), Some(hive_store)) =
+                (broadcast_rx.as_ref(), gossip.as_mut(), hive_store.as_ref())
+            {
+                while broadcast_rx.try_recv().is_ok() {
+                    let connected = reg.connected_peers();
+                    let sync_msgs = gossip.generate_sync_messages(hive_store, &connected);
+                    for (target, sync_msg) in sync_msgs {
+                        let _ = reg.send_to(target.as_str(), &sync_msg);
+                    }
                 }
             }
 
@@ -249,8 +280,12 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
                     super::mesh::MeshEvent::ReconnectScheduled(id, delay) => {
                         println!("Reconnect to {} in {:?}", id, delay);
                     }
-                    super::mesh::MeshEvent::ReconnectNeeded(id, _addr) => {
+                    super::mesh::MeshEvent::ReconnectNeeded(id, addr) => {
                         println!("Reconnecting to {} ...", id);
+                        match reconnect_peer(&mut reg, &id, addr, &identity) {
+                            Ok(()) => println!("Reconnected to {}", id),
+                            Err(e) => println!("Reconnect to {} failed: {}", id, e),
+                        }
                     }
                 }
             }
@@ -292,9 +327,7 @@ fn cmd_pair(json_mode: bool) -> io::Result<()> {
     // encodes 8 bytes; parse_psk derives the remaining 24 deterministically. We must
     // store the canonical form so both sides match during HMAC verification.
     let canonical_psk = crypto::parse_psk(&code).expect("just-generated code must parse");
-    let pending_path = super::peers_dir().join("_pending.key");
-    let _ = std::fs::create_dir_all(super::peers_dir());
-    let _ = std::fs::write(&pending_path, crypto::hex_encode(&canonical_psk));
+    save_pending_psk(&canonical_psk).map_err(io::Error::other)?;
 
     Ok(())
 }
@@ -309,19 +342,16 @@ fn cmd_accept(args: &[&str]) -> io::Result<()> {
 
     let code = args[0];
     let peer_id = args[1];
+    if !is_valid_peer_id(peer_id) || peer_id == PENDING_PEER_ID {
+        return Err(io::Error::other(format!("invalid peer id: {peer_id}")));
+    }
 
     let psk =
         crypto::parse_psk(code).map_err(|e| io::Error::other(format!("invalid code: {e}")))?;
 
     save_peer_psk(peer_id, &psk).map_err(io::Error::other)?;
 
-    // Also save the same PSK under our pending file for the pairing side
-    let pending_path = super::peers_dir().join("_pending.key");
-    if pending_path.exists() {
-        // The pair command was run on this machine — update the pending PSK
-        // with the actual peer_id.
-        let _ = std::fs::remove_file(&pending_path);
-    }
+    clear_pending_psk();
 
     println!("Paired with peer: {}", peer_id);
     println!("PSK stored. You can now connect with:");
@@ -337,6 +367,7 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
     let _ = ctrlc::set_handler(move || {
         r.store(false, std::sync::atomic::Ordering::Relaxed);
     });
+    let identity = super::PeerId(identity.to_string());
 
     while running.load(std::sync::atomic::Ordering::Relaxed) {
         std::thread::sleep(std::time::Duration::from_secs(1));
@@ -357,10 +388,22 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                     }
                 }
             }
-            let events = reg.tick(identity);
+            let events = reg.tick(identity.as_str());
             for event in events {
-                if let super::mesh::MeshEvent::PeerDisconnected(id) = event {
-                    println!("Peer {} disconnected", id);
+                match event {
+                    super::mesh::MeshEvent::PeerDisconnected(id) => {
+                        println!("Peer {} disconnected", id);
+                    }
+                    super::mesh::MeshEvent::ReconnectScheduled(id, delay) => {
+                        println!("Reconnect to {} in {:?}", id, delay);
+                    }
+                    super::mesh::MeshEvent::ReconnectNeeded(id, addr) => {
+                        println!("Reconnecting to {} ...", id);
+                        match reconnect_peer(&mut reg, &id, addr, &identity) {
+                            Ok(()) => println!("Reconnected to {}", id),
+                            Err(e) => println!("Reconnect to {} failed: {}", id, e),
+                        }
+                    }
                 }
             }
         }
@@ -388,6 +431,27 @@ fn try_connect(
     Ok((remote_id, registry))
 }
 
+/// Reconnect an existing peer in a registry using its stored PSK.
+fn reconnect_peer(
+    reg: &mut PeerRegistry,
+    peer_id: &super::PeerId,
+    addr: Option<SocketAddr>,
+    identity: &super::PeerId,
+) -> Result<(), String> {
+    let addr = addr.ok_or("missing reconnect address")?;
+    let psk = load_peer_psk(peer_id.as_str()).ok_or("missing peer PSK")?;
+    let tx = reg.message_tx();
+    let conn = PeerConnection::connect(addr, &psk, identity, tx)?;
+    if conn.peer_id != *peer_id {
+        return Err(format!(
+            "remote identity mismatch: expected {}, got {}",
+            peer_id, conn.peer_id
+        ));
+    }
+    reg.add_peer(conn);
+    Ok(())
+}
+
 /// `claudectl relay connect <host:port>`
 /// Connect to a remote relay.
 fn cmd_connect(args: &[&str]) -> io::Result<()> {
@@ -406,30 +470,26 @@ fn cmd_connect(args: &[&str]) -> io::Result<()> {
     for peer_id in &list_known_peers() {
         if let Some(psk) = load_peer_psk(peer_id) {
             if let Ok((remote_id, registry)) = try_connect(addr, &psk, &identity) {
-                println!("Connected to {} ({})", remote_id, addr);
-                let _ = super::save_peer_meta(&remote_id, &addr.to_string());
-                run_connect_loop(&registry, identity.as_str());
-                return Ok(());
+                if remote_id == *peer_id && is_valid_peer_id(&remote_id) {
+                    println!("Connected to {} ({})", remote_id, addr);
+                    let _ = super::save_peer_meta(&remote_id, &addr.to_string());
+                    run_connect_loop(&registry, identity.as_str());
+                    return Ok(());
+                }
             }
         }
     }
 
     // Try the pending pair key
-    let pending_path = super::peers_dir().join("_pending.key");
-    if let Ok(hex) = std::fs::read_to_string(&pending_path) {
-        if let Ok(bytes) = crypto::hex_decode(hex.trim()) {
-            if bytes.len() == 32 {
-                let mut psk = [0u8; 32];
-                psk.copy_from_slice(&bytes);
-
-                if let Ok((remote_id, registry)) = try_connect(addr, &psk, &identity) {
-                    println!("Connected to {} ({})", remote_id, addr);
-                    let _ = save_peer_psk(&remote_id, &psk);
-                    let _ = super::save_peer_meta(&remote_id, &addr.to_string());
-                    let _ = std::fs::remove_file(&pending_path);
-                    run_connect_loop(&registry, identity.as_str());
-                    return Ok(());
-                }
+    if let Some(psk) = load_pending_psk() {
+        if let Ok((remote_id, registry)) = try_connect(addr, &psk, &identity) {
+            if is_valid_peer_id(&remote_id) && remote_id != PENDING_PEER_ID {
+                println!("Connected to {} ({})", remote_id, addr);
+                let _ = save_peer_psk(&remote_id, &psk);
+                let _ = super::save_peer_meta(&remote_id, &addr.to_string());
+                clear_pending_psk();
+                run_connect_loop(&registry, identity.as_str());
+                return Ok(());
             }
         }
     }
@@ -550,11 +610,11 @@ fn cmd_delegate(args: &[&str], json_mode: bool) -> io::Result<()> {
     }
 
     let peer_id = args[0];
-    let prompt = args[1];
+    let mut prompt_parts: Vec<&str> = Vec::new();
     let mut cwd: Option<&str> = None;
     let mut git_ref: Option<String> = None;
 
-    let mut i = 2;
+    let mut i = 1;
     while i < args.len() {
         if args[i] == "--cwd" {
             i += 1;
@@ -562,8 +622,20 @@ fn cmd_delegate(args: &[&str], json_mode: bool) -> io::Result<()> {
         } else if args[i] == "--git-ref" {
             i += 1;
             git_ref = args.get(i).map(|s| s.to_string());
+        } else {
+            prompt_parts.push(args[i]);
         }
         i += 1;
+    }
+
+    let prompt = prompt_parts
+        .join(" ")
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string();
+    if prompt.is_empty() {
+        eprintln!("Usage: claudectl --relay \"delegate <peer-id> <prompt> [--cwd /path]\"");
+        return Err(io::Error::other("missing prompt"));
     }
 
     let identity = load_or_create_identity();
@@ -575,7 +647,7 @@ fn cmd_delegate(args: &[&str], json_mode: bool) -> io::Result<()> {
     };
 
     let msg =
-        delegation::build_delegate_message(&task_id, prompt, cwd, &context, identity.as_str())
+        delegation::build_delegate_message(&task_id, &prompt, cwd, &context, identity.as_str())
             .map_err(|e| io::Error::other(format!("build message: {e}")))?;
 
     if json_mode {

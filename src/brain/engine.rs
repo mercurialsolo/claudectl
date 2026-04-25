@@ -364,6 +364,23 @@ impl BrainEngine {
                 crate::coord::injection::build_coordination_context(session);
         }
 
+        // Inject hive knowledge only when explicitly enabled. The relay feature
+        // being compiled in should not by itself add peer knowledge to prompts.
+        #[cfg(feature = "relay")]
+        {
+            let cfg = crate::config::Config::load();
+            if let Some(hive_cfg) = cfg.hive.filter(|h| h.enabled) {
+                let store = crate::hive::store::HiveStore::load();
+                let trust_store =
+                    crate::hive::trust::TrustStore::load_with_default(hive_cfg.default_trust);
+                brain_ctx.hive_context = crate::hive::injection::build_hive_context(
+                    &store,
+                    &trust_store,
+                    hive_cfg.inject_unverified,
+                );
+            }
+        }
+
         let prompt = context::format_brain_prompt(&brain_ctx);
 
         self.inflight.insert(pid);

@@ -428,25 +428,32 @@ fn maybe_distill_background() {
             // Export knowledge units to hive store for sharing
             #[cfg(feature = "relay")]
             {
-                let thresholds = crate::hive::distiller::ExportThresholds::default();
-                let peer_id = crate::relay::load_or_create_identity();
-                let mut store = crate::hive::store::HiveStore::load();
-                let units = crate::hive::distiller::distill_to_knowledge_stable(
-                    &prefs,
-                    peer_id.as_str(),
-                    None,
-                    &thresholds,
-                    &store,
-                );
-                let count = units.len() as u32;
-                for unit in units {
-                    store.insert(unit);
-                }
-                let _ = store.save();
+                let cfg = crate::config::Config::load();
+                if let Some(hive_cfg) = cfg.hive.filter(|h| h.enabled) {
+                    let thresholds = crate::hive::distiller::ExportThresholds {
+                        min_pattern_evidence: hive_cfg.export_min_evidence,
+                        min_tool_decisions: hive_cfg.export_min_tool_decisions,
+                        ..Default::default()
+                    };
+                    let peer_id = crate::relay::load_or_create_identity();
+                    let mut store = crate::hive::store::HiveStore::load();
+                    let units = crate::hive::distiller::distill_to_knowledge_stable(
+                        &prefs,
+                        peer_id.as_str(),
+                        None,
+                        &thresholds,
+                        &store,
+                    );
+                    let count = units.len() as u32;
+                    for unit in units {
+                        store.insert(unit);
+                    }
+                    let _ = store.save();
 
-                // Signal the relay to broadcast new knowledge to peers
-                if count > 0 {
-                    crate::hive::signal_new_knowledge(count);
+                    // Signal the relay to broadcast new knowledge to peers
+                    if count > 0 {
+                        crate::hive::signal_new_knowledge(count);
+                    }
                 }
             }
         }
