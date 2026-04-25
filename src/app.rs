@@ -1001,6 +1001,17 @@ impl App {
                     // Show brain activity via status message
                 }
                 crate::demo::EventKind::Route | crate::demo::EventKind::HealthAlert => {}
+                crate::demo::EventKind::HiveSync | crate::demo::EventKind::HiveInfluence => {}
+            }
+        }
+
+        // Update demo peers panel
+        #[cfg(feature = "relay")]
+        {
+            self.relay_peers = crate::demo::demo_peers(self.demo_tick);
+            // Auto-show peers panel on first hive sync event
+            if self.demo_tick % 32 == 14 && !self.show_peers_panel {
+                self.show_peers_panel = true;
             }
         }
 
@@ -1008,7 +1019,7 @@ impl App {
         if let Some(ref mut engine) = self.brain_engine {
             engine.pending.clear();
             // At certain phases, show a pending suggestion for a NeedsInput session
-            let phase = self.demo_tick % 24;
+            let phase = self.demo_tick % 32;
             if (9..=12).contains(&phase) {
                 // Find a NeedsInput session to attach the suggestion to
                 if let Some(s) = sessions
