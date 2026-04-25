@@ -294,10 +294,10 @@ impl SharingFilter {
 
         // Content type exclusions for shared artifacts
         match &unit.content {
-            KnowledgeContent::Skill { .. } => {
-                if self.exclude_content_types.iter().any(|t| t == "skill") {
-                    return false;
-                }
+            KnowledgeContent::Skill { .. }
+                if self.exclude_content_types.iter().any(|t| t == "skill") =>
+            {
+                return false;
             }
             KnowledgeContent::Command { name, .. } => {
                 if self.exclude_content_types.iter().any(|t| t == "command") {
@@ -311,10 +311,10 @@ impl SharingFilter {
                     return false;
                 }
             }
-            KnowledgeContent::HookConfig { .. } => {
-                if self.exclude_content_types.iter().any(|t| t == "hook") {
-                    return false;
-                }
+            KnowledgeContent::HookConfig { .. }
+                if self.exclude_content_types.iter().any(|t| t == "hook") =>
+            {
+                return false;
             }
             _ => {}
         }
