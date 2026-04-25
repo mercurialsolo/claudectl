@@ -2,11 +2,11 @@
 name = "claudectl"
 version = "0.41.0"
 edition = "2024"
-description = "Auto-pilot for Claude Code — a local model watches every session and decides what to approve"
+description = "Mission control for Claude Code — supervise, orchestrate, and connect coding agents with a local LLM brain and hive mind"
 license = "MIT"
 repository = "https://github.com/mercurialsolo/claudectl"
 homepage = "https://mercurialsolo.github.io/claudectl/"
-keywords = ["claude-code", "auto-approve", "local-llm", "tui", "ollama"]
+keywords = ["claude-code", "agent-orchestration", "local-llm", "tui", "hive-mind"]
 categories = ["command-line-utilities", "development-tools"]
 exclude = ["*.gif", "*.cast", "claude-demo.*", "CLAUDE.md", ".github/"]
 

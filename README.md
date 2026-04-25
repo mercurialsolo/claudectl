@@ -1,8 +1,8 @@
 <p align="center">
   <img src="assets/logo.png" alt="claudectl" width="372">
 </p>
-<p align="center"><strong>Auto-pilot for Claude Code.</strong></p>
-<p align="center">A local on-device model that learns what to approve, deny, and improve — no cloud API, no telemetry.</p>
+<p align="center"><strong>Mission control for Claude Code.</strong></p>
+<p align="center">Supervise, orchestrate, and connect coding agents with a local LLM brain and hive mind.</p>
 
 [![CI](https://github.com/mercurialsolo/claudectl/actions/workflows/ci.yml/badge.svg)](https://github.com/mercurialsolo/claudectl/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/claudectl)](https://crates.io/crates/claudectl)
@@ -72,6 +72,7 @@ claudectl --brain             # Enable local LLM auto-pilot
 ## Why claudectl
 
 - **Local LLM auto-pilot** — a brain that learns your preferences and auto-approves/denies tool calls. No cloud API.
+- **Hive mind** — knowledge distillation, archiving, and curriculum generation. Connect instances to share learnings across machines.
 - **Self-improving** — detects friction patterns, suggests rules, and gets smarter with every correction.
 - **Multi-session orchestration** — run parallel tasks with dependency ordering and cross-session context routing.
 - **Health monitoring** — catches cognitive decay, cost spikes, error loops, and context saturation before they waste money.
@@ -192,6 +193,35 @@ claudectl --coord adapters                         # Registered agent adapters
 
 The coordination layer stores state in a local SQLite database (`~/.claudectl/coord/coord.db`) and injects compact context into the brain's prompt before every decision.
 
+## Hive Mind & Relay
+
+The brain distills your decisions into shareable knowledge. Connect instances across machines to build a convergent hive mind.
+
+```bash
+# Hive knowledge is built-in — view what the brain has learned
+claudectl --hive status
+claudectl --hive knowledge
+claudectl --hive distill              # Condense archive into curriculum
+
+# Add relay for cross-machine networking
+cargo install claudectl --features relay
+claudectl --relay invite              # Generate an invite code
+claudectl --relay "join YEK-AGA-YHK-QAA-BM"   # Join from another machine
+claudectl --relay discover            # Scan LAN for nearby instances
+```
+
+Knowledge categories (best practices, techniques, workflow patterns) propagate automatically. Personal patterns (time-of-day habits, cost tolerance) stay local. You control what's shared:
+
+```toml
+[hive]
+share_categories = ["best_practice", "technique"]
+exclude_tools = ["Write"]
+max_units = 500
+max_prompt_units = 20
+```
+
+See the [full Relay & Hive Mind guide](docs/relay.md).
+
 ## Orchestrate Sessions
 
 Run coordinated tasks with dependency ordering, retries, and cross-session data routing:
@@ -284,6 +314,7 @@ Press `R` on any session for a highlight reel GIF (edits, commands, errors — i
 | [Quick Start](docs/quickstart.md) | Install, init, first dashboard |
 | [Reference](docs/reference.md) | All flags, keybindings, modes |
 | [Configuration](docs/configuration.md) | Config files, hooks, rules |
+| [Relay & Hive Mind](docs/relay.md) | Connect instances, share knowledge |
 | [Terminal Support](docs/terminal-support.md) | Compatibility matrix |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and FAQ |
 | [Contributing](docs/contributing.md) | Setup and guidelines |
