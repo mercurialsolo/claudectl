@@ -13,9 +13,9 @@
 
 <sub>~1 MB binary. Sub-50ms startup. Zero config required.</sub>
 
-[Website](https://mercurialsolo.github.io/claudectl/) | [Demo](https://asciinema.org/a/bovJrUq2vEmC08NU) | [Blog: Why a local brain?](blog/local-brain-architecture.md) | [Releases](https://github.com/mercurialsolo/claudectl/releases)
+[Website](https://mercurialsolo.github.io/claudectl/) | [Demo](https://asciinema.org/a/AJP33vbmHGFVW6zL) | [Blog: Why a local brain?](blog/local-brain-architecture.md) | [Releases](https://github.com/mercurialsolo/claudectl/releases)
 
-<a href="https://asciinema.org/a/bovJrUq2vEmC08NU?autoplay=1"><img src="https://asciinema.org/a/bovJrUq2vEmC08NU.svg" alt="claudectl demo" width="100%" /></a>
+<a href="https://asciinema.org/a/AJP33vbmHGFVW6zL?autoplay=1"><img src="https://asciinema.org/a/AJP33vbmHGFVW6zL.svg" alt="claudectl demo" width="100%" /></a>
 
 ## What it does for you
 
