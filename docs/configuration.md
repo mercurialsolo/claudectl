@@ -203,6 +203,10 @@ The plugin and the `--init` hooks are complementary:
 
 You can use both. The `--init` hooks notify claudectl of tool completions. The plugin hook queries the brain before tool execution.
 
+## Coordination Layer (--features coord)
+
+Multi-session coordination on a single machine. Stores events, leases, blockers, handoffs, interrupts, and memory in a local SQLite database at `~/.claudectl/coord.db`. No TOML configuration needed — inspect with `claudectl --coord <subcommand>`. See [Reference](reference.md#coordination---features-coord) for all subcommands.
+
 ## Relay & Hive Mind Configuration
 
 Cross-machine collaboration. `relay` feature enables task delegation. `hive` feature (depends on relay) enables knowledge sharing. See [Relay & Hive Mind](relay.md) for the full guide.

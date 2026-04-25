@@ -86,7 +86,7 @@ TOML rules to approve, deny, send, terminate, route, or spawn based on tool name
 
 ### Health Monitoring
 
-Detects stalled sessions, context saturation, cache issues, cost spikes, retry loops, and cognitive decay - no config needed.
+10 automatic checks: stalled sessions, context saturation, cache ratio, cost spikes, retry loops, cognitive decay, proactive compaction, token efficiency, error acceleration, and repetition detection - no config needed.
 
 </div>
 <div class="feature-item" markdown>
@@ -117,6 +117,20 @@ Press `R` to record a session highlight reel as a GIF. Extracts edits, commands,
 Connect claudectl instances across machines. Share brain learnings, delegate tasks, and build a convergent hive mind - all peer-to-peer. [Learn more](relay.md)
 
 </div>
+<div class="feature-item" markdown>
+
+### Headless Daemon
+
+Run without the TUI via `--headless`. Brain, coordination, and context rot prevention stay active while you work. Attach a dashboard from another terminal anytime.
+
+</div>
+<div class="feature-item" markdown>
+
+### Session Autopsy
+
+Post-mortem analysis on completed sessions via `--autopsy`. Inspect what went wrong, what burned cost, and where the session stalled - after the fact.
+
+</div>
 </div>
 
 ## Screenshots
@@ -134,6 +148,7 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 | **Needs Input** | Waiting for user to approve/confirm a tool use |
 | **Processing** | Actively generating or executing tools |
 | **Waiting** | Done responding, waiting for user's next prompt |
+| **Unknown** | Process alive, but transcript telemetry unavailable |
 | **Idle** | No recent activity (>10 min) |
 | **Finished** | Process exited |
 

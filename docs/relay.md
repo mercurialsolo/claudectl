@@ -124,8 +124,8 @@ Found 2 instance(s):
 
   IDENTITY             ADDRESS                  VERSION
   ────────────────────────────────────────────────────────
-  laptop-a3f2          192.168.1.50:9847        v0.36.0
-  ci-runner-9d1e       192.168.1.101:9847       v0.36.0
+  laptop-a3f2          192.168.1.50:9847        v0.40.0
+  ci-runner-9d1e       192.168.1.101:9847       v0.40.0
 ```
 
 This sends a UDP broadcast and listens for 3 seconds. Peers running `claudectl --relay serve` announce themselves automatically.

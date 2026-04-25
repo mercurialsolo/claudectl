@@ -69,6 +69,7 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 | `-l`, `--list` | Print session table to stdout and exit |
 | `--json` | Print JSON array of sessions and exit |
 | `-w`, `--watch` | Stream status changes to stdout (no TUI) |
+| `--headless` | Run headless with brain, coordination, and context rot prevention active (no TUI). Attach a dashboard with `claudectl` in another terminal |
 | `--format <template>` | Custom format for `--watch`. Placeholders: `{pid}`, `{project}`, `{status}`, `{cost}`, `{context}` |
 | `--summary` | Show activity summary and exit |
 | `--since <duration>` | Time window for `--summary`, `--history`, `--stats` (e.g., "8h", "24h", "7d"). Default: 24h |
@@ -135,6 +136,22 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 
 Press `R` on any session to record a per-session highlight reel (edits, commands, errors — idle time stripped). In `--demo` mode, a scripted coding session is drip-fed so recording works without live sessions.
 
+### Coordination (--features coord)
+
+Inspect multi-session coordination state. Requires `cargo install claudectl --features coord`.
+
+| Flag | Description |
+|------|-------------|
+| `--coord events [N] [type]` | Show last N coordination events (default 50), optionally filtered by type |
+| `--coord leases` | Show active ownership leases |
+| `--coord blockers` | Show open blockers |
+| `--coord handoffs` | Show handoffs |
+| `--coord interrupts` | Show pending interrupts |
+| `--coord memory` | List recent coordination memory records |
+| `--coord "memory search <q>"` | Full-text search coordination memory |
+| `--coord "promote --project <name>"` | Promote brain patterns to coordination memory |
+| `--coord "prune [--days N]"` | Delete old events, resolved blockers, expired leases (default: 30 days) |
+
 ### Relay (--features relay)
 
 Connect machines, delegate tasks. See the [full relay guide](relay.md).
@@ -177,6 +194,8 @@ Share knowledge, distill learnings. Requires relay for transport.
 
 | Flag | Description |
 |------|-------------|
+| `--autopsy` | Run post-mortem analysis on a completed session transcript |
+| `--session <id>` | Session ID or JSONL path for `--autopsy` (defaults to most recent session) |
 | `--history` | Show completed session history and exit |
 | `--stats` | Show aggregated session statistics and exit |
 | `--config` | Show resolved configuration and exit |
@@ -320,12 +339,14 @@ claudectl was the first tool to combine local LLM supervision with multi-session
 |-----------|:-:|:-:|
 | Local LLM auto-approve/deny | No | Brain with ollama |
 | Self-improving insights | No | Friction detection, rule suggestions |
-| Session health monitoring | No | Cognitive decay, cost spikes, loops, stalls, context |
+| Session health monitoring | No | 10 checks: cognitive decay, cost spikes, loops, stalls, context, cache, compaction, token efficiency, error acceleration, repetition |
 | Orchestrate multi-session workflows | No | Dependency-ordered tasks |
 | See status of all sessions at once | No | Live dashboard |
 | Track cost per session | Manually | Live $/hr burn rate |
 | Enforce spend budgets | No | Auto-kill at limit |
 | File conflict detection | No | Auto-detect + brain pre-check + auto-deny |
+| Headless daemon mode | No | `--headless` with brain, coordination, and context rot prevention |
+| Session autopsy / post-mortem | No | `--autopsy` on completed session transcripts |
 | Idle mode / unattended work | No | Run tasks while you sleep |
 | Session auto-restart | No | Checkpoint + restart on context saturation |
 | Task decomposition | No | Splits prompts into parallel DAGs |
@@ -341,7 +362,7 @@ claudectl was the first tool to combine local LLM supervision with multi-session
 |---------|:---------:|:-------------------------:|:-----------------------:|
 | Local LLM brain that learns your preferences | Yes | No | No |
 | Cross-session orchestration + context routing | Yes | No | Varies |
-| Cognitive rot / health monitoring | Yes | No | No |
+| 10-check health monitoring + context rot detection | Yes | No | No |
 | File conflict detection across sessions | Yes | No | No |
 | Per-tool adaptive confidence thresholds | Yes | No | No |
 | Task decomposition into parallel DAGs | Yes | No | No |
