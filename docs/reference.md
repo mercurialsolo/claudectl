@@ -135,6 +135,21 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 
 Press `R` on any session to record a per-session highlight reel (edits, commands, errors — idle time stripped). In `--demo` mode, a scripted coding session is drip-fed so recording works without live sessions.
 
+### Relay & Hive Mind
+
+Requires `--features relay` at build time. See the [full relay guide](relay.md) for details.
+
+| Flag | Description |
+|------|-------------|
+| `--relay serve` | Start the relay listener for peer connections |
+| `--relay invite [--qr] [--words]` | Generate invite code, link, and word phrase |
+| `--relay "join <code>"` | Connect using any invite format |
+| `--relay discover` | Scan LAN for nearby claudectl instances |
+| `--relay peers` | List known and connected peers |
+| `--hive status` | Show hive knowledge store overview |
+| `--hive knowledge` | List shared knowledge units |
+| `--hive trust` | Show/set peer trust levels |
+
 ### Cleanup
 
 | Flag | Description |
@@ -304,6 +319,9 @@ claudectl was the first tool to combine local LLM supervision with multi-session
 | Approve prompts without switching | No | Press `y` |
 | Record session highlight reels | No | Press `R` |
 | Claude Code plugin | No | `/brain`, `/sessions`, `/spend`, `/auto-insights` |
+
+| Cross-machine knowledge sharing | No | Peer-to-peer hive mind |
+| Remote task delegation | No | Delegate to connected peers |
 
 | Feature | claudectl | Static auto-approve tools | Cloud-based supervisors |
 |---------|:---------:|:-------------------------:|:-----------------------:|

@@ -110,6 +110,13 @@ Trigger desktop notifications, shell commands, and webhooks when sessions need a
 Press `R` to record a session highlight reel as a GIF. Extracts edits, commands, errors - strips idle time.
 
 </div>
+<div class="feature-item" markdown>
+
+### Relay & Hive Mind
+
+Connect claudectl instances across machines. Share brain learnings, delegate tasks, and build a convergent hive mind - all peer-to-peer. [Learn more](relay.md)
+
+</div>
 </div>
 
 ## Screenshots

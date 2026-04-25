@@ -29,6 +29,9 @@ claudectl --demo    # try with fake sessions
 - Multi-session orchestration: dependency-ordered task graphs, prompt decomposition into parallel DAGs
 - Event hooks: desktop notifications, shell commands, webhooks on session events
 - Session recording: highlight reels as GIFs (edits, commands, errors - strips idle time)
+- Relay & hive mind: connect instances across machines, share brain learnings peer-to-peer
+- Remote task delegation: offload tasks to connected peers with status streaming
+- Discovery: invite codes, word phrases, QR codes, LAN broadcast scanning
 - Terminal support: Ghostty, tmux, Kitty, Warp, iTerm2, Terminal.app, WezTerm, GNOME Terminal
 
 ## How It Works
@@ -46,6 +49,8 @@ Status inference uses multiple signals: waiting_for_task events, CPU thresholds,
 
 Core: main.rs, app.rs, session.rs, discovery.rs, monitor.rs, process.rs, config.rs, history.rs, hooks.rs, orchestrator.rs, health.rs, rules.rs, launch.rs, models.rs
 Brain: engine.rs, client.rs, context.rs, decisions.rs, agents.rs, mailbox.rs, prompts.rs, evals.rs, insights.rs
+Relay: mod.rs, cli.rs, crypto.rs, protocol.rs, peer.rs, listener.rs, mesh.rs, delegation.rs, worker.rs, invite.rs, lan.rs
+Hive: mod.rs, cli.rs, store.rs, distiller.rs, merger.rs, gossip.rs, trust.rs, injection.rs
 TUI: table.rs, detail.rs, help.rs, status_bar.rs
 Terminals: ghostty, kitty, tmux, wezterm, warp, iterm2, terminal_app, gnome_terminal, windows_terminal
 
@@ -56,6 +61,7 @@ Terminals: ghostty, kitty, tmux, wezterm, warp, iterm2, terminal_app, gnome_term
 - [Reference](https://mercurialsolo.github.io/claudectl/reference/)
 - [Terminal Support](https://mercurialsolo.github.io/claudectl/terminal-support/)
 - [Troubleshooting](https://mercurialsolo.github.io/claudectl/troubleshooting/)
+- [Relay & Hive Mind](https://mercurialsolo.github.io/claudectl/relay/)
 - [Contributing](https://mercurialsolo.github.io/claudectl/contributing/)
 
 ## Links

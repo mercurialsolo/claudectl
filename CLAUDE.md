@@ -56,7 +56,30 @@ cargo fmt --check            # Check formatting
 - `evals.rs` — Eval harness for testing brain decision quality against scenarios
 - `insights.rs` — Auto-insights: friction pattern detection, rule suggestions, differential tracking
 
-**TUI** (`src/ui/`): `table.rs` (session list), `detail.rs` (expanded panel), `help.rs` (overlay), `status_bar.rs` (footer)
+**Relay** (`src/relay/`): Cross-machine TCP transport (feature-gated behind `relay`).
+- `mod.rs` — PeerId, RelayMessage, MessageType, identity persistence, peer PSK storage
+- `crypto.rs` — Inline SHA-256 + HMAC-SHA256, PSK generation/formatting
+- `protocol.rs` — NDJSON framing over TCP, HMAC challenge-response auth
+- `peer.rs` — PeerConnection: connect, send, reader thread, heartbeat, reconnect
+- `listener.rs` — TcpListener accept loop with auth rate limiting, max peers
+- `mesh.rs` — PeerRegistry: broadcast, send_to, message dedup, heartbeat tick
+- `delegation.rs` — DelegationContext, message builders for DelegateTask/TaskStatus/TaskHandoff/TaskInterrupt
+- `worker.rs` — RemoteWorker: accepts delegated tasks, spawns claude sessions, reports status
+- `invite.rs` — Invite codes (base32), word phrases (256-word list), invite links (cctl://), QR rendering
+- `lan.rs` — UDP broadcast LAN discovery: announcer and scanner threads
+- `cli.rs` — CLI dispatch for all relay subcommands (serve, invite, join, discover, delegate, etc.)
+
+**Hive** (`src/hive/`): Gossip-based knowledge sharing across connected brains (feature-gated behind `relay`).
+- `mod.rs` — KnowledgeUnit, KnowledgeScope, KnowledgeContent types, semantic key, broadcast channel
+- `store.rs` — JSONL-backed knowledge store with semantic index, atomic save
+- `distiller.rs` — Converts DistilledPreferences/Insights into KnowledgeUnits with thresholds
+- `merger.rs` — Conflict resolution: local always wins, peer-vs-peer by confidence*evidence
+- `gossip.rs` — GossipEngine: incremental sync, snapshot pagination, epidemic propagation
+- `trust.rs` — PeerTrust with auto-drift, TrustTier classification, TrustStore persistence
+- `injection.rs` — Brain prompt integration with trust labels, concordance checking for drift
+- `cli.rs` — CLI dispatch for hive subcommands (status, knowledge, export, import, trust)
+
+**TUI** (`src/ui/`): `table.rs` (session list), `detail.rs` (expanded panel), `help.rs` (overlay), `status_bar.rs` (footer), `peers.rs` (relay peers panel)
 
 **Terminal backends** (`src/terminals/`): Ghostty, Kitty, tmux, WezTerm, Warp, iTerm2, Terminal.app, Gnome Terminal, Windows Terminal — auto-detected, used for tab switching and input sending.
 

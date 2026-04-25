@@ -140,5 +140,6 @@ cargo uninstall claudectl                    # Cargo
 
 - [Reference](reference.md) -- dashboard features, keybindings, all CLI flags
 - [Configuration](configuration.md) -- TOML config, hooks, rules, model pricing
+- [Relay & Hive Mind](relay.md) -- connect instances across machines, share learnings
 - [Terminal Support](terminal-support.md) -- compatibility and setup notes
 - [Troubleshooting](troubleshooting.md) -- common issues and FAQ
