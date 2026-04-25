@@ -15,14 +15,21 @@ pub fn dispatch(subcommand: &str, _json_mode: bool) -> io::Result<()> {
         Some("import") => cmd_import(&parts[1..]),
         Some("forget") => cmd_forget(&parts[1..]),
         Some("trust") => cmd_trust(&parts[1..], _json_mode),
+        Some("archive") => cmd_archive(&parts[1..], _json_mode),
+        Some("distill") => cmd_distill(_json_mode),
+        Some("curriculum") => cmd_curriculum(_json_mode),
         Some(other) => {
             eprintln!("Unknown hive subcommand: {other}");
-            eprintln!("Available: status, knowledge, export, import, forget, trust");
+            eprintln!(
+                "Available: status, knowledge, export, import, forget, trust, archive, distill, curriculum"
+            );
             Err(io::Error::other("unknown subcommand"))
         }
         None => {
             eprintln!("Usage: claudectl --hive <subcommand>");
-            eprintln!("Available: status, knowledge, export, import, forget, trust");
+            eprintln!(
+                "Available: status, knowledge, export, import, forget, trust, archive, distill, curriculum"
+            );
             Ok(())
         }
     }
@@ -318,4 +325,138 @@ fn parse_scope(s: &str) -> KnowledgeScope {
         // Try shorthand: "rust" -> Language, anything else -> Project
         KnowledgeScope::Project(s.to_string())
     }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Archive and distillation commands
+// ────────────────────────────────────────────────────────────────────────────
+
+/// `claudectl hive archive [--prune Nd]`
+fn cmd_archive(args: &[&str], json_mode: bool) -> io::Result<()> {
+    let mut prune_days: Option<u32> = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--prune" {
+            i += 1;
+            if let Some(val) = args.get(i) {
+                let days_str = val.trim_end_matches('d');
+                prune_days = days_str.parse().ok();
+            }
+        }
+        i += 1;
+    }
+
+    if let Some(days) = prune_days {
+        let pruned = super::archive::prune_archive(days)
+            .map_err(|e| io::Error::other(format!("prune: {e}")))?;
+        println!("Pruned {pruned} archive entries older than {days} days.");
+        return Ok(());
+    }
+
+    let count = super::archive::archive_count();
+    let size = super::archive::archive_size_bytes();
+    let meta = super::archive::load_curriculum_meta();
+
+    if json_mode {
+        let output = serde_json::json!({
+            "archive_units": count,
+            "archive_size_bytes": size,
+            "curriculum": meta,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("Hive Archive (cold storage)");
+        println!();
+        println!("  Archive units: {count}");
+        println!("  Archive size: {:.1} KB", size as f64 / 1024.0);
+        if let Some(m) = meta {
+            println!();
+            println!("  Latest curriculum:");
+            println!("    Version: v{}", m.version);
+            println!("    Units: {}", m.unit_count);
+            println!("    Source: {} archive units", m.source_archive_units);
+        } else {
+            println!();
+            println!("  No curriculum yet. Run: claudectl --hive distill");
+        }
+    }
+
+    Ok(())
+}
+
+/// `claudectl hive distill`
+fn cmd_distill(json_mode: bool) -> io::Result<()> {
+    println!("Running cold distillation...");
+    let report = super::archive::distill_archive()
+        .map_err(|e| io::Error::other(format!("distillation failed: {e}")))?;
+
+    if json_mode {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+    } else {
+        println!();
+        println!("Distillation complete:");
+        println!("  Archive units read: {}", report.archive_units_read);
+        println!("  Duplicates merged: {}", report.duplicates_merged);
+        println!("  Patterns condensed: {}", report.patterns_condensed);
+        println!("  Contradictions resolved: {}", report.contradictions_found);
+        println!(
+            "  Curriculum: v{} ({} units)",
+            report.curriculum_version, report.curriculum_units
+        );
+    }
+
+    Ok(())
+}
+
+/// `claudectl hive curriculum`
+fn cmd_curriculum(json_mode: bool) -> io::Result<()> {
+    let curriculum = super::archive::load_curriculum();
+    let meta = super::archive::load_curriculum_meta();
+
+    if json_mode {
+        let output = serde_json::json!({
+            "meta": meta,
+            "units": curriculum,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return Ok(());
+    }
+
+    if curriculum.is_empty() {
+        println!("No curriculum yet. Run: claudectl --hive distill");
+        return Ok(());
+    }
+
+    if let Some(m) = &meta {
+        println!(
+            "Curriculum v{} ({} units, distilled from {} archive units)",
+            m.version, m.unit_count, m.source_archive_units
+        );
+    }
+    println!();
+    println!(
+        "{:<12} {:<14} {:<8} {:<6} CONTENT",
+        "ID", "CATEGORY", "CONF", "EVID"
+    );
+    println!("{}", "─".repeat(80));
+
+    for unit in &curriculum {
+        let id_short = if unit.id.len() > 11 {
+            &unit.id[..11]
+        } else {
+            &unit.id
+        };
+        println!(
+            "{:<12} {:<14} {:<8.0}% {:<6} {}",
+            id_short,
+            unit.category.label(),
+            unit.confidence * 100.0,
+            unit.evidence_count,
+            unit.content.summary_line(),
+        );
+    }
+    println!();
+    println!("{} units in curriculum", curriculum.len());
+
+    Ok(())
 }

@@ -458,11 +458,15 @@ fn maybe_distill_background() {
                         hive_cfg.stale_peer_days,
                         Some(&trust_store),
                     );
-                    if evicted > 0 {
+                    if !evicted.is_empty() {
+                        // Archive evicted units to cold storage (optional)
+                        let archived = crate::hive::archive::archive_units(&evicted).unwrap_or(0);
                         crate::logger::log(
                             "HIVE",
                             &format!(
-                                "compacted: evicted {evicted} units (max {})",
+                                "compacted: {} evicted, {} archived (max {})",
+                                evicted.len(),
+                                archived,
                                 hive_cfg.max_units
                             ),
                         );

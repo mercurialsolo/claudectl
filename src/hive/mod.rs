@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod archive;
 pub mod cli;
 pub mod distiller;
 pub mod gossip;

@@ -160,34 +160,34 @@ impl HiveStore {
     }
 
     /// Compact the store: remove expired units, prune stale peers, enforce max_units cap.
-    /// Returns the number of units evicted.
+    /// Returns evicted units (can be archived to cold storage).
     pub fn compact(
         &mut self,
         ttl_days: u32,
         max_units: usize,
         stale_peer_days: u32,
         trust_store: Option<&super::trust::TrustStore>,
-    ) -> usize {
+    ) -> Vec<super::KnowledgeUnit> {
         let now = super::epoch_secs();
         let ttl_secs = ttl_days as u64 * 86400;
         let stale_secs = stale_peer_days as u64 * 86400;
-        let before = self.units.len();
+        let mut evicted = Vec::new();
 
         // 1. Remove expired units (past TTL without revalidation)
         let expired_ids: Vec<String> = self
             .units
             .values()
-            .filter(|u| {
-                let age = now.saturating_sub(u.last_validated_at);
-                age > ttl_secs
-            })
+            .filter(|u| now.saturating_sub(u.last_validated_at) > ttl_secs)
             .map(|u| u.id.clone())
             .collect();
         for id in &expired_ids {
+            if let Some(unit) = self.units.get(id).cloned() {
+                evicted.push(unit);
+            }
             self.remove(id);
         }
 
-        // 2. Prune knowledge from stale peers (not seen in stale_peer_days)
+        // 2. Prune knowledge from stale peers
         if let Some(ts) = trust_store {
             let stale_peers: Vec<String> = self
                 .units
@@ -201,13 +201,16 @@ impl HiveStore {
                 })
                 .collect();
             for peer in &stale_peers {
-                let peer_unit_ids: Vec<String> = self
+                let ids: Vec<String> = self
                     .units
                     .values()
                     .filter(|u| &u.source_peer == peer)
                     .map(|u| u.id.clone())
                     .collect();
-                for id in &peer_unit_ids {
+                for id in &ids {
+                    if let Some(unit) = self.units.get(id).cloned() {
+                        evicted.push(unit);
+                    }
                     self.remove(id);
                 }
             }
@@ -224,11 +227,14 @@ impl HiveStore {
 
             let to_evict = self.units.len() - max_units;
             for (id, _) in scored.into_iter().take(to_evict) {
+                if let Some(unit) = self.units.get(&id).cloned() {
+                    evicted.push(unit);
+                }
                 self.remove(&id);
             }
         }
 
-        before - self.units.len()
+        evicted
     }
 
     /// Save the entire store to disk (atomic rewrite via temp file + rename).
