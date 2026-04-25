@@ -16,6 +16,36 @@ use serde::{Deserialize, Serialize};
 // Knowledge unit — the atom of shared learning
 // ────────────────────────────────────────────────────────────────────────────
 
+/// What kind of knowledge this is — determines whether it should be shared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeCategory {
+    /// Tool approval patterns, error handling, safety rules — universal best practices.
+    BestPractice,
+    /// Instruction scaffolding, prompt patterns, planning vs execution strategies.
+    Technique,
+    /// Model selection, delegation patterns, agent orchestration choices.
+    WorkflowPattern,
+    /// Time-of-day habits, approval speed, cost tolerance — personal operating style.
+    Personal,
+}
+
+impl KnowledgeCategory {
+    /// Whether this category should be shared with peers by default.
+    pub fn is_shareable(&self) -> bool {
+        !matches!(self, Self::Personal)
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::BestPractice => "best_practice",
+            Self::Technique => "technique",
+            Self::WorkflowPattern => "workflow",
+            Self::Personal => "personal",
+        }
+    }
+}
+
 /// A single piece of shareable knowledge derived from brain distillation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeUnit {
@@ -23,6 +53,9 @@ pub struct KnowledgeUnit {
     pub id: String,
     /// What scope this knowledge applies to.
     pub scope: KnowledgeScope,
+    /// What kind of knowledge — determines shareability.
+    #[serde(default = "default_category")]
+    pub category: KnowledgeCategory,
     /// The type and content of the knowledge.
     pub content: KnowledgeContent,
     /// How many local decisions back this knowledge.
@@ -39,6 +72,10 @@ pub struct KnowledgeUnit {
     pub propagation_count: u32,
     /// Monotonic version — incremented when the originator updates this unit.
     pub version: u32,
+}
+
+fn default_category() -> KnowledgeCategory {
+    KnowledgeCategory::BestPractice
 }
 
 /// Scope determines where knowledge applies.
@@ -257,6 +294,7 @@ mod tests {
         KnowledgeUnit {
             id: "ku_1".into(),
             scope: KnowledgeScope::Universal,
+            category: KnowledgeCategory::BestPractice,
             content: KnowledgeContent::Pattern {
                 tool: tool.into(),
                 command_pattern: cmd.map(|s| s.into()),
@@ -302,6 +340,7 @@ mod tests {
         let unit = KnowledgeUnit {
             id: "ku_2".into(),
             scope: KnowledgeScope::Universal,
+            category: KnowledgeCategory::BestPractice,
             content: KnowledgeContent::ToolAccuracy {
                 tool: "Bash".into(),
                 total: 100,
@@ -367,6 +406,7 @@ mod tests {
         let unit = KnowledgeUnit {
             id: "ku_utf8".into(),
             scope: KnowledgeScope::Universal,
+            category: KnowledgeCategory::BestPractice,
             content: KnowledgeContent::Temporal {
                 description: long_cjk.to_string(),
                 strength: 0.9,
@@ -390,6 +430,7 @@ mod tests {
         let unit = KnowledgeUnit {
             id: "ku_emoji".into(),
             scope: KnowledgeScope::Universal,
+            category: KnowledgeCategory::BestPractice,
             content: KnowledgeContent::Insight {
                 category: "error_loop".into(),
                 severity: "warning".into(),

@@ -68,6 +68,7 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
     // Load config for relay/hive settings
     let cfg = crate::config::Config::load();
     let relay_cfg = cfg.relay.unwrap_or_default();
+    #[cfg(feature = "hive")]
     let hive_cfg = cfg.hive.unwrap_or_default();
 
     let identity = load_or_create_identity();
@@ -93,25 +94,29 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
     println!("Relay listening on {} as {}", listener.addr, identity);
     println!("Press Ctrl+C to stop.");
 
-    // Initialize worker and gossip engine for message dispatch
+    // Initialize worker for task delegation
     let mut worker = super::worker::RemoteWorker::new(identity.as_str());
-    let hive_enabled = hive_cfg.enabled;
-    let mut hive_store = hive_enabled.then(crate::hive::store::HiveStore::load);
-    let mut gossip = hive_enabled.then(|| {
-        crate::hive::gossip::GossipEngine::new(
-            identity.as_str(),
-            hive_cfg.max_propagation,
-            hive_cfg.knowledge_ttl_days,
-        )
-    });
 
-    // Wire the broadcast channel so brain distillation can trigger gossip
-    let broadcast_rx = if hive_enabled {
-        let (broadcast_tx, broadcast_rx) = std::sync::mpsc::channel::<u32>();
-        crate::hive::set_broadcast_channel(broadcast_tx);
-        Some(broadcast_rx)
-    } else {
-        None
+    // Initialize hive gossip engine (only when hive feature is enabled)
+    #[cfg(feature = "hive")]
+    let (mut hive_store, mut gossip, broadcast_rx) = {
+        let hive_enabled = hive_cfg.enabled;
+        let store = hive_enabled.then(crate::hive::store::HiveStore::load);
+        let gossip_engine = hive_enabled.then(|| {
+            crate::hive::gossip::GossipEngine::new(
+                identity.as_str(),
+                hive_cfg.max_propagation,
+                hive_cfg.knowledge_ttl_days,
+            )
+        });
+        let rx = if hive_enabled {
+            let (tx, rx) = std::sync::mpsc::channel::<u32>();
+            crate::hive::set_broadcast_channel(tx);
+            Some(rx)
+        } else {
+            None
+        };
+        (store, gossip_engine, rx)
     };
 
     // Block on Ctrl+C
@@ -186,6 +191,7 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
                             from_peer
                         );
                     }
+                    #[cfg(feature = "hive")]
                     super::MessageType::KnowledgeSync => {
                         if let (Some(gossip), Some(hive_store)) =
                             (gossip.as_mut(), hive_store.as_mut())
@@ -198,7 +204,6 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
                                 stats.accepted,
                                 stats.rejected
                             );
-                            // Propagate accepted units to other peers
                             if !accepted.is_empty() {
                                 let connected = reg.connected_peers();
                                 let prop_msgs = gossip.propagate(&accepted, &from_peer, &connected);
@@ -206,20 +211,10 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
                                     let _ = reg.send_to(target.as_str(), &prop_msg);
                                 }
                             }
-                        } else {
-                            println!(
-                                "[{}] Ignored KnowledgeSync from {} (hive disabled)",
-                                crate::logger::timestamp_now(),
-                                from_peer
-                            );
                         }
                     }
+                    #[cfg(feature = "hive")]
                     super::MessageType::KnowledgeRequest => {
-                        println!(
-                            "[{}] KnowledgeRequest from {}",
-                            crate::logger::timestamp_now(),
-                            from_peer
-                        );
                         if let (Some(gossip), Some(hive_store)) =
                             (gossip.as_ref(), hive_store.as_ref())
                         {
@@ -229,6 +224,7 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
                             }
                         }
                     }
+                    #[cfg(feature = "hive")]
                     super::MessageType::KnowledgeSnapshot => {
                         if let (Some(gossip), Some(hive_store)) =
                             (gossip.as_mut(), hive_store.as_mut())
@@ -260,6 +256,7 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
             }
 
             // Check if brain distillation produced new knowledge to gossip
+            #[cfg(feature = "hive")]
             if let (Some(broadcast_rx), Some(gossip), Some(hive_store)) =
                 (broadcast_rx.as_ref(), gossip.as_mut(), hive_store.as_ref())
             {

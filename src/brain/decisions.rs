@@ -426,7 +426,7 @@ fn maybe_distill_background() {
             }
 
             // Export knowledge units to hive store for sharing
-            #[cfg(feature = "relay")]
+            #[cfg(feature = "hive")]
             {
                 let cfg = crate::config::Config::load();
                 if let Some(hive_cfg) = cfg.hive.filter(|h| h.enabled) {

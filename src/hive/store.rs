@@ -259,6 +259,7 @@ mod tests {
         KnowledgeUnit {
             id: id.into(),
             scope: KnowledgeScope::Universal,
+            category: crate::hive::KnowledgeCategory::BestPractice,
             content: KnowledgeContent::Pattern {
                 tool: tool.into(),
                 command_pattern: Some("test".into()),

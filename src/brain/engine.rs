@@ -364,9 +364,8 @@ impl BrainEngine {
                 crate::coord::injection::build_coordination_context(session);
         }
 
-        // Inject hive knowledge only when explicitly enabled. The relay feature
-        // being compiled in should not by itself add peer knowledge to prompts.
-        #[cfg(feature = "relay")]
+        // Inject hive knowledge only when explicitly enabled.
+        #[cfg(feature = "hive")]
         {
             let cfg = crate::config::Config::load();
             if let Some(hive_cfg) = cfg.hive.filter(|h| h.enabled) {

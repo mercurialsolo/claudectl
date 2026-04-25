@@ -105,6 +105,28 @@ pub fn distill_to_knowledge_stable(
 // Individual converters
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Classify a preference pattern into a knowledge category.
+fn classify_pattern(pattern: &PreferencePattern) -> super::KnowledgeCategory {
+    use super::KnowledgeCategory;
+    use crate::brain::preferences::PreferenceCondition;
+
+    // Patterns conditioned on cost or time-of-day are personal
+    for cond in &pattern.conditions {
+        match cond {
+            PreferenceCondition::CostAbove(_) | PreferenceCondition::CostBelow(_) => {
+                return KnowledgeCategory::Personal;
+            }
+            PreferenceCondition::HourRange(_, _) => {
+                return KnowledgeCategory::Personal;
+            }
+            _ => {}
+        }
+    }
+
+    // Tool approval/denial patterns are best practices
+    KnowledgeCategory::BestPractice
+}
+
 fn pattern_to_unit(
     pattern: &PreferencePattern,
     source_peer: &str,
@@ -116,11 +138,13 @@ fn pattern_to_unit(
         return None;
     }
 
+    let category = classify_pattern(pattern);
     let conditions: Vec<String> = pattern.conditions.iter().map(|c| c.label()).collect();
 
     Some(KnowledgeUnit {
         id: gen_ku_id(),
         scope: scope.clone(),
+        category,
         content: KnowledgeContent::Pattern {
             tool: pattern.tool.clone(),
             command_pattern: pattern.command_pattern.clone(),
@@ -152,6 +176,7 @@ fn accuracy_to_unit(
     Some(KnowledgeUnit {
         id: gen_ku_id(),
         scope: KnowledgeScope::Universal,
+        category: super::KnowledgeCategory::BestPractice,
         content: KnowledgeContent::ToolAccuracy {
             tool: acc.tool.clone(),
             total: acc.total,
@@ -172,6 +197,32 @@ fn accuracy_to_unit(
     })
 }
 
+/// Classify a temporal pattern by its description.
+fn classify_temporal(tp: &TemporalPattern) -> super::KnowledgeCategory {
+    use super::KnowledgeCategory;
+    let desc = tp.description.to_lowercase();
+
+    // Time-of-day, approval speed, and cost patterns are personal
+    if desc.contains("hour")
+        || desc.contains("time of day")
+        || desc.contains("morning")
+        || desc.contains("evening")
+        || desc.contains("approval")
+    {
+        return KnowledgeCategory::Personal;
+    }
+    if desc.contains("cost") || desc.contains("spend") || desc.contains("budget") {
+        return KnowledgeCategory::Personal;
+    }
+
+    // Error streaks, context patterns are shareable techniques
+    if desc.contains("error") || desc.contains("context") || desc.contains("retry") {
+        return KnowledgeCategory::Technique;
+    }
+
+    KnowledgeCategory::BestPractice
+}
+
 fn temporal_to_unit(
     tp: &TemporalPattern,
     source_peer: &str,
@@ -183,9 +234,12 @@ fn temporal_to_unit(
         return None;
     }
 
+    let category = classify_temporal(tp);
+
     Some(KnowledgeUnit {
         id: gen_ku_id(),
         scope: scope.clone(),
+        category,
         content: KnowledgeContent::Temporal {
             description: tp.description.clone(),
             strength: tp.strength,

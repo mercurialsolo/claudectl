@@ -16,7 +16,7 @@ mod discovery;
 mod health;
 mod helpers;
 mod history;
-#[cfg(feature = "relay")]
+#[cfg(feature = "hive")]
 mod hive;
 mod hooks;
 mod init;
@@ -250,8 +250,8 @@ pub(crate) struct Cli {
     relay: Option<String>,
 
     /// Hive mind knowledge sharing (status, knowledge, export, import, forget)
-    #[cfg(feature = "relay")]
-    #[arg(long, help_heading = "Relay")]
+    #[cfg(feature = "hive")]
+    #[arg(long, help_heading = "Hive Mind")]
     hive: Option<String>,
 
     // ── Recording ──────────────────────────────────────────────────────
@@ -497,7 +497,7 @@ fn run_main(cli: Cli) -> io::Result<()> {
         return relay::cli::dispatch(sub, cli.json);
     }
 
-    #[cfg(feature = "relay")]
+    #[cfg(feature = "hive")]
     if let Some(ref sub) = cli.hive {
         return hive::cli::dispatch(sub, cli.json);
     }

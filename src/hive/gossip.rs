@@ -284,6 +284,10 @@ impl GossipEngine {
 
 /// Check propagation eligibility without borrowing self.
 fn is_propagatable_static(unit: &KnowledgeUnit, max_propagation: u32, ttl_secs: u64) -> bool {
+    // Personal knowledge never propagates
+    if !unit.category.is_shareable() {
+        return false;
+    }
     if unit.propagation_count >= max_propagation {
         return false;
     }
@@ -381,6 +385,7 @@ mod tests {
         KnowledgeUnit {
             id: id.into(),
             scope: KnowledgeScope::Universal,
+            category: crate::hive::KnowledgeCategory::BestPractice,
             content: KnowledgeContent::Pattern {
                 tool: tool.into(),
                 command_pattern: Some("test".into()),

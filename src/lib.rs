@@ -15,7 +15,7 @@ pub mod discovery;
 pub mod health;
 pub mod helpers;
 pub mod history;
-#[cfg(feature = "relay")]
+#[cfg(feature = "hive")]
 pub mod hive;
 pub mod hooks;
 pub mod init;
