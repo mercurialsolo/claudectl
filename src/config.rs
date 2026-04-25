@@ -213,6 +213,13 @@ pub struct HiveConfig {
     pub export_min_tool_decisions: u32,
     pub knowledge_ttl_days: u32,
     pub inject_unverified: bool,
+    /// Which knowledge categories to share. Empty = share all shareable categories.
+    /// Valid values: "best_practice", "technique", "workflow"
+    pub share_categories: Vec<String>,
+    /// Tools to exclude from sharing (e.g., ["Write"] to keep file-write patterns private).
+    pub exclude_tools: Vec<String>,
+    /// Command patterns to exclude from sharing (substring match).
+    pub exclude_commands: Vec<String>,
 }
 
 impl Default for HiveConfig {
@@ -226,6 +233,9 @@ impl Default for HiveConfig {
             export_min_tool_decisions: 10,
             knowledge_ttl_days: 30,
             inject_unverified: true,
+            share_categories: Vec::new(), // empty = share all shareable
+            exclude_tools: Vec::new(),
+            exclude_commands: Vec::new(),
         }
     }
 }
@@ -309,6 +319,9 @@ struct RawHiveConfig {
     export_min_tool_decisions: Option<u32>,
     knowledge_ttl_days: Option<u32>,
     inject_unverified: Option<bool>,
+    share_categories: Vec<String>,
+    exclude_tools: Vec<String>,
+    exclude_commands: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -497,6 +510,15 @@ impl Config {
             }
             if let Some(v) = raw_hive.inject_unverified {
                 hive.inject_unverified = v;
+            }
+            if !raw_hive.share_categories.is_empty() {
+                hive.share_categories = raw_hive.share_categories;
+            }
+            if !raw_hive.exclude_tools.is_empty() {
+                hive.exclude_tools = raw_hive.exclude_tools;
+            }
+            if !raw_hive.exclude_commands.is_empty() {
+                hive.exclude_commands = raw_hive.exclude_commands;
             }
         }
         if let Some(lc) = raw.lifecycle {
@@ -1106,6 +1128,15 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     }
                     "inject_unverified" => {
                         hive.inject_unverified = parse_bool(value);
+                    }
+                    "share_categories" => {
+                        hive.share_categories = parse_string_array(value);
+                    }
+                    "exclude_tools" => {
+                        hive.exclude_tools = parse_string_array(value);
+                    }
+                    "exclude_commands" => {
+                        hive.exclude_commands = parse_string_array(value);
                     }
                     _ => {}
                 }

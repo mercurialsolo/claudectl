@@ -34,6 +34,7 @@ pub struct GossipEngine {
     max_propagation: u32,
     knowledge_ttl_days: u32,
     local_peer_id: String,
+    sharing_filter: super::SharingFilter,
 }
 
 impl GossipEngine {
@@ -44,7 +45,13 @@ impl GossipEngine {
             max_propagation,
             knowledge_ttl_days,
             local_peer_id: local_peer_id.to_string(),
+            sharing_filter: super::SharingFilter::default(),
         }
+    }
+
+    /// Set the user's sharing filter (from HiveConfig).
+    pub fn set_sharing_filter(&mut self, filter: super::SharingFilter) {
+        self.sharing_filter = filter;
     }
 
     /// Create a fresh engine with no persisted sync state (for testing).
@@ -55,6 +62,7 @@ impl GossipEngine {
             max_propagation,
             knowledge_ttl_days,
             local_peer_id: local_peer_id.to_string(),
+            sharing_filter: super::SharingFilter::default(),
         }
     }
 
@@ -72,6 +80,7 @@ impl GossipEngine {
         let max_prop = self.max_propagation;
         let ttl_secs = self.knowledge_ttl_days as u64 * 86400;
         let identity = self.local_peer_id.clone();
+        let filter = self.sharing_filter.clone();
 
         for peer in connected_peers {
             let peer_id = peer.0.clone();
@@ -91,7 +100,7 @@ impl GossipEngine {
                 .filter(|u| {
                     !sync_state.units_sent.contains(&u.id)
                         && u.source_peer != peer_id // don't echo back
-                        && is_propagatable_static(u, max_prop, ttl_secs)
+                        && is_propagatable_static(u, max_prop, ttl_secs, &filter)
                 })
                 .collect();
 
@@ -268,7 +277,7 @@ impl GossipEngine {
     /// Check if a unit is eligible for propagation.
     fn is_propagatable(&self, unit: &KnowledgeUnit) -> bool {
         let ttl_secs = self.knowledge_ttl_days as u64 * 86400;
-        is_propagatable_static(unit, self.max_propagation, ttl_secs)
+        is_propagatable_static(unit, self.max_propagation, ttl_secs, &self.sharing_filter)
     }
 
     /// Get the sync state for a specific peer.
@@ -283,9 +292,18 @@ impl GossipEngine {
 }
 
 /// Check propagation eligibility without borrowing self.
-fn is_propagatable_static(unit: &KnowledgeUnit, max_propagation: u32, ttl_secs: u64) -> bool {
+fn is_propagatable_static(
+    unit: &KnowledgeUnit,
+    max_propagation: u32,
+    ttl_secs: u64,
+    filter: &super::SharingFilter,
+) -> bool {
     // Personal knowledge never propagates
     if !unit.category.is_shareable() {
+        return false;
+    }
+    // User-configured exclusions
+    if !filter.allows(unit) {
         return false;
     }
     if unit.propagation_count >= max_propagation {

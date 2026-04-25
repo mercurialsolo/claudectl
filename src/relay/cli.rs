@@ -103,11 +103,13 @@ fn cmd_serve(args: &[&str]) -> io::Result<()> {
         let hive_enabled = hive_cfg.enabled;
         let store = hive_enabled.then(crate::hive::store::HiveStore::load);
         let gossip_engine = hive_enabled.then(|| {
-            crate::hive::gossip::GossipEngine::new(
+            let mut engine = crate::hive::gossip::GossipEngine::new(
                 identity.as_str(),
                 hive_cfg.max_propagation,
                 hive_cfg.knowledge_ttl_days,
-            )
+            );
+            engine.set_sharing_filter(crate::hive::SharingFilter::from_config(&hive_cfg));
+            engine
         });
         let rx = if hive_enabled {
             let (tx, rx) = std::sync::mpsc::channel::<u32>();

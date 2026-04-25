@@ -36,6 +36,18 @@ impl KnowledgeCategory {
         !matches!(self, Self::Personal)
     }
 
+    /// Whether this category is allowed by a user's share_categories config.
+    /// Empty allow_list = share all shareable categories.
+    pub fn is_allowed_by(&self, allow_list: &[String]) -> bool {
+        if !self.is_shareable() {
+            return false;
+        }
+        if allow_list.is_empty() {
+            return true; // empty = no restriction
+        }
+        allow_list.iter().any(|s| s == self.label())
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Self::BestPractice => "best_practice",
@@ -166,6 +178,71 @@ pub fn semantic_key(unit: &KnowledgeUnit) -> String {
         }
     };
     format!("{scope_part}/{content_part}")
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sharing filter — user-controlled exclusions
+// ────────────────────────────────────────────────────────────────────────────
+
+/// User-configurable filter for what knowledge to share.
+/// Built from HiveConfig's share_categories, exclude_tools, exclude_commands.
+#[derive(Debug, Clone, Default)]
+pub struct SharingFilter {
+    /// Allowed categories (empty = all shareable).
+    pub allow_categories: Vec<String>,
+    /// Tools to exclude (exact match on tool name).
+    pub exclude_tools: Vec<String>,
+    /// Command substrings to exclude.
+    pub exclude_commands: Vec<String>,
+}
+
+impl SharingFilter {
+    /// Build from HiveConfig.
+    pub fn from_config(cfg: &crate::config::HiveConfig) -> Self {
+        SharingFilter {
+            allow_categories: cfg.share_categories.clone(),
+            exclude_tools: cfg.exclude_tools.clone(),
+            exclude_commands: cfg.exclude_commands.clone(),
+        }
+    }
+
+    /// Check if a knowledge unit passes the user's sharing filter.
+    pub fn allows(&self, unit: &KnowledgeUnit) -> bool {
+        // Category check
+        if !unit.category.is_allowed_by(&self.allow_categories) {
+            return false;
+        }
+
+        // Tool exclusion
+        if let KnowledgeContent::Pattern {
+            ref tool,
+            ref command_pattern,
+            ..
+        } = unit.content
+        {
+            if self.exclude_tools.iter().any(|t| t == tool) {
+                return false;
+            }
+            if let Some(cmd) = command_pattern {
+                if self
+                    .exclude_commands
+                    .iter()
+                    .any(|exc| cmd.contains(exc.as_str()))
+                {
+                    return false;
+                }
+            }
+        }
+
+        // ToolAccuracy tool exclusion
+        if let KnowledgeContent::ToolAccuracy { ref tool, .. } = unit.content {
+            if self.exclude_tools.iter().any(|t| t == tool) {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
