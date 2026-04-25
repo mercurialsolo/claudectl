@@ -10,13 +10,13 @@ Current pairing flow:
 
 ```
 # Machine A                        # Machine B
-claudectl --relay pair             
+claudectl relay pair             
 # → PAIR CODE: a3f2-9b1c-d4e5-f678
-# → "They should run: claudectl --relay accept a3f2-9b1c-d4e5-f678 machineA-x7f2"
+# → "They should run: claudectl relay accept a3f2-9b1c-d4e5-f678 machineA-x7f2"
 
-                                    claudectl --relay "accept a3f2-9b1c-d4e5-f678 machineA-x7f2"
-claudectl --relay serve
-                                    claudectl --relay "connect 192.168.1.50:9847"
+                                    claudectl relay accept a3f2-9b1c-d4e5-f678 machineA-x7f2
+claudectl relay serve
+                                    claudectl relay connect 192.168.1.50:9847
 ```
 
 Four friction points:
@@ -65,13 +65,13 @@ Machine B starts relay:
 
 ```bash
 # Discover nearby instances (one-shot scan)
-claudectl --relay discover
+claudectl relay discover
 # → Found 2 claudectl instances on LAN:
 # →   laptop-a3f2    192.168.1.50:9847   v0.36.0
 # →   ci-runner-9d1e 192.168.1.101:9847  v0.36.0
 
 # Pair with a discovered instance (interactive)
-claudectl --relay "pair-with laptop-a3f2"
+claudectl relay pair-with laptop-a3f2
 # → Sending pair request to laptop-a3f2...
 # → Waiting for approval on the remote side...
 # → Paired! Connected to laptop-a3f2.
@@ -148,7 +148,7 @@ auto_approve_lan = false      # if true, skip approval prompt (team LAN)
 
 ```
 # One-time: team lead sets up the peer list
-claudectl --relay "project-init"
+claudectl relay project-init
 # → Created .claudectl/peers.toml with your identity
 
 # Commit it to the repo
@@ -164,8 +164,8 @@ git add .claudectl/peers.toml && git commit -m "add claudectl relay peers"
 
 ```toml
 # Team claudectl relay peers
-# Add your identity with: claudectl --relay "project-add"
-# Connect with: claudectl --relay "project-connect"
+# Add your identity with: claudectl relay project-add
+# Connect with: claudectl relay project-connect
 
 [[peers]]
 identity = "laptop-a3f2"
@@ -183,18 +183,18 @@ addr = "10.0.0.42:9847"
 
 ```bash
 # Add yourself to the project peer list
-claudectl --relay "project-add"
+claudectl relay project-add
 # → Added laptop-a3f2 to .claudectl/peers.toml
 # → Commit this file to share with your team.
 
 # Show project peers and connection status
-claudectl --relay "project-peers"
+claudectl relay project-peers
 # → PROJECT PEERS (.claudectl/peers.toml):
 # →   laptop-a3f2    Barada's laptop     ● connected
 # →   ci-runner-9d1e CI runner           ○ not paired
 
 # Connect to all project peers (pairs if needed)
-claudectl --relay "project-connect"
+claudectl relay project-connect
 # → Connecting to ci-runner-9d1e at 10.0.0.42:9847...
 # → Pair request sent. Waiting for approval...
 # → Connected!
@@ -226,10 +226,10 @@ If the address is stale or wrong, it falls back to LAN discovery or prompts for 
 
 ```bash
 # Generate an invite link
-claudectl --relay invite
+claudectl relay invite
 # → Your relay invite link (valid for 24 hours):
 # →
-# →   claudectl --relay "join cctl://laptop-a3f2@192.168.1.50:9847/k/a3f29b1cd4e5f678"
+# →   claudectl relay join cctl://laptop-a3f2@192.168.1.50:9847/k/a3f29b1cd4e5f678
 # →
 # → Or scan this QR code:
 # →   ██████████████
@@ -237,7 +237,7 @@ claudectl --relay invite
 # →   ...
 
 # Recipient runs the join command
-claudectl --relay "join cctl://laptop-a3f2@192.168.1.50:9847/k/a3f29b1cd4e5f678"
+claudectl relay join cctl://laptop-a3f2@192.168.1.50:9847/k/a3f29b1cd4e5f678
 # → Connecting to laptop-a3f2 at 192.168.1.50:9847...
 # → Authenticated!
 # → Paired with laptop-a3f2.
@@ -261,10 +261,10 @@ Components:
 
 ```bash
 # Generate invite
-claudectl --relay invite [--ttl 24h] [--json]
+claudectl relay invite [--ttl 24h] [--json]
 
 # Accept invite
-claudectl --relay "join <link>"
+claudectl relay join <link>
 
 # The join command:
 # 1. Parses the link
@@ -294,9 +294,9 @@ The invite link itself doesn't expire (it's just data). TTL is enforced by:
 The link is short enough for a QR code (under 80 characters). claudectl can render the QR in the terminal using Unicode block characters — no external dependencies. This is particularly useful for pairing a laptop with a CI server or remote machine where you can see the terminal.
 
 ```bash
-claudectl --relay "invite --qr"
+claudectl relay invite --qr
 # → Renders a scannable QR code in the terminal
-# → (The other machine runs: claudectl --relay "join <scanned-text>")
+# → (The other machine runs: claudectl relay join <scanned-text>)
 ```
 
 ---
@@ -358,7 +358,7 @@ With all four mechanisms, the ideal experience is:
 ### Same room, same WiFi (LAN discovery)
 
 ```
-1. Both run: claudectl --relay serve (or TUI with relay.enabled = true)
+1. Both run: claudectl relay serve (or TUI with relay.enabled = true)
 2. Both see each other in the discovery overlay
 3. One presses "Pair", the other approves
 4. Connected. Knowledge flows.
@@ -367,17 +367,17 @@ With all four mechanisms, the ideal experience is:
 ### Same team, same repo (project peers)
 
 ```
-1. Lead runs: claudectl --relay "project-add" && git commit && git push
-2. Teammate clones, runs: claudectl --relay "project-connect"
+1. Lead runs: claudectl relay project-add && git commit && git push
+2. Teammate clones, runs: claudectl relay project-connect
 3. Pair request sent, approved, connected.
 ```
 
 ### Remote colleague (invite link)
 
 ```
-1. You run: claudectl --relay invite
+1. You run: claudectl relay invite
 2. Paste the link in Slack
-3. They run: claudectl --relay "join <link>"
+3. They run: claudectl relay join <link>
 4. Connected.
 ```
 
@@ -431,23 +431,23 @@ invite_ttl_hours = 24
 
 ```bash
 # Discovery
-claudectl --relay discover              # scan LAN for nearby instances
-claudectl --relay "project-peers"       # show project peer list
+claudectl relay discover              # scan LAN for nearby instances
+claudectl relay project-peers       # show project peer list
 
 # Pairing (new)
-claudectl --relay invite [--qr] [--ttl 24h]   # generate invite link
-claudectl --relay "join <link>"                # accept invite link
-claudectl --relay "pair-with <identity>"       # pair with discovered peer
+claudectl relay invite [--qr] [--ttl 24h]   # generate invite link
+claudectl relay join <link>                # accept invite link
+claudectl relay pair-with <identity>       # pair with discovered peer
 
 # Project peers
-claudectl --relay "project-init"        # create .claudectl/peers.toml
-claudectl --relay "project-add"         # add yourself to peer list
-claudectl --relay "project-connect"     # connect to all project peers
+claudectl relay project-init        # create .claudectl/peers.toml
+claudectl relay project-add         # add yourself to peer list
+claudectl relay project-connect     # connect to all project peers
 
 # Existing (unchanged)
-claudectl --relay serve
-claudectl --relay pair
-claudectl --relay "accept <code> <peer-id>"
-claudectl --relay "connect <host:port>"
-claudectl --relay peers
+claudectl relay serve
+claudectl relay pair
+claudectl relay accept <code> <peer-id>
+claudectl relay connect <host:port>
+claudectl relay peers
 ```

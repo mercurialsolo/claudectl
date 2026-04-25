@@ -4,6 +4,8 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use clap::Subcommand;
+
 use super::crypto;
 use super::delegation::{self, DelegationContext};
 use super::listener::RelayListener;
@@ -15,75 +17,130 @@ use super::{
     save_peer_psk, save_pending_psk,
 };
 
-/// Dispatch a relay subcommand.
-pub fn dispatch(subcommand: &str, json_mode: bool) -> io::Result<()> {
-    let parts: Vec<&str> = subcommand.split_whitespace().collect();
-    match parts.first().copied() {
-        Some("serve") => cmd_serve(&parts[1..]),
-        Some("pair") => cmd_pair(json_mode),
-        Some("accept") => cmd_accept(&parts[1..]),
-        Some("connect") => cmd_connect(&parts[1..]),
-        Some("peers") => cmd_peers(json_mode),
-        Some("disconnect") => cmd_disconnect(&parts[1..]),
-        Some("forget") => cmd_forget(&parts[1..]),
-        Some("identity") => cmd_identity(json_mode),
-        Some("delegate") => cmd_delegate(&parts[1..], json_mode),
-        Some("status") => cmd_task_status(json_mode),
-        Some("interrupt") => cmd_interrupt(&parts[1..]),
-        Some("invite") => cmd_invite(&parts[1..], json_mode),
-        Some("join") => cmd_join(&parts[1..]),
-        Some("discover") => cmd_discover(json_mode),
-        Some(other) => {
-            eprintln!("Unknown relay subcommand: {other}");
-            print_relay_help();
-            Err(io::Error::other("unknown subcommand"))
-        }
-        None => {
-            print_relay_help();
-            Ok(())
-        }
-    }
+#[derive(Subcommand)]
+pub enum RelayCommand {
+    /// Start relay listener
+    Serve {
+        /// Port to listen on
+        #[arg(long, default_value_t = 9847)]
+        port: u16,
+    },
+
+    /// Generate a raw PSK pairing code
+    Pair,
+
+    /// Accept a pairing code from another peer
+    Accept {
+        /// The pair code
+        code: String,
+        /// The peer identity
+        peer_id: String,
+    },
+
+    /// Connect to a remote relay
+    Connect {
+        /// Remote address (host:port)
+        addr: String,
+    },
+
+    /// List known peers
+    Peers,
+
+    /// Disconnect from a peer (informational in standalone mode)
+    Disconnect {
+        /// Peer ID to disconnect
+        peer_id: String,
+    },
+
+    /// Remove all data for a peer
+    Forget {
+        /// Peer ID to forget
+        peer_id: String,
+    },
+
+    /// Show this instance's relay identity
+    Identity,
+
+    /// Delegate a task to a remote peer
+    Delegate {
+        /// Target peer ID
+        peer: String,
+        /// Prompt to send
+        prompt: String,
+        /// Working directory for the task
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Git ref for the task context
+        #[arg(long)]
+        git_ref: Option<String>,
+    },
+
+    /// Show remote task status
+    Status,
+
+    /// Interrupt a remote task
+    Interrupt {
+        /// Task ID
+        task_id: String,
+        /// Interrupt type (nudge, stop, reroute)
+        interrupt_type: String,
+        /// Optional reason
+        reason: Vec<String>,
+    },
+
+    /// Generate invite code/link/phrase
+    Invite {
+        /// Show QR code
+        #[arg(long)]
+        qr: bool,
+        /// Show word phrase
+        #[arg(long)]
+        words: bool,
+    },
+
+    /// Join using any invite format (relay code, word phrase, or invite link)
+    Join {
+        /// Invite code, word phrase, or invite link
+        input: Vec<String>,
+    },
+
+    /// Scan LAN for nearby claudectl instances
+    Discover,
 }
 
-fn print_relay_help() {
-    eprintln!("Usage: claudectl --relay <subcommand>");
-    eprintln!();
-    eprintln!("Connection:");
-    eprintln!("  serve [--port N]             Start relay listener");
-    eprintln!("  invite [--qr] [--words]      Generate invite code/link/phrase");
-    eprintln!("  join <code|link|phrase>       Connect using any invite format");
-    eprintln!("  discover                     Scan LAN for nearby instances");
-    eprintln!("  connect <host:port>          Connect to a known peer");
-    eprintln!();
-    eprintln!("Pairing:");
-    eprintln!("  pair                         Generate raw PSK code");
-    eprintln!("  accept <code> <peer-id>      Accept a PSK from a peer");
-    eprintln!("  peers [--json]               List known/connected peers");
-    eprintln!("  forget <peer-id>             Remove a peer");
-    eprintln!("  identity                     Show this instance's relay identity");
-    eprintln!();
-    eprintln!("Delegation:");
-    eprintln!("  delegate <peer> <prompt>     Delegate a task to a remote peer");
-    eprintln!("  status                       Show remote task status");
-    eprintln!("  interrupt <task> <type>       Interrupt a remote task (nudge/stop)");
+/// Dispatch a relay subcommand.
+pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<()> {
+    match command {
+        RelayCommand::Serve { port } => cmd_serve(*port),
+        RelayCommand::Pair => cmd_pair(json_mode),
+        RelayCommand::Accept { code, peer_id } => cmd_accept(code, peer_id),
+        RelayCommand::Connect { addr } => cmd_connect(addr),
+        RelayCommand::Peers => cmd_peers(json_mode),
+        RelayCommand::Disconnect { peer_id } => cmd_disconnect(peer_id),
+        RelayCommand::Forget { peer_id } => cmd_forget(peer_id),
+        RelayCommand::Identity => cmd_identity(json_mode),
+        RelayCommand::Delegate {
+            peer,
+            prompt,
+            cwd,
+            git_ref,
+        } => cmd_delegate(peer, prompt, cwd.as_deref(), git_ref.clone(), json_mode),
+        RelayCommand::Status => cmd_task_status(json_mode),
+        RelayCommand::Interrupt {
+            task_id,
+            interrupt_type,
+            reason,
+        } => cmd_interrupt(task_id, interrupt_type, reason),
+        RelayCommand::Invite { qr, words } => cmd_invite(*qr, *words, json_mode),
+        RelayCommand::Join { input } => cmd_join(input),
+        RelayCommand::Discover => cmd_discover(json_mode),
+    }
 }
 
 /// `claudectl relay serve [--port PORT]`
 /// Start the relay listener in the foreground.
-fn cmd_serve(args: &[&str]) -> io::Result<()> {
-    let mut port: u16 = 9847;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--port" {
-            i += 1;
-            if let Some(p) = args.get(i) {
-                port = p
-                    .parse()
-                    .map_err(|_| io::Error::other("invalid port number"))?;
-            }
-        }
-        i += 1;
-    }
+fn cmd_serve(port: u16) -> io::Result<()> {
+    let mut port = port;
 
     // Load config for relay/hive settings
     let cfg = crate::config::Config::load();
@@ -337,7 +394,7 @@ fn cmd_pair(json_mode: bool) -> io::Result<()> {
         println!();
         println!("Share this code with the peer you want to connect.");
         println!(
-            "They should run: claudectl --relay \"accept {} {}\"",
+            "They should run: claudectl relay accept {} {}",
             code, identity
         );
     }
@@ -354,14 +411,7 @@ fn cmd_pair(json_mode: bool) -> io::Result<()> {
 
 /// `claudectl relay accept <code> <peer_id>`
 /// Accept a pairing code from another peer.
-fn cmd_accept(args: &[&str]) -> io::Result<()> {
-    if args.len() < 2 {
-        eprintln!("Usage: claudectl --relay \"accept <pair-code> <peer-id>\"");
-        return Err(io::Error::other("missing arguments"));
-    }
-
-    let code = args[0];
-    let peer_id = args[1];
+fn cmd_accept(code: &str, peer_id: &str) -> io::Result<()> {
     if !is_valid_peer_id(peer_id) || peer_id == PENDING_PEER_ID {
         return Err(io::Error::other(format!("invalid peer id: {peer_id}")));
     }
@@ -375,7 +425,7 @@ fn cmd_accept(args: &[&str]) -> io::Result<()> {
 
     println!("Paired with peer: {}", peer_id);
     println!("PSK stored. You can now connect with:");
-    println!("  claudectl --relay \"connect <host>:<port>\"");
+    println!("  claudectl relay connect <host>:<port>");
 
     Ok(())
 }
@@ -474,15 +524,10 @@ fn reconnect_peer(
 
 /// `claudectl relay connect <host:port>`
 /// Connect to a remote relay.
-fn cmd_connect(args: &[&str]) -> io::Result<()> {
-    if args.is_empty() {
-        eprintln!("Usage: claudectl --relay \"connect <host:port>\"");
-        return Err(io::Error::other("missing address"));
-    }
-
-    let addr: SocketAddr = args[0]
+fn cmd_connect(addr_str: &str) -> io::Result<()> {
+    let addr: SocketAddr = addr_str
         .parse()
-        .map_err(|e| io::Error::other(format!("invalid address '{}': {e}", args[0])))?;
+        .map_err(|e| io::Error::other(format!("invalid address '{addr_str}': {e}")))?;
 
     let identity = load_or_create_identity();
 
@@ -514,14 +559,14 @@ fn cmd_connect(args: &[&str]) -> io::Result<()> {
         }
     }
 
-    eprintln!("Could not connect to {}", args[0]);
+    eprintln!("Could not connect to {}", addr_str);
     eprintln!("Make sure you have paired with this peer first:");
-    eprintln!("  1. Remote runs: claudectl --relay pair");
-    eprintln!("  2. You run:     claudectl --relay \"accept <code> <peer-id>\"");
+    eprintln!("  1. Remote runs: claudectl relay pair");
+    eprintln!("  2. You run:     claudectl relay accept <code> <peer-id>");
     Err(io::Error::other("connection failed"))
 }
 
-/// `claudectl relay peers [--json]`
+/// `claudectl relay peers`
 /// List known peers and their status.
 fn cmd_peers(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
@@ -549,7 +594,7 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
         println!("Identity: {}", identity);
         println!();
         if known.is_empty() {
-            println!("No paired peers. Run 'claudectl --relay pair' to get started.");
+            println!("No paired peers. Run 'claudectl relay pair' to get started.");
         } else {
             println!("{:<20} {:<24} PAIRED", "PEER", "ADDRESS");
             println!("{}", "─".repeat(56));
@@ -572,29 +617,20 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
 }
 
 /// `claudectl relay disconnect <peer_id>`
-fn cmd_disconnect(args: &[&str]) -> io::Result<()> {
-    if args.is_empty() {
-        eprintln!("Usage: claudectl --relay \"disconnect <peer-id>\"");
-        return Err(io::Error::other("missing peer id"));
-    }
+fn cmd_disconnect(peer_id: &str) -> io::Result<()> {
     // In standalone CLI mode, we can't disconnect a live connection
     // (that's handled by the TUI/serve loop). Just inform the user.
     println!("Note: to disconnect a live connection, stop the relay serve/connect process.");
     println!(
-        "To remove the pairing entirely, use: claudectl --relay \"forget {}\"",
-        args[0]
+        "To remove the pairing entirely, use: claudectl relay forget {}",
+        peer_id
     );
     Ok(())
 }
 
 /// `claudectl relay forget <peer_id>`
 /// Remove all data for a peer.
-fn cmd_forget(args: &[&str]) -> io::Result<()> {
-    if args.is_empty() {
-        eprintln!("Usage: claudectl --relay \"forget <peer-id>\"");
-        return Err(io::Error::other("missing peer id"));
-    }
-    let peer_id = args[0];
+fn cmd_forget(peer_id: &str) -> io::Result<()> {
     if load_peer_psk(peer_id).is_none() {
         eprintln!("Unknown peer: {}", peer_id);
         return Err(io::Error::other("unknown peer"));
@@ -621,43 +657,13 @@ fn cmd_identity(json_mode: bool) -> io::Result<()> {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// `claudectl relay delegate <peer_id> "<prompt>" [--cwd /path] [--git-ref branch]`
-fn cmd_delegate(args: &[&str], json_mode: bool) -> io::Result<()> {
-    if args.len() < 2 {
-        eprintln!(
-            "Usage: claudectl --relay \"delegate <peer-id> <prompt> [--cwd /path] [--git-ref branch]\""
-        );
-        return Err(io::Error::other("missing arguments"));
-    }
-
-    let peer_id = args[0];
-    let mut prompt_parts: Vec<&str> = Vec::new();
-    let mut cwd: Option<&str> = None;
-    let mut git_ref: Option<String> = None;
-
-    let mut i = 1;
-    while i < args.len() {
-        if args[i] == "--cwd" {
-            i += 1;
-            cwd = args.get(i).copied();
-        } else if args[i] == "--git-ref" {
-            i += 1;
-            git_ref = args.get(i).map(|s| s.to_string());
-        } else {
-            prompt_parts.push(args[i]);
-        }
-        i += 1;
-    }
-
-    let prompt = prompt_parts
-        .join(" ")
-        .trim_matches('"')
-        .trim_matches('\'')
-        .to_string();
-    if prompt.is_empty() {
-        eprintln!("Usage: claudectl --relay \"delegate <peer-id> <prompt> [--cwd /path]\"");
-        return Err(io::Error::other("missing prompt"));
-    }
-
+fn cmd_delegate(
+    peer_id: &str,
+    prompt: &str,
+    cwd: Option<&str>,
+    git_ref: Option<String>,
+    json_mode: bool,
+) -> io::Result<()> {
     let identity = load_or_create_identity();
     let task_id = gen_msg_id().replace("msg_", "task_");
 
@@ -667,7 +673,7 @@ fn cmd_delegate(args: &[&str], json_mode: bool) -> io::Result<()> {
     };
 
     let msg =
-        delegation::build_delegate_message(&task_id, &prompt, cwd, &context, identity.as_str())
+        delegation::build_delegate_message(&task_id, prompt, cwd, &context, identity.as_str())
             .map_err(|e| io::Error::other(format!("build message: {e}")))?;
 
     if json_mode {
@@ -694,7 +700,7 @@ fn cmd_delegate(args: &[&str], json_mode: bool) -> io::Result<()> {
     Ok(())
 }
 
-/// `claudectl relay status [--json]`
+/// `claudectl relay status`
 /// Show status of delegated tasks.
 fn cmd_task_status(json_mode: bool) -> io::Result<()> {
     // In standalone CLI mode, we don't have a live relay connection.
@@ -719,29 +725,21 @@ fn cmd_task_status(json_mode: bool) -> io::Result<()> {
 }
 
 /// `claudectl relay interrupt <task_id> <type> [reason]`
-fn cmd_interrupt(args: &[&str]) -> io::Result<()> {
-    if args.len() < 2 {
-        eprintln!("Usage: claudectl --relay \"interrupt <task-id> <type> [reason]\"");
-        eprintln!("Types: nudge, stop, reroute");
-        return Err(io::Error::other("missing arguments"));
-    }
-
-    let task_id = args[0];
-    let interrupt_type = args[1];
-    let reason = if args.len() > 2 {
-        args[2..].join(" ")
-    } else {
-        String::new()
-    };
+fn cmd_interrupt(task_id: &str, interrupt_type: &str, reason: &[String]) -> io::Result<()> {
+    let reason_str = reason.join(" ");
 
     let identity = load_or_create_identity();
-    let msg =
-        delegation::build_interrupt_message(task_id, interrupt_type, &reason, identity.as_str());
+    let msg = delegation::build_interrupt_message(
+        task_id,
+        interrupt_type,
+        &reason_str,
+        identity.as_str(),
+    );
 
     println!("Interrupt built for task {}", task_id);
     println!("  Type: {}", interrupt_type);
-    if !reason.is_empty() {
-        println!("  Reason: {}", reason);
+    if !reason_str.is_empty() {
+        println!("  Reason: {}", reason_str);
     }
     println!("  Message ID: {}", msg.id);
     println!();
@@ -755,11 +753,8 @@ fn cmd_interrupt(args: &[&str]) -> io::Result<()> {
 // Discovery commands: invite, join, discover
 // ────────────────────────────────────────────────────────────────────────────
 
-/// `claudectl relay invite [--qr] [--words] [--json]`
-fn cmd_invite(args: &[&str], json_mode: bool) -> io::Result<()> {
-    let show_qr = args.contains(&"--qr");
-    let show_words = args.contains(&"--words");
-
+/// `claudectl relay invite [--qr] [--words]`
+fn cmd_invite(show_qr: bool, show_words: bool, json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
     let cfg = crate::config::Config::load();
     let relay_cfg = cfg.relay.unwrap_or_default();
@@ -813,11 +808,11 @@ fn cmd_invite(args: &[&str], json_mode: bool) -> io::Result<()> {
     // Join instructions
     println!("Share any of the above with your peer. They run:");
     println!();
-    println!("  claudectl --relay \"join {}\"", relay_code);
+    println!("  claudectl relay join {}", relay_code);
     if show_words {
-        println!("  claudectl --relay \"join {}\"", word_phrase);
+        println!("  claudectl relay join {}", word_phrase);
     }
-    println!("  claudectl --relay \"join {}\"", invite_link);
+    println!("  claudectl relay join {}", invite_link);
     println!();
 
     // QR code
@@ -836,13 +831,13 @@ fn cmd_invite(args: &[&str], json_mode: bool) -> io::Result<()> {
 }
 
 /// `claudectl relay join <code|link|words>`
-fn cmd_join(args: &[&str]) -> io::Result<()> {
-    if args.is_empty() {
-        eprintln!("Usage: claudectl --relay \"join <relay-code | invite-link | word-phrase>\"");
+fn cmd_join(input: &[String]) -> io::Result<()> {
+    if input.is_empty() {
+        eprintln!("Usage: claudectl relay join <relay-code | invite-link | word-phrase>");
         return Err(io::Error::other("missing argument"));
     }
 
-    let input = args.join(" ");
+    let input = input.join(" ");
     let identity = load_or_create_identity();
 
     // Detect format and parse
@@ -895,7 +890,7 @@ fn cmd_join(args: &[&str]) -> io::Result<()> {
     Ok(())
 }
 
-/// `claudectl relay discover [--json]`
+/// `claudectl relay discover`
 fn cmd_discover(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
 
@@ -922,8 +917,8 @@ fn cmd_discover(json_mode: bool) -> io::Result<()> {
     if peers.is_empty() {
         println!("No claudectl instances found on the local network.");
         println!();
-        println!("Make sure peers are running: claudectl --relay serve");
-        println!("Or use invite codes: claudectl --relay invite");
+        println!("Make sure peers are running: claudectl relay serve");
+        println!("Or use invite codes: claudectl relay invite");
     } else {
         println!("Found {} instance(s):", peers.len());
         println!();
@@ -944,8 +939,8 @@ fn cmd_discover(json_mode: bool) -> io::Result<()> {
             );
         }
         println!();
-        println!("To pair, run: claudectl --relay \"invite\" on the remote machine,");
-        println!("then:         claudectl --relay \"join <code>\" here.");
+        println!("To pair, run: claudectl relay invite on the remote machine,");
+        println!("then:         claudectl relay join <code> here.");
     }
 
     Ok(())

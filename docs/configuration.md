@@ -205,7 +205,7 @@ You can use both. The `--init` hooks notify claudectl of tool completions. The p
 
 ## Coordination Layer (--features coord)
 
-Multi-session coordination on a single machine. Stores events, leases, blockers, handoffs, interrupts, and memory in a local SQLite database at `~/.claudectl/coord.db`. No TOML configuration needed — inspect with `claudectl --coord <subcommand>`. See [Reference](reference.md#coordination---features-coord) for all subcommands.
+Multi-session coordination on a single machine. Stores events, leases, blockers, handoffs, interrupts, and memory in a local SQLite database at `~/.claudectl/coord.db`. No TOML configuration needed — inspect with `claudectl coord <subcommand>`. See [Reference](reference.md#coordination---features-coord) for all subcommands.
 
 ## Relay & Hive Mind Configuration
 

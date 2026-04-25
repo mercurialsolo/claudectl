@@ -28,10 +28,9 @@ pub fn render_peers_panel(frame: &mut Frame, area: Rect, peers: &[PeerDisplayInf
         .border_style(Style::default().fg(theme.border));
 
     if peers.is_empty() {
-        let text =
-            Paragraph::new("No connected peers. Use `claudectl --relay pair` to get started.")
-                .block(block)
-                .style(Style::default().fg(theme.text_muted));
+        let text = Paragraph::new("No connected peers. Use `claudectl relay pair` to get started.")
+            .block(block)
+            .style(Style::default().fg(theme.text_muted));
         frame.render_widget(text, area);
         return;
     }

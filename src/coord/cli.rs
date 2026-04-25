@@ -1,43 +1,234 @@
 use std::io;
 
+use clap::Subcommand;
+
 use super::store;
 use super::types::*;
 
-pub fn dispatch(subcommand: &str, json_mode: bool) -> io::Result<()> {
-    let parts: Vec<&str> = subcommand.split_whitespace().collect();
-    let cmd = parts.first().copied().unwrap_or("help");
+#[derive(Subcommand)]
+pub enum CoordCommand {
+    /// Show last N events, optionally filtered by type
+    Events {
+        /// Number of events to show
+        #[arg(default_value_t = 50)]
+        limit: usize,
+        /// Filter by event type
+        type_filter: Option<String>,
+    },
 
-    match cmd {
-        "events" => {
-            let limit = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(50);
-            let type_filter = parts.get(2).copied();
-            list_events(limit, type_filter, json_mode)
+    /// Show active ownership leases
+    Leases,
+
+    /// Show open blockers
+    Blockers,
+
+    /// Show handoffs
+    Handoffs,
+
+    /// Show pending interrupts
+    Interrupts,
+
+    /// List or search memory records
+    Memory {
+        /// Subcommand and arguments (e.g., "search <query>")
+        args: Vec<String>,
+    },
+
+    /// Claim ownership of a resource
+    Claim {
+        /// Session ID
+        #[arg(long)]
+        session: String,
+        /// Resource path to claim
+        #[arg(long)]
+        path: String,
+        /// Lease mode (exclusive or advisory)
+        #[arg(long, default_value = "exclusive")]
+        mode: String,
+        /// Reason for the claim
+        #[arg(long)]
+        reason: Option<String>,
+    },
+
+    /// Release an ownership lease
+    Release {
+        /// Lease ID to release
+        lease_id: String,
+    },
+
+    /// Create a handoff between sessions
+    Handoff {
+        /// Source session ID
+        #[arg(long)]
+        from: String,
+        /// Task ID
+        #[arg(long)]
+        task: String,
+        /// Summary text
+        #[arg(long)]
+        summary: String,
+        /// Target session ID
+        #[arg(long)]
+        to: Option<String>,
+        /// Priority (high, medium, low)
+        #[arg(long, default_value = "medium")]
+        priority: String,
+    },
+
+    /// Accept a handoff
+    Accept {
+        /// Handoff ID to accept
+        handoff_id: String,
+    },
+
+    /// Open a blocker
+    Block {
+        /// Task ID
+        #[arg(long)]
+        task: String,
+        /// Session ID
+        #[arg(long)]
+        session: String,
+        /// What the task is waiting for
+        #[arg(long)]
+        waiting_for: String,
+        /// Optional dependency task ID
+        #[arg(long)]
+        depends_on: Option<String>,
+    },
+
+    /// Resolve a blocker
+    Unblock {
+        /// Blocker ID to resolve
+        blocker_id: String,
+    },
+
+    /// Raise an interrupt
+    Raise {
+        /// Interrupt type
+        #[arg(long = "type")]
+        interrupt_type: String,
+        /// Target session ID
+        #[arg(long)]
+        target: String,
+        /// Reason text
+        #[arg(long)]
+        reason: String,
+        /// Priority (high, medium, low)
+        #[arg(long, default_value = "medium")]
+        priority: String,
+        /// Delivery mode
+        #[arg(long, default_value = "safe_boundary")]
+        delivery: String,
+        /// Deduplication key
+        #[arg(long)]
+        dedupe: Option<String>,
+        /// Expiration in seconds
+        #[arg(long)]
+        expires: Option<u64>,
+    },
+
+    /// Acknowledge a delivered interrupt
+    Ack {
+        /// Interrupt ID to acknowledge
+        interrupt_id: String,
+    },
+
+    /// Promote brain patterns to coordination memory
+    Promote {
+        /// Project name
+        #[arg(long)]
+        project: String,
+    },
+
+    /// Show coordination context for a session
+    Context {
+        /// Session ID
+        #[arg(long)]
+        session: String,
+    },
+
+    /// List registered agent adapters
+    Adapters {
+        /// Filter by adapter family
+        family: Option<String>,
+    },
+
+    /// Show coordination metrics
+    Metrics {
+        /// Filter events since timestamp
+        #[arg(long)]
+        since: Option<String>,
+    },
+
+    /// Run coordination eval scenarios
+    Eval,
+
+    /// Delete old events, resolved blockers, expired leases
+    Prune {
+        /// Retention period in days
+        #[arg(long, default_value_t = 30)]
+        days: u64,
+    },
+}
+
+pub fn dispatch_command(command: &CoordCommand, json_mode: bool) -> io::Result<()> {
+    match command {
+        CoordCommand::Events { limit, type_filter } => {
+            list_events(*limit, type_filter.as_deref(), json_mode)
         }
-        "leases" => list_leases(json_mode),
-        "blockers" => list_blockers(json_mode),
-        "handoffs" => list_handoffs(json_mode),
-        "interrupts" => list_interrupts(json_mode),
-        "memory" => handle_memory(&parts[1..], json_mode),
-        "claim" => cmd_claim(&parts, json_mode),
-        "release" => cmd_release(&parts, json_mode),
-        "handoff" => cmd_handoff(&parts, json_mode),
-        "accept" => cmd_accept_handoff(&parts, json_mode),
-        "block" => cmd_open_blocker(&parts, json_mode),
-        "unblock" => cmd_resolve_blocker(&parts, json_mode),
-        "raise" => cmd_raise(&parts, json_mode),
-        "ack" => cmd_ack(&parts, json_mode),
-        "promote" => cmd_promote(&parts, json_mode),
-        "context" => cmd_context(&parts, json_mode),
-        "adapters" => cmd_adapters(&parts, json_mode),
-        "metrics" => cmd_metrics(&parts, json_mode),
-        "eval" => cmd_eval(json_mode),
-        "prune" => cmd_prune(&parts, json_mode),
-        "help" | "" => print_help(),
-        _ => {
-            eprintln!("Unknown coord subcommand: '{cmd}'");
-            eprintln!();
-            print_help()
-        }
+        CoordCommand::Leases => list_leases(json_mode),
+        CoordCommand::Blockers => list_blockers(json_mode),
+        CoordCommand::Handoffs => list_handoffs(json_mode),
+        CoordCommand::Interrupts => list_interrupts(json_mode),
+        CoordCommand::Memory { args } => handle_memory(args, json_mode),
+        CoordCommand::Claim {
+            session,
+            path,
+            mode,
+            reason,
+        } => cmd_claim(session, path, mode, reason.as_deref(), json_mode),
+        CoordCommand::Release { lease_id } => cmd_release(lease_id, json_mode),
+        CoordCommand::Handoff {
+            from,
+            task,
+            summary,
+            to,
+            priority,
+        } => cmd_handoff(from, task, summary, to.as_deref(), priority, json_mode),
+        CoordCommand::Accept { handoff_id } => cmd_accept_handoff(handoff_id, json_mode),
+        CoordCommand::Block {
+            task,
+            session,
+            waiting_for,
+            depends_on,
+        } => cmd_open_blocker(task, session, waiting_for, depends_on.as_deref(), json_mode),
+        CoordCommand::Unblock { blocker_id } => cmd_resolve_blocker(blocker_id, json_mode),
+        CoordCommand::Raise {
+            interrupt_type,
+            target,
+            reason,
+            priority,
+            delivery,
+            dedupe,
+            expires,
+        } => cmd_raise(
+            interrupt_type,
+            target,
+            reason,
+            priority,
+            delivery,
+            dedupe.as_deref(),
+            *expires,
+            json_mode,
+        ),
+        CoordCommand::Ack { interrupt_id } => cmd_ack(interrupt_id, json_mode),
+        CoordCommand::Promote { project } => cmd_promote(project, json_mode),
+        CoordCommand::Context { session } => cmd_context(session, json_mode),
+        CoordCommand::Adapters { family } => cmd_adapters(family.as_deref(), json_mode),
+        CoordCommand::Metrics { since } => cmd_metrics(since.as_deref(), json_mode),
+        CoordCommand::Eval => cmd_eval(json_mode),
+        CoordCommand::Prune { days } => cmd_prune(*days, json_mode),
     }
 }
 
@@ -264,17 +455,18 @@ fn list_interrupts(json_mode: bool) -> io::Result<()> {
 
 // -- Memory --------------------------------------------------------------------
 
-fn handle_memory(args: &[&str], json_mode: bool) -> io::Result<()> {
+fn handle_memory(args: &[String], json_mode: bool) -> io::Result<()> {
     let conn = open_or_exit();
 
-    let (records, is_search) = if args.first().copied() == Some("search") && args.len() > 1 {
-        let query = args[1..].join(" ");
-        let results = store::search_memory(&conn, &query, 20).map_err(io::Error::other)?;
-        (results, true)
-    } else {
-        let results = store::list_memory(&conn, 50).map_err(io::Error::other)?;
-        (results, false)
-    };
+    let (records, is_search) =
+        if args.first().map(|s| s.as_str()) == Some("search") && args.len() > 1 {
+            let query = args[1..].join(" ");
+            let results = store::search_memory(&conn, &query, 20).map_err(io::Error::other)?;
+            (results, true)
+        } else {
+            let results = store::list_memory(&conn, 50).map_err(io::Error::other)?;
+            (results, false)
+        };
 
     if json_mode {
         let json = serde_json::to_string_pretty(&records).unwrap_or_default();
@@ -310,20 +502,15 @@ fn handle_memory(args: &[&str], json_mode: bool) -> io::Result<()> {
 
 // -- Claim Ownership -----------------------------------------------------------
 
-fn cmd_claim(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let session = extract_flag(parts, "session");
-    let path = extract_flag(parts, "path");
-
-    let (Some(session_id), Some(resource)) = (session, path) else {
-        eprintln!(
-            "Usage: claudectl --coord \"claim --session <id> --path <resource> [--mode exclusive|advisory] [--reason text]\""
-        );
-        return Err(io::Error::other("missing required flags"));
-    };
-
-    let mode_str = extract_flag(parts, "mode").unwrap_or("exclusive");
+fn cmd_claim(
+    session_id: &str,
+    resource: &str,
+    mode_str: &str,
+    reason: Option<&str>,
+    json_mode: bool,
+) -> io::Result<()> {
     let mode = LeaseMode::parse(mode_str).unwrap_or(LeaseMode::Exclusive);
-    let reason = extract_flag_rest(parts, "reason").unwrap_or_default();
+    let reason = reason.unwrap_or("").to_string();
 
     let conn = open_or_exit();
     let _ = store::expire_stale_leases(&conn);
@@ -388,12 +575,7 @@ fn cmd_claim(parts: &[&str], json_mode: bool) -> io::Result<()> {
 
 // -- Release Ownership ---------------------------------------------------------
 
-fn cmd_release(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let Some(lease_id) = parts.get(1) else {
-        eprintln!("Usage: claudectl --coord \"release <lease_id>\"");
-        return Err(io::Error::other("missing lease_id"));
-    };
-
+fn cmd_release(lease_id: &str, json_mode: bool) -> io::Result<()> {
     let conn = open_or_exit();
 
     let Some(lease) = store::get_lease(&conn, lease_id).map_err(io::Error::other)? else {
@@ -441,21 +623,14 @@ fn cmd_release(parts: &[&str], json_mode: bool) -> io::Result<()> {
 
 // -- Create Handoff ------------------------------------------------------------
 
-fn cmd_handoff(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let from = extract_flag(parts, "from");
-    let task = extract_flag(parts, "task");
-    let summary = extract_flag_rest(parts, "summary");
-
-    let (Some(from_session), Some(task_id), Some(summary_text)) = (from, task, summary) else {
-        eprintln!(
-            "Usage: claudectl --coord \"handoff --from <session> --task <task_id> --summary <text> [--to <session>] [--priority high|medium|low]\""
-        );
-        return Err(io::Error::other("missing required flags"));
-    };
-
-    let to_session = extract_flag(parts, "to").map(|s| s.to_string());
-    let priority = extract_flag(parts, "priority").unwrap_or("medium");
-
+fn cmd_handoff(
+    from_session: &str,
+    task_id: &str,
+    summary_text: &str,
+    to_session: Option<&str>,
+    priority: &str,
+    json_mode: bool,
+) -> io::Result<()> {
     let conn = open_or_exit();
     let handoff_id = store::gen_id("handoff");
     let now = crate::logger::timestamp_now();
@@ -463,11 +638,11 @@ fn cmd_handoff(parts: &[&str], json_mode: bool) -> io::Result<()> {
     let handoff = Handoff {
         id: handoff_id.clone(),
         from_session_id: from_session.to_string(),
-        to_session_id: to_session,
+        to_session_id: to_session.map(|s| s.to_string()),
         task_id: task_id.to_string(),
-        summary: summary_text.clone(),
+        summary: summary_text.to_string(),
         state: HandoffState {
-            goal: summary_text,
+            goal: summary_text.to_string(),
             artifacts: vec![],
             attempted: vec![],
             next_steps: vec![],
@@ -509,12 +684,7 @@ fn cmd_handoff(parts: &[&str], json_mode: bool) -> io::Result<()> {
 
 // -- Accept Handoff ------------------------------------------------------------
 
-fn cmd_accept_handoff(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let Some(handoff_id) = parts.get(1) else {
-        eprintln!("Usage: claudectl --coord \"accept <handoff_id>\"");
-        return Err(io::Error::other("missing handoff_id"));
-    };
-
+fn cmd_accept_handoff(handoff_id: &str, json_mode: bool) -> io::Result<()> {
     let conn = open_or_exit();
 
     let Some(handoff) = store::get_handoff(&conn, handoff_id).map_err(io::Error::other)? else {
@@ -563,19 +733,13 @@ fn cmd_accept_handoff(parts: &[&str], json_mode: bool) -> io::Result<()> {
 
 // -- Blockers ------------------------------------------------------------------
 
-fn cmd_open_blocker(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let task = extract_flag(parts, "task");
-    let waiting_for = extract_flag_rest(parts, "waiting-for");
-    let session = extract_flag(parts, "session");
-
-    let (Some(task_id), Some(waiting_text), Some(session_id)) = (task, waiting_for, session) else {
-        eprintln!(
-            "Usage: claudectl --coord \"block --task <id> --session <id> --waiting-for <text> [--depends-on <task_id>]\""
-        );
-        return Err(io::Error::other("missing required flags"));
-    };
-
-    let depends_on = extract_flag(parts, "depends-on").map(|s| s.to_string());
+fn cmd_open_blocker(
+    task_id: &str,
+    session_id: &str,
+    waiting_for: &str,
+    depends_on: Option<&str>,
+    json_mode: bool,
+) -> io::Result<()> {
     let conn = open_or_exit();
     let blocker_id = store::gen_id("blocker");
     let now = crate::logger::timestamp_now();
@@ -583,8 +747,8 @@ fn cmd_open_blocker(parts: &[&str], json_mode: bool) -> io::Result<()> {
     let blocker = Blocker {
         id: blocker_id.clone(),
         task_id: task_id.to_string(),
-        depends_on,
-        waiting_for: waiting_text,
+        depends_on: depends_on.map(|s| s.to_string()),
+        waiting_for: waiting_for.to_string(),
         status: BlockerStatus::Open,
         owner_session_id: session_id.to_string(),
         created_at: now.clone(),
@@ -616,12 +780,7 @@ fn cmd_open_blocker(parts: &[&str], json_mode: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn cmd_resolve_blocker(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let Some(blocker_id) = parts.get(1) else {
-        eprintln!("Usage: claudectl --coord \"unblock <blocker_id>\"");
-        return Err(io::Error::other("missing blocker_id"));
-    };
-
+fn cmd_resolve_blocker(blocker_id: &str, json_mode: bool) -> io::Result<()> {
     let conn = open_or_exit();
 
     let blockers = store::list_blockers(&conn, None).map_err(io::Error::other)?;
@@ -672,19 +831,17 @@ fn cmd_resolve_blocker(parts: &[&str], json_mode: bool) -> io::Result<()> {
 
 // -- Raise Interrupt -----------------------------------------------------------
 
-fn cmd_raise(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let itype_str = extract_flag(parts, "type");
-    let target = extract_flag(parts, "target");
-    let reason = extract_flag_rest(parts, "reason");
-
-    let (Some(itype_str), Some(target_session), Some(reason_text)) = (itype_str, target, reason)
-    else {
-        eprintln!(
-            "Usage: claudectl --coord \"raise --type <type> --target <session> --reason <text> [--priority high] [--delivery safe_boundary] [--dedupe key] [--expires secs]\""
-        );
-        return Err(io::Error::other("missing required flags"));
-    };
-
+#[allow(clippy::too_many_arguments)]
+fn cmd_raise(
+    itype_str: &str,
+    target_session: &str,
+    reason_text: &str,
+    priority: &str,
+    delivery: &str,
+    dedupe_key: Option<&str>,
+    expires_secs: Option<u64>,
+    json_mode: bool,
+) -> io::Result<()> {
     let Some(itype) = InterruptType::parse(itype_str) else {
         eprintln!("Unknown interrupt type: '{itype_str}'");
         eprintln!(
@@ -693,15 +850,10 @@ fn cmd_raise(parts: &[&str], json_mode: bool) -> io::Result<()> {
         return Err(io::Error::other("invalid type"));
     };
 
-    let priority = extract_flag(parts, "priority").unwrap_or("medium");
-    let delivery = extract_flag(parts, "delivery").unwrap_or("safe_boundary");
-    let dedupe_key = extract_flag(parts, "dedupe").map(|s| s.to_string());
-    let expires_secs: Option<u64> = extract_flag(parts, "expires").and_then(|s| s.parse().ok());
-
     let conn = open_or_exit();
 
     // Deduplication check
-    if let Some(ref key) = dedupe_key {
+    if let Some(key) = dedupe_key {
         if let Ok(Some(existing)) = store::find_duplicate_interrupt(&conn, key) {
             let msg = format!(
                 "Duplicate interrupt exists: {} (dedupe_key: {key})",
@@ -728,7 +880,6 @@ fn cmd_raise(parts: &[&str], json_mode: bool) -> io::Result<()> {
             .unwrap_or_default()
             .as_secs()
             + secs;
-        // Approximate ISO timestamp from epoch (good enough for comparison)
         format_epoch_iso(epoch)
     });
 
@@ -737,14 +888,14 @@ fn cmd_raise(parts: &[&str], json_mode: bool) -> io::Result<()> {
         interrupt_type: itype,
         priority: priority.to_string(),
         target_session_id: target_session.to_string(),
-        reason: reason_text,
+        reason: reason_text.to_string(),
         payload: None,
         delivery_mode: delivery.to_string(),
         max_retries: 3,
         retry_count: 0,
         next_retry_at: None,
         expires_at,
-        dedupe_key,
+        dedupe_key: dedupe_key.map(|s| s.to_string()),
         state: InterruptState::Pending,
         created_at: now.clone(),
         delivered_at: None,
@@ -781,12 +932,7 @@ fn cmd_raise(parts: &[&str], json_mode: bool) -> io::Result<()> {
 
 // -- Acknowledge Interrupt -----------------------------------------------------
 
-fn cmd_ack(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let Some(intr_id) = parts.get(1) else {
-        eprintln!("Usage: claudectl --coord \"ack <interrupt_id>\"");
-        return Err(io::Error::other("missing interrupt_id"));
-    };
-
+fn cmd_ack(intr_id: &str, json_mode: bool) -> io::Result<()> {
     let conn = open_or_exit();
 
     let Some(interrupt) = store::get_interrupt(&conn, intr_id).map_err(io::Error::other)? else {
@@ -850,14 +996,7 @@ fn format_epoch_iso(epoch_secs: u64) -> String {
 
 // -- Promote Memory ------------------------------------------------------------
 
-fn cmd_promote(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let project = extract_flag(parts, "project");
-
-    let Some(project_name) = project else {
-        eprintln!("Usage: claudectl --coord \"promote --project <name>\"");
-        return Err(io::Error::other("missing --project"));
-    };
-
+fn cmd_promote(project_name: &str, json_mode: bool) -> io::Result<()> {
     match super::promotion::promote_project(project_name) {
         Ok(count) => {
             if json_mode {
@@ -885,14 +1024,7 @@ fn cmd_promote(parts: &[&str], json_mode: bool) -> io::Result<()> {
 
 // -- Show Context --------------------------------------------------------------
 
-fn cmd_context(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let session_id = extract_flag(parts, "session");
-
-    let Some(session_id) = session_id else {
-        eprintln!("Usage: claudectl --coord \"context --session <id>\"");
-        return Err(io::Error::other("missing --session"));
-    };
-
+fn cmd_context(session_id: &str, json_mode: bool) -> io::Result<()> {
     // Build a minimal session for the injection engine
     let session = crate::session::ClaudeSession::from_raw(crate::session::RawSession {
         pid: 0,
@@ -922,10 +1054,8 @@ fn cmd_context(parts: &[&str], json_mode: bool) -> io::Result<()> {
 
 // -- Adapters ------------------------------------------------------------------
 
-fn cmd_adapters(parts: &[&str], json_mode: bool) -> io::Result<()> {
+fn cmd_adapters(filter: Option<&str>, json_mode: bool) -> io::Result<()> {
     use super::adapter;
-
-    let filter = parts.get(1).copied();
 
     if json_mode {
         let adapters: Vec<serde_json::Value> = adapter::all_adapters()
@@ -994,10 +1124,8 @@ fn yn(b: bool) -> &'static str {
 
 // -- Metrics -------------------------------------------------------------------
 
-fn cmd_metrics(parts: &[&str], json_mode: bool) -> io::Result<()> {
+fn cmd_metrics(since: Option<&str>, json_mode: bool) -> io::Result<()> {
     let conn = open_or_exit();
-
-    let since = extract_flag(parts, "since");
 
     let m = super::metrics::compute(&conn, since);
 
@@ -1031,20 +1159,18 @@ fn cmd_eval(json_mode: bool) -> io::Result<()> {
 
 // -- Prune ---------------------------------------------------------------------
 
-fn cmd_prune(parts: &[&str], json_mode: bool) -> io::Result<()> {
-    let days: Option<u64> = extract_flag(parts, "days").and_then(|s| s.parse().ok());
+fn cmd_prune(days: u64, json_mode: bool) -> io::Result<()> {
     let conn = open_or_exit();
 
-    match store::prune(&conn, days) {
+    match store::prune(&conn, Some(days)) {
         Ok(count) => {
             if json_mode {
                 println!(
                     "{}",
-                    serde_json::json!({"pruned": count, "retention_days": days.unwrap_or(30)})
+                    serde_json::json!({"pruned": count, "retention_days": days})
                 );
             } else {
-                let d = days.unwrap_or(30);
-                println!("Pruned {count} rows (retention: {d} days).");
+                println!("Pruned {count} rows (retention: {days} days).");
             }
             Ok(())
         }
@@ -1055,58 +1181,6 @@ fn cmd_prune(parts: &[&str], json_mode: bool) -> io::Result<()> {
     }
 }
 
-// -- Help ----------------------------------------------------------------------
-
-fn print_help() -> io::Result<()> {
-    println!("Coordination Layer");
-    println!();
-    println!("Usage: claudectl --coord <subcommand>");
-    println!();
-    println!("Read commands:");
-    println!("  events [N] [type]   Show last N events (default 50), optionally filtered by type");
-    println!("  leases              Show active ownership leases");
-    println!("  blockers            Show open blockers");
-    println!("  handoffs            Show handoffs");
-    println!("  interrupts          Show pending interrupts");
-    println!("  memory              List recent memory records");
-    println!("  memory search <q>   Search memory records (full-text)");
-    println!("  context --session <id>  Show coordination context that would be injected");
-    println!();
-    println!("Write commands:");
-    println!(
-        "  claim --session <id> --path <resource> [--mode exclusive|advisory] [--reason text]"
-    );
-    println!("  release <lease_id>");
-    println!(
-        "  handoff --from <session> --task <id> --summary <text> [--to <session>] [--priority high|medium|low]"
-    );
-    println!(
-        "  raise --type <type> --target <session> --reason <text> [--priority high] [--delivery safe_boundary] [--dedupe key] [--expires secs]"
-    );
-    println!("  accept <handoff_id>");
-    println!("  block --task <id> --session <id> --waiting-for <text> [--depends-on <task_id>]");
-    println!("  unblock <blocker_id>");
-    println!("  ack <interrupt_id>");
-    println!("  promote --project <name>  Promote brain patterns to coordination memory");
-    println!();
-    println!("Adapters:");
-    println!("  adapters [family]   List registered agent adapters and their capabilities");
-    println!();
-    println!("Evaluation:");
-    println!("  metrics [--since ts]  Show coordination metrics from event log");
-    println!("  eval                  Run coordination eval scenarios");
-    println!();
-    println!("Maintenance:");
-    println!(
-        "  prune [--days N]      Delete old events, resolved blockers, expired leases (default: 30 days)"
-    );
-    println!();
-    println!("  help                Show this help");
-    println!();
-    println!("Add --json for machine-readable output.");
-    Ok(())
-}
-
 // -- Helpers -------------------------------------------------------------------
 
 fn truncate(s: &str, max: usize) -> String {
@@ -1114,32 +1188,5 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}...", &s[..max.saturating_sub(3)])
-    }
-}
-
-/// Extract a single-value flag: `--flag value` -> `Some("value")`.
-fn extract_flag<'a>(parts: &[&'a str], flag: &str) -> Option<&'a str> {
-    let target = format!("--{flag}");
-    parts
-        .iter()
-        .position(|p| *p == target)
-        .and_then(|i| parts.get(i + 1).copied())
-}
-
-/// Extract a multi-word flag value: collects tokens after `--flag` until the next `--*` flag.
-fn extract_flag_rest(parts: &[&str], flag: &str) -> Option<String> {
-    let target = format!("--{flag}");
-    let start = parts.iter().position(|p| *p == target)?;
-    let mut words = Vec::new();
-    for p in &parts[start + 1..] {
-        if p.starts_with("--") {
-            break;
-        }
-        words.push(*p);
-    }
-    if words.is_empty() {
-        None
-    } else {
-        Some(words.join(" "))
     }
 }

@@ -40,7 +40,7 @@ mod ui;
 use std::io;
 use std::time::{Duration, Instant};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::{
     event::{self, Event},
     execute,
@@ -55,6 +55,30 @@ pub(crate) struct ViewFilters {
     pub(crate) status_filter: StatusFilter,
     pub(crate) focus_filter: FocusFilter,
     pub(crate) search: String,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum Command {
+    #[cfg(feature = "relay")]
+    /// Relay: peer-to-peer connections, delegation, and discovery
+    Relay {
+        #[command(subcommand)]
+        command: relay::cli::RelayCommand,
+    },
+
+    #[cfg(feature = "hive")]
+    /// Hive: shared knowledge store, trust, archive, and distillation
+    Hive {
+        #[command(subcommand)]
+        command: hive::cli::HiveCommand,
+    },
+
+    #[cfg(feature = "coord")]
+    /// Coordination: events, leases, blockers, handoffs, interrupts, and memory
+    Coord {
+        #[command(subcommand)]
+        command: coord::cli::CoordCommand,
+    },
 }
 
 #[derive(Parser)]
@@ -237,22 +261,9 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Orchestration")]
     pub(crate) parallel: bool,
 
-    // ── Coordination ──────────────────────────────────────────────────
-    /// Coordination layer inspection (events, leases, blockers, handoffs, interrupts, memory)
-    #[cfg(feature = "coord")]
-    #[arg(long, help_heading = "Coordination")]
-    coord: Option<String>,
-
-    // ── Relay ─────────────────────────────────────────────────────────
-    /// Relay: serve, invite, join, discover, pair, accept, connect, peers, delegate, status, interrupt, forget, identity
-    #[cfg(feature = "relay")]
-    #[arg(long, help_heading = "Relay")]
-    relay: Option<String>,
-
-    /// Hive: status, knowledge, trust, export, import, forget, archive, distill, curriculum
-    #[cfg(feature = "hive")]
-    #[arg(long, help_heading = "Hive Mind")]
-    hive: Option<String>,
+    // ── Subcommands ──────────────────────────────────────────────────
+    #[command(subcommand)]
+    command: Option<Command>,
 
     // ── Recording ──────────────────────────────────────────────────────
     /// Record the TUI session as an asciicast v2 file (e.g., --record demo.cast)
@@ -487,19 +498,17 @@ fn run_main(cli: Cli) -> io::Result<()> {
         return Ok(());
     }
 
-    #[cfg(feature = "coord")]
-    if let Some(ref sub) = cli.coord {
-        return coord::cli::dispatch(sub, cli.json);
-    }
+    if let Some(ref command) = cli.command {
+        match command {
+            #[cfg(feature = "relay")]
+            Command::Relay { command } => return relay::cli::dispatch_command(command, cli.json),
 
-    #[cfg(feature = "relay")]
-    if let Some(ref sub) = cli.relay {
-        return relay::cli::dispatch(sub, cli.json);
-    }
+            #[cfg(feature = "hive")]
+            Command::Hive { command } => return hive::cli::dispatch_command(command, cli.json),
 
-    #[cfg(feature = "hive")]
-    if let Some(ref sub) = cli.hive {
-        return hive::cli::dispatch(sub, cli.json);
+            #[cfg(feature = "coord")]
+            Command::Coord { command } => return coord::cli::dispatch_command(command, cli.json),
+        }
     }
 
     if cli.brain_query {

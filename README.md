@@ -168,27 +168,27 @@ Build with `cargo build --features coord` to enable.
 
 ```bash
 # Ownership leases — prevent two agents from editing the same file
-claudectl --coord "claim --session sess_1 --path src/app.rs --mode exclusive"
-claudectl --coord "release lease_123"
+claudectl coord claim --session sess_1 --path src/app.rs --mode exclusive
+claudectl coord release lease_123
 
 # Handoffs — structured context transfer between sessions
-claudectl --coord "handoff --from sess_1 --to sess_2 --task task_1 --summary 'Fix path normalization'"
+claudectl coord handoff --from sess_1 --to sess_2 --task task_1 --summary 'Fix path normalization'
 
 # Interrupts — typed cross-agent signals with delivery modes
-claudectl --coord "raise --type pause --target sess_1 --reason 'lease conflict'"
-claudectl --coord "ack intr_123"
+claudectl coord raise --type pause --target sess_1 --reason 'lease conflict'
+claudectl coord ack intr_123
 
 # Memory — validated patterns promoted from brain decisions
-claudectl --coord "promote --project myproject"
-claudectl --coord "context --session sess_1"      # Preview injected context
+claudectl coord promote --project myproject
+claudectl coord context --session sess_1           # Preview injected context
 
 # Inspection
-claudectl --coord leases                           # Active ownership leases
-claudectl --coord interrupts                       # Pending interrupts
-claudectl --coord events                           # Event audit log
-claudectl --coord metrics                          # Coordination health metrics
-claudectl --coord eval                             # Run 10 eval scenarios
-claudectl --coord adapters                         # Registered agent adapters
+claudectl coord leases                             # Active ownership leases
+claudectl coord interrupts                         # Pending interrupts
+claudectl coord events                             # Event audit log
+claudectl coord metrics                            # Coordination health metrics
+claudectl coord eval                               # Run 10 eval scenarios
+claudectl coord adapters                           # Registered agent adapters
 ```
 
 The coordination layer stores state in a local SQLite database (`~/.claudectl/coord/coord.db`) and injects compact context into the brain's prompt before every decision.
@@ -199,15 +199,15 @@ The brain distills your decisions into shareable knowledge. Connect instances ac
 
 ```bash
 # Hive knowledge is built-in — view what the brain has learned
-claudectl --hive status
-claudectl --hive knowledge
-claudectl --hive distill              # Condense archive into curriculum
+claudectl hive status
+claudectl hive knowledge
+claudectl hive distill                # Condense archive into curriculum
 
 # Add relay for cross-machine networking
 cargo install claudectl --features relay
-claudectl --relay invite              # Generate an invite code
-claudectl --relay "join YEK-AGA-YHK-QAA-BM"   # Join from another machine
-claudectl --relay discover            # Scan LAN for nearby instances
+claudectl relay invite                # Generate an invite code
+claudectl relay join YEK-AGA-YHK-QAA-BM       # Join from another machine
+claudectl relay discover              # Scan LAN for nearby instances
 ```
 
 Knowledge categories (best practices, techniques, workflow patterns) propagate automatically. Personal patterns (time-of-day habits, cost tolerance) stay local. You control what's shared:

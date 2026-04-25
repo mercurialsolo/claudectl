@@ -140,46 +140,46 @@ Press `R` on any session to record a per-session highlight reel (edits, commands
 
 Inspect multi-session coordination state. Requires `cargo install claudectl --features coord`.
 
-| Flag | Description |
-|------|-------------|
-| `--coord events [N] [type]` | Show last N coordination events (default 50), optionally filtered by type |
-| `--coord leases` | Show active ownership leases |
-| `--coord blockers` | Show open blockers |
-| `--coord handoffs` | Show handoffs |
-| `--coord interrupts` | Show pending interrupts |
-| `--coord memory` | List recent coordination memory records |
-| `--coord "memory search <q>"` | Full-text search coordination memory |
-| `--coord "promote --project <name>"` | Promote brain patterns to coordination memory |
-| `--coord "prune [--days N]"` | Delete old events, resolved blockers, expired leases (default: 30 days) |
+| Command | Description |
+|---------|-------------|
+| `coord events [N] [type]` | Show last N coordination events (default 50), optionally filtered by type |
+| `coord leases` | Show active ownership leases |
+| `coord blockers` | Show open blockers |
+| `coord handoffs` | Show handoffs |
+| `coord interrupts` | Show pending interrupts |
+| `coord memory` | List recent coordination memory records |
+| `coord memory search <q>` | Full-text search coordination memory |
+| `coord promote --project <name>` | Promote brain patterns to coordination memory |
+| `coord prune [--days N]` | Delete old events, resolved blockers, expired leases (default: 30 days) |
 
 ### Relay (--features relay)
 
 Connect machines, delegate tasks. See the [full relay guide](relay.md).
 
-| Flag | Description |
-|------|-------------|
-| `--relay serve` | Start the relay listener for peer connections |
-| `--relay invite [--qr] [--words]` | Generate invite code, link, and word phrase |
-| `--relay "join <code>"` | Connect using any invite format (code, words, or link) |
-| `--relay discover` | Scan LAN for nearby claudectl instances |
-| `--relay peers` | List known and connected peers |
-| `--relay "delegate <peer> <prompt>"` | Delegate a task to a remote peer |
-| `--relay identity` | Show this instance's relay identity |
+| Command | Description |
+|---------|-------------|
+| `relay serve [--port N]` | Start the relay listener for peer connections |
+| `relay invite [--qr] [--words]` | Generate invite code, link, and word phrase |
+| `relay join <code>` | Connect using any invite format (code, words, or link) |
+| `relay discover` | Scan LAN for nearby claudectl instances |
+| `relay peers` | List known and connected peers |
+| `relay delegate <peer> <prompt>` | Delegate a task to a remote peer |
+| `relay identity` | Show this instance's relay identity |
 
 ### Hive Mind (--features hive)
 
 Share knowledge, distill learnings. Requires relay for transport.
 
-| Flag | Description |
-|------|-------------|
-| `--hive status` | Knowledge store overview (units, categories, conflicts) |
-| `--hive knowledge [--from X]` | List knowledge units, filter by peer or scope |
-| `--hive trust [<peer> [<level>]]` | Show or set peer trust levels |
-| `--hive export` | Export all knowledge as JSON |
-| `--hive "import <file>"` | Import knowledge from JSON file |
-| `--hive archive` | Show cold storage archive stats |
-| `--hive distill` | Run distillation pipeline (dedup, condense, curriculum) |
-| `--hive curriculum` | Show distilled curriculum |
+| Command | Description |
+|---------|-------------|
+| `hive status` | Knowledge store overview (units, categories, conflicts) |
+| `hive knowledge [--from X]` | List knowledge units, filter by peer or scope |
+| `hive trust [<peer> [<level>]]` | Show or set peer trust levels |
+| `hive export` | Export all knowledge as JSON |
+| `hive import <file>` | Import knowledge from JSON file |
+| `hive archive [--prune Nd]` | Show cold storage archive stats |
+| `hive distill` | Run distillation pipeline (dedup, condense, curriculum) |
+| `hive curriculum` | Show distilled curriculum |
 
 ### Cleanup
 

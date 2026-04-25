@@ -242,28 +242,28 @@ if warm_store.find_by_tool("docker").is_empty() {
 A background thread (or CLI command) runs distillation:
 
 ```bash
-claudectl --hive distill          # manual trigger
-claudectl --hive curriculum       # show current curriculum
-claudectl --hive "curriculum --pull"  # pull latest into warm tier
+claudectl hive distill          # manual trigger
+claudectl hive curriculum       # show current curriculum
+claudectl hive curriculum --pull  # pull latest into warm tier
 ```
 
 ## CLI
 
 ```bash
 # Archive management
-claudectl --hive archive          # show archive stats
-claudectl --hive "archive --prune 90d"  # prune archive entries older than 90 days
+claudectl hive archive          # show archive stats
+claudectl hive archive --prune 90d  # prune archive entries older than 90 days
 
 # Distillation
-claudectl --hive distill          # run cold distillation now
-claudectl --hive curriculum       # show current curriculum
-claudectl --hive "curriculum --pull"    # pull curriculum into warm tier
-claudectl --hive "curriculum --pin v3"  # pin to a specific curriculum version
+claudectl hive distill          # run cold distillation now
+claudectl hive curriculum       # show current curriculum
+claudectl hive curriculum --pull    # pull curriculum into warm tier
+claudectl hive curriculum --pin v3  # pin to a specific curriculum version
 
 # Storage backend
-claudectl --hive "storage status"     # show backend config and stats
-claudectl --hive "storage push"       # manually push warm tier to cold
-claudectl --hive "storage pull"       # manually pull from cold to warm
+claudectl hive storage status     # show backend config and stats
+claudectl hive storage push       # manually push warm tier to cold
+claudectl hive storage pull       # manually pull from cold to warm
 ```
 
 ## Future: Cloud Backends

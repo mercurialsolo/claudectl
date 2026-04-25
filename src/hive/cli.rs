@@ -2,54 +2,78 @@
 
 use std::io;
 
+use clap::Subcommand;
+
 use super::KnowledgeScope;
 use super::store::HiveStore;
 
-/// Dispatch a hive subcommand.
-pub fn dispatch(subcommand: &str, _json_mode: bool) -> io::Result<()> {
-    let parts: Vec<&str> = subcommand.split_whitespace().collect();
-    match parts.first().copied() {
-        Some("status") => cmd_status(_json_mode),
-        Some("knowledge") => cmd_knowledge(&parts[1..], _json_mode),
-        Some("export") => cmd_export(),
-        Some("import") => cmd_import(&parts[1..]),
-        Some("forget") => cmd_forget(&parts[1..]),
-        Some("trust") => cmd_trust(&parts[1..], _json_mode),
-        Some("archive") => cmd_archive(&parts[1..], _json_mode),
-        Some("distill") => cmd_distill(_json_mode),
-        Some("curriculum") => cmd_curriculum(_json_mode),
-        Some(other) => {
-            eprintln!("Unknown hive subcommand: {other}");
-            print_hive_help();
-            Err(io::Error::other("unknown subcommand"))
-        }
-        None => {
-            print_hive_help();
-            Ok(())
-        }
-    }
+#[derive(Subcommand)]
+pub enum HiveCommand {
+    /// Show knowledge store overview
+    Status,
+
+    /// List knowledge units
+    Knowledge {
+        /// Filter by source peer
+        #[arg(long)]
+        from: Option<String>,
+        /// Filter by scope (universal, language:X, project:X)
+        #[arg(long)]
+        scope: Option<String>,
+    },
+
+    /// Export all knowledge as JSON
+    Export,
+
+    /// Import knowledge from a JSON file
+    Import {
+        /// Path to JSON file
+        file: String,
+    },
+
+    /// Remove a knowledge unit
+    Forget {
+        /// Unit ID to remove
+        unit_id: String,
+    },
+
+    /// Show or set peer trust levels
+    Trust {
+        /// Peer ID (omit to list all)
+        peer: Option<String>,
+        /// Trust level 0.0-1.0 (omit to show current)
+        level: Option<f64>,
+    },
+
+    /// Show cold storage archive stats, or prune old entries
+    Archive {
+        /// Prune entries older than N days (e.g., "90d" or "90")
+        #[arg(long)]
+        prune: Option<String>,
+    },
+
+    /// Run distillation pipeline on archive
+    Distill,
+
+    /// Show distilled curriculum
+    Curriculum,
 }
 
-fn print_hive_help() {
-    eprintln!("Usage: claudectl --hive <subcommand>");
-    eprintln!();
-    eprintln!("Knowledge:");
-    eprintln!("  status                       Show knowledge store overview");
-    eprintln!("  knowledge [--from P] [--scope S]  List knowledge units");
-    eprintln!("  export                       Export all knowledge as JSON");
-    eprintln!("  import <file>                Import knowledge from JSON");
-    eprintln!("  forget <unit-id>             Remove a knowledge unit");
-    eprintln!();
-    eprintln!("Trust:");
-    eprintln!("  trust                        Show all peer trust levels");
-    eprintln!("  trust <peer>                 Show trust for one peer");
-    eprintln!("  trust <peer> <0.0-1.0>       Set trust level");
-    eprintln!();
-    eprintln!("Archive & Distillation:");
-    eprintln!("  archive                      Show cold storage stats");
-    eprintln!("  archive --prune <Nd>         Prune entries older than N days");
-    eprintln!("  distill                      Run distillation pipeline");
-    eprintln!("  curriculum                   Show distilled curriculum");
+/// Dispatch a hive subcommand.
+pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()> {
+    match command {
+        HiveCommand::Status => cmd_status(json_mode),
+        HiveCommand::Knowledge { from, scope } => {
+            cmd_knowledge(from.as_deref(), scope.as_deref(), json_mode)
+        }
+        HiveCommand::Export => cmd_export(),
+        HiveCommand::Import { file } => cmd_import(file),
+        HiveCommand::Forget { unit_id } => cmd_forget(unit_id),
+        HiveCommand::Trust { peer, level } => cmd_trust(peer.as_deref(), *level, json_mode),
+        HiveCommand::Archive { prune } => cmd_archive(prune.as_deref(), json_mode),
+        HiveCommand::Distill => cmd_distill(json_mode),
+        HiveCommand::Curriculum => cmd_curriculum(json_mode),
+    }
 }
 
 /// `claudectl hive status`
@@ -153,27 +177,17 @@ fn conflict_line_count() -> usize {
         .unwrap_or(0)
 }
 
-/// `claudectl hive knowledge [--scope X] [--from peer] [--json]`
-fn cmd_knowledge(args: &[&str], json_mode: bool) -> io::Result<()> {
+/// `claudectl hive knowledge [--scope X] [--from peer]`
+fn cmd_knowledge(
+    from_filter: Option<&str>,
+    scope_filter: Option<&str>,
+    json_mode: bool,
+) -> io::Result<()> {
     let store = HiveStore::load();
-    let mut scope_filter: Option<String> = None;
-    let mut from_filter: Option<String> = None;
 
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--scope" {
-            i += 1;
-            scope_filter = args.get(i).map(|s| s.to_string());
-        } else if args[i] == "--from" {
-            i += 1;
-            from_filter = args.get(i).map(|s| s.to_string());
-        }
-        i += 1;
-    }
-
-    let mut units: Vec<&super::KnowledgeUnit> = if let Some(ref from) = from_filter {
+    let mut units: Vec<&super::KnowledgeUnit> = if let Some(from) = from_filter {
         store.by_source(from)
-    } else if let Some(ref scope_str) = scope_filter {
+    } else if let Some(scope_str) = scope_filter {
         let scope = parse_scope(scope_str);
         store.by_scope(&scope)
     } else {
@@ -227,13 +241,7 @@ fn cmd_export() -> io::Result<()> {
 }
 
 /// `claudectl hive import <file>`
-fn cmd_import(args: &[&str]) -> io::Result<()> {
-    if args.is_empty() {
-        eprintln!("Usage: claudectl --hive \"import <file>\"");
-        return Err(io::Error::other("missing file path"));
-    }
-
-    let path = args[0];
+fn cmd_import(path: &str) -> io::Result<()> {
     let content =
         std::fs::read_to_string(path).map_err(|e| io::Error::other(format!("read {path}: {e}")))?;
 
@@ -251,13 +259,7 @@ fn cmd_import(args: &[&str]) -> io::Result<()> {
 }
 
 /// `claudectl hive forget <unit_id>`
-fn cmd_forget(args: &[&str]) -> io::Result<()> {
-    if args.is_empty() {
-        eprintln!("Usage: claudectl --hive \"forget <unit-id>\"");
-        return Err(io::Error::other("missing unit id"));
-    }
-
-    let unit_id = args[0];
+fn cmd_forget(unit_id: &str) -> io::Result<()> {
     let mut store = HiveStore::load();
 
     if store.remove(unit_id) {
@@ -274,11 +276,11 @@ fn cmd_forget(args: &[&str]) -> io::Result<()> {
 }
 
 /// `claudectl hive trust [peer_id] [level]`
-fn cmd_trust(args: &[&str], json_mode: bool) -> io::Result<()> {
+fn cmd_trust(peer: Option<&str>, level: Option<f64>, json_mode: bool) -> io::Result<()> {
     let mut trust_store = super::trust::TrustStore::load();
 
-    match args.len() {
-        0 => {
+    match (peer, level) {
+        (None, _) => {
             // Show all peer trust levels
             let all = trust_store.all();
             if json_mode {
@@ -304,9 +306,8 @@ fn cmd_trust(args: &[&str], json_mode: bool) -> io::Result<()> {
                 }
             }
         }
-        1 => {
+        (Some(peer_id), None) => {
             // Show trust for a specific peer
-            let peer_id = args[0];
             if let Some(trust) = trust_store.get(peer_id) {
                 if json_mode {
                     println!("{}", serde_json::to_string_pretty(trust).unwrap());
@@ -322,12 +323,8 @@ fn cmd_trust(args: &[&str], json_mode: bool) -> io::Result<()> {
                 return Err(io::Error::other("unknown peer"));
             }
         }
-        _ => {
+        (Some(peer_id), Some(level)) => {
             // Set trust level
-            let peer_id = args[0];
-            let level: f64 = args[1]
-                .parse()
-                .map_err(|_| io::Error::other("invalid trust level (must be 0.0-1.0)"))?;
             trust_store.set_trust(peer_id, level);
             trust_store.save().map_err(io::Error::other)?;
             let actual = trust_store.get(peer_id).unwrap();
@@ -362,21 +359,12 @@ fn parse_scope(s: &str) -> KnowledgeScope {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// `claudectl hive archive [--prune Nd]`
-fn cmd_archive(args: &[&str], json_mode: bool) -> io::Result<()> {
-    let mut prune_days: Option<u32> = None;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--prune" {
-            i += 1;
-            if let Some(val) = args.get(i) {
-                let days_str = val.trim_end_matches('d');
-                prune_days = days_str.parse().ok();
-            }
-        }
-        i += 1;
-    }
-
-    if let Some(days) = prune_days {
+fn cmd_archive(prune: Option<&str>, json_mode: bool) -> io::Result<()> {
+    if let Some(val) = prune {
+        let days_str = val.trim_end_matches('d');
+        let days: u32 = days_str
+            .parse()
+            .map_err(|_| io::Error::other(format!("invalid prune value: {val}")))?;
         let pruned = super::archive::prune_archive(days)
             .map_err(|e| io::Error::other(format!("prune: {e}")))?;
         println!("Pruned {pruned} archive entries older than {days} days.");
@@ -407,7 +395,7 @@ fn cmd_archive(args: &[&str], json_mode: bool) -> io::Result<()> {
             println!("    Source: {} archive units", m.source_archive_units);
         } else {
             println!();
-            println!("  No curriculum yet. Run: claudectl --hive distill");
+            println!("  No curriculum yet. Run: claudectl hive distill");
         }
     }
 
@@ -453,7 +441,7 @@ fn cmd_curriculum(json_mode: bool) -> io::Result<()> {
     }
 
     if curriculum.is_empty() {
-        println!("No curriculum yet. Run: claudectl --hive distill");
+        println!("No curriculum yet. Run: claudectl hive distill");
         return Ok(());
     }
 

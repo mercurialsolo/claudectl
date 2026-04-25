@@ -29,7 +29,7 @@ Without relay, hive works locally — knowledge is distilled, archived, and used
 On Machine A:
 
 ```bash
-claudectl --relay invite
+claudectl relay invite
 ```
 
 Output:
@@ -43,14 +43,14 @@ Your identity: laptop-a3f2
 
 Share any of the above with your peer. They run:
 
-  claudectl --relay "join YEK-AGA-YHK-QAA-BM"
-  claudectl --relay "join cctl://laptop-a3f2@192.168.1.50:9847/k/a3f29b1cd4e5f678"
+  claudectl relay join YEK-AGA-YHK-QAA-BM
+  claudectl relay join cctl://laptop-a3f2@192.168.1.50:9847/k/a3f29b1cd4e5f678
 ```
 
 ### Step 3: Join from Machine B
 
 ```bash
-claudectl --relay "join YEK-AGA-YHK-QAA-BM"
+claudectl relay join YEK-AGA-YHK-QAA-BM
 ```
 
 That's it. Both machines are paired and connected.
@@ -60,13 +60,13 @@ That's it. Both machines are paired and connected.
 On Machine A (the one that generated the invite):
 
 ```bash
-claudectl --relay serve
+claudectl relay serve
 ```
 
 Machine B connects:
 
 ```bash
-claudectl --relay "connect 192.168.1.50:9847"
+claudectl relay connect 192.168.1.50:9847
 ```
 
 ## Three Ways to Share a Code
@@ -84,7 +84,7 @@ YEK-AGA-YHK-QAA-BM
 ### Word Phrase (memorable)
 
 ```bash
-claudectl --relay "invite --words"
+claudectl relay invite --words
 ```
 
 ```
@@ -96,7 +96,7 @@ fur-hue-ace-bid-ice-ape-cod-elk-ace
 ### Invite Link + QR Code
 
 ```bash
-claudectl --relay "invite --qr"
+claudectl relay invite --qr
 ```
 
 ```
@@ -108,9 +108,9 @@ Plus a scannable QR code in the terminal (requires `qrencode` installed).
 The `join` command auto-detects the format:
 
 ```bash
-claudectl --relay "join YEK-AGA-YHK-QAA-BM"           # relay code
-claudectl --relay "join fur-hue-ace-bid-ice-..."        # word phrase
-claudectl --relay "join cctl://laptop-a3f2@..."         # invite link
+claudectl relay join YEK-AGA-YHK-QAA-BM           # relay code
+claudectl relay join fur-hue-ace-bid-ice-..."        # word phrase
+claudectl relay join cctl://laptop-a3f2@..."         # invite link
 ```
 
 ## LAN Discovery
@@ -118,7 +118,7 @@ claudectl --relay "join cctl://laptop-a3f2@..."         # invite link
 Find nearby claudectl instances without codes:
 
 ```bash
-claudectl --relay discover
+claudectl relay discover
 ```
 
 ```
@@ -130,7 +130,7 @@ Found 2 instance(s):
   ci-runner-9d1e       192.168.1.101:9847       v0.40.0
 ```
 
-This sends a UDP broadcast and listens for 3 seconds. Peers running `claudectl --relay serve` announce themselves automatically.
+This sends a UDP broadcast and listens for 3 seconds. Peers running `claudectl relay serve` announce themselves automatically.
 
 ## Hive Mind: Knowledge Sharing
 
@@ -161,38 +161,38 @@ Trust adjusts automatically: when your brain makes a decision that agrees with h
 
 ```bash
 # Overview
-claudectl --hive status
+claudectl hive status
 
 # List all knowledge units
-claudectl --hive knowledge
+claudectl hive knowledge
 
 # Filter by source peer
-claudectl --hive "knowledge --from ci-runner"
+claudectl hive knowledge --from ci-runner
 
 # Filter by scope
-claudectl --hive "knowledge --scope project:myapp"
+claudectl hive knowledge --scope project:myapp
 
 # Export all knowledge as JSON
-claudectl --hive export > team-knowledge.json
+claudectl hive export > team-knowledge.json
 
 # Import knowledge from a file
-claudectl --hive "import team-knowledge.json"
+claudectl hive import team-knowledge.json
 
 # Remove a specific unit
-claudectl --hive "forget ku_1745539200_3"
+claudectl hive forget ku_1745539200_3
 ```
 
 ### Manage trust
 
 ```bash
 # Show all peer trust levels
-claudectl --hive trust
+claudectl hive trust
 
 # Show trust for one peer
-claudectl --hive "trust ci-runner"
+claudectl hive trust ci-runner
 
 # Manually set trust
-claudectl --hive "trust ci-runner 0.9"
+claudectl hive trust ci-runner 0.9
 ```
 
 ## Remote Task Delegation
@@ -224,17 +224,17 @@ Tasks with `"peer"` are delegated to the remote machine. Tasks without `"peer"` 
 ### Manual delegation
 
 ```bash
-claudectl --relay "delegate ci-runner 'Fix the auth tests' --cwd /project"
+claudectl relay delegate ci-runner 'Fix the auth tests' --cwd /project
 ```
 
 ### Interrupts
 
 ```bash
 # Nudge a remote task (informational)
-claudectl --relay "interrupt task_123 nudge 'dependency resolved'"
+claudectl relay interrupt task_123 nudge 'dependency resolved'
 
 # Stop a remote task
-claudectl --relay "interrupt task_123 stop 'no longer needed'"
+claudectl relay interrupt task_123 stop 'no longer needed'
 ```
 
 ## TUI Integration
@@ -297,34 +297,33 @@ exclude_commands = []             # command patterns to never share
 
 | Command | Description |
 |---------|-------------|
-| `--relay serve [--port N]` | Start the relay listener |
-| `--relay invite [--qr] [--words]` | Generate invite code/link/phrase |
-| `--relay "join <code>"` | Join using any invite format |
-| `--relay discover` | Scan LAN for nearby instances |
-| `--relay pair` | Generate a raw PSK code |
-| `--relay "accept <code> <peer>"` | Accept a raw PSK from a peer |
-| `--relay "connect <host:port>"` | Connect to a remote relay |
-| `--relay peers [--json]` | List known peers |
-| `--relay "forget <peer>"` | Remove a peer |
-| `--relay identity` | Show this instance's relay identity |
-| `--relay "delegate <peer> <prompt>"` | Delegate a task |
-| `--relay status` | Show remote task status |
-| `--relay "interrupt <task> <type>"` | Interrupt a remote task |
+| `relay serve [--port N]` | Start the relay listener |
+| `relay invite [--qr] [--words]` | Generate invite code/link/phrase |
+| `relay join <code>` | Join using any invite format |
+| `relay discover` | Scan LAN for nearby instances |
+| `relay pair` | Generate a raw PSK code |
+| `relay accept <code> <peer>` | Accept a raw PSK from a peer |
+| `relay connect <host:port>` | Connect to a remote relay |
+| `relay peers` | List known peers |
+| `relay forget <peer>` | Remove a peer |
+| `relay identity` | Show this instance's relay identity |
+| `relay delegate <peer> <prompt>` | Delegate a task |
+| `relay status` | Show remote task status |
+| `relay interrupt <task> <type>` | Interrupt a remote task |
 
 ### Hive commands
 
 | Command | Description |
 |---------|-------------|
-| `--hive status` | Show knowledge store overview |
-| `--hive knowledge [--from X] [--scope Y]` | List knowledge units |
-| `--hive export` | Export knowledge as JSON |
-| `--hive "import <file>"` | Import knowledge from JSON |
-| `--hive "forget <unit-id>"` | Remove a knowledge unit |
-| `--hive trust` | Show/set peer trust levels |
-| `--hive archive` | Show cold storage archive stats |
-| `--hive "archive --prune 90d"` | Prune archive entries older than 90 days |
-| `--hive distill` | Run distillation pipeline on archive |
-| `--hive curriculum` | Show distilled curriculum |
+| `hive status` | Show knowledge store overview |
+| `hive knowledge [--from X] [--scope Y]` | List knowledge units |
+| `hive export` | Export knowledge as JSON |
+| `hive import <file>` | Import knowledge from JSON |
+| `hive forget <unit-id>` | Remove a knowledge unit |
+| `hive trust [<peer> [<level>]]` | Show/set peer trust levels |
+| `hive archive [--prune Nd]` | Show cold storage archive stats |
+| `hive distill` | Run distillation pipeline on archive |
+| `hive curriculum` | Show distilled curriculum |
 
 ## Architecture
 
