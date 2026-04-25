@@ -244,12 +244,12 @@ pub(crate) struct Cli {
     coord: Option<String>,
 
     // ── Relay ─────────────────────────────────────────────────────────
-    /// Relay transport (serve, pair, accept, connect, peers, disconnect, forget)
+    /// Relay: serve, invite, join, discover, pair, accept, connect, peers, delegate, status, interrupt, forget, identity
     #[cfg(feature = "relay")]
     #[arg(long, help_heading = "Relay")]
     relay: Option<String>,
 
-    /// Hive mind knowledge sharing (status, knowledge, export, import, forget)
+    /// Hive: status, knowledge, trust, export, import, forget, archive, distill, curriculum
     #[cfg(feature = "hive")]
     #[arg(long, help_heading = "Hive Mind")]
     hive: Option<String>,

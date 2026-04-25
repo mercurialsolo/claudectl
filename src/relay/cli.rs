@@ -35,17 +35,37 @@ pub fn dispatch(subcommand: &str, json_mode: bool) -> io::Result<()> {
         Some("discover") => cmd_discover(json_mode),
         Some(other) => {
             eprintln!("Unknown relay subcommand: {other}");
-            eprintln!("Available: serve, pair, accept, connect, peers, disconnect, forget,");
-            eprintln!("          identity, delegate, status, interrupt, invite, join, discover");
+            print_relay_help();
             Err(io::Error::other("unknown subcommand"))
         }
         None => {
-            eprintln!("Usage: claudectl --relay <subcommand>");
-            eprintln!("Available: serve, pair, accept, connect, peers, disconnect, forget,");
-            eprintln!("          identity, delegate, status, interrupt, invite, join, discover");
+            print_relay_help();
             Ok(())
         }
     }
+}
+
+fn print_relay_help() {
+    eprintln!("Usage: claudectl --relay <subcommand>");
+    eprintln!();
+    eprintln!("Connection:");
+    eprintln!("  serve [--port N]             Start relay listener");
+    eprintln!("  invite [--qr] [--words]      Generate invite code/link/phrase");
+    eprintln!("  join <code|link|phrase>       Connect using any invite format");
+    eprintln!("  discover                     Scan LAN for nearby instances");
+    eprintln!("  connect <host:port>          Connect to a known peer");
+    eprintln!();
+    eprintln!("Pairing:");
+    eprintln!("  pair                         Generate raw PSK code");
+    eprintln!("  accept <code> <peer-id>      Accept a PSK from a peer");
+    eprintln!("  peers [--json]               List known/connected peers");
+    eprintln!("  forget <peer-id>             Remove a peer");
+    eprintln!("  identity                     Show this instance's relay identity");
+    eprintln!();
+    eprintln!("Delegation:");
+    eprintln!("  delegate <peer> <prompt>     Delegate a task to a remote peer");
+    eprintln!("  status                       Show remote task status");
+    eprintln!("  interrupt <task> <type>       Interrupt a remote task (nudge/stop)");
 }
 
 /// `claudectl relay serve [--port PORT]`

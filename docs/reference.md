@@ -135,20 +135,34 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 
 Press `R` on any session to record a per-session highlight reel (edits, commands, errors — idle time stripped). In `--demo` mode, a scripted coding session is drip-fed so recording works without live sessions.
 
-### Relay & Hive Mind
+### Relay (--features relay)
 
-Requires `--features relay` at build time. See the [full relay guide](relay.md) for details.
+Connect machines, delegate tasks. See the [full relay guide](relay.md).
 
 | Flag | Description |
 |------|-------------|
 | `--relay serve` | Start the relay listener for peer connections |
 | `--relay invite [--qr] [--words]` | Generate invite code, link, and word phrase |
-| `--relay "join <code>"` | Connect using any invite format |
+| `--relay "join <code>"` | Connect using any invite format (code, words, or link) |
 | `--relay discover` | Scan LAN for nearby claudectl instances |
 | `--relay peers` | List known and connected peers |
-| `--hive status` | Show hive knowledge store overview |
-| `--hive knowledge` | List shared knowledge units |
-| `--hive trust` | Show/set peer trust levels |
+| `--relay "delegate <peer> <prompt>"` | Delegate a task to a remote peer |
+| `--relay identity` | Show this instance's relay identity |
+
+### Hive Mind (--features hive)
+
+Share knowledge, distill learnings. Requires relay for transport.
+
+| Flag | Description |
+|------|-------------|
+| `--hive status` | Knowledge store overview (units, categories, conflicts) |
+| `--hive knowledge [--from X]` | List knowledge units, filter by peer or scope |
+| `--hive trust [<peer> [<level>]]` | Show or set peer trust levels |
+| `--hive export` | Export all knowledge as JSON |
+| `--hive "import <file>"` | Import knowledge from JSON file |
+| `--hive archive` | Show cold storage archive stats |
+| `--hive distill` | Run distillation pipeline (dedup, condense, curriculum) |
+| `--hive curriculum` | Show distilled curriculum |
 
 ### Cleanup
 

@@ -20,19 +20,36 @@ pub fn dispatch(subcommand: &str, _json_mode: bool) -> io::Result<()> {
         Some("curriculum") => cmd_curriculum(_json_mode),
         Some(other) => {
             eprintln!("Unknown hive subcommand: {other}");
-            eprintln!(
-                "Available: status, knowledge, export, import, forget, trust, archive, distill, curriculum"
-            );
+            print_hive_help();
             Err(io::Error::other("unknown subcommand"))
         }
         None => {
-            eprintln!("Usage: claudectl --hive <subcommand>");
-            eprintln!(
-                "Available: status, knowledge, export, import, forget, trust, archive, distill, curriculum"
-            );
+            print_hive_help();
             Ok(())
         }
     }
+}
+
+fn print_hive_help() {
+    eprintln!("Usage: claudectl --hive <subcommand>");
+    eprintln!();
+    eprintln!("Knowledge:");
+    eprintln!("  status                       Show knowledge store overview");
+    eprintln!("  knowledge [--from P] [--scope S]  List knowledge units");
+    eprintln!("  export                       Export all knowledge as JSON");
+    eprintln!("  import <file>                Import knowledge from JSON");
+    eprintln!("  forget <unit-id>             Remove a knowledge unit");
+    eprintln!();
+    eprintln!("Trust:");
+    eprintln!("  trust                        Show all peer trust levels");
+    eprintln!("  trust <peer>                 Show trust for one peer");
+    eprintln!("  trust <peer> <0.0-1.0>       Set trust level");
+    eprintln!();
+    eprintln!("Archive & Distillation:");
+    eprintln!("  archive                      Show cold storage stats");
+    eprintln!("  archive --prune <Nd>         Prune entries older than N days");
+    eprintln!("  distill                      Run distillation pipeline");
+    eprintln!("  curriculum                   Show distilled curriculum");
 }
 
 /// `claudectl hive status`

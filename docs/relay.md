@@ -281,6 +281,12 @@ export_min_evidence = 5           # min decisions before sharing a pattern
 export_min_tool_decisions = 10    # min decisions before sharing accuracy
 knowledge_ttl_days = 30           # expire unvalidated knowledge after N days
 inject_unverified = true          # include low-trust knowledge in brain prompt
+max_units = 500                   # hard cap on stored knowledge units
+max_prompt_units = 20             # cap on units injected into brain prompt
+stale_peer_days = 90              # prune knowledge from peers gone this long
+share_categories = []             # empty = share all (or: ["best_practice", "technique"])
+exclude_tools = []                # tools to never share (e.g., ["Write"])
+exclude_commands = []             # command patterns to never share
 ```
 
 ## CLI Reference
@@ -313,6 +319,10 @@ inject_unverified = true          # include low-trust knowledge in brain prompt
 | `--hive "import <file>"` | Import knowledge from JSON |
 | `--hive "forget <unit-id>"` | Remove a knowledge unit |
 | `--hive trust` | Show/set peer trust levels |
+| `--hive archive` | Show cold storage archive stats |
+| `--hive "archive --prune 90d"` | Prune archive entries older than 90 days |
+| `--hive distill` | Run distillation pipeline on archive |
+| `--hive curriculum` | Show distilled curriculum |
 
 ## Architecture
 
