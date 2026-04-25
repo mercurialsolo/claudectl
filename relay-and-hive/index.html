@@ -1,0 +1,2104 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Mission control for Claude Code — supervise, orchestrate, and connect your coding agents with a local LLM brain and hive mind.">
+      
+      
+      
+        <link rel="canonical" href="https://mercurialsolo.github.io/claudectl/relay-and-hive/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Relay and Hive: Cross-Machine Collaboration for claudectl - claudectl</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#relay-and-hive-cross-machine-collaboration-for-claudectl" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="claudectl" class="md-header__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            claudectl
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Relay and Hive: Cross-Machine Collaboration for claudectl
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="claudectl" class="md-nav__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    claudectl
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive Mind
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terminal-support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terminal Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#thesis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thesis
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why This Exists
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Principles
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Design Principles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#peer-to-peer-not-hub-spoke" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer-to-peer, not hub-spoke
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#local-always-wins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Local always wins
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zero-new-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zero new dependencies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gossip-over-consensus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gossip over consensus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#independent-layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Independent layers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-Goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-1-relay-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 1: Relay Transport
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Layer 1: Relay Transport">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#module-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wire-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wire Protocol
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authentication-hmac-challenge-response" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication: HMAC Challenge-Response
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connection-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#threading-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threading Model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Persistence
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-2-remote-coordination" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 2: Remote Coordination
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Layer 2: Remote Coordination">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overview_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extended-taskdef" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extended TaskDef
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delegation-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delegation Protocol
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-context-payload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task Context Payload
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#remote-task-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote Task Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#remote-task-states-in-tui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote Task States in TUI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cost-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#interrupt-forwarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interrupt Forwarding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-3-hive-mind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer 3: Hive Mind
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Layer 3: Hive Mind">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overview_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#module-structure_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowledge-unit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowledge Unit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-shared-vs-what-stays-local" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Gets Shared vs What Stays Local
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#distillation-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distillation Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gossip-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gossip Protocol
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gossip Protocol">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sync-message" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sync message
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#snapshot-for-new-peers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Snapshot (for new peers)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Propagation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#merge-and-conflict-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merge and Conflict Resolution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trust-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trust Model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#brain-prompt-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Brain Prompt Integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#persistence_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Persistence
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Surface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CLI Surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#relay-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relay commands
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hive-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive commands
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tui-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TUI Integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#threat-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threat model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-encryption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No encryption
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#command-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command injection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowledge-poisoning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowledge poisoning
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implementation-phases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation Phases
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Implementation Phases">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-relay-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Relay Transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-remote-task-delegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Remote Task Delegation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-hive-knowledge-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3: Hive Knowledge Store
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-gossip-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4: Gossip Protocol
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-5-trust-and-brain-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 5: Trust and Brain Integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#appendix-hmac-sha256-implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Appendix: HMAC-SHA256 Implementation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#appendix-message-size-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Appendix: Message Size Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="relay-and-hive-cross-machine-collaboration-for-claudectl">Relay and Hive: Cross-Machine Collaboration for claudectl</h1>
+<p>Status: Draft</p>
+<p>This document specifies a relay transport, remote coordination protocol, and hive mind knowledge-sharing system that extends claudectl from a local session supervisor into a distributed collaboration plane across machines, accounts, and teams.</p>
+<h2 id="thesis">Thesis</h2>
+<p>Coding agents learn in isolation. Each claudectl brain distills preferences, detects friction patterns, and builds accuracy — but that knowledge dies at the machine boundary. Two developers working on the same project, or even the same developer across a laptop and a CI runner, cannot share what their brains have learned.</p>
+<p>This design introduces three layers:</p>
+<ol>
+<li><strong>Relay</strong> — a zero-dependency TCP transport with pre-shared key authentication</li>
+<li><strong>Remote Coordination</strong> — task delegation, status streaming, and handoffs across machines</li>
+<li><strong>Hive Mind</strong> — gossip-based knowledge propagation where every connected brain gets smarter from every other brain's corrections</li>
+</ol>
+<p>Each layer is independently useful. Relay alone enables task offloading. Relay + coordination gives cross-machine orchestration. All three together create a convergent hive mind where local learning compounds across the network.</p>
+<h2 id="why-this-exists">Why This Exists</h2>
+<p>The coordination layer (see <code>coordination-layer.md</code>) solves multi-agent coordination on a single machine. It does not solve:</p>
+<ul>
+<li>offloading a task to a remote machine with spare capacity</li>
+<li>two developers' Claude Code instances collaborating on shared work</li>
+<li>sharing brain learnings across machines so corrections propagate</li>
+<li>bootstrapping a new machine's brain with the team's accumulated wisdom</li>
+<li>global cost tracking across distributed sessions</li>
+</ul>
+<p>These problems require a network layer. But claudectl's constraints (zero async runtime, 7 runtime crates, &lt;1MB binary, local-first) mean we cannot bolt on a web framework or message broker. The relay is built entirely on <code>std::net</code>.</p>
+<h2 id="design-principles">Design Principles</h2>
+<h3 id="peer-to-peer-not-hub-spoke">Peer-to-peer, not hub-spoke</h3>
+<p>Both instances run a listener and can initiate connections. Either side can delegate work to the other. The relationship is symmetric by default — there is no inherent controller/worker hierarchy. Roles emerge from usage, not from topology.</p>
+<h3 id="local-always-wins">Local always wins</h3>
+<p>The deny-first principle extends to knowledge. If a peer's knowledge unit conflicts with a local preference, the local preference wins unconditionally. Peer knowledge enriches the brain's context but never overrides local decisions.</p>
+<h3 id="zero-new-dependencies">Zero new dependencies</h3>
+<p>The relay uses <code>std::net::TcpListener</code> and <code>std::net::TcpStream</code>. Authentication uses HMAC-SHA256 implemented inline (the algorithm is simple enough to not warrant a crate). If operators need encryption, they tunnel through SSH or WireGuard — that is an infrastructure concern, not claudectl's.</p>
+<h3 id="gossip-over-consensus">Gossip over consensus</h3>
+<p>Knowledge propagates via epidemic gossip, not distributed consensus. There is no leader election, no quorum, no total ordering. Each brain is sovereign. Knowledge units spread like rumors: high-confidence, well-validated knowledge propagates further and faster. Conflicts resolve locally by preferring local knowledge.</p>
+<h3 id="independent-layers">Independent layers</h3>
+<p>The relay transport is useful without the hive mind. Remote task delegation is useful without knowledge sharing. Each layer adds value incrementally. This also means each layer can be implemented and shipped independently.</p>
+<h2 id="non-goals">Non-Goals</h2>
+<ul>
+<li>Centralized server or cloud dependency</li>
+<li>Real-time file synchronization between machines</li>
+<li>Shared terminal/TUI streaming</li>
+<li>Cross-machine JSONL log streaming (status updates are sufficient)</li>
+<li>Support for non-claudectl peers (the protocol is claudectl-specific)</li>
+<li>Encryption at the transport layer (use SSH tunnels or VPN)</li>
+<li>Automatic peer discovery (peers are explicitly configured)</li>
+</ul>
+<hr />
+<h2 id="layer-1-relay-transport">Layer 1: Relay Transport</h2>
+<h3 id="overview">Overview</h3>
+<p>The relay is a TCP socket layer that allows two claudectl instances to exchange structured JSON messages. It handles connection lifecycle, authentication, heartbeats, and reconnection.</p>
+<h3 id="module-structure">Module Structure</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>src/relay/
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  mod.rs          — PeerId, RelayMessage, MessageType, re-exports
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  protocol.rs     — NDJSON framing, HMAC-SHA256 challenge-response auth
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  listener.rs     — TcpListener accept loop on dedicated thread
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  peer.rs         — single peer connection: read/write/reconnect
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  mesh.rs         — peer registry, broadcast, route-to-peer
+</code></pre></div>
+<p>Feature-gated behind <code>relay</code> in Cargo.toml (like <code>coord</code> is gated behind <code>coord</code>), so the default binary is unchanged.</p>
+<h3 id="data-types">Data Types</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="sd">/// Unique identity for a claudectl instance in the network.</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="sd">/// Derived from hostname + a random suffix, generated on first run.</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="sd">/// Stored in ~/.claudectl/relay/identity.</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">struct</span><span class="w"> </span><span class="nc">PeerId</span><span class="p">(</span><span class="nb">String</span><span class="p">);</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="sd">/// Every message over the wire.</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="k">struct</span><span class="w"> </span><span class="nc">RelayMessage</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w">              </span><span class="c1">// UUID for dedup</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="n">msg_type</span><span class="p">:</span><span class="w"> </span><span class="nc">MessageType</span><span class="p">,</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="n">from_peer</span><span class="p">:</span><span class="w"> </span><span class="nc">PeerId</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="n">timestamp</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span><span class="w">          </span><span class="c1">// epoch millis</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="n">payload</span><span class="p">:</span><span class="w"> </span><span class="nc">serde_json</span><span class="p">::</span><span class="n">Value</span><span class="p">,</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="p">}</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="k">enum</span><span class="w"> </span><span class="nc">MessageType</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="c1">// Layer 1: transport</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="n">Handshake</span><span class="p">,</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="n">HandshakeAck</span><span class="p">,</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="n">Heartbeat</span><span class="p">,</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">    </span><span class="n">Ack</span><span class="p">,</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">    </span><span class="c1">// Layer 2: coordination</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="w">    </span><span class="n">DelegateTask</span><span class="p">,</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">    </span><span class="n">TaskStatus</span><span class="p">,</span>
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="w">    </span><span class="n">TaskHandoff</span><span class="p">,</span>
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="w">    </span><span class="n">TaskInterrupt</span><span class="p">,</span>
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="w">    </span><span class="c1">// Layer 3: hive</span>
+<a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a><span class="w">    </span><span class="n">KnowledgeSync</span><span class="p">,</span>
+<a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a><span class="w">    </span><span class="n">KnowledgeRequest</span><span class="p">,</span>
+<a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a><span class="w">    </span><span class="n">KnowledgeSnapshot</span><span class="p">,</span>
+<a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="wire-protocol">Wire Protocol</h3>
+<p>Newline-delimited JSON (NDJSON) over TCP. Each line is a complete <code>RelayMessage</code> serialized as JSON, terminated by <code>\n</code>. No framing headers, no length prefixes, no binary encoding.</p>
+<p>Rationale: NDJSON is trivially debuggable (<code>nc host port</code> shows readable messages), parseable with <code>serde_json::from_str</code>, and compatible with line-oriented buffered readers.</p>
+<h3 id="authentication-hmac-challenge-response">Authentication: HMAC Challenge-Response</h3>
+<p>Pairing uses a pre-shared key (PSK) generated by <code>claudectl relay pair</code>. The PSK is a 32-byte random value, displayed as a human-friendly code (e.g., <code>kx7f-m2np-9a3d-w1vz</code>).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Connection handshake:
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>1. Connector opens TCP stream to listener
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>2. Listener sends:    {&quot;type&quot;: &quot;challenge&quot;, &quot;nonce&quot;: &quot;&lt;random-32-bytes-hex&gt;&quot;}
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>3. Connector computes: HMAC-SHA256(key=PSK, message=nonce)
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>4. Connector sends:   {&quot;type&quot;: &quot;handshake&quot;, &quot;peer_id&quot;: &quot;...&quot;, &quot;proof&quot;: &quot;&lt;hmac-hex&gt;&quot;,
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>                        &quot;version&quot;: &quot;0.35.0&quot;}
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>5. Listener verifies HMAC, checks version compatibility
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>6. Listener sends:    {&quot;type&quot;: &quot;handshake_ack&quot;, &quot;peer_id&quot;: &quot;...&quot;, &quot;status&quot;: &quot;ok&quot;}
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>7. Connection established. Both sides begin message exchange.
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>If HMAC verification fails:
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>6. Listener sends:    {&quot;type&quot;: &quot;handshake_ack&quot;, &quot;status&quot;: &quot;denied&quot;}
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>7. Listener closes connection.
+</code></pre></div>
+<p>The HMAC-SHA256 implementation is inlined (~60 lines of Rust for the algorithm). No external crate needed.</p>
+<p>PSK storage: <code>~/.claudectl/relay/peers/&lt;peer_id&gt;.key</code> — one file per paired peer, containing the shared key. The file is chmod 600.</p>
+<h3 id="connection-lifecycle">Connection Lifecycle</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>States:
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  Disconnected → Connecting → Authenticating → Connected → Disconnected
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>Heartbeats:
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>  Every 30 seconds, both sides send a Heartbeat message.
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>  If 3 consecutive heartbeats are missed (90 seconds), the connection
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  is considered dead and transitions to Disconnected.
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>Reconnection:
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>  On disconnect, the initiating side (the one that called `relay connect`)
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>  enters a reconnect loop with exponential backoff:
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    5s → 10s → 20s → 40s → 60s (cap)
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>  The listener side does not reconnect — it waits for the connector.
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>Deduplication:
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>  Each RelayMessage carries a unique `id`. Recipients track the last 1000
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>  message IDs and silently drop duplicates. This handles retransmission
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>  after reconnect.
+</code></pre></div>
+<h3 id="threading-model">Threading Model</h3>
+<p>claudectl is synchronous with no async runtime. The relay uses dedicated threads:</p>
+<ul>
+<li><strong>Listener thread</strong>: Runs <code>TcpListener::accept()</code> in a loop. On new connection, spawns a reader thread for that peer.</li>
+<li><strong>Reader thread</strong> (per peer): Reads lines from the <code>TcpStream</code>, parses into <code>RelayMessage</code>, dispatches to the appropriate handler via a <code>crossbeam</code>-free channel (use <code>std::sync::mpsc</code>).</li>
+<li><strong>Writer</strong>: Messages are sent by any thread calling <code>peer.send(msg)</code>, which locks the <code>TcpStream</code> via <code>Arc&lt;Mutex&lt;TcpStream&gt;&gt;</code>.</li>
+</ul>
+<p>No new threading crate needed — <code>std::thread</code>, <code>std::sync::mpsc</code>, and <code>Arc&lt;Mutex&lt;_&gt;&gt;</code> suffice.</p>
+<h3 id="configuration">Configuration</h3>
+<p>In <code>.claudectl.toml</code> or <code>~/.config/claudectl/config.toml</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">[relay]</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">listen_port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">9847</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">listen_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.0.0.0&quot;</span><span class="w">      </span><span class="c1"># or &quot;127.0.0.1&quot; for local-only</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">max_peers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">heartbeat_interval_secs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">reconnect_max_secs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">60</span>
+</code></pre></div>
+<h3 id="cli">CLI</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>serve<span class="w">                    </span><span class="c1"># start listener (foreground, for testing)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>pair<span class="w">                     </span><span class="c1"># generate a new PSK, display as code</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>accept<span class="w"> </span>&lt;code&gt;<span class="w">            </span><span class="c1"># store a PSK from a peer&#39;s pair command</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>connect<span class="w"> </span>&lt;host:port&gt;<span class="w">      </span><span class="c1"># connect to a remote peer</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>peers<span class="w">                    </span><span class="c1"># list connected/known peers</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>disconnect<span class="w"> </span>&lt;peer_id&gt;<span class="w">     </span><span class="c1"># drop a connection</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>forget<span class="w"> </span>&lt;peer_id&gt;<span class="w">         </span><span class="c1"># remove peer and its PSK</span>
+</code></pre></div>
+<p>When the TUI or brain is running, the relay starts automatically if <code>relay.enabled = true</code> in config.</p>
+<h3 id="persistence">Persistence</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>~/.claudectl/relay/
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>  identity              — this instance&#39;s PeerId (generated once)
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>  peers/
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    &lt;peer_id&gt;.key       — PSK for each paired peer (chmod 600)
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    &lt;peer_id&gt;.meta      — JSON: last_seen, trust_level, stats
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>  message_log.jsonl     — optional: last N messages for debugging
+</code></pre></div>
+<hr />
+<h2 id="layer-2-remote-coordination">Layer 2: Remote Coordination</h2>
+<h3 id="overview_1">Overview</h3>
+<p>Remote coordination extends the existing orchestrator and coord store to support task delegation across machines. A task can be spawned locally or sent to a connected peer for execution. The delegating side receives structured status updates; the executing side uses its own brain and sessions.</p>
+<h3 id="extended-taskdef">Extended TaskDef</h3>
+<p>The orchestrator's <code>TaskDef</code> gains an optional <code>peer</code> field:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">TaskDef</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">prompt</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">cwd</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">depends_on</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">resume</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">retries</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span><span class="p">,</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">peer</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">PeerId</span><span class="o">&gt;</span><span class="p">,</span><span class="w">      </span><span class="c1">// NEW: None = local, Some = remote</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="p">}</span>
+</code></pre></div>
+<p>When <code>peer</code> is <code>Some</code>, the orchestrator serializes the task as a <code>DelegateTask</code> message and sends it over the relay instead of spawning a local process.</p>
+<h3 id="delegation-protocol">Delegation Protocol</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Controller (Machine A)                       Worker (Machine B)
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    │                                             │
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    ├── DelegateTask ────────────────────────────► │
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    │   { task_id, prompt, cwd, context,          │
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    │     git_remote, git_ref, depends_on }       │
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    │                                             │
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    │                                             ├── validate context
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    │                                             ├── git clone/pull if needed
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    │                                             ├── spawn `claude` session
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    │                                             │
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>    │ ◄──────────────────────────── TaskStatus ────┤
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>    │   { task_id, state: &quot;running&quot;,              │
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>    │     pid, session_id }                       │
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>    │                                             │
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>    │ ◄──────────────────────────── TaskStatus ────┤  (periodic, every 30s)
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>    │   { task_id, state: &quot;running&quot;,              │
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>    │     tokens_used, cost_usd,                  │
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>    │     context_pct, files_modified }           │
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a>    │                                             │
+<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a>    │ ◄──────────────────────────── TaskHandoff ──┤  (on completion)
+<a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a>    │   { task_id, state: &quot;completed&quot;,            │
+<a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a>    │     summary, artifacts, next_steps,         │
+<a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a>    │     git_ref: &quot;branch-name&quot;,                 │
+<a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a>    │     total_cost_usd, total_tokens }          │
+<a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a>    │                                             │
+<a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a>    ├── TaskInterrupt ──────────────────────────► │  (optional)
+<a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a>    │   { task_id, interrupt_type: &quot;nudge&quot;,       │
+<a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a>    │     reason: &quot;dependency resolved&quot; }         │
+<a id="__codelineno-8-29" name="__codelineno-8-29" href="#__codelineno-8-29"></a>    │                                             │
+<a id="__codelineno-8-30" name="__codelineno-8-30" href="#__codelineno-8-30"></a>    ├── Ack ◄────────────────────────────────────│
+</code></pre></div>
+<h3 id="task-context-payload">Task Context Payload</h3>
+<p>The <code>DelegateTask</code> message includes a context payload that helps the remote worker understand the task without needing the full local filesystem:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;task_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;t_1713960000_0&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Fix the auth middleware tests in src/auth/&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">&quot;cwd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/project&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span><span class="nt">&quot;context&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nt">&quot;git_remote&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;git@github.com:team/project.git&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="nt">&quot;git_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;feat/auth-rewrite&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">    </span><span class="nt">&quot;git_commit&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc123&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">    </span><span class="nt">&quot;relevant_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">      </span><span class="nt">&quot;src/auth/middleware.rs&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;file content or snippet&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">      </span><span class="nt">&quot;tests/auth_test.rs&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;file content or snippet&gt;&quot;</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">    </span><span class="nt">&quot;brain_context&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="w">      </span><span class="nt">&quot;project_preferences&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;distilled preferences summary&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">      </span><span class="nt">&quot;recent_insights&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;error loops in auth module&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;context blowout risk&quot;</span><span class="p">]</span>
+<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a>
+<a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a><span class="w">    </span><span class="nt">&quot;dependency_graph&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-9-22" name="__codelineno-9-22" href="#__codelineno-9-22"></a><span class="w">      </span><span class="nt">&quot;blocks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;deploy-staging&quot;</span><span class="p">],</span>
+<a id="__codelineno-9-23" name="__codelineno-9-23" href="#__codelineno-9-23"></a><span class="w">      </span><span class="nt">&quot;blocked_by&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<a id="__codelineno-9-24" name="__codelineno-9-24" href="#__codelineno-9-24"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-9-25" name="__codelineno-9-25" href="#__codelineno-9-25"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-9-26" name="__codelineno-9-26" href="#__codelineno-9-26"></a><span class="p">}</span>
+</code></pre></div>
+<p>The <code>relevant_files</code> field is optional and size-limited (max 50KB total). For larger contexts, the git remote + ref is the primary mechanism — the worker clones the repo.</p>
+<h3 id="remote-task-lifecycle">Remote Task Lifecycle</h3>
+<p>On the worker side, a delegated task follows the same lifecycle as a local orchestrator task:</p>
+<ol>
+<li><strong>Receive</strong> <code>DelegateTask</code> → validate, store in local coord DB</li>
+<li><strong>Prepare</strong> → <code>git clone</code>/<code>git pull</code> to the specified ref if <code>git_remote</code> provided</li>
+<li><strong>Spawn</strong> → launch <code>claude</code> session with the prompt and cwd</li>
+<li><strong>Monitor</strong> → local brain watches the session, sends periodic <code>TaskStatus</code></li>
+<li><strong>Complete</strong> → send <code>TaskHandoff</code> with summary, artifacts, and final git ref</li>
+<li><strong>Cleanup</strong> → mark task as completed in local coord DB</li>
+</ol>
+<p>The worker's brain makes its own decisions about the delegated session (approve/deny tool use, detect errors, etc.). The controller does not micro-manage — it delegates and receives results.</p>
+<h3 id="remote-task-states-in-tui">Remote Task States in TUI</h3>
+<p>The controller's TUI shows delegated tasks with a peer indicator:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>┌─ Sessions ───────────────────────────────────────────────────────────┐
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>│ PID    Status      Project           Cost    Tokens   Peer          │
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>│ 12345  working     claudectl         $0.42   18.2k    (local)       │
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>│ ──     working     auth-service      $0.18    7.1k    machineB ↗    │
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>│ ──     completed   deploy-staging    $0.05    2.3k    ci-runner ↗   │
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>└──────────────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<p>Delegated tasks have no local PID — they show <code>──</code> and the peer name with an arrow.</p>
+<h3 id="cost-tracking">Cost Tracking</h3>
+<p>Remote task costs are tracked separately in <code>history.rs</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">CostEntry</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">    </span><span class="c1">// ... existing fields ...</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">peer</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">PeerId</span><span class="o">&gt;</span><span class="p">,</span><span class="w">      </span><span class="c1">// NEW: None = local, Some = remote</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">delegated</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w">           </span><span class="c1">// NEW: true if this cost was incurred on a peer</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="p">}</span>
+</code></pre></div>
+<p>The <code>claudectl stats</code> and <code>claudectl history</code> commands show local vs delegated costs:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>Total spend: $12.47
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>  Local:     $9.82 (78.7%)
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>  Delegated: $2.65 (21.3%)
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    machineB:  $1.80
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    ci-runner: $0.85
+</code></pre></div>
+<h3 id="interrupt-forwarding">Interrupt Forwarding</h3>
+<p>The controller can send interrupts to delegated tasks:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Nudge a remote task</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>interrupt<span class="w"> </span>&lt;task_id&gt;<span class="w"> </span>nudge<span class="w"> </span><span class="s2">&quot;dependency resolved, check blockers&quot;</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># Stop a remote task</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>interrupt<span class="w"> </span>&lt;task_id&gt;<span class="w"> </span>stop<span class="w"> </span><span class="s2">&quot;no longer needed, scope changed&quot;</span>
+</code></pre></div>
+<p>These map to <code>TaskInterrupt</code> messages. The worker receives them and applies them to the local session via the existing interrupt bus.</p>
+<hr />
+<h2 id="layer-3-hive-mind">Layer 3: Hive Mind</h2>
+<h3 id="overview_2">Overview</h3>
+<p>The hive mind is a gossip-based knowledge sharing system that allows connected claudectl brains to learn from each other's corrections, preferences, and insights. Each brain remains sovereign — local knowledge always takes precedence — but peer knowledge enriches the decision-making context.</p>
+<h3 id="module-structure_1">Module Structure</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>src/hive/
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>  mod.rs          — KnowledgeUnit, KnowledgeScope, KnowledgeContent, re-exports
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>  store.rs        — local hive knowledge store (~/.claudectl/hive/)
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>  distiller.rs    — convert DistilledPreferences/Insights → KnowledgeUnits
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>  merger.rs       — conflict resolution, trust-weighted merge
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>  gossip.rs       — sync protocol, snapshot generation, propagation
+</code></pre></div>
+<p>Feature-gated behind <code>relay</code> (hive requires relay transport).</p>
+<h3 id="knowledge-unit">Knowledge Unit</h3>
+<p>The atom of shared learning. Maps directly to existing brain data structures.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="sd">/// A single piece of shareable knowledge.</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="k">struct</span><span class="w"> </span><span class="nc">KnowledgeUnit</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">    </span><span class="sd">/// Unique ID: `ku_{epoch}_{counter}`</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">    </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">    </span><span class="sd">/// What scope this knowledge applies to.</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">    </span><span class="n">scope</span><span class="p">:</span><span class="w"> </span><span class="nc">KnowledgeScope</span><span class="p">,</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="w">    </span><span class="sd">/// The type and content of the knowledge.</span>
+<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="w">    </span><span class="n">content</span><span class="p">:</span><span class="w"> </span><span class="nc">KnowledgeContent</span><span class="p">,</span>
+<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a>
+<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="w">    </span><span class="sd">/// How many local decisions back this knowledge.</span>
+<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="w">    </span><span class="n">evidence_count</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a>
+<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="w">    </span><span class="sd">/// Distillation confidence (0.0 to 1.0).</span>
+<a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a><span class="w">    </span><span class="n">confidence</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a>
+<a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a><span class="w">    </span><span class="sd">/// Which peer originated this knowledge.</span>
+<a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="w">    </span><span class="n">source_peer</span><span class="p">:</span><span class="w"> </span><span class="nc">PeerId</span><span class="p">,</span>
+<a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a>
+<a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a><span class="w">    </span><span class="sd">/// When first created (epoch secs).</span>
+<a id="__codelineno-15-22" name="__codelineno-15-22" href="#__codelineno-15-22"></a><span class="w">    </span><span class="n">originated_at</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<a id="__codelineno-15-23" name="__codelineno-15-23" href="#__codelineno-15-23"></a>
+<a id="__codelineno-15-24" name="__codelineno-15-24" href="#__codelineno-15-24"></a><span class="w">    </span><span class="sd">/// When last validated by the originator (epoch secs).</span>
+<a id="__codelineno-15-25" name="__codelineno-15-25" href="#__codelineno-15-25"></a><span class="w">    </span><span class="n">last_validated_at</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<a id="__codelineno-15-26" name="__codelineno-15-26" href="#__codelineno-15-26"></a>
+<a id="__codelineno-15-27" name="__codelineno-15-27" href="#__codelineno-15-27"></a><span class="w">    </span><span class="sd">/// How many peers have accepted this knowledge.</span>
+<a id="__codelineno-15-28" name="__codelineno-15-28" href="#__codelineno-15-28"></a><span class="w">    </span><span class="n">propagation_count</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<a id="__codelineno-15-29" name="__codelineno-15-29" href="#__codelineno-15-29"></a>
+<a id="__codelineno-15-30" name="__codelineno-15-30" href="#__codelineno-15-30"></a><span class="w">    </span><span class="sd">/// Monotonic version — incremented when the originator updates this unit.</span>
+<a id="__codelineno-15-31" name="__codelineno-15-31" href="#__codelineno-15-31"></a><span class="w">    </span><span class="n">version</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<a id="__codelineno-15-32" name="__codelineno-15-32" href="#__codelineno-15-32"></a><span class="p">}</span>
+<a id="__codelineno-15-33" name="__codelineno-15-33" href="#__codelineno-15-33"></a>
+<a id="__codelineno-15-34" name="__codelineno-15-34" href="#__codelineno-15-34"></a><span class="sd">/// Scope determines where knowledge applies.</span>
+<a id="__codelineno-15-35" name="__codelineno-15-35" href="#__codelineno-15-35"></a><span class="k">enum</span><span class="w"> </span><span class="nc">KnowledgeScope</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-36" name="__codelineno-15-36" href="#__codelineno-15-36"></a><span class="w">    </span><span class="sd">/// Applies to all projects and languages.</span>
+<a id="__codelineno-15-37" name="__codelineno-15-37" href="#__codelineno-15-37"></a><span class="w">    </span><span class="n">Universal</span><span class="p">,</span>
+<a id="__codelineno-15-38" name="__codelineno-15-38" href="#__codelineno-15-38"></a><span class="w">    </span><span class="sd">/// Applies to a specific programming language.</span>
+<a id="__codelineno-15-39" name="__codelineno-15-39" href="#__codelineno-15-39"></a><span class="w">    </span><span class="n">Language</span><span class="p">(</span><span class="nb">String</span><span class="p">),</span>
+<a id="__codelineno-15-40" name="__codelineno-15-40" href="#__codelineno-15-40"></a><span class="w">    </span><span class="sd">/// Applies to a specific project (by slug).</span>
+<a id="__codelineno-15-41" name="__codelineno-15-41" href="#__codelineno-15-41"></a><span class="w">    </span><span class="n">Project</span><span class="p">(</span><span class="nb">String</span><span class="p">),</span>
+<a id="__codelineno-15-42" name="__codelineno-15-42" href="#__codelineno-15-42"></a><span class="p">}</span>
+<a id="__codelineno-15-43" name="__codelineno-15-43" href="#__codelineno-15-43"></a>
+<a id="__codelineno-15-44" name="__codelineno-15-44" href="#__codelineno-15-44"></a><span class="sd">/// The actual knowledge payload.</span>
+<a id="__codelineno-15-45" name="__codelineno-15-45" href="#__codelineno-15-45"></a><span class="k">enum</span><span class="w"> </span><span class="nc">KnowledgeContent</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-46" name="__codelineno-15-46" href="#__codelineno-15-46"></a><span class="w">    </span><span class="sd">/// A distilled preference pattern.</span>
+<a id="__codelineno-15-47" name="__codelineno-15-47" href="#__codelineno-15-47"></a><span class="w">    </span><span class="sd">/// Maps to brain::preferences::PreferencePattern.</span>
+<a id="__codelineno-15-48" name="__codelineno-15-48" href="#__codelineno-15-48"></a><span class="w">    </span><span class="n">Pattern</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-49" name="__codelineno-15-49" href="#__codelineno-15-49"></a><span class="w">        </span><span class="n">tool</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-15-50" name="__codelineno-15-50" href="#__codelineno-15-50"></a><span class="w">        </span><span class="n">command_pattern</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<a id="__codelineno-15-51" name="__codelineno-15-51" href="#__codelineno-15-51"></a><span class="w">        </span><span class="n">preferred_action</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-15-52" name="__codelineno-15-52" href="#__codelineno-15-52"></a><span class="w">        </span><span class="n">accept_rate</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<a id="__codelineno-15-53" name="__codelineno-15-53" href="#__codelineno-15-53"></a><span class="w">        </span><span class="n">conditions</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span><span class="w">  </span><span class="c1">// serialized PreferenceConditions</span>
+<a id="__codelineno-15-54" name="__codelineno-15-54" href="#__codelineno-15-54"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-15-55" name="__codelineno-15-55" href="#__codelineno-15-55"></a>
+<a id="__codelineno-15-56" name="__codelineno-15-56" href="#__codelineno-15-56"></a><span class="w">    </span><span class="sd">/// Per-tool accuracy statistics.</span>
+<a id="__codelineno-15-57" name="__codelineno-15-57" href="#__codelineno-15-57"></a><span class="w">    </span><span class="sd">/// Maps to brain::preferences::ToolAccuracy.</span>
+<a id="__codelineno-15-58" name="__codelineno-15-58" href="#__codelineno-15-58"></a><span class="w">    </span><span class="n">ToolAccuracy</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-59" name="__codelineno-15-59" href="#__codelineno-15-59"></a><span class="w">        </span><span class="n">tool</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-15-60" name="__codelineno-15-60" href="#__codelineno-15-60"></a><span class="w">        </span><span class="n">total</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<a id="__codelineno-15-61" name="__codelineno-15-61" href="#__codelineno-15-61"></a><span class="w">        </span><span class="n">correct</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<a id="__codelineno-15-62" name="__codelineno-15-62" href="#__codelineno-15-62"></a><span class="w">        </span><span class="n">confidence_threshold</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<a id="__codelineno-15-63" name="__codelineno-15-63" href="#__codelineno-15-63"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-15-64" name="__codelineno-15-64" href="#__codelineno-15-64"></a>
+<a id="__codelineno-15-65" name="__codelineno-15-65" href="#__codelineno-15-65"></a><span class="w">    </span><span class="sd">/// A temporal behavior pattern.</span>
+<a id="__codelineno-15-66" name="__codelineno-15-66" href="#__codelineno-15-66"></a><span class="w">    </span><span class="sd">/// Maps to brain::preferences::TemporalPattern.</span>
+<a id="__codelineno-15-67" name="__codelineno-15-67" href="#__codelineno-15-67"></a><span class="w">    </span><span class="n">Temporal</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-68" name="__codelineno-15-68" href="#__codelineno-15-68"></a><span class="w">        </span><span class="n">description</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-15-69" name="__codelineno-15-69" href="#__codelineno-15-69"></a><span class="w">        </span><span class="n">strength</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<a id="__codelineno-15-70" name="__codelineno-15-70" href="#__codelineno-15-70"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-15-71" name="__codelineno-15-71" href="#__codelineno-15-71"></a>
+<a id="__codelineno-15-72" name="__codelineno-15-72" href="#__codelineno-15-72"></a><span class="w">    </span><span class="sd">/// A detected friction/error/cost insight.</span>
+<a id="__codelineno-15-73" name="__codelineno-15-73" href="#__codelineno-15-73"></a><span class="w">    </span><span class="sd">/// Maps to brain::insights::Insight.</span>
+<a id="__codelineno-15-74" name="__codelineno-15-74" href="#__codelineno-15-74"></a><span class="w">    </span><span class="n">Insight</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-75" name="__codelineno-15-75" href="#__codelineno-15-75"></a><span class="w">        </span><span class="n">category</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-15-76" name="__codelineno-15-76" href="#__codelineno-15-76"></a><span class="w">        </span><span class="n">severity</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-15-77" name="__codelineno-15-77" href="#__codelineno-15-77"></a><span class="w">        </span><span class="n">summary</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-15-78" name="__codelineno-15-78" href="#__codelineno-15-78"></a><span class="w">        </span><span class="n">suggestion</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="p">,</span>
+<a id="__codelineno-15-79" name="__codelineno-15-79" href="#__codelineno-15-79"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-15-80" name="__codelineno-15-80" href="#__codelineno-15-80"></a>
+<a id="__codelineno-15-81" name="__codelineno-15-81" href="#__codelineno-15-81"></a><span class="w">    </span><span class="sd">/// A promoted rule from coord memory.</span>
+<a id="__codelineno-15-82" name="__codelineno-15-82" href="#__codelineno-15-82"></a><span class="w">    </span><span class="n">PromotedRule</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-83" name="__codelineno-15-83" href="#__codelineno-15-83"></a><span class="w">        </span><span class="n">rule</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<a id="__codelineno-15-84" name="__codelineno-15-84" href="#__codelineno-15-84"></a><span class="w">        </span><span class="n">source_type</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span><span class="w">  </span><span class="c1">// &quot;workflow&quot;, &quot;preference&quot;, &quot;guard&quot;</span>
+<a id="__codelineno-15-85" name="__codelineno-15-85" href="#__codelineno-15-85"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-15-86" name="__codelineno-15-86" href="#__codelineno-15-86"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="what-gets-shared-vs-what-stays-local">What Gets Shared vs What Stays Local</h3>
+<table>
+<thead>
+<tr>
+<th>Data</th>
+<th>Shared</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PreferencePattern</code></td>
+<td>Yes</td>
+<td>Universal tool behavior learnings</td>
+</tr>
+<tr>
+<td><code>ToolAccuracy</code></td>
+<td>Yes</td>
+<td>Calibration data improves all brains</td>
+</tr>
+<tr>
+<td><code>TemporalPattern</code></td>
+<td>Scoped</td>
+<td>Time-of-day patterns may be user-specific</td>
+</tr>
+<tr>
+<td><code>Insight</code></td>
+<td>Yes</td>
+<td>Friction patterns help everyone</td>
+</tr>
+<tr>
+<td>Promoted rules</td>
+<td>Yes</td>
+<td>High-confidence workflow guards</td>
+</tr>
+<tr>
+<td>Raw decision logs</td>
+<td><strong>No</strong></td>
+<td>Too noisy, contains private context</td>
+</tr>
+<tr>
+<td>Decision context snapshots</td>
+<td><strong>No</strong></td>
+<td>Contains cost/model/file details</td>
+</tr>
+<tr>
+<td>API keys, credentials</td>
+<td><strong>No</strong></td>
+<td>Obviously not</td>
+</tr>
+<tr>
+<td>User-specific overrides</td>
+<td><strong>No</strong></td>
+<td>Personal preference stays personal</td>
+</tr>
+<tr>
+<td>Prompt template customizations</td>
+<td><strong>No</strong></td>
+<td>Local customization is intentional</td>
+</tr>
+</tbody>
+</table>
+<h3 id="distillation-pipeline">Distillation Pipeline</h3>
+<p>The existing distillation cycle (every 10 decisions) is extended with a hive export step:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Local decisions accumulate
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>         │
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>         ▼ (every 10 decisions)
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>┌────────────────────┐
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>│ Distill preferences │  ← existing: produces DistilledPreferences
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>└────────┬───────────┘
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>         │
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>         ▼
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>┌────────────────────┐
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>│ Generate insights   │  ← existing: produces Vec&lt;Insight&gt;
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>└────────┬───────────┘
+<a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a>         │
+<a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a>         ▼
+<a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a>┌────────────────────────────┐
+<a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a>│ Export to knowledge units   │  ← NEW: hive::distiller
+<a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a>│                            │
+<a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a>│ For each PreferencePattern │
+<a id="__codelineno-16-18" name="__codelineno-16-18" href="#__codelineno-16-18"></a>│   with evidence ≥ 5:      │
+<a id="__codelineno-16-19" name="__codelineno-16-19" href="#__codelineno-16-19"></a>│   → KnowledgeUnit::Pattern │
+<a id="__codelineno-16-20" name="__codelineno-16-20" href="#__codelineno-16-20"></a>│                            │
+<a id="__codelineno-16-21" name="__codelineno-16-21" href="#__codelineno-16-21"></a>│ For each ToolAccuracy      │
+<a id="__codelineno-16-22" name="__codelineno-16-22" href="#__codelineno-16-22"></a>│   with total ≥ 10:        │
+<a id="__codelineno-16-23" name="__codelineno-16-23" href="#__codelineno-16-23"></a>│   → KnowledgeUnit::ToolAcc │
+<a id="__codelineno-16-24" name="__codelineno-16-24" href="#__codelineno-16-24"></a>│                            │
+<a id="__codelineno-16-25" name="__codelineno-16-25" href="#__codelineno-16-25"></a>│ For each Insight           │
+<a id="__codelineno-16-26" name="__codelineno-16-26" href="#__codelineno-16-26"></a>│   severity ≥ Warning:     │
+<a id="__codelineno-16-27" name="__codelineno-16-27" href="#__codelineno-16-27"></a>│   → KnowledgeUnit::Insight │
+<a id="__codelineno-16-28" name="__codelineno-16-28" href="#__codelineno-16-28"></a>└────────┬───────────────────┘
+<a id="__codelineno-16-29" name="__codelineno-16-29" href="#__codelineno-16-29"></a>         │
+<a id="__codelineno-16-30" name="__codelineno-16-30" href="#__codelineno-16-30"></a>         ▼
+<a id="__codelineno-16-31" name="__codelineno-16-31" href="#__codelineno-16-31"></a>┌──────────────────────┐
+<a id="__codelineno-16-32" name="__codelineno-16-32" href="#__codelineno-16-32"></a>│ Diff against last    │  ← only changed/new units
+<a id="__codelineno-16-33" name="__codelineno-16-33" href="#__codelineno-16-33"></a>│ sync snapshot        │
+<a id="__codelineno-16-34" name="__codelineno-16-34" href="#__codelineno-16-34"></a>└────────┬─────────────┘
+<a id="__codelineno-16-35" name="__codelineno-16-35" href="#__codelineno-16-35"></a>         │
+<a id="__codelineno-16-36" name="__codelineno-16-36" href="#__codelineno-16-36"></a>         ▼
+<a id="__codelineno-16-37" name="__codelineno-16-37" href="#__codelineno-16-37"></a>┌────────────────────┐
+<a id="__codelineno-16-38" name="__codelineno-16-38" href="#__codelineno-16-38"></a>│ Broadcast via relay │  → KnowledgeSync message to all peers
+<a id="__codelineno-16-39" name="__codelineno-16-39" href="#__codelineno-16-39"></a>└────────────────────┘
+</code></pre></div>
+<p>Thresholds for export (configurable):
+- <code>PreferencePattern</code>: minimum 5 evidence decisions
+- <code>ToolAccuracy</code>: minimum 10 total decisions for that tool
+- <code>Insight</code>: minimum severity of Warning
+- <code>TemporalPattern</code>: minimum strength of 0.7</p>
+<p>These thresholds prevent noisy, low-confidence knowledge from polluting the hive.</p>
+<h3 id="gossip-protocol">Gossip Protocol</h3>
+<h4 id="sync-message">Sync message</h4>
+<p>When a peer's distillation cycle produces changed knowledge units, it broadcasts a <code>KnowledgeSync</code> message:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;KnowledgeSync&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span><span class="nt">&quot;from_peer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;machineA&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span><span class="nt">&quot;units&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ku_1713960000_42&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">      </span><span class="nt">&quot;scope&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;language:rust&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">      </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pattern&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Bash&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;command_pattern&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cargo test&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="w">                   </span><span class="nt">&quot;preferred_action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;approve&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;accept_rate&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.95</span><span class="p">,</span>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a><span class="w">                   </span><span class="nt">&quot;conditions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a><span class="w">      </span><span class="nt">&quot;evidence_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">23</span><span class="p">,</span>
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a><span class="w">      </span><span class="nt">&quot;confidence&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.95</span><span class="p">,</span>
+<a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a><span class="w">      </span><span class="nt">&quot;source_peer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;machineA&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a><span class="w">      </span><span class="nt">&quot;originated_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1713900000</span><span class="p">,</span>
+<a id="__codelineno-17-15" name="__codelineno-17-15" href="#__codelineno-17-15"></a><span class="w">      </span><span class="nt">&quot;last_validated_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1713960000</span><span class="p">,</span>
+<a id="__codelineno-17-16" name="__codelineno-17-16" href="#__codelineno-17-16"></a><span class="w">      </span><span class="nt">&quot;propagation_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-17-17" name="__codelineno-17-17" href="#__codelineno-17-17"></a><span class="w">      </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span>
+<a id="__codelineno-17-18" name="__codelineno-17-18" href="#__codelineno-17-18"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-17-19" name="__codelineno-17-19" href="#__codelineno-17-19"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-17-20" name="__codelineno-17-20" href="#__codelineno-17-20"></a><span class="w">  </span><span class="nt">&quot;sync_epoch&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1713960000</span>
+<a id="__codelineno-17-21" name="__codelineno-17-21" href="#__codelineno-17-21"></a><span class="p">}</span>
+</code></pre></div>
+<h4 id="snapshot-for-new-peers">Snapshot (for new peers)</h4>
+<p>When a new peer connects, it can request a full snapshot:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;KnowledgeRequest&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;from_peer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;newMachine&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;since_epoch&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">}</span>
+</code></pre></div>
+<p>The responding peer sends a <code>KnowledgeSnapshot</code> containing all its accepted knowledge units (both locally originated and previously accepted from other peers).</p>
+<h4 id="propagation">Propagation</h4>
+<p>When a peer accepts a knowledge unit from another peer, it increments <code>propagation_count</code> and may re-broadcast to its own peers (excluding the source). This creates epidemic spread — a valuable insight discovered on one machine can reach all connected machines within a few sync cycles.</p>
+<p>Propagation is bounded:
+- A unit is only re-broadcast if its <code>propagation_count &lt; max_propagation</code> (default 5)
+- Units older than 30 days without re-validation are not propagated
+- Each peer tracks which units it has already sent to each other peer</p>
+<h3 id="merge-and-conflict-resolution">Merge and Conflict Resolution</h3>
+<p>When a <code>KnowledgeSync</code> or <code>KnowledgeSnapshot</code> is received, each unit goes through the merger:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>For each incoming KnowledgeUnit:
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>1. Check if a local unit with the same semantic key exists.
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>   Semantic key = (scope, content_type, tool, command_pattern)
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>2. If no local match:
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>   → Accept the unit, store in hive DB
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>   → Weight = confidence × peer_trust × evidence_factor
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>   → If weight &gt; 0.3, add to brain prompt context
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>3. If local match exists and is locally originated:
+<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>   → Local always wins. Drop the incoming unit.
+<a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>   → Log the conflict for diagnostics.
+<a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a>
+<a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a>4. If local match exists and was from another peer:
+<a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a>   → Keep the one with higher (confidence × evidence_count).
+<a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a>   → On tie, keep the newer one (higher version).
+<a id="__codelineno-19-18" name="__codelineno-19-18" href="#__codelineno-19-18"></a>
+<a id="__codelineno-19-19" name="__codelineno-19-19" href="#__codelineno-19-19"></a>5. After merge, rebuild the hive knowledge prompt section.
+</code></pre></div>
+<h3 id="trust-model">Trust Model</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="k">struct</span><span class="w"> </span><span class="nc">PeerTrust</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">    </span><span class="n">peer_id</span><span class="p">:</span><span class="w"> </span><span class="nc">PeerId</span><span class="p">,</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">    </span><span class="sd">/// Trust level: 0.0 (ignore everything) to 1.0 (fully trusted).</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="w">    </span><span class="sd">/// Default: 0.5. Configurable per peer.</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="w">    </span><span class="n">trust_level</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span>
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="w">    </span><span class="sd">/// How many knowledge units accepted from this peer.</span>
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="w">    </span><span class="n">knowledge_accepted</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="w">    </span><span class="sd">/// How many units conflicted with local knowledge.</span>
+<a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="w">    </span><span class="n">knowledge_conflicted</span><span class="p">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a><span class="w">    </span><span class="sd">/// When this peer first connected.</span>
+<a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a><span class="w">    </span><span class="n">first_seen</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a><span class="w">    </span><span class="sd">/// When this peer last synced knowledge.</span>
+<a id="__codelineno-20-13" name="__codelineno-20-13" href="#__codelineno-20-13"></a><span class="w">    </span><span class="n">last_sync</span><span class="p">:</span><span class="w"> </span><span class="kt">u64</span><span class="p">,</span>
+<a id="__codelineno-20-14" name="__codelineno-20-14" href="#__codelineno-20-14"></a><span class="p">}</span>
+</code></pre></div>
+<p>Trust affects how peer knowledge enters the brain prompt:</p>
+<ul>
+<li><code>trust &gt;= 0.8</code>: Knowledge appears as confirmed (<code>[hive]</code> tag)</li>
+<li><code>trust &gt;= 0.5</code>: Knowledge appears as suggested (<code>[hive, suggested]</code> tag)</li>
+<li><code>trust &gt;= 0.2</code>: Knowledge appears as unverified (<code>[hive, unverified]</code> tag)</li>
+<li><code>trust &lt; 0.2</code>: Knowledge is stored but not injected into prompts</li>
+</ul>
+<p>Trust can be adjusted:
+- Manually: <code>claudectl hive trust &lt;peer_id&gt; 0.8</code>
+- Automatically: when local brain agrees with peer knowledge (trust drifts up) or disagrees (trust drifts down). Drift rate: ±0.01 per concordant/discordant decision, clamped to [0.0, 1.0].</p>
+<h3 id="brain-prompt-integration">Brain Prompt Integration</h3>
+<p>Peer knowledge is injected into the brain's advisory prompt as a separate section, clearly distinguished from local preferences:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>## Local Preferences (from your corrections)
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>- [Bash, cargo test] approve (95%, 23 decisions)
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>- [Bash, cargo clippy] approve (92%, 18 decisions)
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>- [Bash, rm -rf] deny (100%, 5 decisions)
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>## Hive Knowledge (3 peers, 47 units)
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>- [hive] [Bash, cargo fmt] approve (93%, 31 decisions across 3 peers)
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>- [hive] [Write, *.lock] deny (88%, 12 decisions from machineB)
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>- [hive, suggested] [Bash, docker push] deny when not_ci_dir (82%, 8 decisions from ci-runner)
+<a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a>- [hive, unverified] [Bash, npm audit] approve (71%, 4 decisions from alice-mbp)
+</code></pre></div>
+<p>The brain sees both sections and can weigh them appropriately. Local preferences are authoritative; hive knowledge is advisory.</p>
+<h3 id="persistence_1">Persistence</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>~/.claudectl/hive/
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>  knowledge.jsonl       — all accepted knowledge units (append-only)
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>  sync_state.json       — per-peer sync cursors (last_sync_epoch per peer)
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>  trust.json            — per-peer trust levels
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>  conflicts.jsonl       — log of merge conflicts (for diagnostics)
+</code></pre></div>
+<hr />
+<h2 id="cli-surface">CLI Surface</h2>
+<h3 id="relay-commands">Relay commands</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Serve: start the relay listener</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>serve<span class="w"> </span><span class="o">[</span>--port<span class="w"> </span><span class="m">9847</span><span class="o">]</span><span class="w"> </span><span class="o">[</span>--foreground<span class="o">]</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="c1"># Pair: generate a pre-shared key</span>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>pair
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="c1"># Output: PAIR CODE: kx7f-m2np-9a3d-w1vz</span>
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a><span class="c1">#         Share this code with the peer you want to connect.</span>
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a>
+<a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a><span class="c1"># Accept: store a PSK from another peer</span>
+<a id="__codelineno-23-10" name="__codelineno-23-10" href="#__codelineno-23-10"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>accept<span class="w"> </span>&lt;code&gt;
+<a id="__codelineno-23-11" name="__codelineno-23-11" href="#__codelineno-23-11"></a>
+<a id="__codelineno-23-12" name="__codelineno-23-12" href="#__codelineno-23-12"></a><span class="c1"># Connect: establish connection to a remote peer</span>
+<a id="__codelineno-23-13" name="__codelineno-23-13" href="#__codelineno-23-13"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>connect<span class="w"> </span>&lt;host:port&gt;
+<a id="__codelineno-23-14" name="__codelineno-23-14" href="#__codelineno-23-14"></a>
+<a id="__codelineno-23-15" name="__codelineno-23-15" href="#__codelineno-23-15"></a><span class="c1"># Peers: list known/connected peers</span>
+<a id="__codelineno-23-16" name="__codelineno-23-16" href="#__codelineno-23-16"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>peers<span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<a id="__codelineno-23-17" name="__codelineno-23-17" href="#__codelineno-23-17"></a>
+<a id="__codelineno-23-18" name="__codelineno-23-18" href="#__codelineno-23-18"></a><span class="c1"># Delegate: send a task to a remote peer</span>
+<a id="__codelineno-23-19" name="__codelineno-23-19" href="#__codelineno-23-19"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>delegate<span class="w"> </span>&lt;peer_id&gt;<span class="w"> </span><span class="s2">&quot;&lt;prompt&gt;&quot;</span><span class="w"> </span><span class="o">[</span>--cwd<span class="w"> </span>/path<span class="o">]</span><span class="w"> </span><span class="o">[</span>--git-ref<span class="w"> </span>branch<span class="o">]</span>
+<a id="__codelineno-23-20" name="__codelineno-23-20" href="#__codelineno-23-20"></a>
+<a id="__codelineno-23-21" name="__codelineno-23-21" href="#__codelineno-23-21"></a><span class="c1"># Status: show all remote tasks</span>
+<a id="__codelineno-23-22" name="__codelineno-23-22" href="#__codelineno-23-22"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>status<span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<a id="__codelineno-23-23" name="__codelineno-23-23" href="#__codelineno-23-23"></a>
+<a id="__codelineno-23-24" name="__codelineno-23-24" href="#__codelineno-23-24"></a><span class="c1"># Interrupt: send interrupt to a remote task</span>
+<a id="__codelineno-23-25" name="__codelineno-23-25" href="#__codelineno-23-25"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>interrupt<span class="w"> </span>&lt;task_id&gt;<span class="w"> </span>&lt;type&gt;<span class="w"> </span><span class="o">[</span>reason<span class="o">]</span>
+<a id="__codelineno-23-26" name="__codelineno-23-26" href="#__codelineno-23-26"></a>
+<a id="__codelineno-23-27" name="__codelineno-23-27" href="#__codelineno-23-27"></a><span class="c1"># Disconnect/forget</span>
+<a id="__codelineno-23-28" name="__codelineno-23-28" href="#__codelineno-23-28"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>disconnect<span class="w"> </span>&lt;peer_id&gt;
+<a id="__codelineno-23-29" name="__codelineno-23-29" href="#__codelineno-23-29"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>forget<span class="w"> </span>&lt;peer_id&gt;
+</code></pre></div>
+<h3 id="hive-commands">Hive commands</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Status: show hive network stats</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>status
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="c1"># Knowledge: list shared knowledge units</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>knowledge<span class="w"> </span><span class="o">[</span>--scope<span class="w"> </span>universal<span class="p">|</span>language:rust<span class="p">|</span>project:foo<span class="o">]</span>
+<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>knowledge<span class="w"> </span><span class="o">[</span>--from<span class="w"> </span>&lt;peer_id&gt;<span class="o">]</span>
+<a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>knowledge<span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a>
+<a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a><span class="c1"># Trust: get/set peer trust</span>
+<a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>trust<span class="w">                         </span><span class="c1"># show all</span>
+<a id="__codelineno-24-11" name="__codelineno-24-11" href="#__codelineno-24-11"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>trust<span class="w"> </span>&lt;peer_id&gt;<span class="w">              </span><span class="c1"># show one</span>
+<a id="__codelineno-24-12" name="__codelineno-24-12" href="#__codelineno-24-12"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>trust<span class="w"> </span>&lt;peer_id&gt;<span class="w"> </span>&lt;<span class="m">0</span>.0-1.0&gt;<span class="w">   </span><span class="c1"># set</span>
+<a id="__codelineno-24-13" name="__codelineno-24-13" href="#__codelineno-24-13"></a>
+<a id="__codelineno-24-14" name="__codelineno-24-14" href="#__codelineno-24-14"></a><span class="c1"># Export/Import: offline knowledge transfer</span>
+<a id="__codelineno-24-15" name="__codelineno-24-15" href="#__codelineno-24-15"></a>claudectl<span class="w"> </span>hive<span class="w"> </span><span class="nb">export</span><span class="w"> </span>&gt;<span class="w"> </span>knowledge.json
+<a id="__codelineno-24-16" name="__codelineno-24-16" href="#__codelineno-24-16"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>import<span class="w"> </span>knowledge.json
+<a id="__codelineno-24-17" name="__codelineno-24-17" href="#__codelineno-24-17"></a>
+<a id="__codelineno-24-18" name="__codelineno-24-18" href="#__codelineno-24-18"></a><span class="c1"># Forget: remove a specific knowledge unit</span>
+<a id="__codelineno-24-19" name="__codelineno-24-19" href="#__codelineno-24-19"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>forget<span class="w"> </span>&lt;unit_id&gt;
+</code></pre></div>
+<h3 id="tui-integration">TUI Integration</h3>
+<p>New <code>p</code> keybinding toggles a peers panel:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>┌─ Peers ───────────────────────────────────────────────────────────────┐
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>│ machineB       ● connected   trust:0.8   ↑12 ↓8 knowledge units    │
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>│ alice-mbp      ○ reconnecting...         trust:0.5                  │
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>│ ci-runner      ● connected   trust:0.3   ↑42 ↓0 knowledge units    │
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>└───────────────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<p>The detail panel for a delegated task shows peer info:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>┌─ Task Detail ─────────────────────────────────────────────────────────┐
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>│ Name:    fix-auth-tests                                              │
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>│ Peer:    machineB (● connected)                                      │
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>│ Status:  working (14m elapsed)                                       │
+<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>│ Tokens:  22.4k used                                                  │
+<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>│ Cost:    $0.31                                                       │
+<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a>│ Context: 42%                                                         │
+<a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a>│ Files:   3 modified                                                  │
+<a id="__codelineno-26-9" name="__codelineno-26-9" href="#__codelineno-26-9"></a>│ Last:    &quot;running cargo test, 2 failures remaining&quot;                  │
+<a id="__codelineno-26-10" name="__codelineno-26-10" href="#__codelineno-26-10"></a>└──────────────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<hr />
+<h2 id="configuration_1">Configuration</h2>
+<p>All relay and hive settings in <code>.claudectl.toml</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="k">[relay]</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="w">                   </span><span class="c1"># opt-in</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="n">listen_port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">9847</span>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="n">listen_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.0.0.0&quot;</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="n">max_peers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span>
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="n">heartbeat_interval_secs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span>
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="n">reconnect_max_secs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">60</span>
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a><span class="n">auto_connect</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span><span class="w">                 </span><span class="c1"># list of &quot;host:port&quot; to connect on startup</span>
+<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a>
+<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a><span class="k">[hive]</span>
+<a id="__codelineno-27-11" name="__codelineno-27-11" href="#__codelineno-27-11"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="w">                   </span><span class="c1"># opt-in (requires relay)</span>
+<a id="__codelineno-27-12" name="__codelineno-27-12" href="#__codelineno-27-12"></a><span class="n">default_trust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.5</span>
+<a id="__codelineno-27-13" name="__codelineno-27-13" href="#__codelineno-27-13"></a><span class="n">auto_trust_drift</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">           </span><span class="c1"># adjust trust based on concordance</span>
+<a id="__codelineno-27-14" name="__codelineno-27-14" href="#__codelineno-27-14"></a><span class="n">max_propagation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="w">               </span><span class="c1"># max hops for knowledge propagation</span>
+<a id="__codelineno-27-15" name="__codelineno-27-15" href="#__codelineno-27-15"></a><span class="n">export_min_evidence</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="w">           </span><span class="c1"># min decisions before sharing a pattern</span>
+<a id="__codelineno-27-16" name="__codelineno-27-16" href="#__codelineno-27-16"></a><span class="n">export_min_tool_decisions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="w">    </span><span class="c1"># min decisions before sharing tool accuracy</span>
+<a id="__codelineno-27-17" name="__codelineno-27-17" href="#__codelineno-27-17"></a><span class="n">export_min_insight_severity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;warning&quot;</span>
+<a id="__codelineno-27-18" name="__codelineno-27-18" href="#__codelineno-27-18"></a><span class="n">knowledge_ttl_days</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span><span class="w">           </span><span class="c1"># expire unvalidated knowledge after N days</span>
+<a id="__codelineno-27-19" name="__codelineno-27-19" href="#__codelineno-27-19"></a><span class="n">inject_unverified</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">          </span><span class="c1"># include low-trust knowledge in brain prompt</span>
+</code></pre></div>
+<hr />
+<h2 id="security-considerations">Security Considerations</h2>
+<h3 id="threat-model">Threat model</h3>
+<p>The relay operates on trusted networks between machines you control or your team controls. It is not designed for exposure to the public internet.</p>
+<h3 id="authentication">Authentication</h3>
+<p>PSK-based HMAC challenge-response. The PSK never travels over the wire — only the HMAC proof does. An attacker who observes the handshake cannot derive the PSK (assuming HMAC-SHA256 is secure, which it is).</p>
+<h3 id="no-encryption">No encryption</h3>
+<p>The wire protocol is plaintext JSON. This is a deliberate choice to avoid adding a TLS dependency. For encryption:
+- Use SSH tunnels: <code>ssh -L 9847:localhost:9847 remote-host</code>
+- Use WireGuard or Tailscale for the network layer
+- Use a VPN</p>
+<p>The documentation should prominently recommend one of these approaches.</p>
+<h3 id="command-injection">Command injection</h3>
+<p>The relay receives prompts and executes them via <code>claude</code> CLI on the worker side. This is inherently powerful — a connected peer can run arbitrary prompts. The trust model partially mitigates this (low-trust peers can be limited), but the primary protection is the pairing step: you only pair with machines you trust.</p>
+<p>Future hardening options (not in v1):
+- Allow-list of permitted prompt patterns per peer
+- Require human confirmation for delegated tasks on the worker side
+- Read-only mode: peer can observe but not delegate</p>
+<h3 id="knowledge-poisoning">Knowledge poisoning</h3>
+<p>A compromised or malicious peer could send bad knowledge units to shift the brain's behavior. Mitigations:
+- Local knowledge always wins (prevents overriding established preferences)
+- Low-trust peers' knowledge is labeled <code>[unverified]</code> in the brain prompt
+- Trust drift naturally penalizes peers whose knowledge conflicts with local decisions
+- Knowledge units require minimum evidence thresholds to be shared
+- The <code>conflicts.jsonl</code> log makes poisoning attempts visible</p>
+<hr />
+<h2 id="implementation-phases">Implementation Phases</h2>
+<h3 id="phase-1-relay-transport">Phase 1: Relay Transport</h3>
+<p>Ship the TCP pipe with PSK auth, heartbeats, reconnect.
+No coordination or hive — just the ability to connect two claudectl instances.
+Test: two machines can pair, connect, exchange heartbeats, reconnect after disconnect.</p>
+<h3 id="phase-2-remote-task-delegation">Phase 2: Remote Task Delegation</h3>
+<p>Extend orchestrator TaskDef with <code>peer</code> field.
+Implement DelegateTask/TaskStatus/TaskHandoff/TaskInterrupt messages.
+Worker spawns local sessions, reports status.
+Test: delegate a task, watch it execute remotely, receive handoff.</p>
+<h3 id="phase-3-hive-knowledge-store">Phase 3: Hive Knowledge Store</h3>
+<p>Build the knowledge unit types and local store.
+Implement the distiller (DistilledPreferences → KnowledgeUnits).
+No gossip yet — just local export/import.
+Test: distill preferences, export to JSON, import on another machine.</p>
+<h3 id="phase-4-gossip-protocol">Phase 4: Gossip Protocol</h3>
+<p>Wire the distiller to the relay.
+Implement KnowledgeSync/KnowledgeRequest/KnowledgeSnapshot.
+Implement the merger with conflict resolution.
+Test: two connected instances share knowledge, new peer gets snapshot.</p>
+<h3 id="phase-5-trust-and-brain-integration">Phase 5: Trust and Brain Integration</h3>
+<p>Implement PeerTrust with auto-drift.
+Inject hive knowledge into brain prompts.
+Add TUI peers panel.
+Test: peer knowledge appears in brain context, trust adjusts based on concordance.</p>
+<hr />
+<h2 id="appendix-hmac-sha256-implementation">Appendix: HMAC-SHA256 Implementation</h2>
+<p>The HMAC-SHA256 algorithm (RFC 2104) is simple enough to implement inline without a crate:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>HMAC(K, m) = H((K&#39; ⊕ opad) || H((K&#39; ⊕ ipad) || m))
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>where:
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>  H = SHA-256
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>  K&#39; = K padded/hashed to block size (64 bytes)
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>  ipad = 0x36 repeated 64 times
+<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a>  opad = 0x5c repeated 64 times
+</code></pre></div>
+<p>SHA-256 itself is ~150 lines of Rust (pure computation, no I/O, no allocations beyond a fixed buffer). Together with the HMAC wrapper, this is ~200 lines — well within claudectl's "inline over crate" ethos.</p>
+<p>Alternative: if the <code>coord</code> feature is enabled, <code>rusqlite</code> bundles SQLite which includes a SHA-256 implementation. We could potentially reuse it, but the inline approach is cleaner and doesn't create a cross-feature dependency.</p>
+<h2 id="appendix-message-size-limits">Appendix: Message Size Limits</h2>
+<p>To prevent memory exhaustion from malformed or malicious messages:</p>
+<ul>
+<li>Maximum line length: 1MB (messages exceeding this are dropped)</li>
+<li>Maximum <code>relevant_files</code> payload in DelegateTask: 50KB</li>
+<li>Maximum KnowledgeSnapshot size: 500KB (~5000 knowledge units)</li>
+<li>If a snapshot exceeds the limit, it is paginated into multiple messages</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/mercurialsolo/claudectl" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

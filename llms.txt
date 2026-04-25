@@ -1,0 +1,70 @@
+# claudectl
+
+> Mission control for Claude Code - supervise, budget, orchestrate, and auto-pilot sessions with a local LLM brain.
+
+claudectl is a Rust TUI that monitors all your Claude Code sessions from one terminal. It shows which agent is blocked, burning budget, waiting for approval, or stalled - and lets you intervene without tab hunting.
+
+## Install
+
+```
+brew install mercurialsolo/tap/claudectl
+cargo install claudectl
+```
+
+Setup:
+```
+claudectl --init    # wire up Claude Code hooks (one-time)
+claudectl           # launch dashboard
+claudectl --demo    # try with fake sessions
+```
+
+## Key Features
+
+- Live dashboard: status, burn rate, context %, CPU, memory, tokens, sparklines for all sessions
+- One-key actions: approve (y), send input (i), launch new session (n), kill (d), record GIF (R)
+- Budget enforcement: per-session and daily limits with auto-kill
+- Local LLM brain: ollama/gemma auto-approves safe commands, denies dangerous ones, learns from corrections
+- Auto-rules engine: TOML rules to approve/deny by tool name, command pattern, project, cost
+- Health monitoring: detects stalls, context saturation, cache issues, cost spikes, retry loops
+- Multi-session orchestration: dependency-ordered task graphs, prompt decomposition into parallel DAGs
+- Event hooks: desktop notifications, shell commands, webhooks on session events
+- Session recording: highlight reels as GIFs (edits, commands, errors - strips idle time)
+- Relay & hive mind: connect instances across machines, share brain learnings peer-to-peer
+- Remote task delegation: offload tasks to connected peers with status streaming
+- Discovery: invite codes, word phrases, QR codes, LAN broadcast scanning
+- Terminal support: Ghostty, tmux, Kitty, Warp, iTerm2, Terminal.app, WezTerm, GNOME Terminal
+
+## How It Works
+
+Reads Claude Code's local files (no API keys, no network, read-only):
+- ~/.claude/sessions/*.json - session metadata
+- ~/.claude/projects/{slug}/*.jsonl - conversation logs with token usage
+- ps - CPU%, memory, TTY per process
+
+Status inference uses multiple signals: waiting_for_task events, CPU thresholds, stop_reason fields, message recency.
+
+## Architecture
+
+~1 MB binary, sub-50ms startup, 7 runtime crates, no async runtime.
+
+Core: main.rs, app.rs, session.rs, discovery.rs, monitor.rs, process.rs, config.rs, history.rs, hooks.rs, orchestrator.rs, health.rs, rules.rs, launch.rs, models.rs
+Brain: engine.rs, client.rs, context.rs, decisions.rs, agents.rs, mailbox.rs, prompts.rs, evals.rs, insights.rs
+Relay: mod.rs, cli.rs, crypto.rs, protocol.rs, peer.rs, listener.rs, mesh.rs, delegation.rs, worker.rs, invite.rs, lan.rs
+Hive: mod.rs, cli.rs, store.rs, distiller.rs, merger.rs, gossip.rs, trust.rs, injection.rs
+TUI: table.rs, detail.rs, help.rs, status_bar.rs
+Terminals: ghostty, kitty, tmux, wezterm, warp, iterm2, terminal_app, gnome_terminal, windows_terminal
+
+## Docs
+
+- [Quick Start](https://mercurialsolo.github.io/claudectl/quickstart/)
+- [Configuration](https://mercurialsolo.github.io/claudectl/configuration/)
+- [Reference](https://mercurialsolo.github.io/claudectl/reference/)
+- [Terminal Support](https://mercurialsolo.github.io/claudectl/terminal-support/)
+- [Troubleshooting](https://mercurialsolo.github.io/claudectl/troubleshooting/)
+- [Relay & Hive Mind](https://mercurialsolo.github.io/claudectl/relay/)
+- [Contributing](https://mercurialsolo.github.io/claudectl/contributing/)
+
+## Links
+
+- Source: https://github.com/mercurialsolo/claudectl
+- License: MIT

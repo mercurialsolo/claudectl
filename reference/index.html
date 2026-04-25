@@ -1,0 +1,2299 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Mission control for Claude Code — supervise, orchestrate, and connect your coding agents with a local LLM brain and hive mind.">
+      
+      
+      
+        <link rel="canonical" href="https://mercurialsolo.github.io/claudectl/reference/">
+      
+      
+        <link rel="prev" href="../configuration/">
+      
+      
+        <link rel="next" href="../relay/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Reference - claudectl</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="claudectl" class="md-header__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            claudectl
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="claudectl" class="md-nav__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    claudectl
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#dashboard-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard Features
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status Detection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interactive-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive Controls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CLI Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Filtering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#budget-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Budget &amp; Notifications
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#brain-local-llm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Brain (Local LLM)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#orchestration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Orchestration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recording" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recording
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coordination-features-coord" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordination (--features coord)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relay-features-relay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relay (--features relay)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hive-mind-features-hive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive Mind (--features hive)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#history-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        History &amp; Diagnostics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cost-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost Tracking
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#themes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Themes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How It Works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#brain-query" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Brain Query
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#brain-gate-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Brain Gate Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#claude-code-plugin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Claude Code Plugin
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Claude Code Plugin">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#plugin-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plugin Components
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-brain-gate-hook-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the brain gate hook works
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comparison
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive Mind
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terminal-support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terminal Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#dashboard-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard Features
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status Detection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interactive-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive Controls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CLI Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Filtering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#budget-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Budget &amp; Notifications
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#brain-local-llm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Brain (Local LLM)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#orchestration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Orchestration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recording" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recording
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coordination-features-coord" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordination (--features coord)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relay-features-relay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relay (--features relay)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hive-mind-features-hive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive Mind (--features hive)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#history-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        History &amp; Diagnostics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cost-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost Tracking
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#themes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Themes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How It Works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#brain-query" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Brain Query
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#brain-gate-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Brain Gate Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#claude-code-plugin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Claude Code Plugin
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Claude Code Plugin">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#plugin-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plugin Components
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-brain-gate-hook-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the brain gate hook works
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comparison
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="reference">Reference</h1>
+<h2 id="dashboard-features">Dashboard Features</h2>
+<ul>
+<li>Live table: PID, project, status, context %, cost, $/hr burn rate, elapsed, CPU%, memory, tokens, sparkline</li>
+<li>Parent sessions expand into subagent rows (completed totals + active subagents)</li>
+<li>Detail panel (<code>Enter</code>) with full session metadata</li>
+<li>Grouped view (<code>g</code>) by project with aggregate stats</li>
+<li>Sort by status, context, cost, burn rate, or elapsed (<code>s</code>)</li>
+<li>Live triage filters: status cycle (<code>f</code>), focus cycle (<code>v</code>), text search (<code>/</code>), clear (<code>z</code>)</li>
+<li>Conflict detection when 2+ sessions share the same git worktree (<code>!!</code>)</li>
+<li>Permission wait time — shows how long sessions have been waiting, longest first</li>
+</ul>
+<h2 id="status-detection">Status Detection</h2>
+<p>Multi-signal inference from CPU usage, JSONL events, and timestamps:</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Color</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Needs Input</strong></td>
+<td>Magenta</td>
+<td>Waiting for user to approve/confirm a tool use</td>
+</tr>
+<tr>
+<td><strong>Processing</strong></td>
+<td>Green</td>
+<td>Actively generating or executing tools</td>
+</tr>
+<tr>
+<td><strong>Waiting</strong></td>
+<td>Yellow</td>
+<td>Done responding, waiting for user's next prompt</td>
+</tr>
+<tr>
+<td><strong>Unknown</strong></td>
+<td>Blue</td>
+<td>Session is alive, but transcript telemetry is missing or unsupported</td>
+</tr>
+<tr>
+<td><strong>Idle</strong></td>
+<td>Gray</td>
+<td>No recent activity (&gt;10 min since last message)</td>
+</tr>
+<tr>
+<td><strong>Finished</strong></td>
+<td>Red</td>
+<td>Process exited</td>
+</tr>
+</tbody>
+</table>
+<h2 id="interactive-controls">Interactive Controls</h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>j</code>/<code>k</code> or <code>Up</code>/<code>Down</code></td>
+<td>Navigate sessions</td>
+</tr>
+<tr>
+<td><code>Tab</code></td>
+<td>Switch to session's terminal tab</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Toggle detail panel</td>
+</tr>
+<tr>
+<td><code>y</code></td>
+<td>Approve (send Enter to NeedsInput session)</td>
+</tr>
+<tr>
+<td><code>i</code></td>
+<td>Input mode (type text to session)</td>
+</tr>
+<tr>
+<td><code>d</code>/<code>x</code></td>
+<td>Kill session (double-tap to confirm)</td>
+</tr>
+<tr>
+<td><code>a</code></td>
+<td>Toggle auto-approve (double-tap to confirm)</td>
+</tr>
+<tr>
+<td><code>n</code></td>
+<td>Launch wizard for cwd, prompt, and resume</td>
+</tr>
+<tr>
+<td><code>g</code></td>
+<td>Toggle grouped view by project</td>
+</tr>
+<tr>
+<td><code>s</code></td>
+<td>Cycle sort column</td>
+</tr>
+<tr>
+<td><code>f</code></td>
+<td>Cycle status filter</td>
+</tr>
+<tr>
+<td><code>v</code></td>
+<td>Cycle focus filter (<code>attention</code>, budget, context, telemetry, conflicts)</td>
+</tr>
+<tr>
+<td><code>/</code></td>
+<td>Search project/model/session text</td>
+</tr>
+<tr>
+<td><code>z</code></td>
+<td>Clear all active filters</td>
+</tr>
+<tr>
+<td><code>c</code></td>
+<td>Send /compact to session (when idle)</td>
+</tr>
+<tr>
+<td><code>R</code></td>
+<td>Record session highlight reel (toggle)</td>
+</tr>
+<tr>
+<td><code>b</code></td>
+<td>Accept brain suggestion for selected session</td>
+</tr>
+<tr>
+<td><code>B</code></td>
+<td>Reject brain suggestion</td>
+</tr>
+<tr>
+<td><code>r</code></td>
+<td>Force refresh</td>
+</tr>
+<tr>
+<td><code>?</code></td>
+<td>Toggle help overlay</td>
+</tr>
+<tr>
+<td><code>q</code>/<code>Esc</code></td>
+<td>Quit</td>
+</tr>
+</tbody>
+</table>
+<h2 id="cli-reference">CLI Reference</h2>
+<h3 id="dashboard">Dashboard</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(no flags)</td>
+<td>Interactive TUI dashboard</td>
+</tr>
+<tr>
+<td><code>-i</code>, <code>--interval &lt;ms&gt;</code></td>
+<td>Refresh interval in milliseconds (default: 2000)</td>
+</tr>
+<tr>
+<td><code>--theme &lt;dark\|light\|none&gt;</code></td>
+<td>Color theme. Respects <code>NO_COLOR</code> env var</td>
+</tr>
+<tr>
+<td><code>--debug</code></td>
+<td>Show timing metrics in the footer</td>
+</tr>
+<tr>
+<td><code>--demo</code></td>
+<td>Run with fake sessions for screenshots and demos</td>
+</tr>
+</tbody>
+</table>
+<h3 id="output-modes">Output Modes</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-l</code>, <code>--list</code></td>
+<td>Print session table to stdout and exit</td>
+</tr>
+<tr>
+<td><code>--json</code></td>
+<td>Print JSON array of sessions and exit</td>
+</tr>
+<tr>
+<td><code>-w</code>, <code>--watch</code></td>
+<td>Stream status changes to stdout (no TUI)</td>
+</tr>
+<tr>
+<td><code>--headless</code></td>
+<td>Run headless with brain, coordination, and context rot prevention active (no TUI). Attach a dashboard with <code>claudectl</code> in another terminal</td>
+</tr>
+<tr>
+<td><code>--format &lt;template&gt;</code></td>
+<td>Custom format for <code>--watch</code>. Placeholders: <code>{pid}</code>, <code>{project}</code>, <code>{status}</code>, <code>{cost}</code>, <code>{context}</code></td>
+</tr>
+<tr>
+<td><code>--summary</code></td>
+<td>Show activity summary and exit</td>
+</tr>
+<tr>
+<td><code>--since &lt;duration&gt;</code></td>
+<td>Time window for <code>--summary</code>, <code>--history</code>, <code>--stats</code> (e.g., "8h", "24h", "7d"). Default: 24h</td>
+</tr>
+</tbody>
+</table>
+<h3 id="filtering">Filtering</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--filter-status &lt;status&gt;</code></td>
+<td>Filter by status: NeedsInput, Processing, Waiting, Finished, etc.</td>
+</tr>
+<tr>
+<td><code>--focus &lt;filter&gt;</code></td>
+<td>High-signal subset: <code>attention</code>, <code>over-budget</code>, <code>high-context</code>, <code>unknown-telemetry</code>, <code>conflict</code></td>
+</tr>
+<tr>
+<td><code>--search &lt;text&gt;</code></td>
+<td>Search project/model/session text</td>
+</tr>
+</tbody>
+</table>
+<h3 id="session-management">Session Management</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--new</code></td>
+<td>Launch a new Claude Code session</td>
+</tr>
+<tr>
+<td><code>--cwd &lt;path&gt;</code></td>
+<td>Working directory for the new session (default: <code>.</code>)</td>
+</tr>
+<tr>
+<td><code>--prompt &lt;text&gt;</code></td>
+<td>Prompt to send to the new session</td>
+</tr>
+<tr>
+<td><code>--resume &lt;session-id&gt;</code></td>
+<td>Resume a previous session by ID</td>
+</tr>
+</tbody>
+</table>
+<h3 id="budget-notifications">Budget &amp; Notifications</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--budget &lt;usd&gt;</code></td>
+<td>Per-session budget in USD. Alert at 80%, optionally kill at 100%</td>
+</tr>
+<tr>
+<td><code>--kill-on-budget</code></td>
+<td>Auto-kill sessions that exceed budget (requires <code>--budget</code>)</td>
+</tr>
+<tr>
+<td><code>--notify</code></td>
+<td>Desktop notifications on NeedsInput transitions</td>
+</tr>
+<tr>
+<td><code>--webhook &lt;url&gt;</code></td>
+<td>Webhook URL to POST JSON on status changes</td>
+</tr>
+<tr>
+<td><code>--webhook-on &lt;statuses&gt;</code></td>
+<td>Only fire webhook on these transitions (comma-separated, e.g. "NeedsInput,Finished")</td>
+</tr>
+</tbody>
+</table>
+<h3 id="brain-local-llm">Brain (Local LLM)</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--brain</code></td>
+<td>Enable local LLM brain for session advisory</td>
+</tr>
+<tr>
+<td><code>--auto-run</code></td>
+<td>Auto-execute brain suggestions without confirmation</td>
+</tr>
+<tr>
+<td><code>--url &lt;endpoint&gt;</code></td>
+<td>LLM endpoint URL (maps to config <code>[brain] endpoint</code>)</td>
+</tr>
+<tr>
+<td><code>--brain-model &lt;name&gt;</code></td>
+<td>Override brain model name (maps to config <code>[brain] model</code>)</td>
+</tr>
+<tr>
+<td><code>--brain-eval</code></td>
+<td>Run brain eval scenarios against the LLM and report results</td>
+</tr>
+<tr>
+<td><code>--brain-prompts</code></td>
+<td>List brain prompt templates and their source (built-in vs user override)</td>
+</tr>
+<tr>
+<td><code>--brain-stats &lt;metric&gt;</code></td>
+<td>Brain statistics: <code>impact</code>, <code>learning-curve</code>, <code>accuracy</code>, <code>baseline</code>, <code>false-approve</code></td>
+</tr>
+<tr>
+<td><code>--brain-query</code></td>
+<td>Query brain for a single tool-call decision (JSON output)</td>
+</tr>
+<tr>
+<td><code>--tool &lt;name&gt;</code></td>
+<td>Tool name for <code>--brain-query</code> (e.g., "Bash", "Write")</td>
+</tr>
+<tr>
+<td><code>--tool-input &lt;input&gt;</code></td>
+<td>Command or file path for <code>--brain-query</code></td>
+</tr>
+<tr>
+<td><code>--project &lt;name&gt;</code></td>
+<td>Project name for <code>--brain-query</code> (default: current directory name)</td>
+</tr>
+<tr>
+<td><code>--mode &lt;on\|off\|auto\|status&gt;</code></td>
+<td>Set brain gate mode (see Brain Gate Mode below)</td>
+</tr>
+<tr>
+<td><code>--insights [on\|off\|status]</code></td>
+<td>Show auto-generated insights, or set insights mode. Requires <code>--brain</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="orchestration">Orchestration</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--decompose &lt;prompt&gt;</code></td>
+<td>Analyze a prompt and suggest parallel sub-tasks (outputs JSON)</td>
+</tr>
+<tr>
+<td><code>--run &lt;file&gt;</code></td>
+<td>Run tasks from a JSON file</td>
+</tr>
+<tr>
+<td><code>--parallel</code></td>
+<td>Run independent tasks in parallel (used with <code>--run</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="recording">Recording</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--record &lt;path&gt;</code></td>
+<td>Record the TUI as an asciicast v2 file (e.g., <code>--record demo.cast</code>)</td>
+</tr>
+<tr>
+<td><code>--duration &lt;secs&gt;</code></td>
+<td>Auto-quit after N seconds (useful with <code>--demo --record</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Press <code>R</code> on any session to record a per-session highlight reel (edits, commands, errors — idle time stripped). In <code>--demo</code> mode, a scripted coding session is drip-fed so recording works without live sessions.</p>
+<h3 id="coordination-features-coord">Coordination (--features coord)</h3>
+<p>Inspect multi-session coordination state. Requires <code>cargo install claudectl --features coord</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>coord events [N] [type]</code></td>
+<td>Show last N coordination events (default 50), optionally filtered by type</td>
+</tr>
+<tr>
+<td><code>coord leases</code></td>
+<td>Show active ownership leases</td>
+</tr>
+<tr>
+<td><code>coord blockers</code></td>
+<td>Show open blockers</td>
+</tr>
+<tr>
+<td><code>coord handoffs</code></td>
+<td>Show handoffs</td>
+</tr>
+<tr>
+<td><code>coord interrupts</code></td>
+<td>Show pending interrupts</td>
+</tr>
+<tr>
+<td><code>coord memory</code></td>
+<td>List recent coordination memory records</td>
+</tr>
+<tr>
+<td><code>coord memory search &lt;q&gt;</code></td>
+<td>Full-text search coordination memory</td>
+</tr>
+<tr>
+<td><code>coord promote --project &lt;name&gt;</code></td>
+<td>Promote brain patterns to coordination memory</td>
+</tr>
+<tr>
+<td><code>coord prune [--days N]</code></td>
+<td>Delete old events, resolved blockers, expired leases (default: 30 days)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="relay-features-relay">Relay (--features relay)</h3>
+<p>Connect machines, delegate tasks. See the <a href="../relay/">full relay guide</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>relay serve [--port N]</code></td>
+<td>Start the relay listener for peer connections</td>
+</tr>
+<tr>
+<td><code>relay invite [--qr] [--words]</code></td>
+<td>Generate invite code, link, and word phrase</td>
+</tr>
+<tr>
+<td><code>relay join &lt;code&gt;</code></td>
+<td>Connect using any invite format (code, words, or link)</td>
+</tr>
+<tr>
+<td><code>relay discover</code></td>
+<td>Scan LAN for nearby claudectl instances</td>
+</tr>
+<tr>
+<td><code>relay peers</code></td>
+<td>List known and connected peers</td>
+</tr>
+<tr>
+<td><code>relay delegate &lt;peer&gt; &lt;prompt&gt;</code></td>
+<td>Delegate a task to a remote peer</td>
+</tr>
+<tr>
+<td><code>relay identity</code></td>
+<td>Show this instance's relay identity</td>
+</tr>
+</tbody>
+</table>
+<h3 id="hive-mind-features-hive">Hive Mind (--features hive)</h3>
+<p>Share knowledge, distill learnings. Requires relay for transport.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hive status</code></td>
+<td>Knowledge store overview (units, categories, conflicts)</td>
+</tr>
+<tr>
+<td><code>hive knowledge [--from X]</code></td>
+<td>List knowledge units, filter by peer or scope</td>
+</tr>
+<tr>
+<td><code>hive trust [&lt;peer&gt; [&lt;level&gt;]]</code></td>
+<td>Show or set peer trust levels</td>
+</tr>
+<tr>
+<td><code>hive export</code></td>
+<td>Export all knowledge as JSON</td>
+</tr>
+<tr>
+<td><code>hive import &lt;file&gt;</code></td>
+<td>Import knowledge from JSON file</td>
+</tr>
+<tr>
+<td><code>hive archive [--prune Nd]</code></td>
+<td>Show cold storage archive stats</td>
+</tr>
+<tr>
+<td><code>hive distill</code></td>
+<td>Run distillation pipeline (dedup, condense, curriculum)</td>
+</tr>
+<tr>
+<td><code>hive curriculum</code></td>
+<td>Show distilled curriculum</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cleanup">Cleanup</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--clean</code></td>
+<td>Clean up old session data (JSONL transcripts, session JSON files)</td>
+</tr>
+<tr>
+<td><code>--older-than &lt;duration&gt;</code></td>
+<td>Only clean sessions older than this (e.g., "7d", "24h")</td>
+</tr>
+<tr>
+<td><code>--finished</code></td>
+<td>Only clean sessions that have finished</td>
+</tr>
+<tr>
+<td><code>--dry-run</code></td>
+<td>Show what would be removed without deleting</td>
+</tr>
+</tbody>
+</table>
+<h3 id="history-diagnostics">History &amp; Diagnostics</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--autopsy</code></td>
+<td>Run post-mortem analysis on a completed session transcript</td>
+</tr>
+<tr>
+<td><code>--session &lt;id&gt;</code></td>
+<td>Session ID or JSONL path for <code>--autopsy</code> (defaults to most recent session)</td>
+</tr>
+<tr>
+<td><code>--history</code></td>
+<td>Show completed session history and exit</td>
+</tr>
+<tr>
+<td><code>--stats</code></td>
+<td>Show aggregated session statistics and exit</td>
+</tr>
+<tr>
+<td><code>--config</code></td>
+<td>Show resolved configuration and exit</td>
+</tr>
+<tr>
+<td><code>--config-template</code></td>
+<td>Print annotated default config template to stdout</td>
+</tr>
+<tr>
+<td><code>--hooks</code></td>
+<td>List configured event hooks and exit</td>
+</tr>
+<tr>
+<td><code>--doctor</code></td>
+<td>Diagnose terminal integration and setup</td>
+</tr>
+<tr>
+<td><code>--log &lt;path&gt;</code></td>
+<td>Write diagnostic logs to a file</td>
+</tr>
+</tbody>
+</table>
+<h3 id="setup">Setup</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--init</code></td>
+<td>Wire up Claude Code hooks in settings and exit</td>
+</tr>
+<tr>
+<td><code>--uninstall</code></td>
+<td>Remove claudectl hooks from settings and exit</td>
+</tr>
+<tr>
+<td><code>-s</code>, <code>--scope &lt;user\|project&gt;</code></td>
+<td>Configuration scope (default: <code>user</code>). Matches Claude Code's <code>--scope</code> convention</td>
+</tr>
+</tbody>
+</table>
+<p><code>--init</code> writes three hooks into Claude Code's settings:</p>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>Matcher</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PreToolUse</code></td>
+<td><code>Bash</code></td>
+<td>Lets claudectl observe commands before execution</td>
+</tr>
+<tr>
+<td><code>PostToolUse</code></td>
+<td><code>*</code></td>
+<td>Notifies claudectl after every tool completion</td>
+</tr>
+<tr>
+<td><code>Stop</code></td>
+<td>(all)</td>
+<td>Notifies claudectl when a session ends</td>
+</tr>
+</tbody>
+</table>
+<p>The hooks call <code>claudectl --json</code> on each event. They are safe to run alongside any existing hooks — <code>--init</code> merges without overwriting.</p>
+<p><code>--uninstall</code> removes only claudectl hook entries, preserving all other settings and hooks. If the file becomes empty after removal, it is deleted.</p>
+<table>
+<thead>
+<tr>
+<th>Scope</th>
+<th>Flag</th>
+<th>File</th>
+<th>Committed to git?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>user</code> (default)</td>
+<td><code>--init</code></td>
+<td><code>~/.claude/settings.json</code></td>
+<td>No (user home)</td>
+</tr>
+<tr>
+<td><code>project</code></td>
+<td><code>--init -s project</code></td>
+<td><code>.claude/settings.local.json</code></td>
+<td>No (gitignored)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="cost-tracking">Cost Tracking</h2>
+<ul>
+<li>Per-session USD estimates (Opus, Sonnet, Haiku model pricing)</li>
+<li>Live $/hr burn rate</li>
+<li>Per-session budget alerts at 80%, auto-kill at 100%</li>
+<li>Daily/weekly aggregate cost tracking in title bar</li>
+<li>Unknown models marked as fallback estimates until overridden in config</li>
+</ul>
+<h2 id="themes">Themes</h2>
+<p>Dark, light, and none (<code>--theme</code>). Respects <code>NO_COLOR</code> environment variable.</p>
+<h2 id="how-it-works">How It Works</h2>
+<p>claudectl reads Claude Code's local data — no API keys, no network access, no modifications to Claude Code:</p>
+<ul>
+<li><strong><code>~/.claude/sessions/*.json</code></strong> — session metadata (PID, session ID, working directory, start time)</li>
+<li><strong><code>~/.claude/projects/{slug}/*.jsonl</code></strong> — conversation logs with token usage and events</li>
+<li><strong><code>ps</code></strong> — CPU%, memory, TTY for each process</li>
+<li><strong><code>/tmp/claude-{uid}/{slug}/{sessionId}/tasks/</code></strong> — subagent task files</li>
+</ul>
+<p>Status inference combines multiple signals: <code>waiting_for_task</code> events, CPU usage thresholds, <code>stop_reason</code> fields, and message recency.</p>
+<h3 id="brain-query">Brain Query</h3>
+<p>Query the brain for a single tool-call decision without the TUI. Used by the Claude Code plugin hook, but also useful for scripting and testing:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>claudectl<span class="w"> </span>--brain<span class="w"> </span>--brain-query<span class="w"> </span>--tool<span class="w"> </span>Bash<span class="w"> </span>--tool-input<span class="w"> </span><span class="s2">&quot;rm -rf /tmp&quot;</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>claudectl<span class="w"> </span>--brain<span class="w"> </span>--brain-query<span class="w"> </span>--tool<span class="w"> </span>Write<span class="w"> </span>--tool-input<span class="w"> </span><span class="s2">&quot;src/main.rs&quot;</span><span class="w"> </span>--project<span class="w"> </span>myapp
+</code></pre></div>
+<p>Output is JSON:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">&quot;action&quot;</span><span class="p">:</span><span class="s2">&quot;deny&quot;</span><span class="p">,</span><span class="nt">&quot;reasoning&quot;</span><span class="p">:</span><span class="s2">&quot;Destructive command&quot;</span><span class="p">,</span><span class="nt">&quot;confidence&quot;</span><span class="p">:</span><span class="mf">0.95</span><span class="p">,</span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="s2">&quot;brain&quot;</span><span class="p">,</span><span class="nt">&quot;below_threshold&quot;</span><span class="p">:</span><span class="kc">false</span><span class="p">,</span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="mf">0.6</span><span class="p">}</span>
+</code></pre></div>
+<p>The decision flow is: deny rules (instant) -&gt; approve rules (instant) -&gt; LLM query -&gt; adaptive threshold check.</p>
+<p>If the brain is unreachable, returns <code>{"action":"abstain","source":"error"}</code> so callers are never blocked.</p>
+<h3 id="brain-gate-mode">Brain Gate Mode</h3>
+<p>Control whether the brain hook evaluates tool calls:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>claudectl<span class="w"> </span>--mode<span class="w"> </span>on<span class="w">                    </span><span class="c1"># Brain evaluates tool calls (default)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>claudectl<span class="w"> </span>--mode<span class="w"> </span>off<span class="w">                   </span><span class="c1"># Disable brain — all calls pass through</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>claudectl<span class="w"> </span>--mode<span class="w"> </span>auto<span class="w">                  </span><span class="c1"># Brain auto-approves above threshold</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>claudectl<span class="w"> </span>--mode<span class="w"> </span>status<span class="w">                </span><span class="c1"># Show current mode</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th style="text-align: center;">Approves safe calls</th>
+<th style="text-align: center;">Denies dangerous calls</th>
+<th style="text-align: center;">Low-confidence calls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>on</code></td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">Fall through to user</td>
+</tr>
+<tr>
+<td><code>auto</code></td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">Auto-approve</td>
+</tr>
+<tr>
+<td><code>off</code></td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Fall through to user</td>
+</tr>
+</tbody>
+</table>
+<p>Mode is stored in <code>~/.claudectl/brain/gate-mode</code>. File absent = <code>on</code> (default).</p>
+<h2 id="claude-code-plugin">Claude Code Plugin</h2>
+<p>claudectl includes a Claude Code plugin in <code>claude-plugin/</code> that integrates the brain directly into sessions.</p>
+<h3 id="plugin-components">Plugin Components</h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Type</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>brain-gate.sh</code></td>
+<td>PreToolUse hook</td>
+<td>Queries the brain before Bash/Write/Edit/NotebookEdit calls</td>
+</tr>
+<tr>
+<td><code>budget-check.sh</code></td>
+<td>PreToolUse hook</td>
+<td>Denies tool calls when session exceeds budget</td>
+</tr>
+<tr>
+<td><code>/brain</code></td>
+<td>Command</td>
+<td>Toggle brain mode: <code>/brain on</code>, <code>/brain off</code>, <code>/brain auto</code></td>
+</tr>
+<tr>
+<td><code>/sessions</code></td>
+<td>Command</td>
+<td>Show all active sessions with status, cost, and health</td>
+</tr>
+<tr>
+<td><code>/spend</code></td>
+<td>Command</td>
+<td>Cost breakdown by project and time window</td>
+</tr>
+<tr>
+<td><code>/brain-stats</code></td>
+<td>Command</td>
+<td>Brain learning metrics and accuracy</td>
+</tr>
+<tr>
+<td><code>/auto-insights</code></td>
+<td>Command</td>
+<td>Show or configure auto-generated workflow insights</td>
+</tr>
+<tr>
+<td>Supervisor</td>
+<td>Agent</td>
+<td>Proactive session health triage</td>
+</tr>
+<tr>
+<td>Session Monitoring</td>
+<td>Skill</td>
+<td>Auto-activated awareness of claudectl capabilities</td>
+</tr>
+</tbody>
+</table>
+<h3 id="how-the-brain-gate-hook-works">How the brain gate hook works</h3>
+<ol>
+<li>Claude Code fires a PreToolUse event with the tool name and input</li>
+<li>The hook checks <code>~/.claudectl/brain/gate-mode</code> — if <code>off</code>, exits immediately</li>
+<li>Calls <code>claudectl --brain --brain-query --tool &lt;name&gt; --tool-input &lt;input&gt;</code></li>
+<li>claudectl checks static deny/approve rules first (instant, no LLM)</li>
+<li>If no rule matches, queries the local LLM brain</li>
+<li>Returns <code>{"decision":"approve"}</code> or <code>{"decision":"deny","reason":"..."}</code> to Claude Code</li>
+</ol>
+<p>In <code>on</code> mode, low-confidence brain approvals fall through to normal permission prompts. In <code>auto</code> mode, all brain approvals execute.</p>
+<h2 id="security">Security</h2>
+<p>claudectl runs entirely locally. It reads Claude Code's session files from disk and process data from <code>ps</code>. It does not:
+- Send data to any server (unless you configure webhooks or the brain feature)
+- Modify Claude Code's files or behavior
+- Require API keys or authentication
+- Run with elevated privileges</p>
+<p>Webhook payloads contain session metadata (project name, cost, status). Review your webhook URL and event filters before enabling.</p>
+<p>The brain feature sends session context to a <strong>local</strong> LLM endpoint (default <code>localhost:11434</code>). No data leaves your machine unless you point <code>--url</code> at a remote server.</p>
+<h2 id="comparison">Comparison</h2>
+<p>claudectl was the first tool to combine local LLM supervision with multi-session orchestration for Claude Code (shipped April 2026).</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th style="text-align: center;">Claude Code alone</th>
+<th style="text-align: center;">With claudectl</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Local LLM auto-approve/deny</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Brain with ollama</td>
+</tr>
+<tr>
+<td>Self-improving insights</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Friction detection, rule suggestions</td>
+</tr>
+<tr>
+<td>Session health monitoring</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">10 checks: cognitive decay, cost spikes, loops, stalls, context, cache, compaction, token efficiency, error acceleration, repetition</td>
+</tr>
+<tr>
+<td>Orchestrate multi-session workflows</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Dependency-ordered tasks</td>
+</tr>
+<tr>
+<td>See status of all sessions at once</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Live dashboard</td>
+</tr>
+<tr>
+<td>Track cost per session</td>
+<td style="text-align: center;">Manually</td>
+<td style="text-align: center;">Live $/hr burn rate</td>
+</tr>
+<tr>
+<td>Enforce spend budgets</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Auto-kill at limit</td>
+</tr>
+<tr>
+<td>File conflict detection</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Auto-detect + brain pre-check + auto-deny</td>
+</tr>
+<tr>
+<td>Headless daemon mode</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;"><code>--headless</code> with brain, coordination, and context rot prevention</td>
+</tr>
+<tr>
+<td>Session autopsy / post-mortem</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;"><code>--autopsy</code> on completed session transcripts</td>
+</tr>
+<tr>
+<td>Idle mode / unattended work</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Run tasks while you sleep</td>
+</tr>
+<tr>
+<td>Session auto-restart</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Checkpoint + restart on context saturation</td>
+</tr>
+<tr>
+<td>Task decomposition</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Splits prompts into parallel DAGs</td>
+</tr>
+<tr>
+<td>Auto-rule engine</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Match by tool/command/project/cost</td>
+</tr>
+<tr>
+<td>Approve prompts without switching</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Press <code>y</code></td>
+</tr>
+<tr>
+<td>Record session highlight reels</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Press <code>R</code></td>
+</tr>
+<tr>
+<td>Claude Code plugin</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;"><code>/brain</code>, <code>/sessions</code>, <code>/spend</code>, <code>/auto-insights</code></td>
+</tr>
+</tbody>
+</table>
+<p>| Cross-machine knowledge sharing | No | Peer-to-peer hive mind |
+| Remote task delegation | No | Delegate to connected peers |</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th style="text-align: center;">claudectl</th>
+<th style="text-align: center;">Static auto-approve tools</th>
+<th style="text-align: center;">Cloud-based supervisors</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Local LLM brain that learns your preferences</td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">No</td>
+</tr>
+<tr>
+<td>Cross-session orchestration + context routing</td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">Varies</td>
+</tr>
+<tr>
+<td>10-check health monitoring + context rot detection</td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">No</td>
+</tr>
+<tr>
+<td>File conflict detection across sessions</td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">No</td>
+</tr>
+<tr>
+<td>Per-tool adaptive confidence thresholds</td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">No</td>
+</tr>
+<tr>
+<td>Task decomposition into parallel DAGs</td>
+<td style="text-align: center;">Yes</td>
+<td style="text-align: center;">No</td>
+<td style="text-align: center;">No</td>
+</tr>
+<tr>
+<td>Binary size</td>
+<td style="text-align: center;">&lt;1 MB</td>
+<td style="text-align: center;">Varies</td>
+<td style="text-align: center;">N/A</td>
+</tr>
+<tr>
+<td>Startup time</td>
+<td style="text-align: center;">&lt;50 ms</td>
+<td style="text-align: center;">Varies</td>
+<td style="text-align: center;">N/A</td>
+</tr>
+<tr>
+<td>Data stays on your machine</td>
+<td style="text-align: center;">100%</td>
+<td style="text-align: center;">Usually</td>
+<td style="text-align: center;">No</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/mercurialsolo/claudectl" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

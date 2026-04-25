@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>claudectl | Mission Control for Claude Code</title>
+    <meta
+      name="description"
+      content="Supervise, orchestrate, and connect your coding agents. Local LLM brain for auto-approve, hive mind for sharing skills across machines, one dashboard for every session."
+    />
+    <meta property="og:title" content="claudectl | Mission Control for Claude Code" />
+    <meta
+      property="og:description"
+      content="Supervise, orchestrate, and connect your coding agents. Local LLM brain, hive mind skill sharing, and one dashboard for every session."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://mercurialsolo.github.io/claudectl/" />
+    <meta
+      property="og:image"
+      content="https://mercurialsolo.github.io/claudectl/assets/github-social-preview.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="claudectl | Mission Control for Claude Code" />
+    <meta
+      name="twitter:description"
+      content="Supervise, orchestrate, and connect your coding agents."
+    />
+    <meta
+      name="twitter:image"
+      content="https://mercurialsolo.github.io/claudectl/assets/github-social-preview.png"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header">
+        <a class="brand" href="#top">claudectl</a>
+        <nav class="site-nav">
+          <a href="#workflows">Workflows</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/mercurialsolo/claudectl">GitHub</a>
+        </nav>
+      </header>
+
+      <main id="top">
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Mission control for Claude Code</p>
+            <h1>Supervise every Claude Code session from one terminal.</h1>
+            <p class="hero-text">
+              Know which agent is blocked, burning budget, waiting for approval,
+              or stalled, and intervene without tab hunting.
+            </p>
+            <div class="cta-row">
+              <a class="button button-primary" href="#install">Install with Homebrew</a>
+              <a
+                class="button button-secondary"
+                href="https://asciinema.org/a/bovJrUq2vEmC08NU"
+                >Watch the demo</a
+              >
+            </div>
+            <ul class="proof-strip" aria-label="claudectl proof points">
+              <li>~1 MB binary</li>
+              <li>Sub-50ms startup</li>
+              <li>Zero config</li>
+              <li>macOS and Linux</li>
+            </ul>
+          </div>
+
+          <div class="hero-panel">
+            <div class="panel-chrome">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <a
+              class="demo-frame"
+              href="https://asciinema.org/a/bovJrUq2vEmC08NU"
+              aria-label="Open claudectl demo on Asciinema"
+            >
+              <img
+                src="assets/claudectl-demo-hero.gif"
+                alt="Animated claudectl dashboard demo"
+                width="1785"
+                height="1142"
+              />
+            </a>
+            <div class="hero-caption">
+              <span>29-second demo</span>
+              <span>Local-only</span>
+              <span>Zero config</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="problem">
+          <div class="section-heading">
+            <p class="eyebrow">Why it exists</p>
+            <h2>Claude Code is good at execution. It is not built to supervise five terminals at once.</h2>
+          </div>
+          <div class="problem-grid">
+            <article class="problem-card">
+              <h3>Blocked session</h3>
+              <p>A permission prompt sits idle in some hidden tab and you miss it for ten minutes.</p>
+            </article>
+            <article class="problem-card">
+              <h3>Budget burn</h3>
+              <p>One agent keeps spending while doing low-value work and you only notice after the fact.</p>
+            </article>
+            <article class="problem-card">
+              <h3>False activity</h3>
+              <p>A session looks alive but is actually stalled, idle, or missing transcript telemetry.</p>
+            </article>
+            <article class="problem-card">
+              <h3>Tab hunting</h3>
+              <p>You waste time switching tabs just to understand state before you can intervene.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="solution">
+          <div class="section-heading">
+            <p class="eyebrow">What claudectl does</p>
+            <h2>The operator layer for Claude Code.</h2>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <h3>See every session</h3>
+              <p>Status, burn rate, context usage, activity, CPU, memory, and subagent rows in one place.</p>
+            </article>
+            <article class="feature-card">
+              <h3>Intervene fast</h3>
+              <p>Approve prompts, send input, jump to the right tab, or kill a runaway session from one pane.</p>
+            </article>
+            <article class="feature-card">
+              <h3>Control spend</h3>
+              <p>Set budgets, alert at thresholds, and auto-kill over-budget runs before they drift.</p>
+            </article>
+            <article class="feature-card">
+              <h3>Coordinate work</h3>
+              <p>Run dependency-ordered task graphs, keep logs per attempt, and resume where it matters.</p>
+            </article>
+            <article class="feature-card">
+              <h3>Alert and hook</h3>
+              <p>Trigger desktop notifications, shell hooks, and webhooks when sessions need attention.</p>
+            </article>
+            <article class="feature-card">
+              <h3>Record results</h3>
+              <p>Turn sessions and dashboards into GIFs and casts you can use in docs, posts, and demos.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="workflows" class="workflow-section">
+          <div class="section-heading">
+            <p class="eyebrow">Core workflows</p>
+            <h2>Built for the moments that actually break multi-session work.</h2>
+          </div>
+          <div class="workflow-grid">
+            <article class="workflow-card">
+              <h3>Catch blockers</h3>
+              <p>Find every session waiting for approval and clear it immediately.</p>
+              <pre><code>claudectl --watch --focus attention</code></pre>
+            </article>
+            <article class="workflow-card">
+              <h3>Control spend</h3>
+              <p>Track live burn rate, set budgets, and auto-kill over-budget runs.</p>
+              <pre><code>claudectl --budget 5 --kill-on-budget</code></pre>
+            </article>
+            <article class="workflow-card">
+              <h3>Supervise agent teams</h3>
+              <p>Run multiple Claude Code sessions without losing operational control.</p>
+              <pre><code>claudectl --run tasks.json --parallel</code></pre>
+            </article>
+          </div>
+        </section>
+
+        <section id="install" class="install-section">
+          <div class="section-heading">
+            <p class="eyebrow">Install</p>
+            <h2>Start with demo mode if you just want to see it work.</h2>
+          </div>
+
+          <div class="install-grid">
+            <article class="install-card">
+              <h3>1. Install</h3>
+              <pre><code>brew install mercurialsolo/tap/claudectl
+cargo install claudectl</code></pre>
+              <p>Single binary, no dependencies. Under 1 MB.</p>
+            </article>
+
+            <article class="install-card">
+              <h3>2. Wire up hooks</h3>
+              <pre><code>claudectl --init</code></pre>
+              <p>One command adds hooks to <code>~/.claude/settings.json</code> so Claude Code notifies claudectl on every tool use. Run once.</p>
+            </article>
+
+            <article class="install-card">
+              <h3>3. Start the dashboard</h3>
+              <pre><code>claudectl</code></pre>
+              <p>See every session at a glance. Or try <code>claudectl --demo</code> first to explore with fake sessions.</p>
+            </article>
+
+            <article class="install-card">
+              <h3>Uninstall</h3>
+              <pre><code>claudectl --uninstall</code></pre>
+              <p>Removes only claudectl hooks. All other settings preserved. Then <code>brew uninstall claudectl</code>.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="terminal-section">
+          <div class="section-heading">
+            <p class="eyebrow">Terminal coverage</p>
+            <h2>Built for the terminals people actually use with Claude Code.</h2>
+          </div>
+          <ul class="terminal-list">
+            <li>Ghostty</li>
+            <li>tmux</li>
+            <li>Kitty</li>
+            <li>Warp</li>
+            <li>iTerm2</li>
+            <li>Terminal.app</li>
+            <li>WezTerm</li>
+            <li>GNOME Terminal</li>
+          </ul>
+          <p class="terminal-note">
+            Run <code>claudectl --doctor</code> to verify launch, switch, input, and approve support in your current terminal.
+          </p>
+        </section>
+
+        <section class="closing-section">
+          <div class="closing-copy">
+            <p class="eyebrow">Launch</p>
+            <h2>Use the repo for code. Use the page for conversion.</h2>
+            <p>
+              This site is designed to answer the top-of-funnel question fast:
+              why someone running multiple Claude Code sessions should care.
+            </p>
+          </div>
+          <div class="closing-actions">
+            <a class="button button-primary" href="https://github.com/mercurialsolo/claudectl"
+              >View on GitHub</a
+            >
+            <a class="button button-secondary" href="#install">Get install commands</a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
