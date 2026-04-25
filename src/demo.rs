@@ -338,7 +338,7 @@ pub fn generate_sessions(tick: u32) -> Vec<ClaudeSession> {
 /// Scripted demo events that simulate rules, brain, and routing actions.
 /// Returns a status message for specific ticks, cycling every CYCLE_LEN ticks.
 pub fn demo_event(tick: u32) -> Option<DemoEvent> {
-    const CYCLE_LEN: u32 = 24;
+    const CYCLE_LEN: u32 = 32;
     let phase = tick % CYCLE_LEN;
 
     match phase {
@@ -384,11 +384,10 @@ pub fn demo_event(tick: u32) -> Option<DemoEvent> {
             kind: EventKind::BrainOverride,
         }),
 
-        // Brain learning signal
+        // Hive: knowledge sync from peer
         14 => Some(DemoEvent {
-            message: "Brain: auto-approved Edit(src/auth.rs) for acme-api — learned from 8 prior approvals [88%]"
-                .into(),
-            kind: EventKind::BrainSuggestion,
+            message: "Hive: synced 3 knowledge units from ci-runner — [Bash, cargo *] approve (94%), [Bash, docker push] deny (92%)".into(),
+            kind: EventKind::HiveSync,
         }),
 
         // Inter-session routing
@@ -403,17 +402,40 @@ pub fn demo_event(tick: u32) -> Option<DemoEvent> {
             kind: EventKind::HealthAlert,
         }),
 
-        // Brain approve with context
+        // Hive: brain decision influenced by peer knowledge
         20 => Some(DemoEvent {
-            message: "Brain: auto-approved Bash(cargo clippy -- -D warnings) for acme-api [94%]"
-                .into(),
-            kind: EventKind::BrainSuggestion,
+            message: "Brain: denied Bash(docker push prod:latest) — [hive] ci-runner says deny (92%, 15 decisions)".into(),
+            kind: EventKind::HiveInfluence,
         }),
 
         // Context saturation alert
         22 => Some(DemoEvent {
             message: "Health: ml-pipeline context at 94% — auto-restart checkpoint saved".into(),
             kind: EventKind::HealthAlert,
+        }),
+
+        // Hive: trust drift from concordance
+        24 => Some(DemoEvent {
+            message: "Hive: trust for alice-mbp drifted 0.50 → 0.53 (3 concordant decisions)".into(),
+            kind: EventKind::HiveSync,
+        }),
+
+        // Brain approve with hive confirmation
+        26 => Some(DemoEvent {
+            message: "Brain: auto-approved Bash(cargo clippy -- -D warnings) — confirmed by [hive] 3 peers (94%) [96%]".into(),
+            kind: EventKind::HiveInfluence,
+        }),
+
+        // Hive: new peer joined
+        28 => Some(DemoEvent {
+            message: "Hive: alice-mbp connected — received snapshot of 12 knowledge units".into(),
+            kind: EventKind::HiveSync,
+        }),
+
+        // Hive: distillation with knowledge discrimination
+        30 => Some(DemoEvent {
+            message: "Hive: distilled 5 patterns — 3 shared (best_practice), 2 kept local (personal: time-of-day, cost)".into(),
+            kind: EventKind::HiveSync,
         }),
 
         _ => None,
@@ -433,6 +455,41 @@ pub enum EventKind {
     BrainOverride,
     Route,
     HealthAlert,
+    HiveSync,
+    HiveInfluence,
+}
+
+/// Generate demo peer display info for the TUI peers panel.
+#[cfg(feature = "relay")]
+pub fn demo_peers(tick: u32) -> Vec<crate::ui::peers::PeerDisplayInfo> {
+    let mut peers = vec![
+        crate::ui::peers::PeerDisplayInfo {
+            peer_id: "ci-runner-9d1e".into(),
+            state: "connected".into(),
+            trust: 0.82,
+            units_sent: 42,
+            units_received: 18,
+        },
+        crate::ui::peers::PeerDisplayInfo {
+            peer_id: "alice-mbp-f3a1".into(),
+            state: if tick % 32 < 28 {
+                "connecting".into()
+            } else {
+                "connected".into()
+            },
+            trust: 0.53,
+            units_sent: 0,
+            units_received: if tick % 32 >= 28 { 12 } else { 0 },
+        },
+    ];
+
+    // After tick 28, alice is connected and has received knowledge
+    if tick % 32 >= 28 {
+        peers[1].state = "connected".into();
+        peers[1].trust = 0.53 + (tick % 32 - 28) as f64 * 0.01;
+    }
+
+    peers
 }
 
 /// Generate demo rules for display.
