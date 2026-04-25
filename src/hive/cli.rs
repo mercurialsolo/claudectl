@@ -57,6 +57,36 @@ pub enum HiveCommand {
 
     /// Show distilled curriculum
     Curriculum,
+
+    /// Share a local skill, command, or hook with the hive
+    Share {
+        /// Content type: skill, command, or hook
+        content_type: String,
+        /// Path to the file (skill .md, command .md, or hooks.json entry)
+        path: String,
+        /// Scope: universal, language:X, or project:X
+        #[arg(long, default_value = "universal")]
+        scope: String,
+    },
+
+    /// Install a received skill, command, or hook from the hive
+    Install {
+        /// Knowledge unit ID to install
+        unit_id: String,
+        /// Target directory (default: ~/.claude)
+        #[arg(long)]
+        target: Option<String>,
+    },
+
+    /// List available shared skills, commands, and hooks from peers
+    Shared {
+        /// Filter by type: skill, command, hook
+        #[arg(long, name = "type")]
+        content_type: Option<String>,
+        /// Show items from ignored peers
+        #[arg(long)]
+        show_ignored: bool,
+    },
 }
 
 /// Dispatch a hive subcommand.
@@ -73,6 +103,18 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         HiveCommand::Archive { prune } => cmd_archive(prune.as_deref(), json_mode),
         HiveCommand::Distill => cmd_distill(json_mode),
         HiveCommand::Curriculum => cmd_curriculum(json_mode),
+        HiveCommand::Share {
+            content_type,
+            path,
+            scope,
+        } => cmd_share(content_type, path, scope, json_mode),
+        HiveCommand::Install { unit_id, target } => {
+            cmd_install(unit_id, target.as_deref(), json_mode)
+        }
+        HiveCommand::Shared {
+            content_type,
+            show_ignored,
+        } => cmd_shared(content_type.as_deref(), *show_ignored, json_mode),
     }
 }
 
@@ -351,6 +393,463 @@ fn parse_scope(s: &str) -> KnowledgeScope {
     } else {
         // Try shorthand: "rust" -> Language, anything else -> Project
         KnowledgeScope::Project(s.to_string())
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Frontmatter parsing
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Parse YAML frontmatter from a markdown file.
+/// Returns key-value pairs from the `---`-delimited block.
+fn parse_frontmatter(content: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return map;
+    }
+
+    // Find closing ---
+    let after_open = &trimmed[3..].trim_start_matches('\r');
+    let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
+
+    let Some(close_pos) = after_open.find("\n---") else {
+        return map;
+    };
+
+    let yaml_block = &after_open[..close_pos];
+
+    for line in yaml_block.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            let key = key.trim().to_string();
+            let value = value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+            if !key.is_empty() && !value.is_empty() {
+                map.insert(key, value);
+            }
+        }
+    }
+
+    map
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Share, Install, Shared commands
+// ────────────────────────────────────────────────────────────────────────────
+
+/// `claudectl hive share <type> <path> [--scope X]`
+fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -> io::Result<()> {
+    let body =
+        std::fs::read_to_string(path).map_err(|e| io::Error::other(format!("read {path}: {e}")))?;
+
+    let scope = parse_scope(scope_str);
+    let identity = super::local_identity();
+    let now = super::epoch_secs();
+
+    let content = match content_type {
+        "skill" => {
+            if body.len() > super::MAX_SKILL_BYTES {
+                return Err(io::Error::other(format!(
+                    "skill body too large: {} bytes (max {})",
+                    body.len(),
+                    super::MAX_SKILL_BYTES
+                )));
+            }
+            let fm = parse_frontmatter(&body);
+            let name = fm
+                .get("name")
+                .cloned()
+                .ok_or_else(|| io::Error::other("skill missing 'name' in frontmatter"))?;
+            let description = fm
+                .get("description")
+                .cloned()
+                .unwrap_or_else(|| name.clone());
+            let version = fm.get("version").cloned().unwrap_or_else(|| "0.0.0".into());
+            super::KnowledgeContent::Skill {
+                name,
+                description,
+                version,
+                body,
+            }
+        }
+        "command" => {
+            if body.len() > super::MAX_COMMAND_BYTES {
+                return Err(io::Error::other(format!(
+                    "command body too large: {} bytes (max {})",
+                    body.len(),
+                    super::MAX_COMMAND_BYTES
+                )));
+            }
+            let fm = parse_frontmatter(&body);
+            let name = fm
+                .get("name")
+                .cloned()
+                .ok_or_else(|| io::Error::other("command missing 'name' in frontmatter"))?;
+            let description = fm
+                .get("description")
+                .cloned()
+                .unwrap_or_else(|| name.clone());
+            let args = fm.get("args").cloned();
+            super::KnowledgeContent::Command {
+                name,
+                description,
+                args,
+                body,
+            }
+        }
+        "hook" => {
+            if body.len() > super::MAX_HOOK_CONFIG_BYTES {
+                return Err(io::Error::other(format!(
+                    "hook config too large: {} bytes (max {})",
+                    body.len(),
+                    super::MAX_HOOK_CONFIG_BYTES
+                )));
+            }
+            // Parse as JSON hook config
+            let parsed: serde_json::Value = serde_json::from_str(&body)
+                .map_err(|e| io::Error::other(format!("invalid JSON: {e}")))?;
+
+            let event = parsed
+                .get("event")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| io::Error::other("hook config missing 'event' field"))?
+                .to_string();
+            let matcher = parsed
+                .get("matcher")
+                .and_then(|v| v.as_str())
+                .unwrap_or("*")
+                .to_string();
+            let description = parsed
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let sanitized = super::sanitize_hook_config(&body);
+
+            super::KnowledgeContent::HookConfig {
+                event,
+                matcher,
+                description,
+                config_json: sanitized,
+            }
+        }
+        other => {
+            return Err(io::Error::other(format!(
+                "unknown content type: {other} (expected: skill, command, hook)"
+            )));
+        }
+    };
+
+    let category = match &content {
+        super::KnowledgeContent::HookConfig { .. } => super::KnowledgeCategory::WorkflowPattern,
+        _ => super::KnowledgeCategory::Technique,
+    };
+
+    let unit = super::KnowledgeUnit {
+        id: super::gen_ku_id(),
+        scope,
+        category,
+        content,
+        evidence_count: 1,
+        confidence: 1.0,
+        source_peer: identity,
+        originated_at: now,
+        last_validated_at: now,
+        propagation_count: 0,
+        version: 1,
+    };
+
+    let summary = unit.content.summary_line();
+    let unit_id = unit.id.clone();
+
+    let mut store = HiveStore::load();
+    store.insert(unit);
+    store
+        .save()
+        .map_err(|e| io::Error::other(format!("save: {e}")))?;
+
+    // Signal gossip if relay is active
+    #[cfg(feature = "relay")]
+    super::signal_new_knowledge(1);
+
+    if json_mode {
+        let output = serde_json::json!({
+            "action": "shared",
+            "unit_id": unit_id,
+            "content_type": content_type,
+            "summary": summary,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("Shared {content_type}: {summary}");
+        println!("  Unit ID: {unit_id}");
+    }
+
+    Ok(())
+}
+
+/// `claudectl hive install <unit_id> [--target dir]`
+fn cmd_install(unit_id: &str, target: Option<&str>, json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let unit = store
+        .get(unit_id)
+        .ok_or_else(|| io::Error::other(format!("unknown unit: {unit_id}")))?;
+
+    // Check trust tier
+    let trust_store = super::trust::TrustStore::load();
+    let tier = trust_store
+        .get(&unit.source_peer)
+        .map(|t| t.tier())
+        .unwrap_or(super::trust::TrustTier::Suggested);
+
+    if tier == super::trust::TrustTier::Ignored {
+        return Err(io::Error::other(format!(
+            "source peer '{}' is in Ignored tier (trust < 0.2). \
+             Set higher trust first: claudectl hive trust {} 0.5",
+            unit.source_peer, unit.source_peer,
+        )));
+    }
+
+    let base_dir = match target {
+        Some(t) => std::path::PathBuf::from(t),
+        None => {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            std::path::PathBuf::from(home).join(".claude")
+        }
+    };
+
+    match &unit.content {
+        super::KnowledgeContent::Skill {
+            name,
+            version,
+            body,
+            ..
+        } => {
+            let slug = name.to_lowercase().replace(' ', "-");
+            let skill_dir = base_dir.join("skills").join(&slug);
+            std::fs::create_dir_all(&skill_dir)?;
+            let file_path = skill_dir.join("SKILL.md");
+            std::fs::write(&file_path, body)?;
+
+            if tier == super::trust::TrustTier::Unverified {
+                eprintln!(
+                    "Warning: source peer '{}' is unverified (trust < 0.5). \
+                     Review the installed skill before relying on it.",
+                    unit.source_peer
+                );
+            }
+
+            if json_mode {
+                let output = serde_json::json!({
+                    "action": "installed",
+                    "content_type": "skill",
+                    "name": name,
+                    "version": version,
+                    "path": file_path.display().to_string(),
+                    "trust_tier": tier.label(),
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else {
+                println!(
+                    "Installed skill '{name}' v{version} to {}",
+                    file_path.display()
+                );
+            }
+        }
+        super::KnowledgeContent::Command {
+            name, body, args, ..
+        } => {
+            let cmds_dir = base_dir.join("commands");
+            std::fs::create_dir_all(&cmds_dir)?;
+            let file_path = cmds_dir.join(format!("{name}.md"));
+            std::fs::write(&file_path, body)?;
+
+            if tier == super::trust::TrustTier::Unverified {
+                eprintln!(
+                    "Warning: source peer '{}' is unverified. Review before use.",
+                    unit.source_peer
+                );
+            }
+
+            if json_mode {
+                let output = serde_json::json!({
+                    "action": "installed",
+                    "content_type": "command",
+                    "name": name,
+                    "args": args,
+                    "path": file_path.display().to_string(),
+                    "trust_tier": tier.label(),
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else {
+                println!("Installed command '/{name}' to {}", file_path.display());
+            }
+        }
+        super::KnowledgeContent::HookConfig {
+            event,
+            matcher,
+            description,
+            config_json,
+            ..
+        } => {
+            if tier == super::trust::TrustTier::Unverified {
+                eprintln!(
+                    "Warning: source peer '{}' is unverified. Review the hook config carefully.",
+                    unit.source_peer
+                );
+            }
+
+            if json_mode {
+                let output = serde_json::json!({
+                    "action": "installed",
+                    "content_type": "hook",
+                    "event": event,
+                    "matcher": matcher,
+                    "description": description,
+                    "config_json": config_json,
+                    "trust_tier": tier.label(),
+                    "note": "Add this config to your hooks.json manually",
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else {
+                println!("Hook config: {event}[{matcher}] — {description}");
+                println!();
+                println!("Add the following to your hooks.json:");
+                println!("{config_json}");
+                println!();
+                println!("Note: You must create the hook script implementation yourself.");
+            }
+        }
+        _ => {
+            return Err(io::Error::other(format!(
+                "unit {unit_id} is not a skill, command, or hook"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// `claudectl hive shared [--type X] [--show-ignored]`
+fn cmd_shared(
+    content_type_filter: Option<&str>,
+    show_ignored: bool,
+    json_mode: bool,
+) -> io::Result<()> {
+    let store = HiveStore::load();
+    let trust_store = super::trust::TrustStore::load();
+
+    let units: Vec<(&super::KnowledgeUnit, super::trust::TrustTier)> = store
+        .all_units()
+        .into_iter()
+        .filter_map(|unit| {
+            // Filter to artifact types only
+            let type_label = match &unit.content {
+                super::KnowledgeContent::Skill { .. } => "skill",
+                super::KnowledgeContent::Command { .. } => "command",
+                super::KnowledgeContent::HookConfig { .. } => "hook",
+                _ => return None,
+            };
+
+            // Apply type filter
+            if let Some(filter) = content_type_filter {
+                if type_label != filter {
+                    return None;
+                }
+            }
+
+            let tier = trust_store
+                .get(&unit.source_peer)
+                .map(|t| t.tier())
+                .unwrap_or(super::trust::TrustTier::Suggested);
+
+            // Skip ignored unless requested
+            if tier == super::trust::TrustTier::Ignored && !show_ignored {
+                return None;
+            }
+
+            Some((unit, tier))
+        })
+        .collect();
+
+    if json_mode {
+        let items: Vec<serde_json::Value> = units
+            .iter()
+            .map(|(unit, tier)| {
+                serde_json::json!({
+                    "id": unit.id,
+                    "type": content_type_label(&unit.content),
+                    "name": content_name(&unit.content),
+                    "source_peer": unit.source_peer,
+                    "trust_tier": tier.label(),
+                    "summary": unit.content.summary_line(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items).unwrap());
+    } else if units.is_empty() {
+        println!("No shared skills, commands, or hooks available.");
+        println!("Share content with: claudectl hive share <skill|command|hook> <path>");
+    } else {
+        println!(
+            "{:<12} {:<8} {:<20} {:<16} CONTENT",
+            "ID", "TYPE", "SOURCE", "TRUST"
+        );
+        println!("{}", "─".repeat(80));
+        for (unit, tier) in &units {
+            let id_short = if unit.id.len() > 11 {
+                &unit.id[..11]
+            } else {
+                &unit.id
+            };
+            let type_label = content_type_label(&unit.content);
+            println!(
+                "{:<12} {:<8} {:<20} {:<16} {}",
+                id_short,
+                type_label,
+                unit.source_peer,
+                tier.label(),
+                unit.content.summary_line(),
+            );
+        }
+        println!();
+        println!(
+            "{} items total. Install with: claudectl hive install <id>",
+            units.len()
+        );
+    }
+
+    Ok(())
+}
+
+/// Get the content type label for display.
+fn content_type_label(content: &super::KnowledgeContent) -> &'static str {
+    match content {
+        super::KnowledgeContent::Skill { .. } => "skill",
+        super::KnowledgeContent::Command { .. } => "command",
+        super::KnowledgeContent::HookConfig { .. } => "hook",
+        _ => "other",
+    }
+}
+
+/// Get the name from a content unit.
+fn content_name(content: &super::KnowledgeContent) -> String {
+    match content {
+        super::KnowledgeContent::Skill { name, .. } => name.clone(),
+        super::KnowledgeContent::Command { name, .. } => name.clone(),
+        super::KnowledgeContent::HookConfig { event, matcher, .. } => {
+            format!("{event}[{matcher}]")
+        }
+        _ => String::new(),
     }
 }
 

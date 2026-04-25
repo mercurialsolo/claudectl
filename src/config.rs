@@ -220,6 +220,8 @@ pub struct HiveConfig {
     pub exclude_tools: Vec<String>,
     /// Command patterns to exclude from sharing (substring match).
     pub exclude_commands: Vec<String>,
+    /// Content types to exclude from sharing (e.g., "skill", "command", "hook").
+    pub exclude_content_types: Vec<String>,
     /// Maximum knowledge units to keep in the store. Oldest/lowest-confidence evicted.
     pub max_units: usize,
     /// Maximum knowledge units to inject into the brain prompt per evaluation.
@@ -242,6 +244,7 @@ impl Default for HiveConfig {
             share_categories: Vec::new(),
             exclude_tools: Vec::new(),
             exclude_commands: Vec::new(),
+            exclude_content_types: Vec::new(),
             max_units: 500,
             max_prompt_units: 20,
             stale_peer_days: 90,
@@ -331,6 +334,7 @@ struct RawHiveConfig {
     share_categories: Vec<String>,
     exclude_tools: Vec<String>,
     exclude_commands: Vec<String>,
+    exclude_content_types: Vec<String>,
     max_units: Option<usize>,
     max_prompt_units: Option<usize>,
     stale_peer_days: Option<u32>,
@@ -531,6 +535,9 @@ impl Config {
             }
             if !raw_hive.exclude_commands.is_empty() {
                 hive.exclude_commands = raw_hive.exclude_commands;
+            }
+            if !raw_hive.exclude_content_types.is_empty() {
+                hive.exclude_content_types = raw_hive.exclude_content_types;
             }
             if let Some(v) = raw_hive.max_units {
                 hive.max_units = v;
@@ -1158,6 +1165,9 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     }
                     "exclude_commands" => {
                         hive.exclude_commands = parse_string_array(value);
+                    }
+                    "exclude_content_types" => {
+                        hive.exclude_content_types = parse_string_array(value);
                     }
                     "max_units" => {
                         hive.max_units = value.parse().ok();

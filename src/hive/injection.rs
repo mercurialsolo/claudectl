@@ -26,9 +26,21 @@ pub fn build_hive_context(
     }
 
     // Score and sort: higher confidence * evidence first
+    // Skip Skill/Command/HookConfig — they aren't decision guidance for the brain.
+    // Users discover them via `claudectl hive shared`.
     let mut scored: Vec<(&super::KnowledgeUnit, f64, TrustTier)> = all
         .iter()
         .filter_map(|unit| {
+            // Skip artifact types — not relevant for brain decision-making
+            if matches!(
+                &unit.content,
+                KnowledgeContent::Skill { .. }
+                    | KnowledgeContent::Command { .. }
+                    | KnowledgeContent::HookConfig { .. }
+            ) {
+                return None;
+            }
+
             let tier = trust_store
                 .get(&unit.source_peer)
                 .map(|t| t.tier())
@@ -349,6 +361,47 @@ mod tests {
 
         let results = check_concordance(Some("Write"), Some("test"), "accept", &store);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn build_context_excludes_skill_bodies() {
+        let mut store = empty_store();
+        store.insert(make_pattern_unit(
+            "ku_1",
+            "Bash",
+            Some("cargo test"),
+            "approve",
+            "peer-a",
+        ));
+        // Add a skill — should NOT appear in brain context
+        store.insert(KnowledgeUnit {
+            id: "ku_skill_1".into(),
+            scope: KnowledgeScope::Universal,
+            category: crate::hive::KnowledgeCategory::Technique,
+            content: KnowledgeContent::Skill {
+                name: "Session Monitoring".into(),
+                description: "Monitors sessions".into(),
+                version: "0.31.0".into(),
+                body: "Full skill body here".into(),
+            },
+            evidence_count: 1,
+            confidence: 1.0,
+            source_peer: "peer-a".into(),
+            originated_at: 1000,
+            last_validated_at: 2000,
+            propagation_count: 0,
+            version: 1,
+        });
+
+        let trust_store = TrustStore::load_with_default(0.5);
+        let ctx = build_hive_context(&store, &trust_store, true, 0);
+
+        // Should contain the pattern unit but NOT the skill
+        assert!(ctx.contains("Bash"));
+        assert!(!ctx.contains("Session Monitoring"));
+        assert!(!ctx.contains("skill"));
+        // Should show 1 unit, not 2
+        assert!(ctx.contains("1 units"));
     }
 
     #[test]

@@ -104,6 +104,17 @@ pub enum KnowledgeScope {
     Project(String),
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Content size limits for shared artifacts
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Maximum size for a shared skill body (32 KB).
+pub const MAX_SKILL_BYTES: usize = 32 * 1024;
+/// Maximum size for a shared command body (16 KB).
+pub const MAX_COMMAND_BYTES: usize = 16 * 1024;
+/// Maximum size for a shared hook config JSON (4 KB).
+pub const MAX_HOOK_CONFIG_BYTES: usize = 4 * 1024;
+
 /// The actual knowledge payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -135,6 +146,32 @@ pub enum KnowledgeContent {
     },
     /// A promoted rule from coord memory.
     PromotedRule { rule: String, source_type: String },
+    /// A shared skill (markdown with YAML frontmatter).
+    Skill {
+        name: String,
+        description: String,
+        version: String,
+        /// Full markdown content (frontmatter + body). Capped at MAX_SKILL_BYTES.
+        body: String,
+    },
+    /// A shared slash command (markdown with YAML frontmatter).
+    Command {
+        name: String,
+        description: String,
+        args: Option<String>,
+        /// Full markdown content (frontmatter + body). Capped at MAX_COMMAND_BYTES.
+        body: String,
+    },
+    /// A shared hook configuration (declarative JSON, no executables).
+    HookConfig {
+        /// Hook event type (e.g., "PreToolUse", "PostToolUse").
+        event: String,
+        /// Matcher pattern (e.g., "Bash|Write|Edit").
+        matcher: String,
+        description: String,
+        /// Sanitized hook config JSON (no secrets). Capped at MAX_HOOK_CONFIG_BYTES.
+        config_json: String,
+    },
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -178,6 +215,15 @@ pub fn semantic_key(unit: &KnowledgeUnit) -> String {
         KnowledgeContent::PromotedRule { rule, .. } => {
             format!("rule:{}", truncate_chars(rule, 40))
         }
+        KnowledgeContent::Skill { name, .. } => {
+            format!("skill:{}", name.to_lowercase().replace(' ', "-"))
+        }
+        KnowledgeContent::Command { name, .. } => {
+            format!("command:{}", name.to_lowercase())
+        }
+        KnowledgeContent::HookConfig { event, matcher, .. } => {
+            format!("hook:{}:{}", event.to_lowercase(), matcher.to_lowercase())
+        }
     };
     format!("{scope_part}/{content_part}")
 }
@@ -196,6 +242,8 @@ pub struct SharingFilter {
     pub exclude_tools: Vec<String>,
     /// Command substrings to exclude.
     pub exclude_commands: Vec<String>,
+    /// Content types to exclude from sharing (e.g., "skill", "command", "hook").
+    pub exclude_content_types: Vec<String>,
 }
 
 impl SharingFilter {
@@ -205,6 +253,7 @@ impl SharingFilter {
             allow_categories: cfg.share_categories.clone(),
             exclude_tools: cfg.exclude_tools.clone(),
             exclude_commands: cfg.exclude_commands.clone(),
+            exclude_content_types: cfg.exclude_content_types.clone(),
         }
     }
 
@@ -241,6 +290,33 @@ impl SharingFilter {
             if self.exclude_tools.iter().any(|t| t == tool) {
                 return false;
             }
+        }
+
+        // Content type exclusions for shared artifacts
+        match &unit.content {
+            KnowledgeContent::Skill { .. } => {
+                if self.exclude_content_types.iter().any(|t| t == "skill") {
+                    return false;
+                }
+            }
+            KnowledgeContent::Command { name, .. } => {
+                if self.exclude_content_types.iter().any(|t| t == "command") {
+                    return false;
+                }
+                if self
+                    .exclude_commands
+                    .iter()
+                    .any(|exc| name.contains(exc.as_str()))
+                {
+                    return false;
+                }
+            }
+            KnowledgeContent::HookConfig { .. } => {
+                if self.exclude_content_types.iter().any(|t| t == "hook") {
+                    return false;
+                }
+            }
+            _ => {}
         }
 
         true
@@ -308,6 +384,180 @@ pub fn signal_new_knowledge(count: u32) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Hook config sanitization
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Environment variables safe to keep in shared hook configs.
+const SAFE_ENV_VARS: &[&str] = &["HOME", "PWD", "PATH", "CLAUDE_PLUGIN_ROOT", "USER", "SHELL"];
+
+/// Credential-like key prefixes (case-insensitive match).
+const CREDENTIAL_KEYS: &[&str] = &[
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "api-key",
+    "auth_token",
+    "access_key",
+    "private_key",
+];
+
+/// Sanitize a hook config string before sharing: strip credentials, unsafe env
+/// vars, and absolute user paths. Returns the sanitized version.
+pub fn sanitize_hook_config(input: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    for line in input.lines() {
+        let mut sanitized = sanitize_credentials(line);
+        sanitized = sanitize_env_vars(&sanitized);
+        sanitized = sanitize_user_paths(&sanitized);
+        lines.push(sanitized);
+    }
+
+    lines.join("\n")
+}
+
+/// Replace credential-like `key=value`, `key: value`, `"key": "value"` patterns.
+fn sanitize_credentials(line: &str) -> String {
+    let lower = line.to_lowercase();
+    for key in CREDENTIAL_KEYS {
+        // Check for JSON-style: "key": "value" or "key":"value"
+        if lower.contains(key) {
+            // Check "key": "value" pattern
+            if let Some(pos) = lower.find(key) {
+                let after_key = &line[pos + key.len()..];
+                let after_key_trimmed = after_key.trim_start_matches('"').trim_start();
+                if after_key_trimmed.starts_with(':') || after_key_trimmed.starts_with('=') {
+                    let sep_char = if after_key_trimmed.starts_with(':') {
+                        ':'
+                    } else {
+                        '='
+                    };
+                    let before = &line[..pos];
+                    // Find the key boundary (include quotes if present)
+                    let key_start = if before.ends_with('"') {
+                        before.len() - 1
+                    } else {
+                        pos
+                    };
+                    let after_sep = &after_key_trimmed[1..].trim_start();
+                    let redacted = if let Some(stripped) = after_sep.strip_prefix('"') {
+                        // JSON string value — find closing quote
+                        if let Some(end) = stripped.find('"') {
+                            let rest_start =
+                                pos + key.len() + (after_key.len() - after_sep.len()) + 2 + end;
+                            format!(
+                                "{}\"{key}\"{sep_char} \"REDACTED\"{}",
+                                &line[..key_start],
+                                &line[rest_start..]
+                            )
+                        } else {
+                            format!("{}\"{key}\"{sep_char} \"REDACTED\"", &line[..key_start])
+                        }
+                    } else {
+                        // Unquoted value — redact to end of token
+                        let end = after_sep
+                            .find(|c: char| c.is_whitespace() || c == ',' || c == '}')
+                            .unwrap_or(after_sep.len());
+                        let rest_start =
+                            pos + key.len() + (after_key.len() - after_sep.len()) + end;
+                        format!(
+                            "{}{}{}REDACTED{}",
+                            &line[..pos],
+                            key,
+                            sep_char,
+                            &line[rest_start..]
+                        )
+                    };
+                    return redacted;
+                }
+            }
+        }
+    }
+    line.to_string()
+}
+
+/// Replace `$VAR` and `${VAR}` references with `$REDACTED` / `${REDACTED}`
+/// unless the variable name is in the safe list.
+fn sanitize_env_vars(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '$' && i + 1 < chars.len() {
+            if chars[i + 1] == '{' {
+                // ${VAR} form
+                if let Some(close) = chars[i + 2..].iter().position(|&c| c == '}') {
+                    let var_name: String = chars[i + 2..i + 2 + close].iter().collect();
+                    if is_env_var_name(&var_name) {
+                        if SAFE_ENV_VARS.contains(&var_name.as_str()) {
+                            result.push_str(&format!("${{{var_name}}}"));
+                        } else {
+                            result.push_str("${REDACTED}");
+                        }
+                        i += 3 + close; // skip past }
+                        continue;
+                    }
+                }
+            } else if chars[i + 1].is_ascii_uppercase() || chars[i + 1] == '_' {
+                // $VAR form
+                let start = i + 1;
+                let mut end = start;
+                while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '_')
+                {
+                    end += 1;
+                }
+                let var_name: String = chars[start..end].iter().collect();
+                if is_env_var_name(&var_name) {
+                    if SAFE_ENV_VARS.contains(&var_name.as_str()) {
+                        result.push('$');
+                        result.push_str(&var_name);
+                    } else {
+                        result.push_str("$REDACTED");
+                    }
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    result
+}
+
+/// Check if a string looks like an env var name (uppercase + underscores + digits).
+fn is_env_var_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Replace `/Users/<name>` and `/home/<name>` with `$HOME`.
+fn sanitize_user_paths(input: &str) -> String {
+    let mut result = input.to_string();
+    for prefix in &["/Users/", "/home/"] {
+        while let Some(pos) = result.find(prefix) {
+            let after = &result[pos + prefix.len()..];
+            let username_end = after
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-' && c != '_')
+                .unwrap_or(after.len());
+            if username_end > 0 {
+                let end = pos + prefix.len() + username_end;
+                result = format!("{}$HOME{}", &result[..pos], &result[end..]);
+            } else {
+                break;
+            }
+        }
+    }
+    result
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Display helpers
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -358,6 +608,30 @@ impl KnowledgeContent {
             }
             Self::PromotedRule { rule, .. } => {
                 format!("rule: {rule}")
+            }
+            Self::Skill {
+                name,
+                version,
+                body,
+                ..
+            } => {
+                format!("skill: {name} v{version} ({} bytes)", body.len())
+            }
+            Self::Command { name, args, .. } => {
+                let arg_str = args.as_deref().unwrap_or("");
+                if arg_str.is_empty() {
+                    format!("command: /{name}")
+                } else {
+                    format!("command: /{name} {arg_str}")
+                }
+            }
+            Self::HookConfig {
+                event,
+                matcher,
+                description,
+                ..
+            } => {
+                format!("hook: {event}[{matcher}] — {description}")
             }
         }
     }
@@ -538,5 +812,283 @@ mod tests {
         };
         let key = semantic_key(&unit);
         assert!(key.starts_with("universal/insight:error_loop:"));
+    }
+
+    // ── New content type tests ─────────────────────────────────────────
+
+    fn sample_skill_unit() -> KnowledgeUnit {
+        KnowledgeUnit {
+            id: "ku_skill_1".into(),
+            scope: KnowledgeScope::Universal,
+            category: KnowledgeCategory::Technique,
+            content: KnowledgeContent::Skill {
+                name: "Session Monitoring".into(),
+                description: "Monitors sessions".into(),
+                version: "0.31.0".into(),
+                body: "---\nname: Session Monitoring\n---\nContent here".into(),
+            },
+            evidence_count: 1,
+            confidence: 1.0,
+            source_peer: "peer-a".into(),
+            originated_at: 1000,
+            last_validated_at: 2000,
+            propagation_count: 0,
+            version: 1,
+        }
+    }
+
+    fn sample_command_unit() -> KnowledgeUnit {
+        KnowledgeUnit {
+            id: "ku_cmd_1".into(),
+            scope: KnowledgeScope::Universal,
+            category: KnowledgeCategory::Technique,
+            content: KnowledgeContent::Command {
+                name: "brain".into(),
+                description: "Toggle brain gate".into(),
+                args: Some("[on|off|auto|status]".into()),
+                body: "---\nname: brain\n---\nContent".into(),
+            },
+            evidence_count: 1,
+            confidence: 1.0,
+            source_peer: "peer-b".into(),
+            originated_at: 1000,
+            last_validated_at: 2000,
+            propagation_count: 0,
+            version: 1,
+        }
+    }
+
+    fn sample_hook_unit() -> KnowledgeUnit {
+        KnowledgeUnit {
+            id: "ku_hook_1".into(),
+            scope: KnowledgeScope::Universal,
+            category: KnowledgeCategory::WorkflowPattern,
+            content: KnowledgeContent::HookConfig {
+                event: "PreToolUse".into(),
+                matcher: "Bash|Write|Edit".into(),
+                description: "Brain gate hook".into(),
+                config_json: r#"{"command": "brain-gate.sh", "timeout": 5000}"#.into(),
+            },
+            evidence_count: 1,
+            confidence: 1.0,
+            source_peer: "peer-a".into(),
+            originated_at: 1000,
+            last_validated_at: 2000,
+            propagation_count: 0,
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn semantic_key_skill() {
+        let unit = sample_skill_unit();
+        assert_eq!(semantic_key(&unit), "universal/skill:session-monitoring");
+    }
+
+    #[test]
+    fn semantic_key_command() {
+        let unit = sample_command_unit();
+        assert_eq!(semantic_key(&unit), "universal/command:brain");
+    }
+
+    #[test]
+    fn semantic_key_hook() {
+        let unit = sample_hook_unit();
+        assert_eq!(
+            semantic_key(&unit),
+            "universal/hook:pretooluse:bash|write|edit"
+        );
+    }
+
+    #[test]
+    fn summary_line_skill() {
+        let unit = sample_skill_unit();
+        let line = unit.content.summary_line();
+        assert!(line.contains("Session Monitoring"));
+        assert!(line.contains("v0.31.0"));
+        assert!(line.contains("bytes"));
+    }
+
+    #[test]
+    fn summary_line_command() {
+        let unit = sample_command_unit();
+        let line = unit.content.summary_line();
+        assert!(line.contains("/brain"));
+        assert!(line.contains("[on|off|auto|status]"));
+    }
+
+    #[test]
+    fn summary_line_command_no_args() {
+        let content = KnowledgeContent::Command {
+            name: "sessions".into(),
+            description: "List sessions".into(),
+            args: None,
+            body: "body".into(),
+        };
+        let line = content.summary_line();
+        assert_eq!(line, "command: /sessions");
+    }
+
+    #[test]
+    fn summary_line_hook() {
+        let unit = sample_hook_unit();
+        let line = unit.content.summary_line();
+        assert!(line.contains("PreToolUse"));
+        assert!(line.contains("Bash|Write|Edit"));
+    }
+
+    #[test]
+    fn serde_roundtrip_skill() {
+        let unit = sample_skill_unit();
+        let json = serde_json::to_string(&unit).unwrap();
+        let back: KnowledgeUnit = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "ku_skill_1");
+        if let KnowledgeContent::Skill { name, version, .. } = &back.content {
+            assert_eq!(name, "Session Monitoring");
+            assert_eq!(version, "0.31.0");
+        } else {
+            panic!("expected Skill variant");
+        }
+    }
+
+    #[test]
+    fn serde_roundtrip_command() {
+        let unit = sample_command_unit();
+        let json = serde_json::to_string(&unit).unwrap();
+        let back: KnowledgeUnit = serde_json::from_str(&json).unwrap();
+        if let KnowledgeContent::Command { name, args, .. } = &back.content {
+            assert_eq!(name, "brain");
+            assert_eq!(args.as_deref(), Some("[on|off|auto|status]"));
+        } else {
+            panic!("expected Command variant");
+        }
+    }
+
+    #[test]
+    fn serde_roundtrip_hook() {
+        let unit = sample_hook_unit();
+        let json = serde_json::to_string(&unit).unwrap();
+        let back: KnowledgeUnit = serde_json::from_str(&json).unwrap();
+        if let KnowledgeContent::HookConfig { event, matcher, .. } = &back.content {
+            assert_eq!(event, "PreToolUse");
+            assert_eq!(matcher, "Bash|Write|Edit");
+        } else {
+            panic!("expected HookConfig variant");
+        }
+    }
+
+    #[test]
+    fn sharing_filter_excludes_skills() {
+        let filter = SharingFilter {
+            exclude_content_types: vec!["skill".into()],
+            ..Default::default()
+        };
+        let unit = sample_skill_unit();
+        assert!(!filter.allows(&unit));
+
+        // Commands should still be allowed
+        let cmd = sample_command_unit();
+        assert!(filter.allows(&cmd));
+    }
+
+    #[test]
+    fn sharing_filter_excludes_commands() {
+        let filter = SharingFilter {
+            exclude_content_types: vec!["command".into()],
+            ..Default::default()
+        };
+        let cmd = sample_command_unit();
+        assert!(!filter.allows(&cmd));
+
+        // Skills should still be allowed
+        let skill = sample_skill_unit();
+        assert!(filter.allows(&skill));
+    }
+
+    #[test]
+    fn sharing_filter_excludes_hooks() {
+        let filter = SharingFilter {
+            exclude_content_types: vec!["hook".into()],
+            ..Default::default()
+        };
+        let hook = sample_hook_unit();
+        assert!(!filter.allows(&hook));
+    }
+
+    #[test]
+    fn sharing_filter_allows_all_by_default() {
+        let filter = SharingFilter::default();
+        assert!(filter.allows(&sample_skill_unit()));
+        assert!(filter.allows(&sample_command_unit()));
+        assert!(filter.allows(&sample_hook_unit()));
+    }
+
+    #[test]
+    fn sharing_filter_command_name_exclusion() {
+        let filter = SharingFilter {
+            exclude_commands: vec!["brain".into()],
+            ..Default::default()
+        };
+        let cmd = sample_command_unit();
+        assert!(!filter.allows(&cmd));
+    }
+
+    // ── Sanitization tests ─────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_strips_env_vars() {
+        let input = "cmd: $API_KEY and ${SECRET_TOKEN}";
+        let result = sanitize_hook_config(input);
+        assert!(result.contains("$REDACTED"));
+        assert!(result.contains("${REDACTED}"));
+        assert!(!result.contains("API_KEY"));
+        assert!(!result.contains("SECRET_TOKEN"));
+    }
+
+    #[test]
+    fn sanitize_keeps_safe_vars() {
+        let input = "path: $HOME/.claudectl and ${CLAUDE_PLUGIN_ROOT}/hooks";
+        let result = sanitize_hook_config(input);
+        assert!(result.contains("$HOME"));
+        assert!(result.contains("${CLAUDE_PLUGIN_ROOT}"));
+    }
+
+    #[test]
+    fn sanitize_strips_absolute_paths() {
+        let input = "file: /Users/barada/.claudectl/config";
+        let result = sanitize_hook_config(input);
+        assert!(result.contains("$HOME"));
+        assert!(!result.contains("/Users/barada"));
+    }
+
+    #[test]
+    fn sanitize_strips_home_paths() {
+        let input = "file: /home/ubuntu/.config/thing";
+        let result = sanitize_hook_config(input);
+        assert!(result.contains("$HOME"));
+        assert!(!result.contains("/home/ubuntu"));
+    }
+
+    #[test]
+    fn sanitize_strips_credentials() {
+        let input = r#""api_key": "sk-1234567890""#;
+        let result = sanitize_hook_config(input);
+        assert!(result.contains("REDACTED"));
+        assert!(!result.contains("sk-1234567890"));
+    }
+
+    #[test]
+    fn sanitize_strips_unquoted_credentials() {
+        let input = "token=abc123def";
+        let result = sanitize_hook_config(input);
+        assert!(result.contains("REDACTED"));
+        assert!(!result.contains("abc123def"));
+    }
+
+    #[test]
+    fn sanitize_preserves_safe_content() {
+        let input = r#"{"command": "brain-gate.sh", "timeout": 5000}"#;
+        let result = sanitize_hook_config(input);
+        assert_eq!(result, input);
     }
 }
