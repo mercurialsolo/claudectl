@@ -3,6 +3,7 @@
 pub mod archive;
 pub mod cli;
 pub mod distiller;
+#[cfg(feature = "relay")]
 pub mod gossip;
 pub mod injection;
 pub mod merger;
@@ -265,19 +266,31 @@ pub fn epoch_secs() -> u64 {
         .as_secs()
 }
 
+/// Local identity for hive knowledge (used when relay feature is not enabled).
+/// Returns hostname or "local" as a fallback.
+pub fn local_identity() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { None } else { Some(s) }
+        })
+        .unwrap_or_else(|| "local".into())
+}
+
 // ────────────────────────────────────────────────────────────────────────────
-// Broadcast channel for triggering gossip after distillation
+// Broadcast channel for triggering gossip after distillation (relay only)
 // ────────────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "relay")]
 use std::sync::Mutex;
 
-/// Global sender for signaling the relay that new knowledge is available.
-/// Set once during relay startup; the distillation thread sends a unit count through it.
-/// Uses Mutex because mpsc::Sender is Send but not Sync — the Mutex is only contended
-/// during initialization and the rare distillation cycle (every 10 decisions).
+#[cfg(feature = "relay")]
 static HIVE_BROADCAST_TX: Mutex<Option<std::sync::mpsc::Sender<u32>>> = Mutex::new(None);
 
-/// Set the broadcast channel (called once during relay/TUI startup).
+/// Set the broadcast channel (called once during relay startup).
+#[cfg(feature = "relay")]
 pub fn set_broadcast_channel(tx: std::sync::mpsc::Sender<u32>) {
     if let Ok(mut guard) = HIVE_BROADCAST_TX.lock() {
         *guard = Some(tx);
@@ -285,7 +298,7 @@ pub fn set_broadcast_channel(tx: std::sync::mpsc::Sender<u32>) {
 }
 
 /// Signal that new knowledge units are available for gossip.
-/// Called from the distillation background thread.
+#[cfg(feature = "relay")]
 pub fn signal_new_knowledge(count: u32) {
     if let Ok(guard) = HIVE_BROADCAST_TX.lock() {
         if let Some(ref tx) = *guard {

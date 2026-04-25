@@ -72,26 +72,34 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
     // Count conflicts
     let conflict_count = conflict_line_count();
 
-    // Load gossip sync state
-    let local_id = crate::relay::load_or_create_identity();
-    let gossip = super::gossip::GossipEngine::new(local_id.as_str(), 5, 30);
-    let sync_states = gossip.all_sync_states();
+    // Load gossip sync state (only when relay is available)
+    #[cfg(feature = "relay")]
+    let relay_identity = Some(crate::relay::load_or_create_identity());
+    #[cfg(not(feature = "relay"))]
+    let relay_identity: Option<String> = None;
 
     if json_mode {
-        let output = serde_json::json!({
-            "identity": local_id.as_str(),
+        #[allow(unused_mut)]
+        let mut output = serde_json::json!({
             "total_units": all.len(),
             "max_units": hive_cfg.max_units,
             "sources": sources,
             "categories": by_category,
             "conflicts": conflict_count,
-            "sync_states": sync_states,
         });
+        #[cfg(feature = "relay")]
+        if let Some(ref id) = relay_identity {
+            output["identity"] = serde_json::json!(id.as_str());
+            let gossip = super::gossip::GossipEngine::new(id.as_str(), 5, 30);
+            output["sync_states"] = serde_json::json!(gossip.all_sync_states());
+        }
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
         println!("Hive Knowledge Store");
         println!();
-        println!("  Identity: {}", local_id);
+        if let Some(ref id) = relay_identity {
+            println!("  Identity: {}", id);
+        }
         println!("  Total units: {} / {} max", all.len(), hive_cfg.max_units);
         if !by_category.is_empty() {
             println!("  Categories:");
@@ -112,15 +120,20 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
             println!();
             println!("  Merge conflicts: {conflict_count} (see ~/.claudectl/hive/conflicts.jsonl)");
         }
-        if !sync_states.is_empty() {
-            println!();
-            println!("  Gossip sync state:");
-            for (peer_id, state) in sync_states {
-                println!(
-                    "    {peer_id}: {} units sent, last sync epoch {}",
-                    state.units_sent.len(),
-                    state.last_sync_epoch
-                );
+        #[cfg(feature = "relay")]
+        if let Some(ref id) = relay_identity {
+            let gossip = super::gossip::GossipEngine::new(id.as_str(), 5, 30);
+            let sync_states = gossip.all_sync_states();
+            if !sync_states.is_empty() {
+                println!();
+                println!("  Gossip sync state:");
+                for (peer_id, state) in sync_states {
+                    println!(
+                        "    {peer_id}: {} units sent, last sync epoch {}",
+                        state.units_sent.len(),
+                        state.last_sync_epoch
+                    );
+                }
             }
         }
     }

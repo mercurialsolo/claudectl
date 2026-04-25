@@ -1,6 +1,6 @@
 [package]
 name = "claudectl"
-version = "0.40.0"
+version = "0.41.0"
 edition = "2024"
 description = "Auto-pilot for Claude Code — a local model watches every session and decides what to approve"
 license = "MIT"
@@ -11,10 +11,10 @@ categories = ["command-line-utilities", "development-tools"]
 exclude = ["*.gif", "*.cast", "claude-demo.*", "CLAUDE.md", ".github/"]
 
 [features]
-default = []
+default = ["hive"]
 coord = ["rusqlite"]
 relay = []
-hive = ["relay"]
+hive = []
 
 [[bin]]
 name = "claudectl"

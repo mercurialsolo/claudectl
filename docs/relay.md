@@ -14,13 +14,15 @@ Every instance stays sovereign. Your local preferences always override peer know
 
 ## Quick Start: Connect Two Machines
 
-### Step 1: Enable the relay feature
+### Step 1: Install with relay feature
 
-Build claudectl with the relay feature:
+Hive (local knowledge) is included by default. For cross-machine networking, add the relay feature:
 
 ```bash
 cargo install claudectl --features relay
 ```
+
+Without relay, hive works locally — knowledge is distilled, archived, and used by the brain, but not synced to peers.
 
 ### Step 2: Generate an invite
 
