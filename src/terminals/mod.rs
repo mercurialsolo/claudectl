@@ -3,12 +3,14 @@ mod ghostty;
 mod gnome_terminal;
 mod iterm2;
 mod kitty;
+mod sandbox_terminal_bridge;
 mod tmux;
 mod warp;
 mod wezterm;
 mod windows_terminal;
 
-use crate::session::ClaudeSession;
+use crate::session::{ClaudeSession, HostTerminalTarget};
+use sandbox_terminal_bridge::{BridgeError, BridgeTarget, BridgeTerminal, BridgeVerb};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -517,6 +519,75 @@ fn doctor_report_for(terminal: Terminal) -> DoctorReport {
     ];
     notes.extend(environment_notes(is_wsl, windows_terminal_bridge_ready()));
 
+    // In-sandbox + Linux host terminal: short-circuit before the per-terminal
+    // arms below. The host kitty/tmux/wezterm CLI is not reachable from
+    // inside the microVM, so the only meaningful capability check is whether
+    // the sandbox-terminal-bridge dir is present and the daemon is running.
+    if let Some(SandboxHostBridge::Terminal(host_kind)) = sandbox_host_bridge() {
+        let host_label = match host_kind {
+            BridgeTerminal::Kitty => "kitty",
+            BridgeTerminal::Tmux => "tmux",
+            BridgeTerminal::WezTerm => "wezterm",
+        };
+        let bridge_dir = sandbox_terminal_bridge::default_bridge_dir().ok();
+        let requests_dir = bridge_dir.as_ref().map(|p| p.join("requests"));
+        let bridge_ready = requests_dir.as_ref().map(|p| p.is_dir()).unwrap_or(false);
+        let (status, detail, fix) = if bridge_ready {
+            (
+                DoctorStatus::Ready,
+                format!("Host {host_label} control forwards through sandbox-terminal-bridge."),
+                None,
+            )
+        } else {
+            let display = bridge_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "~/.cache/sandbox-terminal-bridge/".to_string());
+            (
+                DoctorStatus::Blocked,
+                format!(
+                    "Host {host_label} control needs sandbox-terminal-bridge on the host; {display} is not present."
+                ),
+                Some(
+                    "Run linera-infra/tools/agent-sandbox/install.sh on the host to install the bridge daemon, then rerun `claudectl --doctor`."
+                        .to_string(),
+                ),
+            )
+        };
+        for action in [
+            TerminalAction::Switch,
+            TerminalAction::Input,
+            TerminalAction::Approve,
+        ] {
+            actions.push(action_check(action, status, detail.clone(), fix.clone()));
+        }
+        actions.push(action_check(
+            TerminalAction::Launch,
+            DoctorStatus::Unsupported,
+            format!("Visible launch into a host {host_label} window is not implemented yet."),
+            None::<String>,
+        ));
+        notes.push(format!(
+            "Detected agent-sandbox with Linux host terminal {host_label}; control actions go through sandbox-terminal-bridge instead of the local CLI."
+        ));
+        if !bridge_ready {
+            notes.push(
+                "Monitoring still works without the bridge, but control actions stay manual."
+                    .to_string(),
+            );
+        }
+        if !command_ready("claude") {
+            notes.push("Launching a new session will fail until `claude` is on PATH.".to_string());
+        }
+        return DoctorReport {
+            terminal: terminal_label,
+            platform: platform_name(),
+            actions,
+            prerequisites,
+            notes,
+        };
+    }
+
     match terminal {
         Terminal::Gnome => {
             let gnome_check = binary_check("gnome-terminal");
@@ -1016,6 +1087,14 @@ pub fn launch_session(
 }
 
 pub fn switch_to_terminal(session: &ClaudeSession) -> Result<(), String> {
+    // In-sandbox + Linux host terminal: route through sandbox-terminal-bridge
+    // because the host terminal's CLI / unix socket is not reachable from
+    // inside the microVM. macOS hosts continue to fall through to the
+    // existing AppleScript path via run_osascript inside each terminal arm.
+    if let Some(SandboxHostBridge::Terminal(t)) = sandbox_host_bridge() {
+        return dispatch_terminal_bridge(t, session, BridgeVerb::FocusTab);
+    }
+
     let terminal = detect_terminal();
 
     // Only require a TTY for terminals that match sessions by TTY name.
@@ -1057,6 +1136,15 @@ pub fn switch_to_terminal(session: &ClaudeSession) -> Result<(), String> {
 }
 
 pub fn send_input(session: &ClaudeSession, text: &str) -> Result<(), String> {
+    if let Some(SandboxHostBridge::Terminal(t)) = sandbox_host_bridge() {
+        return dispatch_terminal_bridge(
+            t,
+            session,
+            BridgeVerb::SendText {
+                text: text.to_string(),
+            },
+        );
+    }
     match detect_terminal() {
         Terminal::Gnome => gnome_terminal::send_input(session, text),
         Terminal::Ghostty => ghostty::send_input(session, text),
@@ -1085,6 +1173,18 @@ pub fn send_input(session: &ClaudeSession, text: &str) -> Result<(), String> {
 }
 
 pub fn approve_session(session: &ClaudeSession) -> Result<(), String> {
+    if let Some(SandboxHostBridge::Terminal(t)) = sandbox_host_bridge() {
+        // "Approve" = press Enter. The bridge spec defines both "Enter" and
+        // "Return" as accepted key names; we use "Enter" to match the
+        // canonical XKB keysym name.
+        return dispatch_terminal_bridge(
+            t,
+            session,
+            BridgeVerb::SendKey {
+                key: "Enter".to_string(),
+            },
+        );
+    }
     match detect_terminal() {
         Terminal::Gnome => gnome_terminal::approve(session),
         Terminal::Ghostty => ghostty::approve(session),
@@ -1207,6 +1307,94 @@ pub fn run_osascript(script: &str) -> Result<(), String> {
             stderr_tail.trim()
         ))
     }
+}
+
+/// Hosts that the agent-sandbox wrappers report via SANDBOX_HOST_TERMINAL_TYPE.
+/// macOS values stay on the AppleScript bridge; Linux values flow through the
+/// new sandbox-terminal-bridge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SandboxHostBridge {
+    Osa,
+    Terminal(BridgeTerminal),
+}
+
+/// Resolve which host bridge claudectl should target. Returns None when
+/// claudectl is running native (no LINERA_SANDBOX) or when the host
+/// terminal type is unset/unknown — the caller falls back to driving the
+/// local CLI directly.
+fn sandbox_host_bridge() -> Option<SandboxHostBridge> {
+    std::env::var_os("LINERA_SANDBOX")?;
+    let kind = std::env::var("SANDBOX_HOST_TERMINAL_TYPE").ok()?;
+    match kind.as_str() {
+        "iterm2" | "ghostty" | "warp" | "apple" => Some(SandboxHostBridge::Osa),
+        "kitty" => Some(SandboxHostBridge::Terminal(BridgeTerminal::Kitty)),
+        "tmux" => Some(SandboxHostBridge::Terminal(BridgeTerminal::Tmux)),
+        "wezterm" => Some(SandboxHostBridge::Terminal(BridgeTerminal::WezTerm)),
+        _ => None,
+    }
+}
+
+/// Convert the per-session sidecar target into the wire `BridgeTarget`,
+/// validating that it matches the host terminal kind reported by the
+/// wrappers. Returns Err with a user-facing message otherwise.
+fn bridge_target_for(
+    terminal: BridgeTerminal,
+    session: &ClaudeSession,
+) -> Result<BridgeTarget, String> {
+    let target = session.host_terminal_target.as_ref().ok_or_else(|| {
+        format!(
+            "session {} has no host terminal target in its sidecar; the agent-sandbox wrappers may need updating to capture {} env vars.",
+            session.pid,
+            match terminal {
+                BridgeTerminal::Kitty => "KITTY_WINDOW_ID + KITTY_LISTEN_ON",
+                BridgeTerminal::Tmux => "TMUX + TMUX_PANE",
+                BridgeTerminal::WezTerm => "WEZTERM_PANE",
+            }
+        )
+    })?;
+    match (terminal, target) {
+        (BridgeTerminal::Kitty, HostTerminalTarget::Kitty { socket, window_id }) => {
+            Ok(BridgeTarget::Kitty {
+                socket: socket.clone(),
+                // kitty match expressions: `id:<int>` per
+                // https://sw.kovidgoyal.net/kitty/remote-control/#match-options
+                match_expr: format!("id:{window_id}"),
+            })
+        }
+        (BridgeTerminal::Tmux, HostTerminalTarget::Tmux { socket, pane }) => {
+            Ok(BridgeTarget::Tmux {
+                socket: socket.clone(),
+                pane: pane.clone(),
+            })
+        }
+        (
+            BridgeTerminal::WezTerm,
+            HostTerminalTarget::WezTerm {
+                pane_id,
+                unix_socket,
+            },
+        ) => Ok(BridgeTarget::WezTerm {
+            pane_id: *pane_id,
+            unix_socket: unix_socket.clone(),
+        }),
+        (wanted, got) => Err(format!(
+            "host terminal target mismatch: SANDBOX_HOST_TERMINAL_TYPE expects {:?} but session sidecar has {:?}",
+            wanted, got,
+        )),
+    }
+}
+
+/// Helper: dispatch via the terminal bridge, mapping BridgeError to the
+/// `Result<(), String>` shape the rest of the terminal API uses.
+fn dispatch_terminal_bridge(
+    terminal: BridgeTerminal,
+    session: &ClaudeSession,
+    verb: BridgeVerb,
+) -> Result<(), String> {
+    let target = bridge_target_for(terminal, session)?;
+    sandbox_terminal_bridge::dispatch(terminal, target, verb)
+        .map(|_| ())
+        .map_err(|e: BridgeError| e.to_string())
 }
 
 #[cfg(test)]

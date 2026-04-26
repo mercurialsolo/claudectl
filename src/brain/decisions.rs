@@ -801,6 +801,7 @@ mod tests {
             elapsed: Duration::from_secs(120),
             tty: "/dev/pts/0".into(),
             terminal_id: None,
+            host_terminal_target: None,
             status: SessionStatus::Processing,
             cpu_percent: 50.0,
             cpu_history: vec![],

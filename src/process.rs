@@ -72,7 +72,10 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
                 if let Some(host_tty) = sidecar.as_ref().and_then(|s| s.host_tty.clone()) {
                     session.tty = host_tty;
                 }
-                session.terminal_id = sidecar.and_then(|s| s.terminal_id);
+                if let Some(s) = sidecar {
+                    session.terminal_id = s.terminal_id;
+                    session.host_terminal_target = s.host_terminal_target;
+                }
                 session.mem_mb = mem_mb;
 
                 // CPU smoothing: track last 3 readings, use average
@@ -111,6 +114,12 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
 struct TerminalSidecar {
     host_tty: Option<String>,
     terminal_id: Option<String>,
+    /// Per-host-terminal connection target (kitty socket+window id, tmux
+    /// socket+pane, wezterm pane id+optional socket). Populated by the
+    /// agent-sandbox wrappers when the host runs a Linux desktop terminal.
+    /// Absent on macOS-host sandboxes (which use osa-bridge instead) and
+    /// on host-native claudectl runs.
+    host_terminal_target: Option<crate::session::HostTerminalTarget>,
 }
 
 /// Read the per-session terminal sidecar written by the agent sandbox's
@@ -135,10 +144,52 @@ fn read_terminal_sidecar(pid: u32) -> Option<TerminalSidecar> {
             .filter(|s| !s.is_empty())
             .map(String::from)
     };
+    let host_terminal_target = parse_host_terminal_target(&value, &trim);
     Some(TerminalSidecar {
         host_tty: trim(&value, "host_tty"),
         terminal_id: trim(&value, "terminal_id"),
+        host_terminal_target,
     })
+}
+
+/// Pick the host-terminal target out of the sidecar JSON. The agent-sandbox
+/// wrappers write whichever set of env vars the host terminal exported:
+///   kitty   -> KITTY_WINDOW_ID + KITTY_LISTEN_ON
+///   tmux    -> TMUX (socket,N,session-id) + TMUX_PANE
+///   wezterm -> WEZTERM_PANE + (optional) WEZTERM_UNIX_SOCKET
+/// We probe in that order. If multiple are present we trust kitty first
+/// because it is the strongest single signal (a kitty window id is unique
+/// even when nested in tmux).
+fn parse_host_terminal_target(
+    value: &serde_json::Value,
+    trim: &dyn Fn(&serde_json::Value, &str) -> Option<String>,
+) -> Option<crate::session::HostTerminalTarget> {
+    // Sidecar JSON keys are lowercase (matches the existing host_tty /
+    // terminal_id / terminal_type convention written by sandbox-bootstrap-inner).
+    if let (Some(window_id), Some(listen_on)) = (
+        trim(value, "kitty_window_id"),
+        trim(value, "kitty_listen_on"),
+    ) {
+        return Some(crate::session::HostTerminalTarget::Kitty {
+            socket: listen_on,
+            window_id,
+        });
+    }
+    if let (Some(tmux), Some(pane)) = (trim(value, "tmux"), trim(value, "tmux_pane")) {
+        // $TMUX is "<socket>,<server-pid>,<session-id>"; we only need the
+        // socket path (first field) for `tmux -S`. tmux(1) "ENVIRONMENT".
+        let socket = tmux.split(',').next().unwrap_or(&tmux).to_string();
+        return Some(crate::session::HostTerminalTarget::Tmux { socket, pane });
+    }
+    if let Some(pane_str) = trim(value, "wezterm_pane")
+        && let Ok(pane_id) = pane_str.parse::<u64>()
+    {
+        return Some(crate::session::HostTerminalTarget::WezTerm {
+            pane_id,
+            unix_socket: trim(value, "wezterm_unix_socket"),
+        });
+    }
+    None
 }
 
 fn extract_session_meta(cmd: &[&str], session: &mut ClaudeSession) {
