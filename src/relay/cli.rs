@@ -24,6 +24,12 @@ pub enum RelayCommand {
         /// Port to listen on
         #[arg(long, default_value_t = 9847)]
         port: u16,
+        /// HTTP API port for coordinator mode (enables /api/sessions, /api/workers, /api/heartbeat)
+        #[arg(long)]
+        http_port: Option<u16>,
+        /// Bearer token for HTTP API authentication
+        #[arg(long)]
+        auth_token: Option<String>,
     },
 
     /// Generate a raw PSK pairing code
@@ -111,7 +117,11 @@ pub enum RelayCommand {
 /// Dispatch a relay subcommand.
 pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<()> {
     match command {
-        RelayCommand::Serve { port } => cmd_serve(*port),
+        RelayCommand::Serve {
+            port,
+            http_port,
+            auth_token,
+        } => cmd_serve(*port, http_port.as_ref().copied(), auth_token.as_deref()),
         RelayCommand::Pair => cmd_pair(json_mode),
         RelayCommand::Accept { code, peer_id } => cmd_accept(code, peer_id),
         RelayCommand::Connect { addr } => cmd_connect(addr),
@@ -137,9 +147,9 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
     }
 }
 
-/// `claudectl relay serve [--port PORT]`
+/// `claudectl relay serve [--port PORT] [--http-port PORT] [--auth-token TOKEN]`
 /// Start the relay listener in the foreground.
-fn cmd_serve(port: u16) -> io::Result<()> {
+fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io::Result<()> {
     let mut port = port;
 
     // Load config for relay/hive settings
@@ -169,6 +179,31 @@ fn cmd_serve(port: u16) -> io::Result<()> {
     )?;
 
     println!("Relay listening on {} as {}", listener.addr, identity);
+
+    // Start HTTP coordinator server if configured
+    let http_port = http_port.or(relay_cfg.http_port);
+    let auth_token_str = auth_token
+        .map(|s| s.to_string())
+        .or(relay_cfg.auth_token.clone());
+
+    let coord_state = Arc::new(Mutex::new(super::http::CoordinatorState {
+        identity: identity.as_str().to_string(),
+        workers: std::collections::HashMap::new(),
+        local_sessions: Vec::new(),
+    }));
+
+    let _http_server = if let (Some(hp), Some(token)) = (http_port, &auth_token_str) {
+        let http_addr: SocketAddr = format!("{}:{hp}", relay_cfg.listen_addr)
+            .parse()
+            .map_err(|e| io::Error::other(format!("invalid http addr: {e}")))?;
+        let server =
+            super::http::HttpServer::start(http_addr, token.to_string(), Arc::clone(&coord_state))?;
+        println!("HTTP API on http://{}", server.addr);
+        Some(server)
+    } else {
+        None
+    };
+
     println!("Press Ctrl+C to stop.");
 
     // Initialize worker for task delegation
@@ -214,7 +249,7 @@ fn cmd_serve(port: u16) -> io::Result<()> {
             for (from_peer, msg) in messages {
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
-                        reg.handle_heartbeat(&from_peer);
+                        reg.handle_heartbeat(&from_peer, &msg.payload);
                     }
                     super::MessageType::DelegateTask => {
                         match super::delegation::parse_delegate_message(&msg) {
@@ -348,7 +383,7 @@ fn cmd_serve(port: u16) -> io::Result<()> {
                 }
             }
 
-            let events = reg.tick(identity.as_str());
+            let events = reg.tick(identity.as_str(), None);
             for event in events {
                 match event {
                     super::mesh::MeshEvent::PeerDisconnected(id) => {
@@ -365,6 +400,17 @@ fn cmd_serve(port: u16) -> io::Result<()> {
                         }
                     }
                 }
+            }
+
+            // Sync worker states to the HTTP coordinator state
+            if let Ok(mut cs) = coord_state.lock() {
+                for (k, v) in reg.all_worker_states() {
+                    cs.workers.insert(k.clone(), v.clone());
+                }
+                // Expire workers that vanished from the registry
+                let registry_keys: std::collections::HashSet<&String> =
+                    reg.all_worker_states().keys().collect();
+                cs.workers.retain(|k, _| registry_keys.contains(k));
             }
         }
     }
@@ -446,7 +492,7 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
             for (peer_id, msg) in &messages {
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
-                        reg.handle_heartbeat(peer_id);
+                        reg.handle_heartbeat(peer_id, &msg.payload);
                     }
                     _ => {
                         println!(
@@ -458,7 +504,7 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                     }
                 }
             }
-            let events = reg.tick(identity.as_str());
+            let events = reg.tick(identity.as_str(), None);
             for event in events {
                 match event {
                     super::mesh::MeshEvent::PeerDisconnected(id) => {

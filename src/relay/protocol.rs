@@ -172,7 +172,7 @@ pub fn await_handshake_ack(reader: &mut BufReader<TcpStream>) -> Result<String, 
 // Heartbeat helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Build a heartbeat message.
+/// Build a heartbeat message (liveness only, no session data).
 pub fn heartbeat_message(identity: &str) -> RelayMessage {
     RelayMessage {
         id: gen_msg_id(),
@@ -180,6 +180,21 @@ pub fn heartbeat_message(identity: &str) -> RelayMessage {
         from_peer: identity.to_string(),
         timestamp: epoch_ms(),
         payload: serde_json::json!({}),
+    }
+}
+
+/// Build a heartbeat message carrying the worker's current session state.
+pub fn heartbeat_with_sessions(identity: &str, sessions: &[serde_json::Value]) -> RelayMessage {
+    RelayMessage {
+        id: gen_msg_id(),
+        msg_type: MessageType::Heartbeat,
+        from_peer: identity.to_string(),
+        timestamp: epoch_ms(),
+        payload: serde_json::json!({
+            "worker_id": identity,
+            "timestamp": epoch_ms(),
+            "sessions": sessions,
+        }),
     }
 }
 
@@ -272,5 +287,31 @@ mod tests {
             msg.payload.get("ack_id").and_then(|v| v.as_str()),
             Some("msg_123")
         );
+    }
+
+    #[test]
+    fn heartbeat_with_sessions_includes_payload() {
+        let sessions = vec![
+            serde_json::json!({"pid": 1234, "project": "backend", "status": "Processing"}),
+            serde_json::json!({"pid": 5678, "project": "frontend", "status": "Idle"}),
+        ];
+        let msg = heartbeat_with_sessions("worker-01", &sessions);
+        assert_eq!(msg.msg_type, MessageType::Heartbeat);
+        assert_eq!(msg.from_peer, "worker-01");
+        assert_eq!(
+            msg.payload.get("worker_id").and_then(|v| v.as_str()),
+            Some("worker-01")
+        );
+        let payload_sessions = msg.payload.get("sessions").and_then(|v| v.as_array());
+        assert!(payload_sessions.is_some());
+        assert_eq!(payload_sessions.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn heartbeat_with_empty_sessions() {
+        let msg = heartbeat_with_sessions("worker-02", &[]);
+        let sessions = msg.payload.get("sessions").and_then(|v| v.as_array());
+        assert!(sessions.is_some());
+        assert_eq!(sessions.unwrap().len(), 0);
     }
 }

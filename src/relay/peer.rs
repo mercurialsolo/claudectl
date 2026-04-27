@@ -151,9 +151,21 @@ impl PeerConnection {
         protocol::write_message(&mut guard, msg)
     }
 
-    /// Send a heartbeat.
+    /// Send a heartbeat (liveness only).
     pub fn send_heartbeat(&mut self, identity: &str) -> io::Result<()> {
         let msg = protocol::heartbeat_message(identity);
+        self.send(&msg)?;
+        self.last_heartbeat_sent = Instant::now();
+        Ok(())
+    }
+
+    /// Send a heartbeat carrying session state.
+    pub fn send_heartbeat_with_sessions(
+        &mut self,
+        identity: &str,
+        sessions: &[serde_json::Value],
+    ) -> io::Result<()> {
+        let msg = protocol::heartbeat_with_sessions(identity, sessions);
         self.send(&msg)?;
         self.last_heartbeat_sent = Instant::now();
         Ok(())

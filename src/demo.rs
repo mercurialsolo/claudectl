@@ -469,6 +469,7 @@ pub fn demo_peers(tick: u32) -> Vec<crate::ui::peers::PeerDisplayInfo> {
             trust: 0.82,
             units_sent: 42,
             units_received: 18,
+            session_count: 3,
         },
         crate::ui::peers::PeerDisplayInfo {
             peer_id: "alice-mbp-f3a1".into(),
@@ -480,6 +481,7 @@ pub fn demo_peers(tick: u32) -> Vec<crate::ui::peers::PeerDisplayInfo> {
             trust: 0.53,
             units_sent: 0,
             units_received: if tick % 32 >= 28 { 12 } else { 0 },
+            session_count: if tick % 32 >= 28 { 2 } else { 0 },
         },
     ];
 

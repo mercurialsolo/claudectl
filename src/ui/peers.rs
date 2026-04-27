@@ -17,6 +17,7 @@ pub struct PeerDisplayInfo {
     pub trust: f64,
     pub units_sent: u32,
     pub units_received: u32,
+    pub session_count: u32,
 }
 
 /// Render the peers panel in the TUI.
@@ -63,6 +64,10 @@ pub fn render_peers_panel(frame: &mut Frame, area: Rect, peers: &[PeerDisplayInf
                     Style::default().fg(theme.text_primary),
                 ),
                 Span::styled(
+                    format!("{}s  ", p.session_count),
+                    Style::default().fg(theme.text_primary),
+                ),
+                Span::styled(
                     format!("↑{} ↓{} kb", p.units_sent, p.units_received),
                     Style::default().fg(theme.text_muted),
                 ),
@@ -88,8 +93,10 @@ mod tests {
             trust: 0.8,
             units_sent: 12,
             units_received: 8,
+            session_count: 3,
         };
         assert_eq!(info.peer_id, "test-peer");
         assert_eq!(info.trust, 0.8);
+        assert_eq!(info.session_count, 3);
     }
 }

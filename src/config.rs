@@ -186,6 +186,8 @@ pub struct RelayConfig {
     pub heartbeat_interval_secs: u64,
     pub reconnect_max_secs: u64,
     pub auto_connect: Vec<String>,
+    pub http_port: Option<u16>,
+    pub auth_token: Option<String>,
 }
 
 impl Default for RelayConfig {
@@ -198,6 +200,8 @@ impl Default for RelayConfig {
             heartbeat_interval_secs: 30,
             reconnect_max_secs: 60,
             auto_connect: Vec::new(),
+            http_port: None,
+            auth_token: None,
         }
     }
 }
@@ -319,6 +323,8 @@ struct RawRelayConfig {
     heartbeat_interval_secs: Option<u64>,
     reconnect_max_secs: Option<u64>,
     auto_connect: Option<Vec<String>>,
+    http_port: Option<u16>,
+    auth_token: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -499,6 +505,12 @@ impl Config {
             }
             if let Some(v) = raw_relay.auto_connect {
                 relay.auto_connect = v;
+            }
+            if let Some(v) = raw_relay.http_port {
+                relay.http_port = Some(v);
+            }
+            if let Some(v) = raw_relay.auth_token {
+                relay.auth_token = Some(v);
             }
         }
         if let Some(raw_hive) = raw.hive {
@@ -1126,6 +1138,12 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     }
                     "auto_connect" => {
                         relay.auto_connect = Some(parse_string_array(value));
+                    }
+                    "http_port" => {
+                        relay.http_port = value.parse().ok();
+                    }
+                    "auth_token" => {
+                        relay.auth_token = Some(unquote(value));
                     }
                     _ => {}
                 }

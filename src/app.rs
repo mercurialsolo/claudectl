@@ -339,6 +339,9 @@ pub struct App {
     #[cfg(feature = "relay")]
     #[allow(dead_code)]
     pub relay_peers: Vec<crate::ui::peers::PeerDisplayInfo>,
+    /// Remote sessions received from connected worker peers (relay heartbeats).
+    #[cfg(feature = "relay")]
+    pub remote_sessions: Vec<crate::session::ClaudeSession>,
 }
 
 #[derive(Default, Clone)]
@@ -474,6 +477,8 @@ impl App {
             show_peers_panel: false,
             #[cfg(feature = "relay")]
             relay_peers: Vec::new(),
+            #[cfg(feature = "relay")]
+            remote_sessions: Vec::new(),
         };
         #[cfg(feature = "coord")]
         app.coord_refresh();
@@ -901,6 +906,15 @@ impl App {
         self.prev_statuses = sessions.iter().map(|s| (s.pid, s.status)).collect();
 
         self.sessions = sessions;
+
+        // Append remote sessions from relay peers (if relay feature active)
+        #[cfg(feature = "relay")]
+        {
+            for remote in &self.remote_sessions {
+                self.sessions.push(remote.clone());
+            }
+        }
+
         self.normalize_selection();
 
         // Record debug timings
@@ -1005,13 +1019,35 @@ impl App {
             }
         }
 
-        // Update demo peers panel
+        // Update demo peers panel and remote sessions
         #[cfg(feature = "relay")]
         {
             self.relay_peers = crate::demo::demo_peers(self.demo_tick);
             // Auto-show peers panel on first hive sync event
             if self.demo_tick % 32 == 14 && !self.show_peers_panel {
                 self.show_peers_panel = true;
+            }
+            // Demo remote sessions from connected peers
+            self.remote_sessions.clear();
+            if self.demo_tick % 32 >= 14 {
+                let remote_json = serde_json::json!({
+                    "pid": 99001, "project": "backend",
+                    "status": "Processing", "cost_usd": 1.4,
+                    "elapsed_secs": 320, "context_pct": 42.0,
+                });
+                if let Some(s) = ClaudeSession::from_remote_json("ci-runner-9d1e", &remote_json) {
+                    self.remote_sessions.push(s);
+                }
+            }
+            if self.demo_tick % 32 >= 28 {
+                let remote_json = serde_json::json!({
+                    "pid": 99002, "project": "frontend",
+                    "status": "Needs Input", "cost_usd": 0.32,
+                    "elapsed_secs": 150,
+                });
+                if let Some(s) = ClaudeSession::from_remote_json("alice-mbp-f3a1", &remote_json) {
+                    self.remote_sessions.push(s);
+                }
             }
         }
 
@@ -1534,6 +1570,10 @@ impl App {
         let Some(session) = self.selected_session() else {
             return;
         };
+        if session.is_remote() {
+            self.status_msg = "Remote session \u{2014} action not available".into();
+            return;
+        }
         let pid = session.pid;
         let name = session.display_name().to_string();
 
@@ -1598,6 +1638,10 @@ impl App {
         let Some(session) = self.selected_session() else {
             return;
         };
+        if session.is_remote() {
+            self.status_msg = "Remote session \u{2014} action not available".into();
+            return;
+        }
         let pid = session.pid;
         let name = session.display_name().to_string();
 
@@ -2083,6 +2127,10 @@ impl App {
 
     fn handle_approve(&mut self) {
         if let Some(session) = self.selected_session() {
+            if session.is_remote() {
+                self.status_msg = "Remote session \u{2014} action not available".into();
+                return;
+            }
             if session.status == SessionStatus::NeedsInput {
                 // Log passive observation: user approved without brain involvement
                 crate::brain::decisions::log_observation(
@@ -2108,6 +2156,10 @@ impl App {
         let Some(session) = self.selected_session().cloned() else {
             return;
         };
+        if session.is_remote() {
+            self.status_msg = "Remote session \u{2014} action not available".into();
+            return;
+        }
         let pid = session.pid;
         let Some(ref mut engine) = self.brain_engine else {
             self.status_msg = "Brain is not enabled".into();
@@ -2141,6 +2193,10 @@ impl App {
         let Some(session) = self.selected_session().cloned() else {
             return;
         };
+        if session.is_remote() {
+            self.status_msg = "Remote session \u{2014} action not available".into();
+            return;
+        }
         let pid = session.pid;
         let Some(ref mut engine) = self.brain_engine else {
             self.status_msg = "Brain is not enabled".into();
@@ -2232,6 +2288,10 @@ impl App {
 
     fn handle_compact(&mut self) {
         if let Some(session) = self.selected_session() {
+            if session.is_remote() {
+                self.status_msg = "Remote session \u{2014} action not available".into();
+                return;
+            }
             match session.status {
                 SessionStatus::WaitingInput | SessionStatus::Idle => {
                     match terminals::send_input(session, "/compact\n") {
@@ -2262,6 +2322,12 @@ impl App {
     }
 
     fn enter_input_mode(&mut self) {
+        if let Some(session) = self.selected_session() {
+            if session.is_remote() {
+                self.status_msg = "Remote session \u{2014} action not available".into();
+                return;
+            }
+        }
         let info = self
             .selected_session()
             .map(|s| (s.pid, s.display_name().to_string()));
@@ -2275,6 +2341,10 @@ impl App {
 
     fn handle_switch_terminal(&mut self) {
         if let Some(session) = self.selected_session() {
+            if session.is_remote() {
+                self.status_msg = "Remote session \u{2014} action not available".into();
+                return;
+            }
             match terminals::switch_to_terminal(session) {
                 Ok(()) => {
                     self.status_msg = format!("Switched to {}", session.display_name());
