@@ -94,6 +94,29 @@ pub struct RawSession {
     pub name: Option<String>,
 }
 
+/// Connection target for a host-side terminal when claudectl runs inside the
+/// agent-sandbox microVM. Filled from the per-PID terminal sidecar written
+/// by the sandbox wrappers; mirrors the env vars each terminal exports.
+///
+/// On macOS-host sandboxes (Ghostty/iTerm2/Warp/Apple) the bridge speaks
+/// AppleScript over `sandbox-osa-bridge`, so this field stays None and the
+/// macOS arms in `terminals/mod.rs` pick the matcher by `terminal_id`/`tty`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostTerminalTarget {
+    Kitty {
+        socket: String,
+        window_id: String,
+    },
+    Tmux {
+        socket: String,
+        pane: String,
+    },
+    WezTerm {
+        pane_id: u64,
+        unix_socket: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct ClaudeSession {
     pub pid: u32,
@@ -110,6 +133,13 @@ pub struct ClaudeSession {
     /// host-native claude sessions and terminals that don't expose a stable
     /// id (iTerm2/Apple/Warp rely on `tty` instead).
     pub terminal_id: Option<String>,
+    /// Host-side terminal connection target (kitty socket+window, tmux
+    /// socket+pane, wezterm pane id+optional socket). Populated from the
+    /// agent-sandbox terminal sidecar when claudectl runs inside the
+    /// sandbox and the host runs a Linux desktop terminal. None for
+    /// macOS-host sandboxes (which use osa-bridge) and for host-native
+    /// claudectl runs (which talk to the local terminal CLIs directly).
+    pub host_terminal_target: Option<HostTerminalTarget>,
     pub status: SessionStatus,
     pub cpu_percent: f32,
     pub cpu_history: Vec<f32>, // Last N CPU readings for smoothing
@@ -323,6 +353,7 @@ impl ClaudeSession {
             elapsed,
             tty: String::new(),
             terminal_id: None,
+            host_terminal_target: None,
             status: SessionStatus::Idle,
             cpu_percent: 0.0,
             cpu_history: Vec::new(),
