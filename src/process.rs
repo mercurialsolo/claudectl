@@ -50,8 +50,10 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
 
         // Only count this PID as alive if it's actually a claude process.
         // PIDs get reused on macOS — a dead claude session's PID may belong
-        // to an unrelated process now.
-        if !command.contains("claude") {
+        // to an unrelated process now. Match on argv0 basename, not a raw
+        // substring: `claudectl`, `bash -lc '... claude ...'`, and
+        // `grep claude` would all match a substring check.
+        if !is_claude_process(&command) {
             continue;
         }
 
@@ -109,6 +111,15 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
             session.cpu_percent = 0.0;
         }
     }
+}
+
+/// True iff the first whitespace-split token of `command` (i.e. argv0),
+/// after stripping any leading path, is exactly `"claude"`. This excludes
+/// `claudectl`, `grep claude`, and `bash -lc '... claude ...'`.
+fn is_claude_process(command: &str) -> bool {
+    let argv0 = command.split_whitespace().next().unwrap_or("");
+    let basename = argv0.rsplit('/').next().unwrap_or(argv0);
+    basename == "claude"
 }
 
 struct TerminalSidecar {
@@ -224,4 +235,36 @@ fn looks_like_uuid(s: &str) -> bool {
     s.len() == 36
         && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
         && s.matches('-').count() == 4
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_claude_process_matches_bare_argv0() {
+        assert!(is_claude_process("claude --dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn is_claude_process_matches_absolute_path() {
+        assert!(is_claude_process("/usr/local/bin/claude --resume foo"));
+    }
+
+    #[test]
+    fn is_claude_process_rejects_claudectl() {
+        assert!(!is_claude_process("claudectl --list"));
+    }
+
+    #[test]
+    fn is_claude_process_rejects_shell_wrapping() {
+        assert!(!is_claude_process(
+            "bash -lc 'exec sandbox-bootstrap claude --resume foo'"
+        ));
+    }
+
+    #[test]
+    fn is_claude_process_rejects_grep_claude() {
+        assert!(!is_claude_process("grep claude"));
+    }
 }
