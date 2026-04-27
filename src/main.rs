@@ -23,6 +23,7 @@ mod models;
 mod monitor;
 mod orchestrator;
 mod process;
+mod reaper;
 mod recorder;
 mod rules;
 mod session;
@@ -250,9 +251,16 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Cleanup")]
     pub(crate) finished: bool,
 
-    /// Show what would be removed without deleting. Used with --clean.
+    /// Show what would be removed without deleting. Used with --clean and --reap-orphans.
     #[arg(long, help_heading = "Cleanup")]
     pub(crate) dry_run: bool,
+
+    /// Detect and SIGHUP in-sandbox claude processes orphaned by host tab close.
+    /// Diffs sandbox sidecars (`/var/lib/sandbox-sessions/*.terminal.json`) against
+    /// the host's set of currently-attached `SANDBOX_HOST_TTY` values, kills the
+    /// runaheads, sweeps dead sidecars off disk. No-op when `sbx` isn't in PATH.
+    #[arg(long, help_heading = "Cleanup")]
+    pub(crate) reap_orphans: bool,
 
     // ── History & Diagnostics ──────────────────────────────────────────
     /// Show history of completed sessions and exit
@@ -488,6 +496,10 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if cli.clean {
         return commands::run_clean(cli.older_than.as_deref(), cli.finished, cli.dry_run);
+    }
+
+    if cli.reap_orphans {
+        return reaper::run(cli.dry_run);
     }
 
     if cli.history {
