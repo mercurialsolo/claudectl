@@ -219,6 +219,46 @@ Press `R` on any session for a highlight reel GIF (edits, commands, errors — i
 
 </details>
 
+## Sandboxed claude orphan cleanup
+
+Running `claude` inside a Docker-based agent sandbox (e.g. `hazmat claude
+--docker=sandbox`) leaves orphaned `claude` processes on the host whenever
+an iTerm2 tab is closed without `/exit`. The in-sandbox `claude` survives
+on a dead pty — `claudectl` shows the row stuck Idle forever. After a few
+days of normal use these accumulate into 40+ ghost rows.
+
+Root cause: `hazmat`/`sbx exec` doesn't propagate the host disconnect to
+the in-sandbox process. The kernel pty SIGHUP doesn't fire because the
+master fd stays open in the sbx daemon (see
+[docs/known-bugs/hazmat-orphan-disconnect.md](docs/known-bugs/hazmat-orphan-disconnect.md)
+for the full diagnosis).
+
+Mitigations, in order of preference:
+
+1. Type `/exit` before closing the iTerm2 tab — clean shutdown, no orphan.
+2. Run `claudectl --reap-orphans` manually any time — diffs the host's
+   open `SANDBOX_HOST_TTY` set against in-sandbox sidecars under
+   `/var/lib/sandbox-sessions/*.terminal.json`, SIGHUPs any sandbox
+   `claude` whose host TTY is no longer attached, and sweeps dead-PID
+   sidecars off disk. Add `--dry-run` to preview without acting.
+3. Run `claudectl --install-reaper` (macOS only) to wire a launchd job
+   that runs `--reap-orphans` every 60 seconds. Tune with
+   `--reaper-interval N` (range 10..=3600 seconds). Reverse with
+   `claudectl --uninstall-reaper`.
+
+The reaper is a no-op on hosts without `sbx` in `PATH`, so it's safe to
+install unconditionally.
+
+Sandbox layout differs across teams. Override the defaults via env vars:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `CLAUDECTL_SANDBOX_NAME` | `linera-agent` | sbx sandbox name to scan |
+| `CLAUDECTL_SANDBOX_SESSIONS_DIR` | `/var/lib/sandbox-sessions` | in-sandbox dir holding `{pid}.terminal.json` sidecars |
+
+Both vars are read on every invocation; an empty value falls back to the
+default.
+
 ## Docs
 
 | | |
