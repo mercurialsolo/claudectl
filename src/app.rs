@@ -711,10 +711,12 @@ impl App {
             .map(|(pid, _)| *pid)
             .collect();
         for pid in &expired {
-            let session_file = dirs_home()
-                .join(".claude/sessions")
-                .join(format!("{pid}.json"));
-            let _ = std::fs::remove_file(session_file);
+            let sessions_dir = dirs_home().join(".claude/sessions");
+            let _ = std::fs::remove_file(sessions_dir.join(format!("{pid}.json")));
+            // Sidecar written by the agent-sandbox bootstrap (host TTY +
+            // terminal target). Both files are per-PID; both go together so
+            // a recycled PID can't pick up another session's host terminal.
+            let _ = std::fs::remove_file(sessions_dir.join(format!("{pid}.terminal.json")));
         }
         self.finished_at
             .retain(|_, t| now.duration_since(*t).as_secs() < 60);
