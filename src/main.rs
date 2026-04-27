@@ -262,6 +262,24 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Cleanup")]
     pub(crate) reap_orphans: bool,
 
+    /// Install a launchd job that runs `--reap-orphans` every --interval seconds.
+    /// macOS only. Idempotent: re-running replaces any existing agent.
+    #[arg(long, help_heading = "Cleanup")]
+    pub(crate) install_reaper: bool,
+
+    /// Remove the launchd job installed by --install-reaper. macOS only.
+    #[arg(long, help_heading = "Cleanup")]
+    pub(crate) uninstall_reaper: bool,
+
+    /// Reaper run interval for --install-reaper, in seconds. Range 10..=3600.
+    /// Default 60.
+    #[arg(
+        long = "reaper-interval",
+        help_heading = "Cleanup",
+        default_value_t = 60
+    )]
+    pub(crate) reaper_interval: u64,
+
     // ── History & Diagnostics ──────────────────────────────────────────
     /// Show history of completed sessions and exit
     #[arg(long, help_heading = "History & Diagnostics")]
@@ -500,6 +518,14 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if cli.reap_orphans {
         return reaper::run(cli.dry_run);
+    }
+
+    if cli.install_reaper {
+        return reaper::install_launch_agent(cli.reaper_interval);
+    }
+
+    if cli.uninstall_reaper {
+        return reaper::uninstall_launch_agent();
     }
 
     if cli.history {
