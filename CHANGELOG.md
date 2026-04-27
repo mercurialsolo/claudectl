@@ -2,6 +2,32 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.44.0] - 2026-04-27
+
+### Added
+- **Session state in heartbeats** -- relay heartbeats now carry the worker's session list, enabling cross-machine visibility (#107)
+  - `WorkerState` storage in `PeerRegistry` with automatic stale worker expiry (3x heartbeat interval)
+  - Backward compatible: peers running older versions send empty payloads (liveness-only)
+- **HTTP coordinator API** -- lightweight raw-TCP HTTP/1.1 server for coordinator mode, zero new dependencies (#108)
+  - `POST /api/heartbeat` -- receive worker session state
+  - `GET /api/sessions` -- unified session list across all connected workers
+  - `GET /api/workers` -- worker status summary with staleness detection
+  - Bearer token auth, 1 MB body cap, background thread
+  - CLI: `claudectl relay serve --http-port 9876 --auth-token <token>`
+  - Config: `[relay]` section supports `http_port` and `auth_token`
+- **Unified dashboard** -- remote sessions from connected workers appear in the TUI alongside local sessions (#109)
+  - Remote sessions shown with `[worker-id] project` prefix
+  - Terminal actions (kill, approve, input, compact, switch) gracefully blocked for remote sessions
+  - Peers panel now shows session count per peer
+  - Demo mode includes fake remote sessions from connected peers
+- **Secure pairing** -- confirmed already complete: HMAC challenge-response, PSK, invite codes/words/links/QR, LAN discovery, rate limiting (#113)
+
+### Technical details
+- All new code feature-gated behind `--features relay` -- default build unaffected
+- HTTP server uses `std::net::TcpListener` (same pattern as relay listener) -- no new runtime dependencies
+- `ClaudeSession` gains `worker_origin: Option<String>`, `is_remote()`, and `from_remote_json()` for remote session hydration
+- 596 tests passing across all build configurations
+
 ## [0.33.0] - 2026-04-21
 
 ### Added

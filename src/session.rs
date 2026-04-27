@@ -168,6 +168,9 @@ pub struct ClaudeSession {
     pub total_error_count: u32,
     /// Cached composite decay score (0-100), recomputed each tick.
     pub decay_score: u32,
+    /// If set, this session is from a remote worker (not local).
+    /// Terminal actions (approve, kill, etc.) are disabled for remote sessions.
+    pub worker_origin: Option<String>,
 }
 
 /// A captured tool error with context.
@@ -357,6 +360,7 @@ impl ClaudeSession {
             file_reads_since_edit: HashMap::new(),
             total_error_count: 0,
             decay_score: 0,
+            worker_origin: None,
         }
     }
 
@@ -416,6 +420,81 @@ impl ClaudeSession {
         } else {
             &self.project_name
         }
+    }
+
+    /// Whether this session is from a remote worker (not local).
+    pub fn is_remote(&self) -> bool {
+        self.worker_origin.is_some()
+    }
+
+    /// Build a ClaudeSession from remote JSON (as received via heartbeat/HTTP).
+    #[allow(dead_code)]
+    pub fn from_remote_json(worker_id: &str, json: &serde_json::Value) -> Option<Self> {
+        let pid = json.get("pid")?.as_u64()? as u32;
+        let project = json.get("project")?.as_str()?;
+        let status_str = json
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown");
+        let status = match status_str {
+            "Needs Input" => SessionStatus::NeedsInput,
+            "Processing" => SessionStatus::Processing,
+            "Waiting" => SessionStatus::WaitingInput,
+            "Idle" => SessionStatus::Idle,
+            "Finished" => SessionStatus::Finished,
+            _ => SessionStatus::Unknown,
+        };
+
+        let elapsed_secs = json
+            .get("elapsed_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let mut session = Self::from_raw(RawSession {
+            pid,
+            session_id: format!("remote-{worker_id}-{pid}"),
+            cwd: project.to_string(),
+            started_at: now_ms.saturating_sub(elapsed_secs * 1000),
+        });
+        session.status = status;
+        session.worker_origin = Some(worker_id.to_string());
+        session.project_name = format!("[{worker_id}] {project}");
+
+        // Populate metrics from JSON when available
+        if let Some(cost) = json.get("cost_usd").and_then(|v| v.as_f64()) {
+            session.cost_usd = cost;
+            session.usage_metrics_available = true;
+        }
+        if let Some(burn) = json.get("burn_rate_per_hr").and_then(|v| v.as_f64()) {
+            session.burn_rate_per_hr = burn;
+        }
+        if let Some(ctx) = json.get("context_pct").and_then(|v| v.as_f64()) {
+            // Reverse-engineer context_tokens/context_max from percentage
+            session.context_max = 200_000; // reasonable default
+            session.context_tokens = ((ctx / 100.0) * session.context_max as f64) as u64;
+        }
+        if let Some(t_in) = json.get("tokens_in").and_then(|v| v.as_u64()) {
+            session.total_input_tokens = t_in;
+            session.usage_metrics_available = true;
+        }
+        if let Some(t_out) = json.get("tokens_out").and_then(|v| v.as_u64()) {
+            session.total_output_tokens = t_out;
+        }
+        if let Some(model) = json.get("model").and_then(|v| v.as_str()) {
+            session.model = model.to_string();
+        }
+        if let Some(subs) = json.get("subagents").and_then(|v| v.as_u64()) {
+            session.subagent_count = subs as usize;
+        }
+        if let Some(decay) = json.get("decay_score").and_then(|v| v.as_u64()) {
+            session.decay_score = decay as u32;
+        }
+
+        Some(session)
     }
 
     pub fn format_subagent_summary(&self) -> String {
@@ -684,6 +763,7 @@ impl ClaudeSession {
             "tool_usage": self.tool_usage.iter().map(|(k, v)| {
                 (k.clone(), serde_json::json!({"calls": v.calls}))
             }).collect::<serde_json::Map<String, serde_json::Value>>(),
+            "worker_origin": self.worker_origin,
         })
     }
 
@@ -887,5 +967,82 @@ mod tests {
             s.record_activity();
         }
         assert_eq!(s.baseline_error_rate.unwrap(), baseline);
+    }
+
+    // ── Remote session tests ────────────────────────────────────────
+
+    #[test]
+    fn local_session_is_not_remote() {
+        let s = make_session();
+        assert!(!s.is_remote());
+        assert!(s.worker_origin.is_none());
+    }
+
+    #[test]
+    fn from_remote_json_parses_basic_fields() {
+        let json = serde_json::json!({
+            "pid": 42,
+            "project": "backend",
+            "status": "Processing",
+            "cost_usd": 1.23,
+            "elapsed_secs": 600,
+            "tokens_in": 50000,
+            "tokens_out": 10000,
+        });
+        let session = ClaudeSession::from_remote_json("macbook-02", &json).unwrap();
+        assert!(session.is_remote());
+        assert_eq!(session.worker_origin.as_deref(), Some("macbook-02"));
+        assert_eq!(session.pid, 42);
+        assert_eq!(session.project_name, "[macbook-02] backend");
+        assert_eq!(session.status, SessionStatus::Processing);
+        assert!((session.cost_usd - 1.23).abs() < 0.01);
+        assert_eq!(session.total_input_tokens, 50000);
+        assert_eq!(session.total_output_tokens, 10000);
+        assert!(session.usage_metrics_available);
+    }
+
+    #[test]
+    fn from_remote_json_handles_all_statuses() {
+        for (label, expected) in [
+            ("Needs Input", SessionStatus::NeedsInput),
+            ("Processing", SessionStatus::Processing),
+            ("Waiting", SessionStatus::WaitingInput),
+            ("Idle", SessionStatus::Idle),
+            ("Finished", SessionStatus::Finished),
+            ("SomethingElse", SessionStatus::Unknown),
+        ] {
+            let json = serde_json::json!({"pid": 1, "project": "p", "status": label});
+            let session = ClaudeSession::from_remote_json("w", &json).unwrap();
+            assert_eq!(session.status, expected, "status mismatch for {label}");
+        }
+    }
+
+    #[test]
+    fn from_remote_json_returns_none_on_missing_fields() {
+        // Missing pid
+        let json = serde_json::json!({"project": "x", "status": "Idle"});
+        assert!(ClaudeSession::from_remote_json("w", &json).is_none());
+
+        // Missing project
+        let json = serde_json::json!({"pid": 1, "status": "Idle"});
+        assert!(ClaudeSession::from_remote_json("w", &json).is_none());
+    }
+
+    #[test]
+    fn remote_session_display_name_shows_worker_prefix() {
+        let json = serde_json::json!({"pid": 1, "project": "api-server", "status": "Idle"});
+        let session = ClaudeSession::from_remote_json("laptop-01", &json).unwrap();
+        assert_eq!(session.display_name(), "[laptop-01] api-server");
+    }
+
+    #[test]
+    fn remote_session_json_includes_worker_origin() {
+        let json = serde_json::json!({"pid": 1, "project": "test", "status": "Idle"});
+        let session = ClaudeSession::from_remote_json("remote-w", &json).unwrap();
+        let output = session.to_json_value();
+        assert_eq!(
+            output.get("worker_origin").and_then(|v| v.as_str()),
+            Some("remote-w")
+        );
     }
 }

@@ -929,6 +929,7 @@ mod tests {
             file_reads_since_edit: HashMap::new(),
             total_error_count: 0,
             decay_score: 0,
+            worker_origin: None,
         };
 
         let ctx = snapshot_context(&session);

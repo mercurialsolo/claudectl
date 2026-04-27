@@ -208,6 +208,11 @@ cargo install claudectl --features relay
 claudectl relay invite                # Generate an invite code
 claudectl relay join YEK-AGA-YHK-QAA-BM       # Join from another machine
 claudectl relay discover              # Scan LAN for nearby instances
+
+# Start coordinator with HTTP API for multi-machine dashboard
+claudectl relay serve --http-port 9876 --auth-token secret
+# Remote sessions appear in the TUI as [worker-id] project-name
+# GET /api/sessions returns the unified view across all workers
 ```
 
 Knowledge categories (best practices, techniques, workflow patterns) propagate automatically. Personal patterns (time-of-day habits, cost tolerance) stay local. You control what's shared:

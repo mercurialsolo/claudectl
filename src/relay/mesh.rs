@@ -10,6 +10,14 @@ use super::{PeerId, RelayMessage};
 /// Maximum number of message IDs to track for deduplication.
 const DEDUP_CAPACITY: usize = 1000;
 
+/// Session state snapshot received from a single worker peer.
+#[derive(Debug, Clone)]
+pub struct WorkerState {
+    pub worker_id: String,
+    pub sessions: Vec<serde_json::Value>,
+    pub last_updated: u64, // epoch_ms
+}
+
 /// The peer registry: central state for all peer connections.
 pub struct PeerRegistry {
     peers: HashMap<String, PeerConnection>, // peer_id string -> connection
@@ -18,6 +26,8 @@ pub struct PeerRegistry {
     seen_ids: VecDeque<String>,
     heartbeat_interval: Duration,
     last_heartbeat_tick: Instant,
+    /// Session state received from each connected peer's heartbeat.
+    worker_states: HashMap<String, WorkerState>,
 }
 
 impl PeerRegistry {
@@ -30,6 +40,7 @@ impl PeerRegistry {
             seen_ids: VecDeque::with_capacity(DEDUP_CAPACITY + 1),
             heartbeat_interval: Duration::from_secs(heartbeat_interval_secs),
             last_heartbeat_tick: Instant::now(),
+            worker_states: HashMap::new(),
         }
     }
 
@@ -117,8 +128,13 @@ impl PeerRegistry {
     }
 
     /// Periodic tick: send heartbeats, check for dead peers, schedule reconnects.
+    /// When `local_sessions` is provided, heartbeats include the session state.
     /// Returns a list of events (peer disconnected, peer needs reconnect, etc).
-    pub fn tick(&mut self, identity: &str) -> Vec<MeshEvent> {
+    pub fn tick(
+        &mut self,
+        identity: &str,
+        local_sessions: Option<&[serde_json::Value]>,
+    ) -> Vec<MeshEvent> {
         let mut events = Vec::new();
         let now = Instant::now();
 
@@ -138,9 +154,15 @@ impl PeerRegistry {
 
             match peer.state {
                 PeerState::Connected => {
-                    // Send heartbeat
+                    // Send heartbeat (with sessions if available)
                     if should_heartbeat {
-                        if peer.send_heartbeat(identity).is_err() {
+                        let send_ok = match local_sessions {
+                            Some(sessions) => peer
+                                .send_heartbeat_with_sessions(identity, sessions)
+                                .is_ok(),
+                            None => peer.send_heartbeat(identity).is_ok(),
+                        };
+                        if !send_ok {
                             peer.mark_disconnected();
                             events.push(MeshEvent::PeerDisconnected(peer.peer_id.clone()));
                             continue;
@@ -170,14 +192,47 @@ impl PeerRegistry {
             }
         }
 
+        // Expire stale worker states (3x heartbeat interval)
+        let stale_ms = self.heartbeat_interval.as_millis() as u64 * 3;
+        self.expire_stale_workers(stale_ms);
+
         events
     }
 
     /// Process an incoming heartbeat for a peer.
-    pub fn handle_heartbeat(&mut self, peer_id: &PeerId) {
+    /// If the payload contains session data, store the worker state.
+    pub fn handle_heartbeat(&mut self, peer_id: &PeerId, payload: &serde_json::Value) {
         if let Some(peer) = self.peers.get_mut(&peer_id.0) {
             peer.record_heartbeat();
         }
+        // Store worker state if sessions are present in the payload
+        if let Some(sessions) = payload.get("sessions").and_then(|v| v.as_array()) {
+            let worker_id = payload
+                .get("worker_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(peer_id.as_str())
+                .to_string();
+            self.worker_states.insert(
+                peer_id.0.clone(),
+                WorkerState {
+                    worker_id,
+                    sessions: sessions.clone(),
+                    last_updated: super::epoch_ms(),
+                },
+            );
+        }
+    }
+
+    /// Get all worker states (session snapshots from connected peers).
+    pub fn all_worker_states(&self) -> &HashMap<String, WorkerState> {
+        &self.worker_states
+    }
+
+    /// Remove worker states that haven't been updated within `max_age_ms`.
+    fn expire_stale_workers(&mut self, max_age_ms: u64) {
+        let now = super::epoch_ms();
+        self.worker_states
+            .retain(|_, ws| now.saturating_sub(ws.last_updated) < max_age_ms);
     }
 
     /// Number of connected peers.
@@ -273,5 +328,75 @@ mod tests {
         // Should not panic on empty registry
         registry.broadcast(&msg);
         assert!(registry.send_to("nonexistent", &msg).is_err());
+    }
+
+    #[test]
+    fn handle_heartbeat_stores_worker_state() {
+        let mut registry = PeerRegistry::new(30);
+        let peer_id = PeerId("worker-01".into());
+        let payload = serde_json::json!({
+            "worker_id": "worker-01",
+            "timestamp": 1234567890_u64,
+            "sessions": [
+                {"pid": 100, "project": "backend", "status": "Processing"},
+                {"pid": 200, "project": "frontend", "status": "Idle"},
+            ]
+        });
+        registry.handle_heartbeat(&peer_id, &payload);
+
+        let states = registry.all_worker_states();
+        assert_eq!(states.len(), 1);
+        let ws = states.get("worker-01").unwrap();
+        assert_eq!(ws.worker_id, "worker-01");
+        assert_eq!(ws.sessions.len(), 2);
+    }
+
+    #[test]
+    fn handle_heartbeat_empty_payload_is_liveness_only() {
+        let mut registry = PeerRegistry::new(30);
+        let peer_id = PeerId("worker-02".into());
+        let payload = serde_json::json!({});
+        registry.handle_heartbeat(&peer_id, &payload);
+
+        assert!(registry.all_worker_states().is_empty());
+    }
+
+    #[test]
+    fn expire_stale_workers_removes_old_entries() {
+        let mut registry = PeerRegistry::new(30);
+        let peer_id = PeerId("stale-worker".into());
+        let payload = serde_json::json!({
+            "worker_id": "stale-worker",
+            "sessions": []
+        });
+        registry.handle_heartbeat(&peer_id, &payload);
+        assert_eq!(registry.all_worker_states().len(), 1);
+
+        // Manually backdate the entry
+        if let Some(ws) = registry.worker_states.get_mut("stale-worker") {
+            ws.last_updated = 1; // epoch_ms near zero = very stale
+        }
+        registry.expire_stale_workers(1000);
+        assert!(registry.all_worker_states().is_empty());
+    }
+
+    #[test]
+    fn handle_heartbeat_updates_existing_worker() {
+        let mut registry = PeerRegistry::new(30);
+        let peer_id = PeerId("worker-01".into());
+
+        let payload1 = serde_json::json!({
+            "worker_id": "worker-01",
+            "sessions": [{"pid": 100}]
+        });
+        registry.handle_heartbeat(&peer_id, &payload1);
+        assert_eq!(registry.all_worker_states()["worker-01"].sessions.len(), 1);
+
+        let payload2 = serde_json::json!({
+            "worker_id": "worker-01",
+            "sessions": [{"pid": 100}, {"pid": 200}, {"pid": 300}]
+        });
+        registry.handle_heartbeat(&peer_id, &payload2);
+        assert_eq!(registry.all_worker_states()["worker-01"].sessions.len(), 3);
     }
 }
