@@ -36,6 +36,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 /// Process-wide cache for the auto-detected sandbox name. `None` means
 /// `sbx ls` could not pick exactly one running sandbox; the resolver then
@@ -242,6 +243,85 @@ pub fn compute_orphans(open_ttys: &HashSet<String>, sidecars: &[SandboxSidecar])
     plan
 }
 
+// ── Tick-skip cache ───────────────────────────────────────────────────────
+//
+// Most ticks have no host-side TTY changes since the previous tick → no new
+// orphans can have appeared → previous tick's full pass already handled
+// everything. Skipping the in-sandbox scan saves the sbx exec round-trip
+// (~2.6s startup overhead per call), which dominates steady-state cost when
+// the timer fires every minute.
+//
+// Cache shape: `<XDG_CACHE_HOME or ~/.cache>/claudectl/reaper-last-state`.
+// File body  : sorted, newline-joined open SANDBOX_HOST_TTY values.
+// Freshness  : the file's own mtime, ceilinged at MAX_CACHE_AGE.
+//
+// Cache is written ONLY after a successful scan + decide_action accepted
+// the plan. Skipped on dry-run, on safety-guard skips, and on error paths,
+// so a transient failure or preview pass doesn't suppress the next real
+// tick.
+
+/// Hard ceiling on cache freshness. Past this, the next tick must do a
+/// full pass even if the host TTY set hasn't changed — catches in-sandbox
+/// `claude` deaths (panic, oom-kill) that wouldn't show up as a host TTY
+/// transition.
+const MAX_CACHE_AGE: Duration = Duration::from_secs(30 * 60);
+
+/// What the cache decides we should do this tick.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CacheAction {
+    /// State matches the cached snapshot AND the cache is within the
+    /// freshness ceiling — skip the in-sandbox scan entirely.
+    Skip,
+    /// State differs, cache is stale, or there is no cache yet — run the
+    /// full pass and (on success) refresh the cache.
+    FullPass,
+}
+
+/// Stable string representation of the open-TTY set. Sorted so the same
+/// set always serialises to the same body (HashSet iteration order isn't
+/// stable across runs, and we need byte-exact equality for the cache).
+pub fn state_string(open_ttys: &HashSet<String>) -> String {
+    let mut sorted: Vec<&str> = open_ttys.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    sorted.join("\n")
+}
+
+/// Pure decision: does the current tick's open-TTY state plus the cached
+/// state warrant skipping the in-sandbox scan? Skips only when the state
+/// matches AND the cache age is within `max_age`.
+pub fn decide_cache_action(
+    prev_state: Option<&str>,
+    new_state: &str,
+    cache_age: Option<Duration>,
+    max_age: Duration,
+) -> CacheAction {
+    match (prev_state, cache_age) {
+        (Some(prev), Some(age)) if prev == new_state && age <= max_age => CacheAction::Skip,
+        _ => CacheAction::FullPass,
+    }
+}
+
+fn cache_path() -> Option<PathBuf> {
+    let dir = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home_dir().ok().map(|h| h.join(".cache")))?;
+    Some(dir.join("claudectl").join("reaper-last-state"))
+}
+
+fn read_cache_state(path: &Path) -> Option<(String, Duration)> {
+    let body = std::fs::read_to_string(path).ok()?;
+    let mtime = std::fs::metadata(path).ok()?.modified().ok()?;
+    let age = std::time::SystemTime::now().duration_since(mtime).ok()?;
+    Some((body, age))
+}
+
+fn write_cache_state(path: &Path, state: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, state)
+}
+
 /// Entry point for `claudectl --reap-orphans`. Returns `Ok(())` even when no
 /// sandboxes/sbx are present — the reaper is a no-op fallback.
 pub fn run(dry_run: bool) -> io::Result<()> {
@@ -264,6 +344,23 @@ pub fn run(dry_run: bool) -> io::Result<()> {
         }
     };
 
+    let new_state = state_string(&open_ttys);
+    let cache = cache_path();
+    if !dry_run {
+        if let Some(path) = &cache {
+            let prev = read_cache_state(path);
+            let action = decide_cache_action(
+                prev.as_ref().map(|(s, _)| s.as_str()),
+                &new_state,
+                prev.as_ref().map(|(_, age)| *age),
+                MAX_CACHE_AGE,
+            );
+            if matches!(action, CacheAction::Skip) {
+                return Ok(());
+            }
+        }
+    }
+
     let sidecars = match scan_sandbox_sidecars() {
         Ok(list) => list,
         Err(e) => {
@@ -279,6 +376,19 @@ pub fn run(dry_run: bool) -> io::Result<()> {
         }
         Action::Execute(plan) => plan,
     };
+
+    // Refresh the cache as soon as both observations succeeded and the
+    // safety guard accepted the plan. Even if the kill/sweep below errors
+    // out, the cache reflects "we've seen this state and decided to act";
+    // the MAX_CACHE_AGE ceiling bounds how long a survived orphan can
+    // linger before the next tick re-checks anyway.
+    if !dry_run {
+        if let Some(path) = &cache {
+            if let Err(e) = write_cache_state(path, &new_state) {
+                writeln!(io::stderr(), "reaper: cache write failed: {e}")?;
+            }
+        }
+    }
 
     if plan.kill.is_empty() && plan.sweep.is_empty() {
         writeln!(out, "no orphans")?;
@@ -943,6 +1053,95 @@ mod tests {
 
     fn ttys(values: &[&str]) -> HashSet<String> {
         values.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    // ---- Tick-skip cache ----------------------------------------------
+
+    #[test]
+    fn state_string_is_deterministic_across_iteration_orders() {
+        let a = ttys(&["/dev/ttys003", "/dev/ttys001", "/dev/ttys002"]);
+        let b = ttys(&["/dev/ttys001", "/dev/ttys002", "/dev/ttys003"]);
+        assert_eq!(state_string(&a), state_string(&b));
+        assert_eq!(state_string(&a), "/dev/ttys001\n/dev/ttys002\n/dev/ttys003");
+    }
+
+    #[test]
+    fn state_string_empty_set_is_empty_body() {
+        assert_eq!(state_string(&HashSet::new()), "");
+    }
+
+    #[test]
+    fn cache_skips_when_state_matches_and_within_max_age() {
+        let action = decide_cache_action(
+            Some("/dev/ttys001\n/dev/ttys002"),
+            "/dev/ttys001\n/dev/ttys002",
+            Some(Duration::from_secs(60)),
+            MAX_CACHE_AGE,
+        );
+        assert_eq!(action, CacheAction::Skip);
+    }
+
+    #[test]
+    fn cache_full_pass_when_state_changed() {
+        let action = decide_cache_action(
+            Some("/dev/ttys001"),
+            "/dev/ttys001\n/dev/ttys002",
+            Some(Duration::from_secs(60)),
+            MAX_CACHE_AGE,
+        );
+        assert_eq!(action, CacheAction::FullPass);
+    }
+
+    #[test]
+    fn cache_full_pass_when_age_exceeds_max() {
+        let action = decide_cache_action(
+            Some("/dev/ttys001"),
+            "/dev/ttys001",
+            Some(MAX_CACHE_AGE + Duration::from_secs(1)),
+            MAX_CACHE_AGE,
+        );
+        assert_eq!(action, CacheAction::FullPass);
+    }
+
+    #[test]
+    fn cache_full_pass_when_no_prev_state() {
+        let action = decide_cache_action(None, "/dev/ttys001", None, MAX_CACHE_AGE);
+        assert_eq!(action, CacheAction::FullPass);
+    }
+
+    #[test]
+    fn cache_full_pass_when_age_unknown_even_if_state_matches() {
+        // mtime-read failure (clock skew, FS oddity) → must NOT skip,
+        // because we can't bound how stale the cache is.
+        let action = decide_cache_action(Some("/dev/ttys001"), "/dev/ttys001", None, MAX_CACHE_AGE);
+        assert_eq!(action, CacheAction::FullPass);
+    }
+
+    #[test]
+    fn cache_skip_at_exact_max_age_boundary() {
+        // age == max → still in window. The check is `<= max_age`.
+        let action = decide_cache_action(
+            Some("/dev/ttys001"),
+            "/dev/ttys001",
+            Some(MAX_CACHE_AGE),
+            MAX_CACHE_AGE,
+        );
+        assert_eq!(action, CacheAction::Skip);
+    }
+
+    #[test]
+    fn cache_full_pass_when_both_states_empty_but_no_prev() {
+        // First-ever invocation with no host TTYs open: still need a
+        // full pass to populate the cache.
+        let action = decide_cache_action(None, "", None, MAX_CACHE_AGE);
+        assert_eq!(action, CacheAction::FullPass);
+    }
+
+    #[test]
+    fn cache_skips_when_both_states_empty_and_fresh() {
+        let action =
+            decide_cache_action(Some(""), "", Some(Duration::from_secs(10)), MAX_CACHE_AGE);
+        assert_eq!(action, CacheAction::Skip);
     }
 
     #[test]
