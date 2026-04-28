@@ -22,7 +22,9 @@
 //!
 //! ## Environment overrides
 //!
-//! - `CLAUDECTL_SANDBOX_NAME` — sbx sandbox to scan. Default `linera-agent`.
+//! - `CLAUDECTL_SANDBOX_NAME` — sbx sandbox to scan. If unset, the reaper
+//!   runs `sbx ls` once and uses the single running sandbox if there is
+//!   exactly one; otherwise falls back to `linera-agent`.
 //! - `CLAUDECTL_SANDBOX_SESSIONS_DIR` — in-sandbox path holding the per-PID
 //!   `{pid}.terminal.json` sidecars. Default `/var/lib/sandbox-sessions`.
 //!
@@ -33,12 +35,82 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+
+/// Process-wide cache for the auto-detected sandbox name. Populated lazily
+/// on first call to `sandbox_name()`. The explicit env-var override is NOT
+/// cached here — it's checked on every call so a test that sets/unsets the
+/// var mid-process sees the new value, regardless of cache state.
+static AUTO_SANDBOX_NAME: OnceLock<String> = OnceLock::new();
+
+const DEFAULT_SANDBOX_NAME: &str = "linera-agent";
 
 fn sandbox_name() -> String {
-    resolve_or_default(
-        std::env::var("CLAUDECTL_SANDBOX_NAME").ok().as_deref(),
-        "linera-agent",
-    )
+    if let Ok(v) = std::env::var("CLAUDECTL_SANDBOX_NAME") {
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    AUTO_SANDBOX_NAME
+        .get_or_init(|| {
+            detect_running_sandbox_name().unwrap_or_else(|| DEFAULT_SANDBOX_NAME.to_string())
+        })
+        .clone()
+}
+
+/// Shell out to `sbx ls` once and try to identify a unique running sandbox.
+/// Returns `None` for any failure (binary missing, non-zero exit, parse miss),
+/// in which case the caller falls back to `DEFAULT_SANDBOX_NAME`.
+fn detect_running_sandbox_name() -> Option<String> {
+    let output = Command::new("sbx").arg("ls").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_sbx_ls_for_single_running_sandbox(&text)
+}
+
+/// Pure parser: given `sbx ls` stdout, return the name of the unique running
+/// sandbox if and only if there is exactly one. Anything else (zero, multiple,
+/// stopped-only, malformed) returns `None` so the caller can fall back to the
+/// default. We require the running condition because a stopped sandbox is no
+/// help to the reaper — it has no in-VM processes to scan.
+pub(crate) fn parse_sbx_ls_for_single_running_sandbox(stdout: &str) -> Option<String> {
+    // Header is the first non-empty line whose first whitespace-delimited
+    // token equals "SANDBOX". Non-headers are body rows: `name agent status
+    // ports workspace`. We only count rows whose status column is "running".
+    let mut running: Vec<String> = Vec::new();
+    let mut saw_header = false;
+    for raw in stdout.lines() {
+        let line = raw.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        let mut cols = line.split_whitespace();
+        let Some(first) = cols.next() else {
+            continue;
+        };
+        if !saw_header {
+            if first.eq_ignore_ascii_case("SANDBOX") {
+                saw_header = true;
+            }
+            // Skip everything until we see the header. Anything before it
+            // (banners, warnings) isn't a sandbox row.
+            continue;
+        }
+        // Body row. Columns are: SANDBOX AGENT STATUS [PORTS] WORKSPACE.
+        let _agent = cols.next();
+        let Some(status) = cols.next() else {
+            continue;
+        };
+        if status == "running" {
+            running.push(first.to_string());
+        }
+    }
+    if running.len() == 1 {
+        return running.pop();
+    }
+    None
 }
 
 fn sandbox_sessions_dir() -> String {
@@ -416,9 +488,16 @@ done
     Ok(())
 }
 
-// ── Launchd install/uninstall ─────────────────────────────────────────────
+// ── Install/uninstall (macOS launchd + Linux systemd-user) ────────────────
 
+// Used by macOS install/uninstall and by the plist-renderer tests; absent
+// in non-test Linux builds so the binary compiles dead-code-clean there.
+#[cfg(any(target_os = "macos", test))]
 const LAUNCH_AGENT_LABEL: &str = "linera.claudectl-reaper";
+
+// Used by Linux install/uninstall and by the systemd unit-renderer tests.
+#[cfg(any(target_os = "linux", test))]
+const SYSTEMD_UNIT_BASENAME: &str = "claudectl-reaper";
 
 /// Hard floor: anything below this hammers `sbx exec` faster than a real
 /// reaper pass completes (the in-sandbox bash + grep + kill pipeline takes
@@ -430,9 +509,10 @@ pub const MAX_INTERVAL_SECONDS: u64 = 3600;
 fn home_dir() -> io::Result<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
-        .ok_or_else(|| io::Error::other("HOME is not set; cannot locate ~/Library"))
+        .ok_or_else(|| io::Error::other("HOME is not set; cannot locate user home"))
 }
 
+#[cfg(target_os = "macos")]
 fn plist_path() -> io::Result<PathBuf> {
     Ok(home_dir()?
         .join("Library")
@@ -440,6 +520,7 @@ fn plist_path() -> io::Result<PathBuf> {
         .join(format!("{LAUNCH_AGENT_LABEL}.plist")))
 }
 
+#[cfg(target_os = "macos")]
 fn err_log_path() -> io::Result<PathBuf> {
     Ok(home_dir()?
         .join("Library")
@@ -447,9 +528,35 @@ fn err_log_path() -> io::Result<PathBuf> {
         .join("claudectl-reaper.err.log"))
 }
 
+#[cfg(target_os = "linux")]
+fn systemd_user_dir() -> io::Result<PathBuf> {
+    Ok(home_dir()?.join(".config").join("systemd").join("user"))
+}
+
+#[cfg(target_os = "linux")]
+fn systemd_service_path() -> io::Result<PathBuf> {
+    Ok(systemd_user_dir()?.join(format!("{SYSTEMD_UNIT_BASENAME}.service")))
+}
+
+#[cfg(target_os = "linux")]
+fn systemd_timer_path() -> io::Result<PathBuf> {
+    Ok(systemd_user_dir()?.join(format!("{SYSTEMD_UNIT_BASENAME}.timer")))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_err_log_path() -> io::Result<PathBuf> {
+    // Per XDG Base Directory spec: state goes under $XDG_STATE_HOME, default
+    // ~/.local/state. systemd resolves `%h` to the user's HOME at runtime.
+    Ok(home_dir()?
+        .join(".local")
+        .join("state")
+        .join("claudectl-reaper.err.log"))
+}
+
 /// Pure plist renderer. The XML body is byte-for-byte equivalent to the
 /// hand-written plist that's been driving the auto-reaper on Andre's box —
 /// changing whitespace here will break the byte-equivalence verification.
+#[cfg(any(target_os = "macos", test))]
 pub fn build_plist(exe_path: &Path, interval_seconds: u64, err_log: &Path, home: &Path) -> String {
     let exe = exe_path.display();
     let err = err_log.display();
@@ -499,6 +606,7 @@ pub fn build_plist(exe_path: &Path, interval_seconds: u64, err_log: &Path, home:
     )
 }
 
+#[cfg(target_os = "macos")]
 fn current_uid() -> u32 {
     // libc::getuid is FFI but always-succeeds (returns the real UID of the
     // calling process). No errno path.
@@ -509,6 +617,7 @@ fn current_uid() -> u32 {
 
 /// Best-effort `launchctl bootout`. Failure is expected when nothing is
 /// loaded yet; we ignore the error and let the caller continue.
+#[cfg(target_os = "macos")]
 fn launchctl_bootout(uid: u32) -> Result<bool, io::Error> {
     let target = format!("gui/{uid}/{LAUNCH_AGENT_LABEL}");
     let output = Command::new("launchctl")
@@ -520,6 +629,7 @@ fn launchctl_bootout(uid: u32) -> Result<bool, io::Error> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn launchctl_bootstrap(uid: u32, plist: &Path) -> io::Result<()> {
     let target = format!("gui/{uid}");
     let output = Command::new("launchctl")
@@ -539,6 +649,7 @@ fn launchctl_bootstrap(uid: u32, plist: &Path) -> io::Result<()> {
 
 /// Atomic plist write: `<plist>.tmp` then rename. Avoids the half-written
 /// file racing against an in-flight launchd reload.
+#[cfg(target_os = "macos")]
 fn write_plist_atomic(path: &Path, body: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -555,18 +666,7 @@ fn write_plist_atomic(path: &Path, body: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Wire `claudectl --reap-orphans` to launchd at the given interval.
-/// Idempotent: bootouts any existing job first, then bootstraps the new one.
-pub fn install_launch_agent(interval_seconds: u64) -> io::Result<()> {
-    if !cfg!(target_os = "macos") {
-        writeln!(
-            io::stderr(),
-            "reaper auto-install: only macOS launchd is implemented. \
-             On Linux, run `claudectl --reap-orphans` from a systemd user \
-             timer or a cron entry. See docs/known-bugs/hazmat-orphan-disconnect.md."
-        )?;
-        return Ok(());
-    }
+fn validate_interval(interval_seconds: u64) -> io::Result<()> {
     if !(MIN_INTERVAL_SECONDS..=MAX_INTERVAL_SECONDS).contains(&interval_seconds) {
         writeln!(
             io::stderr(),
@@ -578,6 +678,16 @@ pub fn install_launch_agent(interval_seconds: u64) -> io::Result<()> {
             "interval out of range",
         ));
     }
+    Ok(())
+}
+
+/// Wire `claudectl --reap-orphans` to the host's user-scoped scheduler at
+/// the given interval. macOS uses launchd, Linux uses a systemd user timer;
+/// other platforms print a hint and exit 0. Idempotent on both supported
+/// platforms.
+#[cfg(target_os = "macos")]
+pub fn install_launch_agent(interval_seconds: u64) -> io::Result<()> {
+    validate_interval(interval_seconds)?;
 
     let exe = std::env::current_exe()
         .map_err(|e| io::Error::other(format!("cannot resolve current binary path: {e}")))?;
@@ -610,16 +720,71 @@ pub fn install_launch_agent(interval_seconds: u64) -> io::Result<()> {
     Ok(())
 }
 
-/// Reverse of `install_launch_agent`. Tolerates "nothing was installed".
-pub fn uninstall_launch_agent() -> io::Result<()> {
-    if !cfg!(target_os = "macos") {
-        writeln!(
-            io::stderr(),
-            "reaper auto-uninstall: only macOS launchd is implemented; nothing to do on this platform."
-        )?;
-        return Ok(());
+#[cfg(target_os = "linux")]
+pub fn install_launch_agent(interval_seconds: u64) -> io::Result<()> {
+    validate_interval(interval_seconds)?;
+
+    let exe = std::env::current_exe()
+        .map_err(|e| io::Error::other(format!("cannot resolve current binary path: {e}")))?;
+    let unit_dir = systemd_user_dir()?;
+    std::fs::create_dir_all(&unit_dir)?;
+
+    let err_log = linux_err_log_path()?;
+    if let Some(parent) = err_log.parent() {
+        std::fs::create_dir_all(parent)?;
     }
 
+    let service_path = systemd_service_path()?;
+    let timer_path = systemd_timer_path()?;
+    let service_body = build_systemd_service(&exe);
+    let timer_body = build_systemd_timer(interval_seconds);
+    std::fs::write(&service_path, service_body)?;
+    std::fs::write(&timer_path, timer_body)?;
+
+    // systemctl is the only way to make systemd notice the new units. If
+    // it's missing, leave the unit files on disk so the user can wire them
+    // manually (e.g. via a non-systemd init or a remote reload).
+    if !systemctl_available() {
+        writeln!(
+            io::stderr(),
+            "reaper: `systemctl` not in PATH. Wrote {} and {}, but did not enable the timer. \
+             Reload manually once systemctl is available.",
+            service_path.display(),
+            timer_path.display()
+        )?;
+        return Err(io::Error::other("systemctl not found"));
+    }
+
+    systemctl_user(&["daemon-reload"])?;
+    let timer_unit = format!("{SYSTEMD_UNIT_BASENAME}.timer");
+    systemctl_user(&["enable", "--now", &timer_unit])?;
+
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    writeln!(
+        out,
+        "installed: {} (interval={}s)",
+        timer_path.display(),
+        interval_seconds
+    )?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn install_launch_agent(interval_seconds: u64) -> io::Result<()> {
+    let _ = interval_seconds;
+    writeln!(
+        io::stderr(),
+        "reaper auto-install: not supported on {}; run `claudectl --reap-orphans` \
+         from cron or a custom scheduler.",
+        std::env::consts::OS
+    )?;
+    Ok(())
+}
+
+/// Reverse of `install_launch_agent`. Tolerates "nothing was installed".
+#[cfg(target_os = "macos")]
+pub fn uninstall_launch_agent() -> io::Result<()> {
     let plist = plist_path()?;
     let uid = current_uid();
     match launchctl_bootout(uid) {
@@ -640,6 +805,113 @@ pub fn uninstall_launch_agent() -> io::Result<()> {
     let mut out = stdout.lock();
     writeln!(out, "uninstalled: {}", plist.display())?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn uninstall_launch_agent() -> io::Result<()> {
+    let timer_path = systemd_timer_path()?;
+    let service_path = systemd_service_path()?;
+    let timer_unit = format!("{SYSTEMD_UNIT_BASENAME}.timer");
+
+    if systemctl_available() {
+        // Best-effort disable; ignore exit code because "not loaded" is fine.
+        let _ = Command::new("systemctl")
+            .args(["--user", "disable", "--now", &timer_unit])
+            .output();
+    }
+
+    let _ = std::fs::remove_file(&timer_path);
+    let _ = std::fs::remove_file(&service_path);
+
+    if systemctl_available() {
+        let _ = Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .output();
+    }
+
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    writeln!(out, "uninstalled: {}", timer_path.display())?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn uninstall_launch_agent() -> io::Result<()> {
+    writeln!(
+        io::stderr(),
+        "reaper auto-uninstall: not supported on {}; nothing to do.",
+        std::env::consts::OS
+    )?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn systemctl_available() -> bool {
+    Command::new("systemctl")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn systemctl_user(args: &[&str]) -> io::Result<()> {
+    let mut cmd = Command::new("systemctl");
+    cmd.arg("--user");
+    cmd.args(args);
+    let output = cmd
+        .output()
+        .map_err(|e| io::Error::other(format!("systemctl --user {args:?} exec failed: {e}")))?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "systemctl --user {args:?} failed (exit {}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Pure renderer for the systemd `.service` unit. Snapshot-tested. The unit
+/// is `Type=oneshot`: each timer firing executes `claudectl --reap-orphans`
+/// to completion and exits, mirroring the launchd `StartInterval` model.
+/// `StandardError=append:%h/.local/state/...` puts the error log at a
+/// predictable path inside the user's HOME (resolved by systemd via `%h`).
+#[cfg(any(target_os = "linux", test))]
+pub fn build_systemd_service(exe_path: &Path) -> String {
+    let exe = exe_path.display();
+    format!(
+        "[Unit]\n\
+Description=claudectl orphan reaper for in-sandbox claude processes\n\
+\n\
+[Service]\n\
+Type=oneshot\n\
+ExecStart={exe} --reap-orphans\n\
+Nice=5\n\
+StandardOutput=null\n\
+StandardError=append:%h/.local/state/claudectl-reaper.err.log\n"
+    )
+}
+
+/// Pure renderer for the systemd `.timer` unit. `OnUnitActiveSec` schedules
+/// the next run that many seconds after the previous run completed, which
+/// matches launchd's `StartInterval` semantics. `Persistent=true` makes the
+/// timer catch up on missed runs after suspend/reboot.
+#[cfg(any(target_os = "linux", test))]
+pub fn build_systemd_timer(interval_seconds: u64) -> String {
+    format!(
+        "[Unit]\n\
+Description=Periodic claudectl orphan reaper\n\
+\n\
+[Timer]\n\
+Unit={SYSTEMD_UNIT_BASENAME}.service\n\
+OnUnitActiveSec={interval_seconds}s\n\
+OnBootSec={interval_seconds}s\n\
+Persistent=true\n\
+\n\
+[Install]\n\
+WantedBy=timers.target\n"
+    )
 }
 
 #[cfg(test)]
@@ -829,11 +1101,15 @@ mod tests {
 
     #[test]
     fn sandbox_name_picks_up_env_override() {
-        // Real env-var roundtrip. SAFETY: cargo test runs tests in parallel
-        // by default and `set_var`/`remove_var` mutate process-global state,
-        // so any other test reading CLAUDECTL_SANDBOX_NAME at the same time
-        // would race. We're the only test that touches this var.
-        // SAFETY: see comment above on global env mutation.
+        // Real env-var roundtrip. The override wins on every call regardless
+        // of whether AUTO_SANDBOX_NAME has been populated by an earlier test
+        // — `sandbox_name()` checks the env var FIRST and only falls through
+        // to the cache on unset/empty.
+        //
+        // SAFETY: cargo test runs tests in parallel by default and
+        // `set_var`/`remove_var` mutate process-global state, so any other
+        // test reading CLAUDECTL_SANDBOX_NAME at the same time would race.
+        // We're the only test that touches this var.
         unsafe {
             std::env::set_var("CLAUDECTL_SANDBOX_NAME", "ndr-private-test-sbx");
         }
@@ -842,7 +1118,77 @@ mod tests {
         unsafe {
             std::env::remove_var("CLAUDECTL_SANDBOX_NAME");
         }
-        assert_eq!(sandbox_name(), "linera-agent");
+        // After unset: returns whatever auto-detect produced (cached) OR the
+        // default if auto-detect failed. We can't assert the exact value
+        // because it depends on the host's `sbx ls` state at first call;
+        // we just assert it's non-empty.
+        assert!(!sandbox_name().is_empty());
+    }
+
+    // ---- sbx ls parser tests ------------------------------------------
+
+    #[test]
+    fn parse_sbx_ls_returns_single_running_sandbox() {
+        // Mirrors `sbx ls` on Andre's box on 2026-04-27.
+        let stdout = "\
+SANDBOX        AGENT    STATUS    PORTS   WORKSPACE
+linera-agent   claude   running           /Users/ndr/repos
+";
+        assert_eq!(
+            parse_sbx_ls_for_single_running_sandbox(stdout),
+            Some("linera-agent".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_sbx_ls_returns_none_when_no_sandboxes() {
+        let stdout = "SANDBOX  AGENT  STATUS  PORTS  WORKSPACE\n";
+        assert_eq!(parse_sbx_ls_for_single_running_sandbox(stdout), None);
+    }
+
+    #[test]
+    fn parse_sbx_ls_returns_none_when_multiple_running() {
+        let stdout = "\
+SANDBOX        AGENT    STATUS    PORTS   WORKSPACE
+sbx-a          claude   running           /a
+sbx-b          claude   running           /b
+";
+        assert_eq!(parse_sbx_ls_for_single_running_sandbox(stdout), None);
+    }
+
+    #[test]
+    fn parse_sbx_ls_returns_none_when_only_stopped() {
+        let stdout = "\
+SANDBOX        AGENT    STATUS    PORTS   WORKSPACE
+linera-agent   claude   stopped           /Users/ndr/repos
+";
+        assert_eq!(parse_sbx_ls_for_single_running_sandbox(stdout), None);
+    }
+
+    #[test]
+    fn parse_sbx_ls_returns_running_when_one_running_one_stopped() {
+        // A stopped sandbox is not a candidate; the lone running one is.
+        let stdout = "\
+SANDBOX        AGENT    STATUS    PORTS   WORKSPACE
+linera-agent   claude   running           /Users/ndr/repos
+old-sbx        claude   stopped           /elsewhere
+";
+        assert_eq!(
+            parse_sbx_ls_for_single_running_sandbox(stdout),
+            Some("linera-agent".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_sbx_ls_returns_none_for_empty_input() {
+        assert_eq!(parse_sbx_ls_for_single_running_sandbox(""), None);
+    }
+
+    #[test]
+    fn parse_sbx_ls_returns_none_for_garbage_input() {
+        // No SANDBOX header line → can't parse → None.
+        let stdout = "totally bogus\noutput here\n";
+        assert_eq!(parse_sbx_ls_for_single_running_sandbox(stdout), None);
     }
 
     #[test]
@@ -943,5 +1289,49 @@ notapid\t/dev/ttys001\t1\t
         assert!(body.contains("<string>/x/y</string>"));
         assert!(body.contains("<string>/e</string>"));
         assert!(body.contains("<string>/h</string>"));
+    }
+
+    // ---- systemd unit generators --------------------------------------
+
+    #[test]
+    fn build_systemd_service_matches_known_good_snapshot() {
+        let exe = std::path::PathBuf::from("/home/dev/.cargo/bin/claudectl");
+        let body = build_systemd_service(&exe);
+        let expected = "[Unit]\n\
+Description=claudectl orphan reaper for in-sandbox claude processes\n\
+\n\
+[Service]\n\
+Type=oneshot\n\
+ExecStart=/home/dev/.cargo/bin/claudectl --reap-orphans\n\
+Nice=5\n\
+StandardOutput=null\n\
+StandardError=append:%h/.local/state/claudectl-reaper.err.log\n";
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn build_systemd_timer_matches_known_good_snapshot() {
+        let body = build_systemd_timer(60);
+        let expected = "[Unit]\n\
+Description=Periodic claudectl orphan reaper\n\
+\n\
+[Timer]\n\
+Unit=claudectl-reaper.service\n\
+OnUnitActiveSec=60s\n\
+OnBootSec=60s\n\
+Persistent=true\n\
+\n\
+[Install]\n\
+WantedBy=timers.target\n";
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn build_systemd_timer_substitutes_interval() {
+        let body = build_systemd_timer(300);
+        assert!(body.contains("OnUnitActiveSec=300s"));
+        assert!(body.contains("OnBootSec=300s"));
+        assert!(body.contains("Persistent=true"));
+        assert!(body.contains("WantedBy=timers.target"));
     }
 }

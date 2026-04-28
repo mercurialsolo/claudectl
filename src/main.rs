@@ -262,12 +262,13 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Cleanup")]
     pub(crate) reap_orphans: bool,
 
-    /// Install a launchd job that runs `--reap-orphans` every --interval seconds.
-    /// macOS only. Idempotent: re-running replaces any existing agent.
+    /// Install a periodic job that runs `--reap-orphans` every --reaper-interval seconds.
+    /// macOS uses launchd; Linux uses a systemd user timer. Idempotent: re-running
+    /// replaces any existing agent.
     #[arg(long, help_heading = "Cleanup")]
     pub(crate) install_reaper: bool,
 
-    /// Remove the launchd job installed by --install-reaper. macOS only.
+    /// Remove the periodic job installed by --install-reaper.
     #[arg(long, help_heading = "Cleanup")]
     pub(crate) uninstall_reaper: bool,
 
