@@ -1,4 +1,5 @@
 use crate::session::{ClaudeSession, SessionStatus};
+use std::collections::{HashMap, HashSet};
 
 /// Check which PIDs are alive and fetch TTY, CPU%, MEM, command args — all via `ps`.
 /// No sysinfo dependency needed.
@@ -30,8 +31,14 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Collect alive PIDs from ps output
-    let mut alive_pids = std::collections::HashSet::new();
+    // Build a pid → session-index map once. Replaces the prior O(N²)
+    // inner loop that scanned every session for every ps line.
+    let pid_to_idx: HashMap<u32, usize> = sessions
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.pid, i))
+        .collect();
+    let mut alive_pids: HashSet<u32> = HashSet::new();
 
     for line in stdout.lines() {
         let trimmed = line.trim();
@@ -59,48 +66,51 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
 
         alive_pids.insert(pid);
 
-        for session in sessions.iter_mut() {
-            if session.pid == pid {
-                session.tty = tty.clone();
-                // If this is a sandboxed claude (running inside the linera
-                // agent sandbox microVM), override with the HOST TTY recorded
-                // at startup by sandbox-bootstrap-inner. The sandbox's own
-                // pseudo-TTY (/dev/pts/N inside the VM) is invisible to the
-                // host's AppleScript, so iTerm2/Warp/Apple-Terminal matchers
-                // that iterate `tty of s` on host would never match. The
-                // sidecar file is missing for non-sandbox sessions, so this
-                // is a no-op there.
-                let sidecar = read_terminal_sidecar(pid);
-                if let Some(host_tty) = sidecar.as_ref().and_then(|s| s.host_tty.clone()) {
+        let Some(&idx) = pid_to_idx.get(&pid) else {
+            continue;
+        };
+        let session = &mut sessions[idx];
+
+        // ps tty is invariant per pid (set at exec time, never changes), so
+        // overwriting every tick is wasted work and would also clobber the
+        // host-tty override below. Set once when empty.
+        if session.tty.is_empty() {
+            session.tty = tty;
+        }
+        // The terminal sidecar is written exactly once at session start by
+        // sandbox-bootstrap-inner and is invariant for the lifetime of the
+        // pid; reading it every tick was 40+ syscalls + JSON parses for no
+        // information gain. `sidecar_loaded` flips on the first attempt
+        // (success or absence) so we only do the I/O once per session.
+        if !session.sidecar_loaded {
+            if let Some(s) = read_terminal_sidecar(pid) {
+                if let Some(host_tty) = s.host_tty {
                     session.tty = host_tty;
                 }
-                if let Some(s) = sidecar {
-                    session.terminal_id = s.terminal_id;
-                    session.host_terminal_target = s.host_terminal_target;
-                }
-                session.mem_mb = mem_mb;
-
-                // CPU smoothing: track last 3 readings, use average
-                session.cpu_history.push(cpu);
-                if session.cpu_history.len() > 3 {
-                    session.cpu_history.remove(0);
-                }
-                session.cpu_percent =
-                    session.cpu_history.iter().sum::<f32>() / session.cpu_history.len() as f32;
-
-                // Extract args (everything after "claude")
-                if let Some(idx) = command.find("claude") {
-                    let after_claude = &command[idx + 6..];
-                    session.command_args = after_claude.trim().to_string();
-                }
-
-                // Extract session name from --name or --resume
-                let cmd_parts: Vec<&str> = command.split_whitespace().collect();
-                extract_session_meta(&cmd_parts, session);
-
-                break;
+                session.terminal_id = s.terminal_id;
+                session.host_terminal_target = s.host_terminal_target;
             }
+            session.sidecar_loaded = true;
         }
+        session.mem_mb = mem_mb;
+
+        // CPU smoothing: track last 3 readings, use average
+        session.cpu_history.push(cpu);
+        if session.cpu_history.len() > 3 {
+            session.cpu_history.remove(0);
+        }
+        session.cpu_percent =
+            session.cpu_history.iter().sum::<f32>() / session.cpu_history.len() as f32;
+
+        // Extract args (everything after "claude")
+        if let Some(idx) = command.find("claude") {
+            let after_claude = &command[idx + 6..];
+            session.command_args = after_claude.trim().to_string();
+        }
+
+        // Extract session name from --name or --resume
+        let cmd_parts: Vec<&str> = command.split_whitespace().collect();
+        extract_session_meta(&cmd_parts, session);
     }
 
     // Mark dead PIDs as Finished instead of removing them immediately.

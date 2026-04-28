@@ -140,6 +140,12 @@ pub struct ClaudeSession {
     /// macOS-host sandboxes (which use osa-bridge) and for host-native
     /// claudectl runs (which talk to the local terminal CLIs directly).
     pub host_terminal_target: Option<HostTerminalTarget>,
+    /// True once `process::fetch_and_enrich` has attempted to read the
+    /// per-PID `terminal.json` sidecar at least once. The sidecar is
+    /// written exactly once at session start by sandbox-bootstrap and
+    /// never mutated, so re-reading every tick burned ~70 ms / tick at
+    /// 40 sandboxed sessions for no information gain.
+    pub sidecar_loaded: bool,
     pub status: SessionStatus,
     pub cpu_percent: f32,
     pub cpu_history: Vec<f32>, // Last N CPU readings for smoothing
@@ -354,6 +360,7 @@ impl ClaudeSession {
             tty: String::new(),
             terminal_id: None,
             host_terminal_target: None,
+            sidecar_loaded: false,
             status: SessionStatus::Idle,
             cpu_percent: 0.0,
             cpu_history: Vec::new(),

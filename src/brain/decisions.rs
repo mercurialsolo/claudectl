@@ -802,6 +802,7 @@ mod tests {
             tty: "/dev/pts/0".into(),
             terminal_id: None,
             host_terminal_target: None,
+            sidecar_loaded: false,
             status: SessionStatus::Processing,
             cpu_percent: 50.0,
             cpu_history: vec![],
