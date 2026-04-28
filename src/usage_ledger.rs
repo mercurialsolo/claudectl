@@ -182,73 +182,102 @@ fn read_live_session_ids(sessions_dir: &Path) -> std::collections::HashSet<Strin
     out
 }
 
-/// Recursively enumerate every `*.jsonl` under `~/.claude/projects`. Order
-/// is filesystem-dependent; scan_and_append treats files independently so
-/// order doesn't matter.
-fn find_jsonl_files(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(ft) = entry.file_type() else { continue };
-            if ft.is_dir() {
-                stack.push(path);
-            } else if ft.is_file() && path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-                out.push(path);
-            }
-        }
-    }
-    out
-}
-
-/// Process-local cache of `find_jsonl_files` results. Walking
-/// `~/.claude/projects` recursively takes ~500 ms on a heavy tree (Andre's
-/// box has ~36 project dirs × ~60 jsonls), and we only call it from the
-/// every-30 s `scan_and_append` cadence. New JSONL files appear when a
-/// new Claude Code session starts — rare enough that a few minutes of
-/// staleness is fine; the next walk picks them up.
-const FILE_LIST_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
-
+/// Per-project-subdir cached file list. Walking
+/// `~/.claude/projects` recursively from scratch takes ~500 ms on a
+/// heavy tree (Andre's box has 36 project subdirs, 2k+ jsonls). Most
+/// scans see no directory changes, so we keep a per-subdir cache keyed
+/// by mtime: if a project subdir's mtime is unchanged since last walk,
+/// its JSONL list can't have grown OR shrunk (POSIX mtime updates on
+/// add/remove/rename of direct children) — reuse the cached list.
+///
+/// New sessions show up on the very next scan_and_append after their
+/// project subdir's mtime moves (i.e. within ≤30 s of session start)
+/// instead of waiting for a full re-walk timer. Steady-state cost: 1
+/// read_dir of projects_root (~36 entries) + 36 stats = ~10 ms.
 #[derive(Default)]
-struct FileListCache {
-    last_walk_unix_ms: u64,
+struct SubdirCache {
+    last_mtime_ms: u64,
     files: Vec<PathBuf>,
-    walked_root: PathBuf,
 }
+
+type FileListCache = HashMap<PathBuf, SubdirCache>;
 
 fn file_list_cache() -> &'static Mutex<FileListCache> {
     static CACHE: OnceLock<Mutex<FileListCache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(FileListCache::default()))
+    CACHE.get_or_init(|| Mutex::new(FileListCache::new()))
 }
 
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn dir_mtime_ms(path: &Path) -> u64 {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 
-/// Cached wrapper around `find_jsonl_files`. Re-walks every
-/// `FILE_LIST_CACHE_TTL_MS` or when the projects root changes (defends
-/// the cache against process-wide state pollution if the production
-/// projects dir ever changes mid-process — e.g., HOME swap in tests).
+/// Build the JSONL file list using the per-project-subdir mtime cache.
+/// Subdirs whose mtime is unchanged since last call return their cached
+/// file list; changed (or new) subdirs are re-walked. Subdirs that
+/// disappeared since last call are evicted from the cache.
 fn find_jsonl_files_cached(root: &Path) -> Vec<PathBuf> {
-    let now = now_unix_ms();
-    let mut c = file_list_cache()
+    let mut all = Vec::new();
+    let Ok(entries) = fs::read_dir(root) else {
+        return all;
+    };
+
+    let mut cache = file_list_cache()
         .lock()
         .expect("file list cache mutex poisoned");
-    let stale = now.saturating_sub(c.last_walk_unix_ms) >= FILE_LIST_CACHE_TTL_MS;
-    let root_changed = c.walked_root.as_path() != root;
-    if stale || root_changed || c.files.is_empty() {
-        c.files = find_jsonl_files(root);
-        c.last_walk_unix_ms = now;
-        c.walked_root = root.to_path_buf();
+    let mut seen_subdirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else { continue };
+        if !ft.is_dir() {
+            // Top-level files. Bare `*.jsonl` directly under
+            // projects_root is unusual but handle it just in case.
+            if ft.is_file() && path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                all.push(path);
+            }
+            continue;
+        }
+        let mtime = dir_mtime_ms(&path);
+        seen_subdirs.insert(path.clone());
+
+        let dc = cache.entry(path.clone()).or_default();
+        if dc.last_mtime_ms != mtime {
+            let mut walked = Vec::new();
+            walk_jsonls_into(&path, &mut walked);
+            dc.files = walked;
+            dc.last_mtime_ms = mtime;
+        }
+        all.extend(dc.files.iter().cloned());
     }
-    c.files.clone()
+
+    // Project subdir was deleted since last scan ⇒ drop its cache
+    // entry so memory doesn't accrete forever.
+    cache.retain(|k, _| seen_subdirs.contains(k));
+
+    all
+}
+
+fn walk_jsonls_into(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                stack.push(p);
+            } else if ft.is_file() && p.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                out.push(p);
+            }
+        }
+    }
 }
 
 /// Single-stat helper: returns `(mtime_ms, len)` for the path in one
@@ -287,6 +316,44 @@ fn csv_escape(raw: &str) -> String {
     raw.chars()
         .filter(|c| *c != ',' && *c != '\n' && *c != '\r')
         .collect()
+}
+
+/// Process-wide flag set while a background `scan_and_append` is in flight,
+/// so the caller can avoid spawning a second thread before the first
+/// finishes. The atomic is the cheapest correct synchronisation —
+/// scan_and_append serialises against itself naturally via the file-list
+/// cache mutex and offsets-file write, but we don't want to QUEUE work,
+/// just skip a duplicate kick.
+static SCAN_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Fire-and-forget background scan. Returns immediately. If a previous
+/// background scan is still running (a possibility if the projects tree
+/// is huge or the disk is slow), drops this kick on the floor — the
+/// next tick will try again.
+///
+/// The TUI's main thread never blocks on the JSONL walk this way;
+/// freezes from a slow `scan_and_append` are eliminated regardless of
+/// how long the scan takes. The in-memory ledger cache (read by
+/// `load_summary` on the main thread) is updated as a side-effect when
+/// the next `load_summary` reads the now-larger CSV.
+pub fn scan_and_append_background() {
+    use std::sync::atomic::Ordering;
+    if SCAN_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("ledger-scan".into())
+        .spawn(|| {
+            let _ = scan_and_append();
+            SCAN_IN_FLIGHT.store(false, Ordering::Release);
+        })
+        // If thread spawn fails (PID limit, OS denial), clear the flag
+        // so the next tick can retry instead of getting stuck "in flight".
+        .map_err(|_| SCAN_IN_FLIGHT.store(false, Ordering::Release))
+        .ok();
 }
 
 /// Scan every JSONL and append any new assistant `usage` blocks to the
