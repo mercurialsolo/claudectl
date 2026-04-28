@@ -23,6 +23,8 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
@@ -304,53 +306,193 @@ pub fn scan_and_append_at(projects_root: &Path, ledger: &Path, offsets_file: &Pa
 /// Aggregate ledger rows whose timestamp falls in `[since_ms, now)`. Pass
 /// `since_ms == 0` for the full-history total. Cost is computed per row
 /// using current `models::resolve` prices.
-pub fn load_summary(since_ms: u64) -> UsageSummary {
-    load_summary_at(&ledger_path(), since_ms)
+/// Single ledger row in cached form. Cost is pre-computed at parse time
+/// so the hot summary path doesn't redo the model-pricing lookup. 48 bytes
+/// per row; 31d of activity at the user's observed density (~50k rows/day)
+/// fits in ~75 MB worst-case, ~5 MB typical.
+#[derive(Debug, Clone, Copy)]
+struct LedgerRow {
+    ts_ms: u64,
+    fresh_input: u64,
+    cache_read: u64,
+    cache_write: u64,
+    output: u64,
+    cost_usd: f64,
 }
 
-/// Testable variant of `load_summary` accepting an explicit ledger path.
+/// Process-local cache of parsed ledger rows. Avoids re-parsing the entire
+/// 100MB+ usage_log.csv every time `load_summary` is called (3× per
+/// 6-second tick, ~750ms/pass in release-mode Rust at 1.4M rows). With the
+/// cache, the only per-tick I/O is reading bytes appended since the last
+/// scan — typically zero or a few KB — plus a linear scan of in-memory
+/// rows whose ts_ms >= cutoff.
+///
+/// Rows older than `MAX_RETENTION_MS` are evicted on every refresh so
+/// memory doesn't grow unbounded; the existing CSV file is never trimmed.
+const MAX_RETENTION_MS: u64 = 31 * 86_400_000;
+
+#[derive(Default)]
+struct LedgerCache {
+    last_scan_size: u64,
+    rows: Vec<LedgerRow>,
+}
+
+fn cache() -> &'static Mutex<LedgerCache> {
+    static CACHE: OnceLock<Mutex<LedgerCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(LedgerCache::default()))
+}
+
+/// Read newly-appended bytes since the last refresh and merge them into the
+/// in-memory cache. On file truncation (size shrunk) the cache is reset and
+/// re-scanned from the start. Errors are swallowed — a missing or
+/// unreadable ledger leaves the cache empty, same as the prior file-only
+/// implementation.
+fn refresh_cache_from(ledger: &Path) {
+    let Ok(meta) = fs::metadata(ledger) else {
+        return;
+    };
+    let current_size = meta.len();
+    let mut c = cache().lock().expect("ledger cache mutex poisoned");
+
+    let start = if current_size < c.last_scan_size {
+        // Truncation / rotation: fall back to a full re-scan.
+        c.rows.clear();
+        0
+    } else if current_size == c.last_scan_size {
+        return;
+    } else {
+        c.last_scan_size
+    };
+
+    let Ok(mut file) = File::open(ledger) else {
+        return;
+    };
+    if start > 0 && file.seek(SeekFrom::Start(start)).is_err() {
+        return;
+    }
+
+    let reader = BufReader::new(&file);
+    for (idx, line) in reader.lines().enumerate() {
+        let Ok(line) = line else { break };
+        // The header line is only present at the start of the file; on
+        // tail reads `start > 0` we never encounter it. On full reads
+        // `start == 0` it's the first line (idx 0) and the prefix check
+        // catches it.
+        if start == 0 && idx == 0 && line.starts_with("timestamp_ms") {
+            continue;
+        }
+        let Some(row) = parse_csv_row(&line) else {
+            continue;
+        };
+        c.rows.push(row);
+    }
+    c.last_scan_size = current_size;
+
+    // Evict rows older than MAX_RETENTION_MS. CSV is append-only with
+    // monotonic timestamps, so the cache is sorted ascending and the
+    // eviction is a prefix drop. Note: scan_and_append walks JSONL files
+    // in directory-walk order (not strictly time-sorted), so there can
+    // be small local out-of-order ranges. They're bounded to a single
+    // refresh batch and don't break the bulk-prefix eviction below — at
+    // worst a row up to MAX_RETENTION_MS ago survives one extra cycle.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let cutoff = now.saturating_sub(MAX_RETENTION_MS);
+    let evict_to = c.rows.partition_point(|r| r.ts_ms < cutoff);
+    if evict_to > 0 {
+        c.rows.drain(..evict_to);
+    }
+}
+
+fn parse_csv_row(line: &str) -> Option<LedgerRow> {
+    let fields: Vec<&str> = line.splitn(7, ',').collect();
+    if fields.len() != 7 {
+        return None;
+    }
+    let ts_ms: u64 = fields[0].parse().ok()?;
+    // fields[1] = session_id (unused for summary)
+    let model = fields[2];
+    let fresh: u64 = fields[3].parse().unwrap_or(0);
+    let cache_read: u64 = fields[4].parse().unwrap_or(0);
+    let cache_write: u64 = fields[5].parse().unwrap_or(0);
+    let output: u64 = fields[6].parse().unwrap_or(0);
+
+    let p = models::resolve(model).profile;
+    let cost = (fresh as f64 * p.input_per_m
+        + cache_read as f64 * p.cache_read_per_m
+        + cache_write as f64 * p.cache_write_per_m
+        + output as f64 * p.output_per_m)
+        / 1_000_000.0;
+    Some(LedgerRow {
+        ts_ms,
+        fresh_input: fresh,
+        cache_read,
+        cache_write,
+        output,
+        cost_usd: cost,
+    })
+}
+
+pub fn load_summary(since_ms: u64) -> UsageSummary {
+    refresh_cache_from(&ledger_path());
+    summarize_cached(since_ms)
+}
+
+fn summarize_cached(since_ms: u64) -> UsageSummary {
+    let c = cache().lock().expect("ledger cache mutex poisoned");
+    let mut summary = UsageSummary::default();
+    // Rows are sorted by ts_ms ascending (CSV is append-only); the cutoff
+    // walk skips the older prefix in O(log N) and accumulates O(K) where
+    // K = rows since the cutoff.
+    let start = c.rows.partition_point(|r| r.ts_ms < since_ms);
+    for row in &c.rows[start..] {
+        summary.fresh_input += row.fresh_input;
+        summary.cache_read += row.cache_read;
+        summary.cache_write += row.cache_write;
+        summary.output += row.output;
+        summary.cost_usd += row.cost_usd;
+        summary.msg_count += 1;
+    }
+    summary
+}
+
+#[cfg(test)]
+fn reset_cache_for_tests() {
+    let mut c = cache().lock().expect("ledger cache mutex poisoned");
+    c.last_scan_size = 0;
+    c.rows.clear();
+}
+
+/// Testable variant: explicit ledger path, NO cache. Used by tests so each
+/// test sees only its own fixture; the production path uses the
+/// process-wide cache via `load_summary`.
+#[cfg(test)]
 pub fn load_summary_at(ledger: &Path, since_ms: u64) -> UsageSummary {
     let Ok(file) = File::open(ledger) else {
         return UsageSummary::default();
     };
     let reader = BufReader::new(file);
     let mut summary = UsageSummary::default();
-
     for (idx, line) in reader.lines().enumerate() {
         let Ok(line) = line else { break };
         if idx == 0 && line.starts_with("timestamp_ms") {
             continue;
         }
-        let fields: Vec<&str> = line.splitn(7, ',').collect();
-        if fields.len() != 7 {
+        let Some(row) = parse_csv_row(&line) else {
+            continue;
+        };
+        if row.ts_ms < since_ms {
             continue;
         }
-        let ts: u64 = fields[0].parse().unwrap_or(0);
-        if ts < since_ms {
-            continue;
-        }
-        // fields[1] = session_id (unused for summary)
-        let model = fields[2];
-        let fresh: u64 = fields[3].parse().unwrap_or(0);
-        let cache_read: u64 = fields[4].parse().unwrap_or(0);
-        let cache_write: u64 = fields[5].parse().unwrap_or(0);
-        let output: u64 = fields[6].parse().unwrap_or(0);
-
-        let p = models::resolve(model).profile;
-        let cost = (fresh as f64 * p.input_per_m
-            + cache_read as f64 * p.cache_read_per_m
-            + cache_write as f64 * p.cache_write_per_m
-            + output as f64 * p.output_per_m)
-            / 1_000_000.0;
-
-        summary.fresh_input += fresh;
-        summary.cache_read += cache_read;
-        summary.cache_write += cache_write;
-        summary.output += output;
-        summary.cost_usd += cost;
+        summary.fresh_input += row.fresh_input;
+        summary.cache_read += row.cache_read;
+        summary.cache_write += row.cache_write;
+        summary.output += row.output;
+        summary.cost_usd += row.cost_usd;
         summary.msg_count += 1;
     }
-
     summary
 }
 
@@ -562,5 +704,124 @@ mod tests {
         let s = p.summary(0);
         assert_eq!(s.fresh_input, 100);
         assert_eq!(s.output, 50);
+    }
+
+    // ---- Cache tests --------------------------------------------------
+    //
+    // The cache is a process-global singleton, so these tests must
+    // serialise via the same mutex `cache()` returns. Calling
+    // `reset_cache_for_tests()` between scenarios + naming each ledger
+    // file uniquely (TestPaths counter) keeps them order-independent.
+
+    fn write_csv_rows(path: &Path, rows: &[(u64, &str, u64, u64, u64, u64)]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let mut body = String::from(HEADER);
+        body.push('\n');
+        for (ts, model, fresh, cr, cw, out) in rows {
+            body.push_str(&format!("{ts},sess,{model},{fresh},{cr},{cw},{out}\n"));
+        }
+        std::fs::write(path, body).unwrap();
+    }
+
+    fn append_csv_rows(path: &Path, rows: &[(u64, &str, u64, u64, u64, u64)]) {
+        let mut body = String::new();
+        for (ts, model, fresh, cr, cw, out) in rows {
+            body.push_str(&format!("{ts},sess,{model},{fresh},{cr},{cw},{out}\n"));
+        }
+        let mut f = OpenOptions::new().append(true).open(path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+    }
+
+    /// All cache tests share the global cache, so each test owns its file
+    /// and resets state via `reset_cache_for_tests()`. Keep them in one
+    /// `#[test]` so they run sequentially under any test-thread setting.
+    #[test]
+    fn cache_refresh_is_incremental_truncation_safe_and_filters_by_cutoff() {
+        let p = TestPaths::new("cache");
+        let ledger = p.ledger.clone();
+        // Use real-clock-relative timestamps so MAX_RETENTION_MS doesn't
+        // evict the test rows: a row from 2 hours ago is well within the
+        // 31-day window. Spacing 60s apart keeps the cutoff filter test
+        // unambiguous.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let t1 = now - 7_200_000; // 2h ago
+        let t2 = t1 + 60_000;
+        let t3 = t2 + 60_000;
+        let cutoff_between_t2_t3 = t2 + 30_000;
+
+        // Initial population: cache is empty, refresh reads everything.
+        reset_cache_for_tests();
+        write_csv_rows(
+            &ledger,
+            &[
+                (t1, "claude-opus-4-7", 100, 0, 0, 50),
+                (t2, "claude-opus-4-7", 200, 0, 0, 100),
+            ],
+        );
+        refresh_cache_from(&ledger);
+        let s = summarize_cached(0);
+        assert_eq!(s.msg_count, 2);
+        assert_eq!(s.fresh_input, 300);
+
+        // Append: only the new row should be parsed; cache must show
+        // 3 rows total without re-reading the first 2.
+        append_csv_rows(&ledger, &[(t3, "claude-opus-4-7", 5, 0, 0, 1)]);
+        refresh_cache_from(&ledger);
+        let s = summarize_cached(0);
+        assert_eq!(s.msg_count, 3);
+        assert_eq!(s.fresh_input, 305);
+
+        // Cutoff filter: only rows at-or-after `since_ms` count.
+        let s = summarize_cached(cutoff_between_t2_t3);
+        assert_eq!(s.msg_count, 1);
+        assert_eq!(s.fresh_input, 5);
+
+        // File truncation/rotation: write a smaller file in place. Cache
+        // must reset and re-scan from byte 0.
+        let t4 = now - 60_000;
+        write_csv_rows(&ledger, &[(t4, "claude-opus-4-7", 7, 0, 0, 0)]);
+        refresh_cache_from(&ledger);
+        let s = summarize_cached(0);
+        assert_eq!(s.msg_count, 1);
+        assert_eq!(s.fresh_input, 7);
+
+        // Cleanup so a later test starting with the same global cache
+        // has no leftover rows from this one.
+        reset_cache_for_tests();
+    }
+
+    #[test]
+    fn cache_evicts_rows_older_than_max_retention() {
+        let p = TestPaths::new("cache_evict");
+        let ledger = p.ledger.clone();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        // One row inside the retention window, one well outside it.
+        let recent = now - 60_000;
+        let ancient = now.saturating_sub(MAX_RETENTION_MS + 86_400_000);
+
+        reset_cache_for_tests();
+        write_csv_rows(
+            &ledger,
+            &[
+                (ancient, "claude-opus-4-7", 999, 0, 0, 0),
+                (recent, "claude-opus-4-7", 1, 0, 0, 0),
+            ],
+        );
+        refresh_cache_from(&ledger);
+        // Asking for the full window must yield only the recent row;
+        // the ancient one was evicted on refresh.
+        let s = summarize_cached(0);
+        assert_eq!(s.msg_count, 1);
+        assert_eq!(s.fresh_input, 1);
+
+        reset_cache_for_tests();
     }
 }
