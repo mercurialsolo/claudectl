@@ -2,6 +2,25 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.45.0] - 2026-04-28
+
+### Added
+- **Configurable event log retention** -- `retention_days` in `[lifecycle]` config section controls auto-prune period (default 30 days), wired to headless auto-prune loop (#186)
+- **Per-session recording toggle** -- `R` key now starts/stops recording for the selected session only, not all recordings. Recordings include a ~30-second lookback buffer of events before record-start. Output filenames include timestamps for uniqueness (#73)
+- **Config validation** -- `claudectl --config-validate` reports unknown keys, unknown sections, and malformed values in config files with line numbers and actionable messages (#74)
+- **Hook dry-run** -- `claudectl --init --dry-run` shows what hooks would be written to `.claude/settings.json` without modifying the file (#74)
+- **Sample config generation** -- `claudectl --config-init` writes an annotated `.claudectl.toml` template in the current directory (#74)
+- **False-deny friction cost** -- `--brain-stats false-deny` now shows friction cost (avg override delay, total friction time) and override reason breakdown. Brain denial overrides prompt for categorized reasons: always safe, one-time exception, or brain is wrong (#134)
+- **Override reason capture** -- when accepting a brain denial, TUI prompts for override reason (1/2/3 keys) to feed back into preference distillation
+- **Decision record timestamps** -- `resolved_at` field on all brain decisions enables friction latency measurement
+
+### Technical details
+- `LifecycleConfig` gains `retention_days: u64` (default 30), parsed from `[lifecycle]` TOML section
+- `SessionRecorder` lookback: seeks back 50KB and aligns to line boundary before recording
+- `validate_config_file()` enumerates valid keys per known section and reports unknowns
+- `DecisionRecord` gains `resolved_at: Option<u64>` and `override_reason: Option<String>`, backward-compatible with old JSONL
+- 677 tests passing across all build configurations
+
 ## [0.44.0] - 2026-04-27
 
 ### Added

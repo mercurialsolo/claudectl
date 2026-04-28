@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::transcript::{TranscriptBlock, TranscriptEvent, TranscriptRole, parse_line};
 
+/// Default lookback buffer: capture recent events before record start (~30s of activity).
+const DEFAULT_LOOKBACK_BYTES: u64 = 50_000;
 /// Maximum characters of bash output to include in a frame.
 const MAX_BASH_OUTPUT: usize = 800;
 /// Maximum characters of assistant text to include.
@@ -90,8 +92,31 @@ impl SessionRecorder {
         });
         writeln!(cast_file, "{}", header)?;
 
-        // Start from end of file — only record NEW events going forward
-        let initial_offset = std::fs::metadata(jsonl_path).map(|m| m.len()).unwrap_or(0);
+        // Start with a lookback buffer to capture recent events before record-start.
+        // Seek back DEFAULT_LOOKBACK_BYTES, then scan forward to the next newline
+        // to avoid starting mid-line in the JSONL stream.
+        let file_len = std::fs::metadata(jsonl_path).map(|m| m.len()).unwrap_or(0);
+        let initial_offset = if file_len > DEFAULT_LOOKBACK_BYTES {
+            let raw_offset = file_len - DEFAULT_LOOKBACK_BYTES;
+            // Find next newline after raw_offset to align to a line boundary
+            if let Ok(f) = File::open(jsonl_path) {
+                let mut reader = BufReader::new(f);
+                if reader.seek(SeekFrom::Start(raw_offset)).is_ok() {
+                    let mut discard = String::new();
+                    if reader.read_line(&mut discard).is_ok() {
+                        reader.stream_position().unwrap_or(raw_offset)
+                    } else {
+                        raw_offset
+                    }
+                } else {
+                    raw_offset
+                }
+            } else {
+                raw_offset
+            }
+        } else {
+            0 // File is smaller than lookback — include everything
+        };
 
         Ok(Self {
             jsonl_path: jsonl_path.to_path_buf(),

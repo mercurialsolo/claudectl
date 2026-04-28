@@ -100,6 +100,7 @@ impl BrainEngine {
                                     "deny_rule_override",
                                     Some(session),
                                     DecisionType::Session,
+                                    None,
                                 );
                                 actions.push((
                                     result.pid,
@@ -133,6 +134,7 @@ impl BrainEngine {
                                     "deferred_low_confidence",
                                     Some(session),
                                     DecisionType::Session,
+                                    None,
                                 );
                                 self.pending.insert(result.pid, suggestion);
                                 continue;
@@ -152,6 +154,7 @@ impl BrainEngine {
                                     "deferred_file_conflict",
                                     Some(session),
                                     DecisionType::Session,
+                                    None,
                                 );
                                 let mut flagged = suggestion.clone();
                                 flagged.reasoning =
@@ -180,6 +183,7 @@ impl BrainEngine {
                                                     "auto",
                                                     Some(session),
                                                     DecisionType::Session,
+                                                    None,
                                                 );
                                                 actions.push((result.pid, msg));
                                             }
@@ -220,6 +224,7 @@ impl BrainEngine {
                                                     "auto",
                                                     Some(session),
                                                     DecisionType::Session,
+                                                    None,
                                                 );
                                                 actions.push((result.pid, msg));
                                             }
@@ -238,6 +243,7 @@ impl BrainEngine {
                                         "auto",
                                         Some(session),
                                         DecisionType::Session,
+                                        None,
                                     );
                                     actions.push((
                                         result.pid,
@@ -265,6 +271,7 @@ impl BrainEngine {
                                                 "auto",
                                                 Some(session),
                                                 DecisionType::Session,
+                                                None,
                                             );
                                             actions.push((result.pid, msg));
                                         }
@@ -612,6 +619,7 @@ impl BrainEngine {
             orch_user_action,
             None,
             DecisionType::Orchestration,
+            None,
         );
 
         // The orchestration response may suggest multiple actions.
@@ -969,6 +977,7 @@ mod tests {
             auto_restart: true,
             restart_threshold_pct: 90.0,
             restart_only_when_idle: false,
+            retention_days: 30,
         };
         let mut engine = BrainEngine::new(make_config());
         let mut s = make_session(100, SessionStatus::Processing);
@@ -985,6 +994,7 @@ mod tests {
             auto_restart: true,
             restart_threshold_pct: 90.0,
             restart_only_when_idle: false,
+            retention_days: 30,
         };
         let mut engine = BrainEngine::new(make_config());
         let mut s = make_session(100, SessionStatus::Processing);
@@ -1002,6 +1012,7 @@ mod tests {
             auto_restart: true,
             restart_threshold_pct: 90.0,
             restart_only_when_idle: false,
+            retention_days: 30,
         };
         let mut engine = BrainEngine::new(make_config());
         engine.restarted_pids.insert(100);
@@ -1019,6 +1030,7 @@ mod tests {
             auto_restart: true,
             restart_threshold_pct: 90.0,
             restart_only_when_idle: true,
+            retention_days: 30,
         };
         let mut engine = BrainEngine::new(make_config());
         let mut s = make_session(100, SessionStatus::Processing);

@@ -316,6 +316,14 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "History & Diagnostics")]
     pub(crate) config_template: bool,
 
+    /// Validate config files and report unknown keys or malformed values
+    #[arg(long, help_heading = "History & Diagnostics")]
+    pub(crate) config_validate: bool,
+
+    /// Write a sample .claudectl.toml in the current directory
+    #[arg(long, help_heading = "Setup")]
+    pub(crate) config_init: bool,
+
     /// List configured event hooks and exit
     #[arg(long, help_heading = "History & Diagnostics")]
     pub(crate) hooks: bool,
@@ -448,6 +456,14 @@ fn run_main(cli: Cli) -> io::Result<()> {
         return Ok(());
     }
 
+    if cli.config_validate {
+        return commands::validate_config();
+    }
+
+    if cli.config_init {
+        return commands::write_config_init();
+    }
+
     if cli.hooks {
         hook_registry.print_list();
         return Ok(());
@@ -459,7 +475,7 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if cli.init {
         let project = cli.scope == "project";
-        return init::run_init(project);
+        return init::run_init(project, cli.dry_run);
     }
 
     if cli.uninstall {

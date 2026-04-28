@@ -242,7 +242,7 @@ pub fn run_uninit(project: bool) -> io::Result<()> {
 }
 
 /// Run the init command: write Claude Code hooks into settings.json.
-pub fn run_init(project: bool) -> io::Result<()> {
+pub fn run_init(project: bool, dry_run: bool) -> io::Result<()> {
     let path = settings_path(project);
 
     // Read existing settings or start fresh
@@ -277,13 +277,25 @@ pub fn run_init(project: bool) -> io::Result<()> {
         return Ok(());
     }
 
+    // Merge hooks into settings
+    merge_hooks(&mut settings);
+
+    if dry_run {
+        // Show what would be written without actually writing
+        let json = serde_json::to_string_pretty(&settings)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        println!("Would write to {}:", path.display());
+        println!();
+        println!("{json}");
+        return Ok(());
+    }
+
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    // Merge and write
-    merge_hooks(&mut settings);
+    // Write
     let json = serde_json::to_string_pretty(&settings)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     std::fs::write(&path, format!("{json}\n"))?;

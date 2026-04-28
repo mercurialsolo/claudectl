@@ -90,6 +90,10 @@ pub struct DecisionRecord {
     /// Epoch seconds when the brain suggestion was created.
     /// None for old records or observations. Used by time-to-correct analysis.
     pub suggested_at: Option<u64>,
+    /// Epoch seconds when the user acted on the suggestion.
+    pub resolved_at: Option<u64>,
+    /// Why the user overrode a brain denial (if applicable).
+    pub override_reason: Option<String>,
 }
 
 /// Outcome of a decision, backfilled during distillation by looking at
@@ -289,7 +293,12 @@ pub fn log_decision(
     user_action: &str,
     session: Option<&crate::session::ClaudeSession>,
     decision_type: DecisionType,
+    override_reason: Option<&str>,
 ) {
+    let resolved_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let mut record = serde_json::json!({
         "ts": timestamp_now(),
         "pid": pid,
@@ -302,6 +311,8 @@ pub fn log_decision(
         "user_action": user_action,
         "decision_type": decision_type.label(),
         "suggested_at": suggestion.suggested_at,
+        "resolved_at": resolved_at,
+        "override_reason": override_reason,
     });
     if let Some(s) = session {
         record["context"] = snapshot_context(s);
@@ -621,8 +632,13 @@ pub fn read_all_decisions() -> Vec<DecisionRecord> {
                 context,
                 outcome: None, // Backfilled during distillation
                 decision_type,
-                // Backwards-compatible: old records won't have "suggested_at"
+                // Backwards-compatible: old records won't have these fields
                 suggested_at: json.get("suggested_at").and_then(|v| v.as_u64()),
+                resolved_at: json.get("resolved_at").and_then(|v| v.as_u64()),
+                override_reason: json
+                    .get("override_reason")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
             })
         })
         .collect()
@@ -662,6 +678,8 @@ mod tests {
             outcome: None,
             decision_type: DecisionType::Session,
             suggested_at: None,
+            resolved_at: None,
+            override_reason: None,
         }
     }
 
@@ -715,6 +733,8 @@ mod tests {
             outcome: None,
             decision_type: DecisionType::Orchestration,
             suggested_at: None,
+            resolved_at: None,
+            override_reason: None,
         }
     }
 
