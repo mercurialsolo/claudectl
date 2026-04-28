@@ -14,6 +14,15 @@ exclude = ["*.gif", "*.cast", "claude-demo.*", "CLAUDE.md", ".github/"]
 name = "claudectl"
 path = "src/main.rs"
 
+# Side-by-side install target for verifying refactor branches against the
+# stable `claudectl` binary on the same machine. Build the same source
+# with `cargo install --path . --bin claudectl_test` and run it as
+# `claudectl_test` while the old binary stays in place. Once the new
+# code is validated, drop this entry (or just stop installing the alias).
+[[bin]]
+name = "claudectl_test"
+path = "src/main.rs"
+
 [lib]
 name = "claudectl"
 path = "src/lib.rs"
