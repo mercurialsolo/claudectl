@@ -9,6 +9,33 @@ use super::store::HiveStore;
 
 #[derive(Subcommand)]
 pub enum HiveCommand {
+    /// Turn the hive on (overrides config; broadcasts and brain injection enabled)
+    On,
+
+    /// Turn the hive off (overrides config; nothing broadcasts, no injection)
+    Off,
+
+    /// List local units that would be broadcast on the next gossip tick
+    Preview,
+
+    /// Mark units as exposed (broadcast outbound). Pass a unit ID or `--all`.
+    Expose {
+        /// Unit ID to expose
+        unit_id: Option<String>,
+        /// Expose every locally-originated unit currently in the store
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Hide units from outbound broadcast. Pass a unit ID or `--all`.
+    Hide {
+        /// Unit ID to hide
+        unit_id: Option<String>,
+        /// Hide every locally-originated unit currently in the store
+        #[arg(long)]
+        all: bool,
+    },
+
     /// Show knowledge store overview
     Status,
 
@@ -90,11 +117,41 @@ pub enum HiveCommand {
         #[arg(long)]
         show_ignored: bool,
     },
+
+    /// Accept (install) a received artifact and record it as installed
+    Accept {
+        /// Knowledge unit ID to accept
+        unit_id: String,
+        /// Target directory (default: ~/.claude)
+        #[arg(long)]
+        target: Option<String>,
+        /// Force accept even if compatibility checks fail
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Show or set the inbound accept mode (manual, trusted, all)
+    AcceptMode {
+        /// Mode value (omit to show current)
+        mode: Option<String>,
+    },
+
+    /// List shared artifacts that haven't been accepted yet
+    Pending {
+        /// Filter by type: skill, command, hook
+        #[arg(long, name = "type")]
+        content_type: Option<String>,
+    },
 }
 
 /// Dispatch a hive subcommand.
 pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()> {
     match command {
+        HiveCommand::On => cmd_set_mode("on", json_mode),
+        HiveCommand::Off => cmd_set_mode("off", json_mode),
+        HiveCommand::Preview => cmd_preview(json_mode),
+        HiveCommand::Expose { unit_id, all } => cmd_expose(unit_id.as_deref(), *all, json_mode),
+        HiveCommand::Hide { unit_id, all } => cmd_hide(unit_id.as_deref(), *all, json_mode),
         HiveCommand::Status => cmd_status(json_mode),
         HiveCommand::Knowledge { from, scope } => {
             cmd_knowledge(from.as_deref(), scope.as_deref(), json_mode)
@@ -120,7 +177,264 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
             content_type,
             show_ignored,
         } => cmd_shared(content_type.as_deref(), *show_ignored, json_mode),
+        HiveCommand::Accept {
+            unit_id,
+            target,
+            force,
+        } => cmd_install(unit_id, target.as_deref(), *force, json_mode),
+        HiveCommand::AcceptMode { mode } => cmd_accept_mode(mode.as_deref(), json_mode),
+        HiveCommand::Pending { content_type } => cmd_pending(content_type.as_deref(), json_mode),
     }
+}
+
+/// `claudectl hive on|off`
+fn cmd_set_mode(mode: &str, json_mode: bool) -> io::Result<()> {
+    super::write_mode_override(mode)?;
+    let cfg = crate::config::Config::load();
+    let active = super::is_active(cfg.hive.as_ref());
+
+    if json_mode {
+        let output = serde_json::json!({
+            "mode_override": mode,
+            "active": active,
+            "config_enabled": cfg.hive.as_ref().map(|h| h.enabled).unwrap_or(false),
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        let label = if active { "active" } else { "inactive" };
+        println!("Hive override: {mode} (currently {label})");
+        if mode == "off" {
+            println!("  Outbound gossip and brain injection paused.");
+            println!("  Local store is preserved.");
+        } else {
+            println!("  Outbound gossip and brain injection enabled.");
+        }
+        println!();
+        println!(
+            "Tip: edit ~/.claudectl/hive/mode (or rerun) to change this; the file overrides config."
+        );
+    }
+    Ok(())
+}
+
+/// `claudectl hive preview` — what would broadcast on the next gossip tick.
+fn cmd_preview(json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let cfg = crate::config::Config::load();
+    let hive_cfg = cfg.hive.clone().unwrap_or_default();
+    let active = super::is_active(cfg.hive.as_ref());
+
+    let mode = super::exposure::ShareMode::parse(&hive_cfg.share_mode)
+        .unwrap_or(super::exposure::ShareMode::Auto);
+    let exposure = super::exposure::ExposureStore::load();
+    let filter = super::SharingFilter::from_config(&hive_cfg);
+
+    #[cfg(feature = "relay")]
+    let local_id = crate::relay::load_or_create_identity().0;
+    #[cfg(not(feature = "relay"))]
+    let local_id = super::local_identity();
+
+    // Partition local units into ready / hidden / blocked
+    let mut ready = Vec::new();
+    let mut hidden = Vec::new();
+    let mut blocked: Vec<(&super::KnowledgeUnit, &'static str)> = Vec::new();
+
+    for unit in store.all_units() {
+        if unit.source_peer != local_id {
+            continue;
+        }
+        if !unit.category.is_shareable() {
+            blocked.push((unit, "personal"));
+            continue;
+        }
+        if !filter.allows(unit) {
+            blocked.push((unit, "filter"));
+            continue;
+        }
+        let ttl_secs = hive_cfg.knowledge_ttl_days as u64 * 86400;
+        let age = super::epoch_secs().saturating_sub(unit.last_validated_at);
+        if age > ttl_secs {
+            blocked.push((unit, "expired"));
+            continue;
+        }
+        if unit.propagation_count >= hive_cfg.max_propagation {
+            blocked.push((unit, "max-prop"));
+            continue;
+        }
+        if exposure.is_exposed(&unit.id, mode) {
+            ready.push(unit);
+        } else {
+            hidden.push(unit);
+        }
+    }
+
+    if json_mode {
+        let to_json = |units: &[&super::KnowledgeUnit]| -> Vec<serde_json::Value> {
+            units
+                .iter()
+                .map(|u| {
+                    serde_json::json!({
+                        "id": u.id,
+                        "scope": u.scope.to_string(),
+                        "category": u.category.label(),
+                        "summary": u.content.summary_line(),
+                    })
+                })
+                .collect()
+        };
+        let output = serde_json::json!({
+            "active": active,
+            "share_mode": mode.label(),
+            "ready": to_json(&ready),
+            "hidden": to_json(&hidden),
+            "blocked": blocked
+                .iter()
+                .map(|(u, reason)| serde_json::json!({
+                    "id": u.id,
+                    "summary": u.content.summary_line(),
+                    "reason": reason,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return Ok(());
+    }
+
+    let active_label = if active { "active" } else { "inactive" };
+    println!(
+        "Outbound preview ({} mode, hive {active_label})",
+        mode.label()
+    );
+    println!();
+
+    if ready.is_empty() && hidden.is_empty() && blocked.is_empty() {
+        println!("  No locally-originated units yet.");
+        return Ok(());
+    }
+
+    if !ready.is_empty() {
+        println!("Ready to broadcast ({}):", ready.len());
+        for u in &ready {
+            print_preview_row(u);
+        }
+        println!();
+    }
+    if !hidden.is_empty() {
+        println!("Hidden — won't broadcast ({}):", hidden.len());
+        for u in &hidden {
+            print_preview_row(u);
+        }
+        println!();
+        println!("  Expose with: claudectl hive expose <id>  (or --all)");
+        println!();
+    }
+    if !blocked.is_empty() {
+        println!("Blocked by config or rules ({}):", blocked.len());
+        for (u, reason) in &blocked {
+            let id_short = short_id(&u.id);
+            println!("  {id_short}  [{reason}]  {}", u.content.summary_line());
+        }
+    }
+
+    Ok(())
+}
+
+fn print_preview_row(u: &super::KnowledgeUnit) {
+    let id_short = short_id(&u.id);
+    println!(
+        "  {id_short}  {:<10}  {}",
+        u.category.label(),
+        u.content.summary_line()
+    );
+}
+
+fn short_id(id: &str) -> &str {
+    if id.len() > 12 { &id[..12] } else { id }
+}
+
+/// `claudectl hive expose [unit_id] [--all]`
+fn cmd_expose(unit_id: Option<&str>, all: bool, json_mode: bool) -> io::Result<()> {
+    apply_exposure(
+        unit_id,
+        all,
+        super::exposure::ExposureState::Expose,
+        json_mode,
+    )
+}
+
+/// `claudectl hive hide [unit_id] [--all]`
+fn cmd_hide(unit_id: Option<&str>, all: bool, json_mode: bool) -> io::Result<()> {
+    apply_exposure(
+        unit_id,
+        all,
+        super::exposure::ExposureState::Hide,
+        json_mode,
+    )
+}
+
+fn apply_exposure(
+    unit_id: Option<&str>,
+    all: bool,
+    state: super::exposure::ExposureState,
+    json_mode: bool,
+) -> io::Result<()> {
+    if unit_id.is_none() && !all {
+        return Err(io::Error::other("specify a unit ID or --all".to_string()));
+    }
+
+    let store = HiveStore::load();
+    let mut exposure = super::exposure::ExposureStore::load();
+
+    #[cfg(feature = "relay")]
+    let local_id = crate::relay::load_or_create_identity().0;
+    #[cfg(not(feature = "relay"))]
+    let local_id = super::local_identity();
+
+    let mut affected: Vec<String> = Vec::new();
+
+    if all {
+        for u in store.all_units() {
+            if u.source_peer == local_id {
+                exposure.set(&u.id, state);
+                affected.push(u.id.clone());
+            }
+        }
+    } else if let Some(id) = unit_id {
+        let unit = store
+            .get(id)
+            .ok_or_else(|| io::Error::other(format!("unknown unit: {id}")))?;
+        if unit.source_peer != local_id {
+            return Err(io::Error::other(
+                "exposure only applies to locally-originated units".to_string(),
+            ));
+        }
+        exposure.set(id, state);
+        affected.push(id.to_string());
+    }
+
+    exposure
+        .save()
+        .map_err(|e| io::Error::other(format!("save exposure: {e}")))?;
+
+    let action = match state {
+        super::exposure::ExposureState::Expose => "exposed",
+        super::exposure::ExposureState::Hide => "hidden",
+    };
+
+    if json_mode {
+        let output = serde_json::json!({
+            "action": action,
+            "count": affected.len(),
+            "unit_ids": affected,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else if affected.is_empty() {
+        println!("No locally-originated units matched.");
+    } else {
+        println!("{} {} unit(s).", action, affected.len());
+    }
+
+    Ok(())
 }
 
 /// `claudectl hive status`
@@ -128,7 +442,9 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
     let store = HiveStore::load();
     let all = store.all_units();
     let cfg = crate::config::Config::load();
-    let hive_cfg = cfg.hive.unwrap_or_default();
+    let hive_cfg = cfg.hive.clone().unwrap_or_default();
+    let active = super::is_active(cfg.hive.as_ref());
+    let mode_override = super::read_mode_override();
 
     // Count by source
     let mut sources: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
@@ -152,6 +468,10 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
     if json_mode {
         #[allow(unused_mut)]
         let mut output = serde_json::json!({
+            "active": active,
+            "mode_override": mode_override,
+            "share_mode": hive_cfg.share_mode,
+            "config_enabled": cfg.hive.as_ref().map(|h| h.enabled).unwrap_or(false),
             "total_units": all.len(),
             "max_units": hive_cfg.max_units,
             "sources": sources,
@@ -166,11 +486,24 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
         }
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
-        println!("Hive Knowledge Store");
+        let state_label = if active { "ON" } else { "OFF" };
+        let source_label = match mode_override.as_deref() {
+            Some(s) => format!("override: {s}"),
+            None => format!(
+                "config: {}",
+                if cfg.hive.as_ref().map(|h| h.enabled).unwrap_or(false) {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ),
+        };
+        println!("Hive Knowledge Store [{state_label}]  ({source_label})");
         println!();
         if let Some(ref id) = relay_identity {
             println!("  Identity: {}", id);
         }
+        println!("  Share mode: {}", hive_cfg.share_mode);
         println!("  Total units: {} / {} max", all.len(), hive_cfg.max_units);
         if !by_category.is_empty() {
             println!("  Categories:");
@@ -644,6 +977,86 @@ fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -
     Ok(())
 }
 
+/// Outcome of an artifact write — used by both interactive install and auto-accept.
+pub enum InstallOutcome {
+    Skill {
+        name: String,
+        version: String,
+        path: std::path::PathBuf,
+    },
+    Command {
+        name: String,
+        args: Option<String>,
+        path: std::path::PathBuf,
+    },
+    /// Hooks are never auto-installed; we surface the config for the user to review.
+    HookConfig {
+        event: String,
+        matcher: String,
+        description: String,
+        config_json: String,
+    },
+}
+
+/// Write a skill or command to disk. Hooks are returned as config-only —
+/// callers decide how to present them. Returns None for non-artifact units.
+pub fn write_artifact_files(
+    unit: &super::KnowledgeUnit,
+    base_dir: &std::path::Path,
+) -> io::Result<Option<InstallOutcome>> {
+    match &unit.content {
+        super::KnowledgeContent::Skill {
+            name,
+            version,
+            body,
+            ..
+        } => {
+            let slug = name.to_lowercase().replace(' ', "-");
+            let skill_dir = base_dir.join("skills").join(&slug);
+            std::fs::create_dir_all(&skill_dir)?;
+            let file_path = skill_dir.join("SKILL.md");
+            std::fs::write(&file_path, body)?;
+            Ok(Some(InstallOutcome::Skill {
+                name: name.clone(),
+                version: version.clone(),
+                path: file_path,
+            }))
+        }
+        super::KnowledgeContent::Command {
+            name, body, args, ..
+        } => {
+            let cmds_dir = base_dir.join("commands");
+            std::fs::create_dir_all(&cmds_dir)?;
+            let file_path = cmds_dir.join(format!("{name}.md"));
+            std::fs::write(&file_path, body)?;
+            Ok(Some(InstallOutcome::Command {
+                name: name.clone(),
+                args: args.clone(),
+                path: file_path,
+            }))
+        }
+        super::KnowledgeContent::HookConfig {
+            event,
+            matcher,
+            description,
+            config_json,
+            ..
+        } => Ok(Some(InstallOutcome::HookConfig {
+            event: event.clone(),
+            matcher: matcher.clone(),
+            description: description.clone(),
+            config_json: config_json.clone(),
+        })),
+        _ => Ok(None),
+    }
+}
+
+/// Default `~/.claude` install root.
+pub fn default_install_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    std::path::PathBuf::from(home).join(".claude")
+}
+
 /// `claudectl hive install <unit_id> [--target dir] [--force]`
 fn cmd_install(
     unit_id: &str,
@@ -693,93 +1106,85 @@ fn cmd_install(
 
     let base_dir = match target {
         Some(t) => std::path::PathBuf::from(t),
-        None => {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            std::path::PathBuf::from(home).join(".claude")
-        }
+        None => default_install_dir(),
     };
 
-    match &unit.content {
-        super::KnowledgeContent::Skill {
+    let outcome = write_artifact_files(unit, &base_dir)?.ok_or_else(|| {
+        io::Error::other(format!("unit {unit_id} is not a skill, command, or hook"))
+    })?;
+
+    let unverified_warning = if tier == super::trust::TrustTier::Unverified {
+        Some(format!(
+            "Warning: source peer '{}' is unverified. Review before use.",
+            unit.source_peer
+        ))
+    } else {
+        None
+    };
+
+    let mut tracker = super::accept::InstalledTracker::load();
+    let mut record_install = || {
+        tracker.record(
+            unit_id,
+            &unit.source_peer,
+            super::accept::AcceptMode::Manual,
+        );
+        let _ = tracker.save();
+    };
+
+    match outcome {
+        InstallOutcome::Skill {
             name,
             version,
-            body,
-            ..
+            path,
         } => {
-            let slug = name.to_lowercase().replace(' ', "-");
-            let skill_dir = base_dir.join("skills").join(&slug);
-            std::fs::create_dir_all(&skill_dir)?;
-            let file_path = skill_dir.join("SKILL.md");
-            std::fs::write(&file_path, body)?;
-
-            if tier == super::trust::TrustTier::Unverified {
-                eprintln!(
-                    "Warning: source peer '{}' is unverified (trust < 0.5). \
-                     Review the installed skill before relying on it.",
-                    unit.source_peer
-                );
+            if let Some(w) = unverified_warning {
+                eprintln!("{w}");
             }
-
+            record_install();
             if json_mode {
                 let output = serde_json::json!({
                     "action": "installed",
                     "content_type": "skill",
                     "name": name,
                     "version": version,
-                    "path": file_path.display().to_string(),
+                    "path": path.display().to_string(),
                     "trust_tier": tier.label(),
                 });
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
-                println!(
-                    "Installed skill '{name}' v{version} to {}",
-                    file_path.display()
-                );
+                println!("Installed skill '{name}' v{version} to {}", path.display());
             }
         }
-        super::KnowledgeContent::Command {
-            name, body, args, ..
-        } => {
-            let cmds_dir = base_dir.join("commands");
-            std::fs::create_dir_all(&cmds_dir)?;
-            let file_path = cmds_dir.join(format!("{name}.md"));
-            std::fs::write(&file_path, body)?;
-
-            if tier == super::trust::TrustTier::Unverified {
-                eprintln!(
-                    "Warning: source peer '{}' is unverified. Review before use.",
-                    unit.source_peer
-                );
+        InstallOutcome::Command { name, args, path } => {
+            if let Some(w) = unverified_warning {
+                eprintln!("{w}");
             }
-
+            record_install();
             if json_mode {
                 let output = serde_json::json!({
                     "action": "installed",
                     "content_type": "command",
                     "name": name,
                     "args": args,
-                    "path": file_path.display().to_string(),
+                    "path": path.display().to_string(),
                     "trust_tier": tier.label(),
                 });
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
-                println!("Installed command '/{name}' to {}", file_path.display());
+                println!("Installed command '/{name}' to {}", path.display());
             }
         }
-        super::KnowledgeContent::HookConfig {
+        InstallOutcome::HookConfig {
             event,
             matcher,
             description,
             config_json,
-            ..
         } => {
-            if tier == super::trust::TrustTier::Unverified {
-                eprintln!(
-                    "Warning: source peer '{}' is unverified. Review the hook config carefully.",
-                    unit.source_peer
-                );
+            if let Some(w) = unverified_warning {
+                eprintln!("{w}");
             }
-
+            // Hooks aren't recorded as installed — user pastes config manually.
             if json_mode {
                 let output = serde_json::json!({
                     "action": "installed",
@@ -800,11 +1205,6 @@ fn cmd_install(
                 println!();
                 println!("Note: You must create the hook script implementation yourself.");
             }
-        }
-        _ => {
-            return Err(io::Error::other(format!(
-                "unit {unit_id} is not a skill, command, or hook"
-            )));
         }
     }
 
@@ -1056,4 +1456,208 @@ fn cmd_curriculum(json_mode: bool) -> io::Result<()> {
     println!("{} units in curriculum", curriculum.len());
 
     Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Inbound accept controls
+// ────────────────────────────────────────────────────────────────────────────
+
+/// `claudectl hive accept-mode [manual|trusted|all]`
+fn cmd_accept_mode(mode: Option<&str>, json_mode: bool) -> io::Result<()> {
+    use super::accept::AcceptMode;
+
+    match mode {
+        None => {
+            let current = super::accept::read_mode(AcceptMode::Manual);
+            if json_mode {
+                let output = serde_json::json!({
+                    "accept_mode": current.label(),
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else {
+                println!("Accept mode: {}", current.label());
+                println!();
+                println!("Modes:");
+                println!("  manual  — hold all incoming artifacts; user accepts each (default)");
+                println!("  trusted — auto-install from peers in the Confirmed trust tier");
+                println!(
+                    "  all     — auto-install every received skill/command (hooks always manual)"
+                );
+            }
+        }
+        Some(m) => {
+            let parsed = AcceptMode::parse(m).ok_or_else(|| {
+                io::Error::other(format!("invalid accept mode: {m} (manual|trusted|all)"))
+            })?;
+            super::accept::write_mode(parsed)?;
+            println!("Accept mode set to: {}", parsed.label());
+            if parsed != AcceptMode::Manual {
+                println!("  Newly received skills/commands will be installed automatically.");
+                println!("  Hooks always require manual review.");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `claudectl hive pending [--type X]` — list shared artifacts not yet accepted.
+fn cmd_pending(content_type_filter: Option<&str>, json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let trust_store = super::trust::TrustStore::load();
+    let tracker = super::accept::InstalledTracker::load();
+
+    let pending: Vec<(&super::KnowledgeUnit, super::trust::TrustTier)> = store
+        .all_units()
+        .into_iter()
+        .filter_map(|unit| {
+            let type_label = match &unit.content {
+                super::KnowledgeContent::Skill { .. } => "skill",
+                super::KnowledgeContent::Command { .. } => "command",
+                super::KnowledgeContent::HookConfig { .. } => "hook",
+                _ => return None,
+            };
+            if let Some(filter) = content_type_filter {
+                if type_label != filter {
+                    return None;
+                }
+            }
+            if tracker.is_installed(&unit.id) {
+                return None;
+            }
+            let tier = trust_store
+                .get(&unit.source_peer)
+                .map(|t| t.tier())
+                .unwrap_or(super::trust::TrustTier::Suggested);
+            if tier == super::trust::TrustTier::Ignored {
+                return None;
+            }
+            Some((unit, tier))
+        })
+        .collect();
+
+    if json_mode {
+        let items: Vec<serde_json::Value> = pending
+            .iter()
+            .map(|(unit, tier)| {
+                serde_json::json!({
+                    "id": unit.id,
+                    "type": content_type_label(&unit.content),
+                    "name": content_name(&unit.content),
+                    "source_peer": unit.source_peer,
+                    "trust_tier": tier.label(),
+                    "summary": unit.content.summary_line(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items).unwrap());
+        return Ok(());
+    }
+
+    if pending.is_empty() {
+        println!("No pending artifacts. Run `claudectl hive shared` to see all received items.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<12} {:<8} {:<16} {:<14} CONTENT",
+        "ID", "TYPE", "SOURCE", "TRUST"
+    );
+    println!("{}", "─".repeat(80));
+    for (unit, tier) in &pending {
+        let id_short = if unit.id.len() > 11 {
+            &unit.id[..11]
+        } else {
+            &unit.id
+        };
+        println!(
+            "{:<12} {:<8} {:<16} {:<14} {}",
+            id_short,
+            content_type_label(&unit.content),
+            unit.source_peer,
+            tier.label(),
+            unit.content.summary_line(),
+        );
+    }
+    println!();
+    println!(
+        "{} pending. Accept with: claudectl hive accept <id>",
+        pending.len()
+    );
+
+    Ok(())
+}
+
+/// Auto-install eligible artifacts after a gossip merge. Skills/commands only.
+/// Returns the number of units installed. Errors are logged but never fatal.
+pub fn auto_accept_units(
+    units: &[super::KnowledgeUnit],
+    base_dir: Option<&std::path::Path>,
+) -> usize {
+    use super::accept::AcceptMode;
+
+    let mode = super::accept::read_mode(AcceptMode::Manual);
+    if mode == AcceptMode::Manual {
+        return 0;
+    }
+
+    let trust_store = super::trust::TrustStore::load();
+    let mut tracker = super::accept::InstalledTracker::load();
+    let owned_dir = base_dir.map(std::path::PathBuf::from);
+    let dir = owned_dir.unwrap_or_else(default_install_dir);
+    let mut installed = 0;
+
+    for unit in units {
+        // Don't reinstall.
+        if tracker.is_installed(&unit.id) {
+            continue;
+        }
+
+        // Only auto-install skills and commands; hooks always require manual review.
+        let is_artifact = matches!(
+            &unit.content,
+            super::KnowledgeContent::Skill { .. } | super::KnowledgeContent::Command { .. }
+        );
+        if !is_artifact {
+            continue;
+        }
+
+        // Compatibility check — skip on blocking issues.
+        if let Some(requires) = super::get_requires(&unit.content) {
+            let issues = super::check_compatibility(requires);
+            if issues.iter().any(|i| i.is_blocking()) {
+                continue;
+            }
+        }
+
+        // Trust gate.
+        let tier = trust_store
+            .get(&unit.source_peer)
+            .map(|t| t.tier())
+            .unwrap_or(super::trust::TrustTier::Suggested);
+
+        let allow = match mode {
+            AcceptMode::Manual => false,
+            AcceptMode::Trusted => tier == super::trust::TrustTier::Confirmed,
+            AcceptMode::All => tier != super::trust::TrustTier::Ignored,
+        };
+        if !allow {
+            continue;
+        }
+
+        match write_artifact_files(unit, &dir) {
+            Ok(Some(_)) => {
+                tracker.record(&unit.id, &unit.source_peer, mode);
+                installed += 1;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                crate::logger::log("HIVE", &format!("auto-accept failed for {}: {e}", unit.id));
+            }
+        }
+    }
+
+    if installed > 0 {
+        let _ = tracker.save();
+    }
+    installed
 }

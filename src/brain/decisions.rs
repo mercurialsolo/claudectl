@@ -440,7 +440,8 @@ fn maybe_distill_background() {
             #[cfg(feature = "hive")]
             {
                 let cfg = crate::config::Config::load();
-                if let Some(hive_cfg) = cfg.hive.filter(|h| h.enabled) {
+                if crate::hive::is_active(cfg.hive.as_ref()) {
+                    let hive_cfg = cfg.hive.clone().unwrap_or_default();
                     let thresholds = crate::hive::distiller::ExportThresholds {
                         min_pattern_evidence: hive_cfg.export_min_evidence,
                         min_tool_decisions: hive_cfg.export_min_tool_decisions,

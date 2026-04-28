@@ -375,7 +375,8 @@ impl BrainEngine {
         #[cfg(feature = "hive")]
         {
             let cfg = crate::config::Config::load();
-            if let Some(hive_cfg) = cfg.hive.filter(|h| h.enabled) {
+            if crate::hive::is_active(cfg.hive.as_ref()) {
+                let hive_cfg = cfg.hive.clone().unwrap_or_default();
                 let store = crate::hive::store::HiveStore::load();
                 let trust_store =
                     crate::hive::trust::TrustStore::load_with_default(hive_cfg.default_trust);

@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 
+pub mod accept;
 pub mod archive;
 pub mod cli;
 pub mod distiller;
+pub mod exposure;
 #[cfg(feature = "relay")]
 pub mod gossip;
 pub mod injection;
@@ -363,6 +365,58 @@ pub fn epoch_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// On/off override (mirrors brain's gate-mode pattern)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Path to the hive mode override file (`~/.claudectl/hive/mode`).
+pub fn mode_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    std::path::PathBuf::from(home)
+        .join(".claudectl")
+        .join("hive")
+        .join("mode")
+}
+
+/// Read the mode override. Returns `Some("on")`, `Some("off")`, or `None` when
+/// the file is absent (i.e., fall back to config).
+pub fn read_mode_override() -> Option<String> {
+    let path = mode_path();
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let trimmed = raw.trim().to_lowercase();
+    if trimmed == "on" || trimmed == "off" {
+        Some(trimmed)
+    } else {
+        None
+    }
+}
+
+/// Set the mode override. Pass `"on"` or `"off"` to force; `"clear"` removes the
+/// override and falls back to the config flag.
+pub fn write_mode_override(mode: &str) -> std::io::Result<()> {
+    let path = mode_path();
+    if mode == "clear" {
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, mode)
+}
+
+/// True if the hive should be active. The mode file (when present) overrides
+/// the config flag. When both are absent, hive is inactive.
+pub fn is_active(cfg: Option<&crate::config::HiveConfig>) -> bool {
+    match read_mode_override().as_deref() {
+        Some("on") => true,
+        Some("off") => false,
+        _ => cfg.map(|c| c.enabled).unwrap_or(false),
+    }
 }
 
 /// Local identity for hive knowledge (used when relay feature is not enabled).

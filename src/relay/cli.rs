@@ -212,7 +212,7 @@ fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io:
     // Initialize hive gossip engine (only when hive feature is enabled)
     #[cfg(feature = "hive")]
     let (mut hive_store, mut gossip, broadcast_rx) = {
-        let hive_enabled = hive_cfg.enabled;
+        let hive_enabled = crate::hive::is_active(Some(&hive_cfg));
         let store = hive_enabled.then(crate::hive::store::HiveStore::load);
         let gossip_engine = hive_enabled.then(|| {
             let mut engine = crate::hive::gossip::GossipEngine::new(
@@ -221,6 +221,9 @@ fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io:
                 hive_cfg.knowledge_ttl_days,
             );
             engine.set_sharing_filter(crate::hive::SharingFilter::from_config(&hive_cfg));
+            if let Some(mode) = crate::hive::exposure::ShareMode::parse(&hive_cfg.share_mode) {
+                engine.set_share_mode(mode);
+            }
             engine
         });
         let rx = if hive_enabled {
@@ -318,6 +321,13 @@ fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io:
                                 stats.accepted,
                                 stats.rejected
                             );
+                            let installed = crate::hive::cli::auto_accept_units(&accepted, None);
+                            if installed > 0 {
+                                println!(
+                                    "[{}] Auto-installed {installed} artifact(s)",
+                                    crate::logger::timestamp_now()
+                                );
+                            }
                             if !accepted.is_empty() {
                                 let connected = reg.connected_peers();
                                 let prop_msgs = gossip.propagate(&accepted, &from_peer, &connected);
@@ -343,13 +353,20 @@ fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io:
                         if let (Some(gossip), Some(hive_store)) =
                             (gossip.as_mut(), hive_store.as_mut())
                         {
-                            let stats = gossip.handle_snapshot(hive_store, &msg);
+                            let (stats, merged) = gossip.handle_snapshot(hive_store, &msg);
                             println!(
                                 "[{}] KnowledgeSnapshot from {}: {} accepted",
                                 crate::logger::timestamp_now(),
                                 from_peer,
                                 stats.accepted
                             );
+                            let installed = crate::hive::cli::auto_accept_units(&merged, None);
+                            if installed > 0 {
+                                println!(
+                                    "[{}] Auto-installed {installed} artifact(s)",
+                                    crate::logger::timestamp_now()
+                                );
+                            }
                         }
                     }
                     _ => {
