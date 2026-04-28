@@ -54,7 +54,7 @@ Periodic external reaper that diffs host `SANDBOX_HOST_TTY` env values
 (open set) against in-container `*.terminal.json` sidecars (sandbox set)
 and SIGHUPs alive members of the difference. Implementation: `src/reaper.rs`
 in this repo, exposed as `claudectl --reap-orphans` and auto-runnable via
-`claudectl --install-reaper`.
+`claudectl --install-reaper` (macOS launchd / Linux systemd-user timer).
 
 ## Related
 - moby/moby#9098 — `docker exec`: SIGHUP propagation on client disconnect.

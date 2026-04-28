@@ -241,10 +241,10 @@ Mitigations, in order of preference:
    `/var/lib/sandbox-sessions/*.terminal.json`, SIGHUPs any sandbox
    `claude` whose host TTY is no longer attached, and sweeps dead-PID
    sidecars off disk. Add `--dry-run` to preview without acting.
-3. Run `claudectl --install-reaper` (macOS only) to wire a launchd job
-   that runs `--reap-orphans` every 60 seconds. Tune with
-   `--reaper-interval N` (range 10..=3600 seconds). Reverse with
-   `claudectl --uninstall-reaper`.
+3. Run `claudectl --install-reaper` to wire a periodic background job
+   that runs `--reap-orphans` every 60 seconds. macOS uses launchd;
+   Linux uses a systemd user timer. Tune with `--reaper-interval N`
+   (range 10..=3600 seconds). Reverse with `claudectl --uninstall-reaper`.
 
 The reaper is a no-op on hosts without `sbx` in `PATH`, so it's safe to
 install unconditionally.
@@ -253,11 +253,20 @@ Sandbox layout differs across teams. Override the defaults via env vars:
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `CLAUDECTL_SANDBOX_NAME` | `linera-agent` | sbx sandbox name to scan |
+| `CLAUDECTL_SANDBOX_NAME` | auto-detected, falls back to `linera-agent` | sbx sandbox name to scan |
 | `CLAUDECTL_SANDBOX_SESSIONS_DIR` | `/var/lib/sandbox-sessions` | in-sandbox dir holding `{pid}.terminal.json` sidecars |
 
-Both vars are read on every invocation; an empty value falls back to the
-default.
+If `CLAUDECTL_SANDBOX_NAME` is unset, claudectl runs `sbx ls` once per
+invocation and uses the single running sandbox if there is exactly one;
+otherwise it falls back to `linera-agent`. An empty value is treated as
+unset.
+
+### Where things live
+
+| Platform | Unit / plist | Error log |
+|---|---|---|
+| macOS | `~/Library/LaunchAgents/linera.claudectl-reaper.plist` | `~/Library/Logs/claudectl-reaper.err.log` |
+| Linux | `~/.config/systemd/user/claudectl-reaper.{service,timer}` | `~/.local/state/claudectl-reaper.err.log` |
 
 ## Docs
 
