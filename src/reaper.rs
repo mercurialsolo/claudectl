@@ -428,36 +428,14 @@ pub fn run(dry_run: bool) -> io::Result<()> {
         return Ok(());
     }
 
-    // Sweep already-dead sidecars unconditionally — they have no live
-    // process, removing their disk artefacts is always safe.
+    // Apply the plan in ONE sbx exec instead of two. The dead pids get
+    // their `{pid}.json` and `{pid}.terminal.json` removed; the alive pids
+    // get SIGHUP. Alive pids' sidecars are NOT swept this pass — if the
+    // HUP fails or the process ignores it, the sidecar must remain so the
+    // next reaper tick re-detects it.
     let dead_pids: Vec<u32> = plan.sweep.iter().map(|o| o.pid).collect();
-    if !dead_pids.is_empty() {
-        sweep_sandbox_files(&dead_pids)?;
-    }
-
-    // Send SIGHUP to alive orphans. Do NOT pre-emptively sweep their disk
-    // files: if the kill fails (sbx down, signal lost, claude ignores HUP)
-    // we want their sidecars to remain so the next reaper pass can retry.
-    // Successful kills will be followed by their PIDs going dead, and the
-    // next pass will sweep them via the dead-sidecar path above.
-    if !plan.kill.is_empty() {
-        let pids: Vec<String> = plan.kill.iter().map(|o| o.pid.to_string()).collect();
-        let name = sandbox_name();
-        match Command::new("sbx")
-            .args(["exec", &name, "kill", "-HUP"])
-            .args(&pids)
-            .output()
-        {
-            Ok(o) if !o.status.success() => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                writeln!(io::stderr(), "reaper: kill -HUP failed: {stderr}")?;
-            }
-            Err(e) => {
-                writeln!(io::stderr(), "reaper: kill -HUP exec failed: {e}")?;
-            }
-            Ok(_) => {}
-        }
-    }
+    let alive_pids: Vec<u32> = plan.kill.iter().map(|o| o.pid).collect();
+    apply_plan(&dead_pids, &alive_pids)?;
 
     Ok(())
 }
@@ -584,32 +562,67 @@ fn parse_sandbox_sidecars(text: &str) -> Vec<SandboxSidecar> {
     out
 }
 
-/// Sweep `{pid}.json` and `{pid}.terminal.json` for every reaped/dead pid.
-/// Single sbx exec, comma/space-joined.
-fn sweep_sandbox_files(pids: &[u32]) -> io::Result<()> {
-    let pids_arg: Vec<String> = pids.iter().map(|p| p.to_string()).collect();
+/// Apply the reaper plan in ONE `sbx exec`: sweep dead-PID sidecar files
+/// then SIGHUP alive-PID orphans. No-op when both lists are empty.
+///
+/// The script gets the dead-pid count as its first positional, lets the
+/// shell shift it off, and uses the rest of the count as sweep targets;
+/// anything still on the argv after that is the kill set. This avoids a
+/// second `sbx exec` round-trip (each is on the order of seconds of
+/// startup overhead from inside the sbx wrapper).
+///
+/// Errors:
+/// - `Command::output` failure (sbx binary missing/unspawnable) is
+///   propagated — same as the prior split implementation.
+/// - Non-zero bash exit (rm trips, kill returns non-zero) is logged to
+///   stderr but does NOT fail the run. `rm -f` swallows its own errors
+///   already; a non-zero exit here usually means kill couldn't deliver
+///   the signal, which is a soft warning at worst — the next reaper pass
+///   will re-detect the still-alive orphan and retry.
+fn apply_plan(dead_pids: &[u32], alive_pids: &[u32]) -> io::Result<()> {
+    if dead_pids.is_empty() && alive_pids.is_empty() {
+        return Ok(());
+    }
+
     let dir = sandbox_sessions_dir();
     let script = format!(
         r#"
 set -u
 DIR={dir}
-for pid in "$@"; do
+N_DEAD=$1; shift
+i=0
+while [ "$i" -lt "$N_DEAD" ]; do
+  pid=$1; shift
   rm -f "$DIR/$pid.json" "$DIR/$pid.terminal.json" 2>/dev/null || true
+  i=$((i+1))
 done
+if [ "$#" -gt 0 ]; then
+  kill -HUP "$@" 2>&1
+fi
 "#
     );
+
+    let mut all_args: Vec<String> = Vec::with_capacity(1 + dead_pids.len() + alive_pids.len());
+    all_args.push(dead_pids.len().to_string());
+    all_args.extend(dead_pids.iter().map(u32::to_string));
+    all_args.extend(alive_pids.iter().map(u32::to_string));
+
     let name = sandbox_name();
     let mut cmd = Command::new("sbx");
     cmd.args(["exec", &name, "bash", "-c", &script, "--"]);
-    cmd.args(&pids_arg);
-    let output = cmd.output()?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "sbx exec sweep failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
+    cmd.args(&all_args);
+    match cmd.output() {
+        Ok(o) if !o.status.success() => {
+            writeln!(
+                io::stderr(),
+                "reaper: apply_plan returned non-zero: {}",
+                String::from_utf8_lossy(&o.stderr)
+            )?;
+            Ok(())
+        }
+        Err(e) => Err(e),
+        Ok(_) => Ok(()),
     }
-    Ok(())
 }
 
 // ── Install/uninstall (macOS launchd + Linux systemd-user) ────────────────
