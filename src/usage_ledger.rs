@@ -92,6 +92,12 @@ fn offsets_path() -> PathBuf {
 struct FileOffset {
     last_byte: u64,
     mtime_ms: u64,
+    /// True once we've drained this JSONL after observing its writer
+    /// process exited. After draining a dead-writer file we know it can
+    /// never grow again, so subsequent scans skip it entirely (no stat,
+    /// no open). Drops the every-30-s scan from ~1700 ms (stat-ing every
+    /// historical JSONL) to ~30 ms on a heavy `~/.claude/projects` tree.
+    drained: bool,
 }
 
 type OffsetMap = HashMap<String, FileOffset>;
@@ -110,11 +116,15 @@ fn load_offsets_at(path: &Path) -> OffsetMap {
     for (k, v) in obj {
         let last_byte = v.get("last_byte").and_then(|n| n.as_u64()).unwrap_or(0);
         let mtime_ms = v.get("mtime_ms").and_then(|n| n.as_u64()).unwrap_or(0);
+        // Older offsets files won't have the `drained` field; default to
+        // false so we re-scan once on upgrade and pick up the marker.
+        let drained = v.get("drained").and_then(|n| n.as_bool()).unwrap_or(false);
         out.insert(
             k.clone(),
             FileOffset {
                 last_byte,
                 mtime_ms,
+                drained,
             },
         );
     }
@@ -127,12 +137,49 @@ fn save_offsets_at(path: &Path, offsets: &OffsetMap) {
         let mut entry = serde_json::Map::new();
         entry.insert("last_byte".into(), Value::from(v.last_byte));
         entry.insert("mtime_ms".into(), Value::from(v.mtime_ms));
+        entry.insert("drained".into(), Value::from(v.drained));
         obj.insert(k.clone(), Value::Object(entry));
     }
     let Ok(rendered) = serde_json::to_string(&Value::Object(obj)) else {
         return;
     };
     let _ = fs::write(path, rendered);
+}
+
+/// Read `~/.claude/sessions/*.json` pointer files and return the set of
+/// `sessionId` values for currently-live Claude Code sessions. The set is
+/// used by `scan_and_append` to gate stat-skipping on dead-writer files.
+fn read_live_session_ids(sessions_dir: &Path) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(entries) = fs::read_dir(sessions_dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Skip the *.terminal.json sidecars and anything else non-pointer.
+        let Some(ext) = path.extension() else {
+            continue;
+        };
+        if ext != "json" {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".terminal.json") {
+            continue;
+        }
+        let Ok(body) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&body) else {
+            continue;
+        };
+        if let Some(sid) = value.get("sessionId").and_then(|v| v.as_str()) {
+            out.insert(sid.to_string());
+        }
+    }
+    out
 }
 
 /// Recursively enumerate every `*.jsonl` under `~/.claude/projects`. Order
@@ -156,6 +203,52 @@ fn find_jsonl_files(root: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// Process-local cache of `find_jsonl_files` results. Walking
+/// `~/.claude/projects` recursively takes ~500 ms on a heavy tree (Andre's
+/// box has ~36 project dirs × ~60 jsonls), and we only call it from the
+/// every-30 s `scan_and_append` cadence. New JSONL files appear when a
+/// new Claude Code session starts — rare enough that a few minutes of
+/// staleness is fine; the next walk picks them up.
+const FILE_LIST_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
+
+#[derive(Default)]
+struct FileListCache {
+    last_walk_unix_ms: u64,
+    files: Vec<PathBuf>,
+    walked_root: PathBuf,
+}
+
+fn file_list_cache() -> &'static Mutex<FileListCache> {
+    static CACHE: OnceLock<Mutex<FileListCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(FileListCache::default()))
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Cached wrapper around `find_jsonl_files`. Re-walks every
+/// `FILE_LIST_CACHE_TTL_MS` or when the projects root changes (defends
+/// the cache against process-wide state pollution if the production
+/// projects dir ever changes mid-process — e.g., HOME swap in tests).
+fn find_jsonl_files_cached(root: &Path) -> Vec<PathBuf> {
+    let now = now_unix_ms();
+    let mut c = file_list_cache()
+        .lock()
+        .expect("file list cache mutex poisoned");
+    let stale = now.saturating_sub(c.last_walk_unix_ms) >= FILE_LIST_CACHE_TTL_MS;
+    let root_changed = c.walked_root.as_path() != root;
+    if stale || root_changed || c.files.is_empty() {
+        c.files = find_jsonl_files(root);
+        c.last_walk_unix_ms = now;
+        c.walked_root = root.to_path_buf();
+    }
+    c.files.clone()
 }
 
 /// Single-stat helper: returns `(mtime_ms, len)` for the path in one
@@ -199,12 +292,28 @@ fn csv_escape(raw: &str) -> String {
 /// Scan every JSONL and append any new assistant `usage` blocks to the
 /// ledger. Offsets persist across runs so subsequent scans are O(new bytes).
 pub fn scan_and_append() -> ScanReport {
-    scan_and_append_at(&projects_dir(), &ledger_path(), &offsets_path())
+    scan_and_append_at(
+        &projects_dir(),
+        &ledger_path(),
+        &offsets_path(),
+        &dirs_home().join(".claude").join("sessions"),
+    )
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
 /// Testable variant: explicit paths. Production wrapper computes paths from
 /// `$HOME` and delegates here.
-pub fn scan_and_append_at(projects_root: &Path, ledger: &Path, offsets_file: &Path) -> ScanReport {
+pub fn scan_and_append_at(
+    projects_root: &Path,
+    ledger: &Path,
+    offsets_file: &Path,
+    sessions_dir: &Path,
+) -> ScanReport {
     if let Some(parent) = ledger.parent() {
         if fs::create_dir_all(parent).is_err() {
             return ScanReport::default();
@@ -223,7 +332,8 @@ pub fn scan_and_append_at(projects_root: &Path, ledger: &Path, offsets_file: &Pa
     }
 
     let mut offsets = load_offsets_at(offsets_file);
-    let files = find_jsonl_files(projects_root);
+    let live = read_live_session_ids(sessions_dir);
+    let files = find_jsonl_files_cached(projects_root);
 
     let mut report = ScanReport {
         files_scanned: files.len(),
@@ -232,20 +342,36 @@ pub fn scan_and_append_at(projects_root: &Path, ledger: &Path, offsets_file: &Pa
 
     for jsonl in &files {
         let key = jsonl.display().to_string();
+        let prev = offsets.get(&key).cloned().unwrap_or_default();
+        let session_id = session_id_from_path(jsonl);
+        let writer_alive = live.contains(&session_id);
+
+        // Drained-skip: a JSONL whose writer process exited and which we
+        // already drained on a prior scan can never grow again. Skip the
+        // stat + open + read entirely. This is the dominant code path on
+        // any box with many historical sessions — typically 99%+ of files.
+        if !writer_alive && prev.drained {
+            continue;
+        }
+
         let Some((current_mtime, current_size)) = metadata_mtime_len(jsonl) else {
             continue;
         };
 
-        let prev = offsets.get(&key).cloned().unwrap_or_default();
-
         // Fast skip: same mtime AND same size as last scan ⇒ no new
-        // bytes can possibly exist. Avoids the file open + read + parse
-        // for every untouched JSONL, which is the steady-state case for
-        // 2k+ historical sessions on Andre's box (>99% of files per
-        // tick are dormant). Still respect truncation below — only skip
-        // when size matches too, so a `> /dev/null` rewrite that
-        // preserved mtime by accident would still get re-scanned.
+        // bytes can possibly exist. For dead writers also flip the
+        // `drained` marker so the next scan can skip the stat above.
         if current_mtime == prev.mtime_ms && current_size == prev.last_byte {
+            if !writer_alive && !prev.drained {
+                offsets.insert(
+                    key.clone(),
+                    FileOffset {
+                        last_byte: current_size,
+                        mtime_ms: current_mtime,
+                        drained: true,
+                    },
+                );
+            }
             continue;
         }
 
@@ -264,6 +390,7 @@ pub fn scan_and_append_at(projects_root: &Path, ledger: &Path, offsets_file: &Pa
                 FileOffset {
                     last_byte: current_size,
                     mtime_ms: current_mtime,
+                    drained: !writer_alive,
                 },
             );
             continue;
@@ -326,6 +453,10 @@ pub fn scan_and_append_at(projects_root: &Path, ledger: &Path, offsets_file: &Pa
             FileOffset {
                 last_byte: current_size,
                 mtime_ms: current_mtime,
+                // We just performed a full read up to `current_size`. If
+                // the writer is dead, future scans can skip this file
+                // entirely via the drained-skip above.
+                drained: !writer_alive,
             },
         );
     }
@@ -550,6 +681,7 @@ mod tests {
         projects: PathBuf,
         ledger: PathBuf,
         offsets: PathBuf,
+        sessions: PathBuf,
     }
 
     impl TestPaths {
@@ -563,18 +695,31 @@ mod tests {
             let _ = fs::remove_dir_all(&root);
             let projects = root.join("projects");
             let share = root.join("share");
+            let sessions = root.join("sessions");
             fs::create_dir_all(&projects).unwrap();
             fs::create_dir_all(&share).unwrap();
+            fs::create_dir_all(&sessions).unwrap();
             Self {
                 ledger: share.join("usage_log.csv"),
                 offsets: share.join("usage_offsets.json"),
                 projects,
+                sessions,
                 _root: root,
             }
         }
 
         fn scan(&self) -> ScanReport {
-            scan_and_append_at(&self.projects, &self.ledger, &self.offsets)
+            scan_and_append_at(&self.projects, &self.ledger, &self.offsets, &self.sessions)
+        }
+
+        /// Mark the JSONL named `<session_id>.jsonl` as having a live writer
+        /// process. Without this, scan_and_append's drained-skip kicks in
+        /// after the first scan and subsequent calls return 0 rows
+        /// (correct for production — dead-writer files can't grow).
+        fn mark_live(&self, session_id: &str) {
+            let pid_path = self.sessions.join(format!("{session_id}-test-pid.json"));
+            let body = format!(r#"{{"sessionId":"{session_id}"}}"#);
+            fs::write(pid_path, body).unwrap();
         }
 
         fn summary(&self, since_ms: u64) -> UsageSummary {
@@ -651,6 +796,10 @@ mod tests {
     fn scan_is_incremental_across_runs() {
         let p = TestPaths::new("incremental");
         let project = p.projects.join("-test/sess-x.jsonl");
+        // Mark this session as live so scan_and_append doesn't drain-skip
+        // it on the second pass — we want to verify incremental APPENDS,
+        // which only happen for live writers.
+        p.mark_live("sess-x");
         write_tmp(
             &project,
             &fixture_assistant_line("2026-04-22T10:00:00.000Z", "claude-opus-4-7", 10, 0, 0, 5),
@@ -675,6 +824,47 @@ mod tests {
         assert_eq!(summary.msg_count, 2);
         assert_eq!(summary.fresh_input, 40);
         assert_eq!(summary.output, 12);
+    }
+
+    #[test]
+    fn dead_writer_is_drained_once_then_skipped() {
+        // First scan: writer is "dead" (no pointer file). Drains the
+        // file in one pass and flips `drained=true` in offsets.
+        // Second scan: even after appending more bytes, drained-skip
+        // means the appended bytes are NOT picked up — correct because
+        // a real dead writer cannot append, and we want O(0) work for
+        // historical JSONLs.
+        let p = TestPaths::new("drain");
+        let project = p.projects.join("-test/sess-dead.jsonl");
+        write_tmp(
+            &project,
+            &fixture_assistant_line("2026-04-22T10:00:00.000Z", "claude-opus-4-7", 10, 0, 0, 5),
+        );
+        let r1 = p.scan();
+        assert_eq!(r1.rows_appended, 1);
+
+        // Simulate a "phantom append" that should never happen for a
+        // real dead writer but proves drained-skip is short-circuiting.
+        let mut f = OpenOptions::new().append(true).open(&project).unwrap();
+        writeln!(
+            f,
+            "\n{}",
+            fixture_assistant_line("2026-04-22T10:05:00.000Z", "claude-opus-4-7", 99, 0, 0, 99)
+        )
+        .unwrap();
+        drop(f);
+
+        let r2 = p.scan();
+        assert_eq!(
+            r2.rows_appended, 0,
+            "drained dead-writer files must be skipped without re-stat"
+        );
+
+        // Now mark the session as live + scan again. The file is no
+        // longer skipped, the appended row is parsed.
+        p.mark_live("sess-dead");
+        let r3 = p.scan();
+        assert_eq!(r3.rows_appended, 1, "live writer un-drains the file");
     }
 
     #[test]
