@@ -418,6 +418,20 @@ pub struct App {
     /// `data_snapshot()` (cheap Arc-clone, lock held for ns); writes
     /// build a fresh `AppData` and atomic-swap with `replace_data()`.
     pub data: Arc<RwLock<Arc<AppData>>>,
+    /// Sender end of the channel that `refresh_nonblocking` uses to
+    /// ship `RefreshIoOutput` from a `spawn_blocking` worker back to
+    /// the main thread. Cloned per-spawn so each worker gets its own
+    /// handle; the receiver lives on `App`.
+    pub refresh_tx: tokio::sync::mpsc::UnboundedSender<RefreshIoOutput>,
+    /// Receiver end of the refresh channel. Drained on each tick via
+    /// `try_recv` (non-blocking) so the main thread never waits for
+    /// a refresh worker to finish.
+    pub refresh_rx: tokio::sync::mpsc::UnboundedReceiver<RefreshIoOutput>,
+    /// True while a `do_refresh_io` worker is in flight on the tokio
+    /// blocking pool. Prevents a slow refresh from kicking off
+    /// duplicates each tick — the next tick reuses the existing
+    /// worker's eventual result. Cleared once the result is recv'd.
+    pub refresh_in_flight: bool,
     pub table_state: TableState,
     pub should_quit: bool,
     pub status_msg: String,
@@ -580,8 +594,12 @@ impl App {
     }
 
     pub fn new() -> Self {
+        let (refresh_tx, refresh_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = Self {
             data: Arc::new(RwLock::new(Arc::new(AppData::default()))),
+            refresh_tx,
+            refresh_rx,
+            refresh_in_flight: false,
             table_state: TableState::default(),
             should_quit: false,
             status_msg: String::new(),
@@ -677,19 +695,84 @@ impl App {
             return;
         }
 
-        // Run the I/O-heavy phase synchronously. `do_refresh_io` does
-        // all the discovery / ps / monitor / JSONL work and returns a
-        // ready-to-merge result; everything below operates on its
-        // outputs to do the App-state mutations (status detection,
-        // conflict tracking, budget enforcement, etc.).
+        // Run the I/O-heavy phase synchronously, then apply the
+        // post-I/O App-state mutations. Splitting these makes the
+        // async path (`refresh_nonblocking`) easy: it spawns
+        // `do_refresh_io` on a worker and routes the result through a
+        // channel, then calls `apply_refresh_output` on the main thread.
         let prev_sessions = self.data_snapshot().sessions.clone();
+        let out = do_refresh_io(prev_sessions);
+        self.apply_refresh_output(out, tick_start);
+    }
+
+    /// Non-blocking refresh: drain any completed worker results, apply
+    /// them on the main thread, and kick off a new worker if none is
+    /// in flight. The TUI loop calls this every tick instead of
+    /// `refresh()` so the I/O latency doesn't block render or key
+    /// handling. Falls back to a synchronous refresh when called
+    /// outside a tokio runtime (e.g. one-shot CLI commands, tests),
+    /// preserving existing behaviour for those entry points.
+    ///
+    /// Returns `true` when this call applied at least one
+    /// `RefreshIoOutput` to App state (i.e. fresh data is now
+    /// visible). Tests use the return value to drive a poll loop;
+    /// production callers can ignore it.
+    pub fn refresh_nonblocking(&mut self) -> bool {
+        if self.demo_mode {
+            self.refresh();
+            return true;
+        }
+
+        // Drain ALL completed results, applying each. Keeping a stale
+        // result in the channel would hide the latest one; we want the
+        // main thread to converge on the freshest snapshot fast.
+        let mut applied_any = false;
+        while let Ok(out) = self.refresh_rx.try_recv() {
+            self.apply_refresh_output(out, std::time::Instant::now());
+            self.refresh_in_flight = false;
+            applied_any = true;
+        }
+
+        // Don't kick off a new worker until the previous one's result
+        // has been applied — keeps memory bounded under bursty I/O.
+        if self.refresh_in_flight {
+            return applied_any;
+        }
+
+        // Kick a new refresh on the tokio blocking pool. If we're not
+        // in a runtime context (tests, one-shot CLI), fall back to a
+        // synchronous refresh on the calling thread.
+        let prev_sessions = self.data_snapshot().sessions.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let tx = self.refresh_tx.clone();
+            handle.spawn_blocking(move || {
+                let out = do_refresh_io(prev_sessions);
+                let _ = tx.send(out);
+            });
+            self.refresh_in_flight = true;
+        } else if !applied_any {
+            // No runtime AND we didn't already apply a result this tick:
+            // run synchronously so the caller still gets fresh data.
+            let out = do_refresh_io(prev_sessions);
+            self.apply_refresh_output(out, std::time::Instant::now());
+            applied_any = true;
+        }
+        applied_any
+    }
+
+    /// Apply an already-computed `RefreshIoOutput` to App state.
+    /// All the burn-rate / budget / context / status-transition /
+    /// conflict-detection / file-conflict logic runs here on the main
+    /// thread. The I/O has already happened; this is pure CPU + App
+    /// field mutation.
+    fn apply_refresh_output(&mut self, out: RefreshIoOutput, tick_start: std::time::Instant) {
         let RefreshIoOutput {
             mut sessions,
             new_pids,
             scan_elapsed,
             ps_elapsed,
             jsonl_elapsed,
-        } = do_refresh_io(prev_sessions);
+        } = out;
 
         // Compute burn rate from cost delta (skip first tick where prev_cost is 0)
         for session in &mut sessions {
@@ -1318,7 +1401,12 @@ impl App {
             }
         });
 
-        self.refresh();
+        // Non-blocking refresh: applies any completed worker result and
+        // kicks the next one off without waiting. The main thread
+        // returns immediately so the render+key loop stays smooth even
+        // when `do_refresh_io` takes ~30 ms (or much more on a slow
+        // disk).
+        self.refresh_nonblocking();
         self.run_auto_actions();
 
         // Check idle mode transition
@@ -2672,6 +2760,50 @@ mod tests {
         assert_eq!(snap.ledger_week.fresh_input, 12345);
         assert_eq!(snap.sessions.len(), 1);
         assert_eq!(snap.sessions[0].pid, 99);
+    }
+
+    #[test]
+    fn refresh_nonblocking_falls_back_to_sync_when_no_runtime() {
+        // No tokio runtime is active in unit tests by default — the
+        // function must therefore run `do_refresh_io` synchronously
+        // and return `true` (work was applied) with refresh_in_flight
+        // cleared, rather than dispatching to a worker that never runs.
+        let mut app = app_with_empty_data();
+        assert!(app.refresh_nonblocking());
+        assert!(!app.refresh_in_flight);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refresh_nonblocking_kicks_worker_under_runtime() {
+        // With a multi-threaded tokio runtime the first call kicks
+        // a `do_refresh_io` worker onto the blocking pool. Subsequent
+        // calls return false until the worker sends its result back
+        // through the channel; once the result is applied,
+        // refresh_nonblocking returns true. We poll on the return
+        // value rather than `refresh_in_flight` because each call
+        // also schedules the NEXT worker, so the flag is true on
+        // exit even after a successful drain.
+        //
+        // Note: `do_refresh_io` reads the real host filesystem
+        // (~/.claude/sessions, ~/.claude/projects). On a heavy box
+        // the cold pass can take seconds; the 60 s deadline is
+        // generous to keep this test reliable on slow CI/sandboxes.
+        let mut app = app_with_empty_data();
+        let kicked = app.refresh_nonblocking();
+        assert!(!kicked, "first call only schedules; nothing applied yet");
+        assert!(app.refresh_in_flight, "worker must be scheduled");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            tokio::task::yield_now().await;
+            if app.refresh_nonblocking() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("refresh worker did not complete within 60 s");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
     }
 
     #[test]
