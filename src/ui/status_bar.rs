@@ -86,11 +86,12 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(msg, area);
     } else if !app.session_recordings.is_empty() {
         let count = app.session_recordings.len();
+        let snap = app.data_snapshot();
         let names: Vec<&str> = app
             .session_recordings
             .keys()
             .filter_map(|pid| {
-                app.sessions
+                snap.sessions
                     .iter()
                     .find(|s| s.pid == *pid)
                     .map(|s| s.display_name())

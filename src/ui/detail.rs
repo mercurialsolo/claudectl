@@ -230,12 +230,13 @@ pub fn render_detail_panel(frame: &mut Frame, area: Rect, session: &ClaudeSessio
                 format!(" File Conflicts ({})", conflicting_files.len()),
                 Style::default().fg(t.error).add_modifier(Modifier::BOLD),
             )));
+            let snap = app.data_snapshot();
             for (file, pids) in conflicting_files.iter().take(10) {
                 let others: Vec<&str> = pids
                     .iter()
                     .filter(|&&p| p != pid)
                     .filter_map(|p| {
-                        app.sessions
+                        snap.sessions
                             .iter()
                             .find(|s| s.pid == *p)
                             .map(|s| s.display_name())

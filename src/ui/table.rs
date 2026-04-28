@@ -41,7 +41,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .to_vec();
 
     // Empty state: show onboarding message when no sessions found
-    if app.sessions.is_empty() {
+    if app.data_snapshot().sessions.is_empty() {
         let launch_hint = if crate::terminals::can_launch_session() {
             "  Press n for the launch wizard, or start claude in another terminal."
         } else {
@@ -201,7 +201,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             // Session rows under this group
             for s in visible_sessions
                 .iter()
-                .copied()
                 .filter(|s| s.project_name == group.name)
             {
                 if Some(s.pid) == selected_pid {
@@ -221,7 +220,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .filter(|s| app.is_parked(&s.session_id))
             .count();
         let mut separator_inserted = false;
-        for s in visible_sessions.iter().copied() {
+        for s in visible_sessions.iter() {
             let is_parked = app.is_parked(&s.session_id);
             // When we see the first parked session, insert a visual separator
             // so the section is obviously distinct from the working set above.
@@ -257,7 +256,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     ];
 
     let count = visible_sessions.len();
-    let total_sessions = app.sessions.len();
+    let total_sessions = app.data_snapshot().sessions.len();
     let active = visible_sessions
         .iter()
         .filter(|s| {
@@ -371,8 +370,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // Always-visible throughput panel sourced from the usage ledger
     // (JSONL-backed, independent of session-close detection). Suppressed only
     // until the first scan has populated the ledger.
-    let week = &app.ledger_week;
-    let month = &app.ledger_month;
+    let snap = app.data_snapshot();
+    let week = &snap.ledger_week;
+    let month = &snap.ledger_month;
     if week.msg_count > 0 || month.msg_count > 0 {
         let week_tokens = format_token_count_nonempty(week.total_tokens());
         let month_tokens = format_token_count_nonempty(month.total_tokens());
@@ -422,7 +422,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let mut next_chunk = 1;
     if show_detail {
         if let Some(session) = app.selected_session() {
-            render_detail_panel(frame, chunks[next_chunk], session, app);
+            render_detail_panel(frame, chunks[next_chunk], &session, app);
         }
         next_chunk += 1;
     }

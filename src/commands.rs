@@ -299,7 +299,7 @@ pub(crate) fn run_clean(
     // Collect active PIDs to avoid deleting live sessions
     let active_pids: std::collections::HashSet<u32> = {
         let app = App::new();
-        app.sessions.iter().map(|s| s.pid).collect()
+        app.data_snapshot().sessions.iter().map(|s| s.pid).collect()
     };
 
     let mut removed_sessions = 0u64;
@@ -384,7 +384,7 @@ pub(crate) fn run_clean(
                 if finished_only {
                     // Check if any active session is using this JSONL
                     let app = App::new();
-                    let is_active = app.sessions.iter().any(|s| {
+                    let is_active = app.data_snapshot().sessions.iter().any(|s| {
                         s.jsonl_path
                             .as_ref()
                             .map(|p| p == &file_path)
@@ -438,13 +438,14 @@ pub(crate) fn run_clean(
 pub(crate) fn print_summary(since: &str) -> io::Result<()> {
     let since_duration = parse_duration_str(since);
     let app = App::new();
+    let snap = app.data_snapshot();
 
-    if app.sessions.is_empty() {
+    if snap.sessions.is_empty() {
         println!("No active Claude sessions.");
         return Ok(());
     }
 
-    for s in &app.sessions {
+    for s in &snap.sessions {
         let status_color = match s.status {
             session::SessionStatus::Processing => "\x1b[32m",
             session::SessionStatus::Compacting => "\x1b[36m",
@@ -548,7 +549,7 @@ pub(crate) fn print_summary(since: &str) -> io::Result<()> {
         println!();
     }
 
-    let total_cost: f64 = app.sessions.iter().map(|s| s.cost_usd).sum();
+    let total_cost: f64 = snap.sessions.iter().map(|s| s.cost_usd).sum();
     println!("Total cost: ${total_cost:.2}");
 
     Ok(())
@@ -568,7 +569,10 @@ fn make_app(demo: bool, filters: &ViewFilters) -> App {
     let mut app = if demo {
         let mut app = App::new();
         app.demo_mode = true;
-        app.sessions = demo::generate_sessions(10);
+        app.replace_data(crate::app::AppData {
+            sessions: demo::generate_sessions(10),
+            ..crate::app::AppData::default()
+        });
         app
     } else {
         App::new()
@@ -653,11 +657,16 @@ pub(crate) fn run_watch(
 
     let mut app = App::new();
     apply_filters(&mut app, filters);
-    let mut prev_statuses: HashMap<u32, SessionStatus> =
-        app.sessions.iter().map(|s| (s.pid, s.status)).collect();
+    let mut prev_statuses: HashMap<u32, SessionStatus> = app
+        .data_snapshot()
+        .sessions
+        .iter()
+        .map(|s| (s.pid, s.status))
+        .collect();
 
     // Print initial state for all sessions
-    for s in app.visible_sessions() {
+    let visible = app.visible_sessions();
+    for s in &visible {
         if json_mode {
             let obj = serde_json::json!({
                 "event": "initial",
@@ -681,7 +690,8 @@ pub(crate) fn run_watch(
         let visible_pids: std::collections::HashSet<u32> =
             app.visible_sessions().iter().map(|s| s.pid).collect();
 
-        for s in &app.sessions {
+        let snap = app.data_snapshot();
+        for s in &snap.sessions {
             let prev = prev_statuses.get(&s.pid).copied();
             let changed = prev.is_none_or(|p| p != s.status);
 
@@ -707,7 +717,7 @@ pub(crate) fn run_watch(
             }
         }
 
-        prev_statuses = app.sessions.iter().map(|s| (s.pid, s.status)).collect();
+        prev_statuses = snap.sessions.iter().map(|s| (s.pid, s.status)).collect();
     }
 }
 

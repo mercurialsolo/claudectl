@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
@@ -14,6 +15,24 @@ use crate::process;
 use crate::session::{ClaudeSession, SessionStatus};
 use crate::terminals;
 use crate::theme::Theme;
+
+/// Refresh-driven application state. Owned exclusively by `App.data` and
+/// swapped atomically each refresh cycle. Render and key-event paths read
+/// snapshots via `App::data_snapshot()`; mutations (refresh) go through
+/// `App::replace_data()` which builds a fresh `AppData` and atomically
+/// replaces the shared `Arc`.
+///
+/// Splitting these fields off from `App` is the foundation for moving
+/// refresh I/O onto a background tokio task: the task owns `AppData`
+/// mutations, the render thread reads snapshots concurrently, and no
+/// torn reads are possible because the swap is at the whole-state level.
+#[derive(Default, Clone)]
+pub struct AppData {
+    pub sessions: Vec<ClaudeSession>,
+    pub ledger_today: crate::usage_ledger::UsageSummary,
+    pub ledger_week: crate::usage_ledger::UsageSummary,
+    pub ledger_month: crate::usage_ledger::UsageSummary,
+}
 
 pub const SORT_COLUMNS: &[&str] = &[
     "Status", "Context", "Cost", "$/hr", "Elapsed", "Last", "Name",
@@ -333,7 +352,10 @@ fn compact_value(value: &str, empty_label: &str) -> String {
 }
 
 pub struct App {
-    pub sessions: Vec<ClaudeSession>,
+    /// Refresh-driven state behind a shared atomic. Reads use
+    /// `data_snapshot()` (cheap Arc-clone, lock held for ns); writes
+    /// build a fresh `AppData` and atomic-swap with `replace_data()`.
+    pub data: Arc<RwLock<Arc<AppData>>>,
     pub table_state: TableState,
     pub should_quit: bool,
     pub status_msg: String,
@@ -377,11 +399,6 @@ pub struct App {
     pub theme: Theme,
     pub ledger_refresh_tick: u32, // Cheap rollup refresh every N ticks
     pub ledger_scan_tick: u32,    // Expensive scan_and_append every N ticks
-    // JSONL-sourced usage aggregates. Independent of session-exit detection,
-    // so they stay accurate even for sessions closed via terminal-close.
-    pub ledger_today: crate::usage_ledger::UsageSummary,
-    pub ledger_week: crate::usage_ledger::UsageSummary,
-    pub ledger_month: crate::usage_ledger::UsageSummary,
     pub hooks: HookRegistry,
     pub daily_limit: Option<f64>,
     pub weekly_limit: Option<f64>,
@@ -461,9 +478,48 @@ impl Default for App {
 }
 
 impl App {
+    /// Cheap shared-state read: clones the inner Arc (a refcount bump,
+    /// not a deep clone) while the lock is held for nanoseconds. Use
+    /// for any read that touches refresh-driven fields. Iterate the
+    /// returned snapshot for the lifetime of one frame; do not interleave
+    /// with `replace_data` and expect consistency across calls.
+    pub fn data_snapshot(&self) -> Arc<AppData> {
+        Arc::clone(&self.data.read().expect("AppData read lock poisoned"))
+    }
+
+    /// Atomic-swap the shared `Arc<AppData>` to a freshly built one.
+    /// Holds the write lock only long enough to assign — readers see
+    /// either the old state or the new one, never a partial mix.
+    pub fn replace_data(&self, new: AppData) {
+        *self.data.write().expect("AppData write lock poisoned") = Arc::new(new);
+    }
+
+    /// Mutate the shared AppData in place via a closure. Uses
+    /// `Arc::make_mut` so callers see a `&mut AppData` directly: if no
+    /// other readers hold the Arc the mutation is in-place; otherwise
+    /// it triggers one copy. Holds the write lock for the duration of
+    /// the closure, so keep the body short — for long refresh work,
+    /// snapshot + build a fresh `AppData` locally + `replace_data`.
+    pub fn modify_data<F: FnOnce(&mut AppData)>(&self, f: F) {
+        let mut guard = self.data.write().expect("AppData write lock poisoned");
+        let inner: &mut AppData = Arc::make_mut(&mut *guard);
+        f(inner);
+    }
+
+    /// Common idiom for sort / reorder paths: snapshot, clone the
+    /// AppData, run a mutator on the sessions vec, atomic-swap. Holds
+    /// no locks across the closure; safe for the closure body to
+    /// reborrow `&self` (e.g. to call `App::apply_sort`).
+    pub fn with_sessions<F: FnOnce(&mut Vec<ClaudeSession>)>(&self, f: F) {
+        let snap = self.data_snapshot();
+        let mut new_data = (*snap).clone();
+        f(&mut new_data.sessions);
+        self.replace_data(new_data);
+    }
+
     pub fn new() -> Self {
         let mut app = Self {
-            sessions: Vec::new(),
+            data: Arc::new(RwLock::new(Arc::new(AppData::default()))),
             table_state: TableState::default(),
             should_quit: false,
             status_msg: String::new(),
@@ -500,9 +556,6 @@ impl App {
             theme: Theme::from_mode(crate::theme::ThemeMode::Dark),
             ledger_refresh_tick: 0,
             ledger_scan_tick: 0,
-            ledger_today: crate::usage_ledger::UsageSummary::default(),
-            ledger_week: crate::usage_ledger::UsageSummary::default(),
-            ledger_month: crate::usage_ledger::UsageSummary::default(),
             hooks: HookRegistry::new(),
             daily_limit: None,
             weekly_limit: None,
@@ -567,7 +620,10 @@ impl App {
         let discovered = discovery::scan_sessions();
         let scan_elapsed = scan_start.elapsed();
 
-        let existing = std::mem::take(&mut self.sessions);
+        // Take ownership of the existing sessions vec from the shared
+        // AppData so refresh can mutate freely without holding the
+        // RwLock. We rebuild a fresh AppData at the end and atomic-swap.
+        let existing = self.data_snapshot().sessions.clone();
         let (mut sessions, new_pids) = merge_discovered_sessions(existing, discovered);
 
         // Enrich with ps data (CPU, MEM, TTY, command args) + filter dead PIDs
@@ -946,7 +1002,17 @@ impl App {
         // Update prev_statuses
         self.prev_statuses = sessions.iter().map(|s| (s.pid, s.status)).collect();
 
-        self.sessions = sessions;
+        // Atomic-swap the new sessions list into shared AppData.
+        // Preserve ledger summaries from the previous snapshot so a
+        // refresh that doesn't touch the ledger doesn't accidentally
+        // zero it out.
+        let prev = self.data_snapshot();
+        self.replace_data(AppData {
+            sessions,
+            ledger_today: prev.ledger_today.clone(),
+            ledger_week: prev.ledger_week.clone(),
+            ledger_month: prev.ledger_month.clone(),
+        });
         self.normalize_selection();
 
         // Record debug timings
@@ -1039,9 +1105,7 @@ impl App {
         // ordering carried over from a prior column's `S` toggle.
         self.sort_reversed = false;
         self.status_msg = format!("Sort: {}", SORT_COLUMNS[self.sort_column]);
-        let mut sessions = std::mem::take(&mut self.sessions);
-        self.apply_sort(&mut sessions);
-        self.sessions = sessions;
+        self.with_sessions(|s| self.apply_sort(s));
     }
 
     pub fn is_parked(&self, session_id: &str) -> bool {
@@ -1075,9 +1139,7 @@ impl App {
         } else {
             format!("Parked {display_name}")
         };
-        let mut sessions = std::mem::take(&mut self.sessions);
-        self.apply_sort(&mut sessions);
-        self.sessions = sessions;
+        self.with_sessions(|s| self.apply_sort(s));
         self.normalize_selection();
     }
 
@@ -1095,9 +1157,7 @@ impl App {
         } else {
             format!("Sort: {label}")
         };
-        let mut sessions = std::mem::take(&mut self.sessions);
-        self.apply_sort(&mut sessions);
-        self.sessions = sessions;
+        self.with_sessions(|s| self.apply_sort(s));
     }
 
     fn refresh_demo(&mut self) {
@@ -1195,7 +1255,13 @@ impl App {
                 crate::health::compute_decay_score(session, &self.health_thresholds);
         }
 
-        self.sessions = sessions;
+        let prev = self.data_snapshot();
+        self.replace_data(AppData {
+            sessions,
+            ledger_today: prev.ledger_today.clone(),
+            ledger_week: prev.ledger_week.clone(),
+            ledger_month: prev.ledger_month.clone(),
+        });
         self.normalize_selection();
     }
 
@@ -1207,10 +1273,15 @@ impl App {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        for session in &mut self.sessions {
-            let elapsed_ms = now_ms.saturating_sub(session.started_at);
-            session.elapsed = std::time::Duration::from_millis(elapsed_ms);
-        }
+        // Refresh `elapsed` on every session in place. Cheap; runs every
+        // tick. Uses `modify_data` so we don't deep-clone the AppData
+        // for what's just a per-session integer write.
+        self.modify_data(|d| {
+            for session in &mut d.sessions {
+                let elapsed_ms = now_ms.saturating_sub(session.started_at);
+                session.elapsed = std::time::Duration::from_millis(elapsed_ms);
+            }
+        });
 
         self.refresh();
         self.run_auto_actions();
@@ -1248,9 +1319,16 @@ impl App {
         let day_cutoff = now.saturating_sub(86_400_000);
         let week_cutoff = now.saturating_sub(7 * 86_400_000);
         let month_cutoff = now.saturating_sub(30 * 86_400_000);
-        self.ledger_today = crate::usage_ledger::load_summary(day_cutoff);
-        self.ledger_week = crate::usage_ledger::load_summary(week_cutoff);
-        self.ledger_month = crate::usage_ledger::load_summary(month_cutoff);
+        let today = crate::usage_ledger::load_summary(day_cutoff);
+        let week = crate::usage_ledger::load_summary(week_cutoff);
+        let month = crate::usage_ledger::load_summary(month_cutoff);
+        let snap = self.data_snapshot();
+        self.replace_data(AppData {
+            sessions: snap.sessions.clone(),
+            ledger_today: today,
+            ledger_week: week,
+            ledger_month: month,
+        });
     }
 
     /// Get how long a session has been waiting for input, if applicable.
@@ -1274,15 +1352,16 @@ impl App {
     /// Compute budget exhaustion ETA based on current burn rate.
     /// Returns (spent, limit, eta_string, urgency) where urgency is 0=safe, 1=warn, 2=critical.
     pub fn budget_eta(&self) -> Option<(f64, f64, String, u8)> {
-        let live_cost: f64 = self.sessions.iter().map(|s| s.cost_usd).sum();
-        let total_burn: f64 = self.sessions.iter().map(|s| s.burn_rate_per_hr).sum();
+        let snap = self.data_snapshot();
+        let live_cost: f64 = snap.sessions.iter().map(|s| s.cost_usd).sum();
+        let total_burn: f64 = snap.sessions.iter().map(|s| s.burn_rate_per_hr).sum();
 
         // Prefer daily limit, fall back to per-session budget
         let (spent, limit) = if let Some(daily) = self.daily_limit {
-            (self.ledger_today.cost_usd + live_cost, daily)
+            (snap.ledger_today.cost_usd + live_cost, daily)
         } else if let Some(budget) = self.budget_usd {
             // For per-session budget, show the session closest to limit
-            if let Some(session) = self.sessions.iter().max_by(|a, b| {
+            if let Some(session) = snap.sessions.iter().max_by(|a, b| {
                 (a.cost_usd / budget)
                     .partial_cmp(&(b.cost_usd / budget))
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -1322,14 +1401,15 @@ impl App {
     }
 
     fn check_aggregate_budgets(&mut self) {
+        let snap = self.data_snapshot();
         // Also include cost from currently live sessions. The ledger only
         // captures messages that have already been written to JSONL; a
         // mid-flight streaming response isn't there yet.
-        let live_cost: f64 = self.sessions.iter().map(|s| s.cost_usd).sum();
+        let live_cost: f64 = snap.sessions.iter().map(|s| s.cost_usd).sum();
 
         // Daily limit check
         if let Some(daily_limit) = self.daily_limit {
-            let today_total = self.ledger_today.cost_usd + live_cost;
+            let today_total = snap.ledger_today.cost_usd + live_cost;
             let pct = today_total / daily_limit * 100.0;
 
             if pct >= 80.0 && !self.daily_alert_fired {
@@ -1353,7 +1433,7 @@ impl App {
 
         // Weekly limit check
         if let Some(weekly_limit) = self.weekly_limit {
-            let week_total = self.ledger_week.cost_usd + live_cost;
+            let week_total = snap.ledger_week.cost_usd + live_cost;
             let pct = week_total / weekly_limit * 100.0;
 
             if pct >= 80.0 && !self.weekly_alert_fired {
@@ -1395,13 +1475,14 @@ impl App {
     }
 
     fn run_auto_actions(&mut self) {
+        let snap = self.data_snapshot();
         // In demo mode, events are scripted in refresh_demo() — skip real execution
         if self.demo_mode {
             return;
         }
 
         // Legacy per-PID auto-approve (toggled with 'a' key)
-        let legacy_pids: Vec<u32> = self
+        let legacy_pids: Vec<u32> = snap
             .sessions
             .iter()
             .filter(|s| s.status == SessionStatus::NeedsInput && self.auto_approve.contains(&s.pid))
@@ -1409,7 +1490,7 @@ impl App {
             .collect();
 
         for pid in legacy_pids {
-            if let Some(session) = self.sessions.iter().find(|s| s.pid == pid) {
+            if let Some(session) = snap.sessions.iter().find(|s| s.pid == pid) {
                 crate::brain::decisions::log_observation(
                     session.pid,
                     session.display_name(),
@@ -1427,7 +1508,7 @@ impl App {
 
         // Built-in file conflict auto-deny: deny writes to files being edited by another session
         if self.auto_deny_file_conflicts {
-            let conflict_candidates: Vec<(u32, String, String)> = self
+            let conflict_candidates: Vec<(u32, String, String)> = snap
                 .sessions
                 .iter()
                 .filter(|s| {
@@ -1442,7 +1523,7 @@ impl App {
                         .iter()
                         .filter(|&&p| p != s.pid)
                         .find_map(|pid| {
-                            self.sessions
+                            snap.sessions
                                 .iter()
                                 .find(|o| o.pid == *pid)
                                 .map(|o| format!("{} (PID {})", o.display_name(), o.pid))
@@ -1459,7 +1540,7 @@ impl App {
                         continue;
                     }
                 }
-                if let Some(session) = self.sessions.iter().find(|s| s.pid == pid) {
+                if let Some(session) = snap.sessions.iter().find(|s| s.pid == pid) {
                     // Log passive observation: conflict auto-deny
                     crate::brain::decisions::log_observation(
                         session.pid,
@@ -1492,7 +1573,7 @@ impl App {
 
         // Rule-based auto-actions
         if !self.rules.is_empty() {
-            let candidates: Vec<u32> = self
+            let candidates: Vec<u32> = snap
                 .sessions
                 .iter()
                 .filter(|s| {
@@ -1513,7 +1594,7 @@ impl App {
                     }
                 }
 
-                let session = match self.sessions.iter().find(|s| s.pid == pid) {
+                let session = match snap.sessions.iter().find(|s| s.pid == pid) {
                     Some(s) => s,
                     None => continue,
                 };
@@ -1561,16 +1642,16 @@ impl App {
                 .cloned()
                 .collect();
 
-            let actions = engine.tick(&self.sessions, &deny_rules);
+            let actions = engine.tick(&snap.sessions, &deny_rules);
             for (_pid, msg) in actions {
                 crate::logger::log("BRAIN", &msg);
                 self.status_msg = msg;
             }
 
-            engine.cleanup(&self.sessions);
+            engine.cleanup(&snap.sessions);
 
             // Deliver pending mailbox messages to sessions waiting for input
-            let deliveries = crate::brain::mailbox::deliver_pending(&self.sessions);
+            let deliveries = crate::brain::mailbox::deliver_pending(&snap.sessions);
             for (_pid, msg) in deliveries {
                 crate::logger::log("MAILBOX", &msg);
                 self.status_msg = msg;
@@ -1635,11 +1716,11 @@ impl App {
         self.table_state.select(Some(i));
     }
 
-    pub fn selected_session(&self) -> Option<&ClaudeSession> {
+    pub fn selected_session(&self) -> Option<ClaudeSession> {
         let visible = self.visible_session_indices();
         let selected = self.table_state.selected()?;
         let session_idx = *visible.get(selected)?;
-        self.sessions.get(session_idx)
+        self.data_snapshot().sessions.get(session_idx).cloned()
     }
 
     pub fn handle_kill(&mut self) {
@@ -1721,7 +1802,8 @@ impl App {
         match key.code {
             KeyCode::Enter => {
                 if let Some(pid) = self.input_target_pid {
-                    if let Some(session) = self.sessions.iter().find(|s| s.pid == pid) {
+                    let snap = self.data_snapshot();
+                    if let Some(session) = snap.sessions.iter().find(|s| s.pid == pid) {
                         // Log passive observation: user sent manual input
                         crate::brain::decisions::log_observation(
                             session.pid,
@@ -2067,17 +2149,26 @@ impl App {
     }
 
     pub fn visible_session_indices(&self) -> Vec<usize> {
-        self.sessions
+        let snap = self.data_snapshot();
+        snap.sessions
             .iter()
             .enumerate()
             .filter_map(|(idx, session)| self.matches_filters(session).then_some(idx))
             .collect()
     }
 
-    pub fn visible_sessions(&self) -> Vec<&ClaudeSession> {
-        self.visible_session_indices()
-            .into_iter()
-            .filter_map(|idx| self.sessions.get(idx))
+    /// Owned snapshot of the sessions matching the current filters.
+    /// Returns `Vec<ClaudeSession>` (cloned) instead of references because
+    /// the underlying `AppData` lives behind an `Arc<RwLock<...>>` — we
+    /// can't hand out references whose lifetime is tied to `&self` once
+    /// the snapshot Arc is dropped at end of call. Callers that just
+    /// need to iterate immutably can take `.iter()` on the result.
+    pub fn visible_sessions(&self) -> Vec<ClaudeSession> {
+        let snap = self.data_snapshot();
+        snap.sessions
+            .iter()
+            .filter(|s| self.matches_filters(s))
+            .cloned()
             .collect()
     }
 
@@ -2160,9 +2251,9 @@ impl App {
                     session.pending_tool_name.as_deref(),
                     session.pending_tool_input.as_deref(),
                     "user_approve",
-                    Some(session),
+                    Some(&session),
                 );
-                match terminals::approve_session(session) {
+                match terminals::approve_session(&session) {
                     Ok(()) => self.status_msg = format!("Approved {}", session.display_name()),
                     Err(e) => self.status_msg = format!("Error: {e}"),
                 }
@@ -2174,7 +2265,7 @@ impl App {
 
     fn handle_brain_accept(&mut self) {
         // Clone session data first to avoid borrow conflict with brain_engine
-        let Some(session) = self.selected_session().cloned() else {
+        let Some(session) = self.selected_session() else {
             return;
         };
         let pid = session.pid;
@@ -2207,7 +2298,7 @@ impl App {
     }
 
     fn handle_brain_reject(&mut self) {
-        let Some(session) = self.selected_session().cloned() else {
+        let Some(session) = self.selected_session() else {
             return;
         };
         let pid = session.pid;
@@ -2273,7 +2364,7 @@ impl App {
         if let Some(session) = self.selected_session() {
             match session.status {
                 SessionStatus::WaitingInput | SessionStatus::Idle => {
-                    match terminals::send_input(session, "/compact\n") {
+                    match terminals::send_input(&session, "/compact\n") {
                         Ok(()) => {
                             self.status_msg = format!("Sent /compact to {}", session.display_name())
                         }
@@ -2317,7 +2408,7 @@ impl App {
 
     fn handle_switch_terminal(&mut self) {
         if let Some(session) = self.selected_session() {
-            match terminals::switch_to_terminal(session) {
+            match terminals::switch_to_terminal(&session) {
                 Ok(()) => {
                     self.status_msg = format!("Switched to {}", session.display_name());
                 }
@@ -2342,8 +2433,9 @@ pub struct ProjectGroup {
 
 impl App {
     pub fn project_groups(&self) -> Vec<ProjectGroup> {
+        let visible = self.visible_sessions();
         let mut groups: HashMap<String, Vec<&ClaudeSession>> = HashMap::new();
-        for s in self.visible_sessions() {
+        for s in &visible {
             groups.entry(s.project_name.clone()).or_default().push(s);
         }
 
@@ -2424,7 +2516,7 @@ mod tests {
 
     fn make_test_app() -> App {
         let mut app = App::new();
-        app.sessions = vec![
+        let sessions = vec![
             make_session(
                 11,
                 "blocked-api",
@@ -2462,11 +2554,112 @@ mod tests {
                 false,
             ),
         ];
+        app.replace_data(AppData {
+            sessions,
+            ..AppData::default()
+        });
         app.budget_usd = Some(5.0);
         app.context_warn_threshold = 75;
         app.conflict_pids.insert(13);
         app.normalize_selection();
         app
+    }
+
+    /// Build an App with empty AppData, bypassing the host-side
+    /// session discovery that `App::new()` does in its constructor.
+    /// The data-helper tests below assert on the post-replace state
+    /// directly, so we don't want real sessions leaking in.
+    fn app_with_empty_data() -> App {
+        let app = App::new();
+        app.replace_data(AppData::default());
+        app
+    }
+
+    #[test]
+    fn data_snapshot_returns_empty_appdata_after_clear() {
+        let app = app_with_empty_data();
+        let snap = app.data_snapshot();
+        assert!(snap.sessions.is_empty());
+        assert_eq!(snap.ledger_today.msg_count, 0);
+        assert_eq!(snap.ledger_week.msg_count, 0);
+        assert_eq!(snap.ledger_month.msg_count, 0);
+    }
+
+    #[test]
+    fn replace_data_swaps_atomically_and_takes_effect_for_next_snapshot() {
+        let app = app_with_empty_data();
+        let snap_before = app.data_snapshot();
+        assert!(snap_before.sessions.is_empty());
+
+        let mut new_data = AppData::default();
+        new_data.sessions.push(make_session(
+            42,
+            "regression-app",
+            "sonnet",
+            SessionStatus::Idle,
+            0.5,
+            10.0,
+            true,
+        ));
+        new_data.ledger_today.msg_count = 7;
+        app.replace_data(new_data);
+
+        let snap_after = app.data_snapshot();
+        assert_eq!(snap_after.sessions.len(), 1);
+        assert_eq!(snap_after.sessions[0].pid, 42);
+        assert_eq!(snap_after.ledger_today.msg_count, 7);
+
+        // The previous snapshot must NOT see the new data — it captured a
+        // distinct Arc that is still alive via `snap_before`. This is the
+        // whole point of `Arc<RwLock<Arc<AppData>>>`: readers hold an
+        // immutable owned snapshot that survives the next swap.
+        assert!(snap_before.sessions.is_empty());
+        assert_eq!(snap_before.ledger_today.msg_count, 0);
+    }
+
+    #[test]
+    fn modify_data_mutates_in_place_and_visible_to_subsequent_snapshot() {
+        let app = app_with_empty_data();
+        app.modify_data(|d| {
+            d.ledger_week.fresh_input = 12345;
+            d.sessions.push(make_session(
+                99,
+                "x",
+                "sonnet",
+                SessionStatus::Idle,
+                0.0,
+                0.0,
+                false,
+            ));
+        });
+
+        let snap = app.data_snapshot();
+        assert_eq!(snap.ledger_week.fresh_input, 12345);
+        assert_eq!(snap.sessions.len(), 1);
+        assert_eq!(snap.sessions[0].pid, 99);
+    }
+
+    #[test]
+    fn with_sessions_preserves_ledger_fields() {
+        let app = app_with_empty_data();
+        app.modify_data(|d| {
+            d.ledger_month.cost_usd = 999.99;
+        });
+        // Sort/reorder mutation: must not zero out the ledger.
+        app.with_sessions(|s| {
+            s.push(make_session(
+                1,
+                "a",
+                "haiku",
+                SessionStatus::Idle,
+                0.0,
+                0.0,
+                false,
+            ));
+        });
+        let snap = app.data_snapshot();
+        assert!((snap.ledger_month.cost_usd - 999.99).abs() < 1e-9);
+        assert_eq!(snap.sessions.len(), 1);
     }
 
     #[test]
@@ -2752,6 +2945,7 @@ mod tests {
 
         // Find PID 11's new index (it's now in the parked section).
         let idx = app
+            .data_snapshot()
             .sessions
             .iter()
             .position(|s| s.pid == 11)

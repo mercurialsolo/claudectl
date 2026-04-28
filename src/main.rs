@@ -777,11 +777,12 @@ fn run_tui<W: io::Write>(
             last_tick = Instant::now();
 
             // Start recorders for newly added recordings
+            let snap = app.data_snapshot();
             for (pid, path) in &app.session_recordings {
                 if sess_recs.contains_key(pid) {
                     continue;
                 }
-                if let Some(session) = app.sessions.iter().find(|s| s.pid == *pid) {
+                if let Some(session) = snap.sessions.iter().find(|s| s.pid == *pid) {
                     if let Some(ref jsonl) = session.jsonl_path {
                         let name = session.display_name();
                         match session_recorder::SessionRecorder::new(
