@@ -618,22 +618,20 @@ fn refresh_cache_from(ledger: &Path) {
     }
     c.last_scan_size = current_size;
 
-    // Evict rows older than MAX_RETENTION_MS. CSV is append-only with
-    // monotonic timestamps, so the cache is sorted ascending and the
-    // eviction is a prefix drop. Note: scan_and_append walks JSONL files
-    // in directory-walk order (not strictly time-sorted), so there can
-    // be small local out-of-order ranges. They're bounded to a single
-    // refresh batch and don't break the bulk-prefix eviction below — at
-    // worst a row up to MAX_RETENTION_MS ago survives one extra cycle.
+    // Evict rows older than MAX_RETENTION_MS. The CSV is appended by
+    // scan_and_append in file-walk order, NOT strict time order — each
+    // batch interleaves rows from many JSONLs whose timestamps run in
+    // parallel — so the in-memory `rows` are mostly-sorted but contain
+    // local out-of-order regions. `Vec::retain` linearly scans every
+    // row, which is correct regardless of order; using `partition_point`
+    // here was a bug that silently dropped recent rows while keeping
+    // ancient ones, undercounting weekly/monthly totals.
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let cutoff = now.saturating_sub(MAX_RETENTION_MS);
-    let evict_to = c.rows.partition_point(|r| r.ts_ms < cutoff);
-    if evict_to > 0 {
-        c.rows.drain(..evict_to);
-    }
+    c.rows.retain(|r| r.ts_ms >= cutoff);
 }
 
 fn parse_csv_row(line: &str) -> Option<LedgerRow> {
@@ -673,11 +671,16 @@ pub fn load_summary(since_ms: u64) -> UsageSummary {
 fn summarize_cached(since_ms: u64) -> UsageSummary {
     let c = cache().lock().expect("ledger cache mutex poisoned");
     let mut summary = UsageSummary::default();
-    // Rows are sorted by ts_ms ascending (CSV is append-only); the cutoff
-    // walk skips the older prefix in O(log N) and accumulates O(K) where
-    // K = rows since the cutoff.
-    let start = c.rows.partition_point(|r| r.ts_ms < since_ms);
-    for row in &c.rows[start..] {
+    // Linear scan with explicit ts filter. Cannot use partition_point
+    // because the row ordering reflects scan_and_append's file-walk
+    // order, not strict time ascending — a previous version used
+    // `partition_point` here and silently undercounted week/month
+    // totals by ~88% on a real ledger (1.4M rows from many concurrent
+    // sessions).
+    for row in &c.rows {
+        if row.ts_ms < since_ms {
+            continue;
+        }
         summary.fresh_input += row.fresh_input;
         summary.cache_read += row.cache_read;
         summary.cache_write += row.cache_write;
@@ -693,6 +696,19 @@ fn reset_cache_for_tests() {
     let mut c = cache().lock().expect("ledger cache mutex poisoned");
     c.last_scan_size = 0;
     c.rows.clear();
+}
+
+/// Serialize tests that mutate the process-global ledger cache. Without
+/// this, parallel cargo-test workers race on `cache()` state and one
+/// test's `reset_cache_for_tests` can wipe another test's freshly-read
+/// rows mid-assertion. Each cache-touching test acquires
+/// `cache_test_lock()` at the top and holds it until done.
+#[cfg(test)]
+fn cache_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("test serialise mutex poisoned")
 }
 
 /// Testable variant: explicit ledger path, NO cache. Used by tests so each
@@ -1028,6 +1044,7 @@ mod tests {
     /// `#[test]` so they run sequentially under any test-thread setting.
     #[test]
     fn cache_refresh_is_incremental_truncation_safe_and_filters_by_cutoff() {
+        let _g = cache_test_lock();
         let p = TestPaths::new("cache");
         let ledger = p.ledger.clone();
         // Use real-clock-relative timestamps so MAX_RETENTION_MS doesn't
@@ -1085,7 +1102,125 @@ mod tests {
     }
 
     #[test]
+    fn cache_correctly_filters_unsorted_rows() {
+        let _g = cache_test_lock();
+        // Regression: the cache used `partition_point` for both the
+        // since-cutoff filter AND the retention eviction. Since the
+        // ledger CSV is appended in file-walk order (not strict time
+        // ascending), the array can be mostly-sorted with local
+        // out-of-order regions — exactly the input that breaks
+        // `partition_point`'s binary-search assumption. On the real
+        // ledger this undercounted week/month totals by ~88%.
+        //
+        // Verify the fix by stuffing the cache with deliberately
+        // unsorted timestamps and asserting summarize_cached counts
+        // EVERY row at-or-after the cutoff regardless of its position.
+        let p = TestPaths::new("cache_unsorted");
+        let ledger = p.ledger.clone();
+
+        // Use real-clock-relative timestamps to dodge MAX_RETENTION_MS
+        // eviction on every row.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let recent = |secs_ago: u64| now - secs_ago * 1_000;
+
+        // Order chosen to break a binary-search partition: a "newer"
+        // timestamp early in the file, then "older" ones, then newer
+        // again. partition_point would return a position partway
+        // through and miss real rows; the linear scan must find them
+        // all.
+        reset_cache_for_tests();
+        write_csv_rows(
+            &ledger,
+            &[
+                (recent(60), "claude-opus-4-7", 100, 0, 0, 50),
+                (recent(120), "claude-opus-4-7", 200, 0, 0, 100),
+                (recent(30), "claude-opus-4-7", 5, 0, 0, 1),
+                (recent(180), "claude-opus-4-7", 300, 0, 0, 200),
+                (recent(15), "claude-opus-4-7", 7, 0, 0, 2),
+                (recent(90), "claude-opus-4-7", 10, 0, 0, 4),
+            ],
+        );
+        refresh_cache_from(&ledger);
+
+        let all = summarize_cached(0);
+        assert_eq!(
+            all.msg_count, 6,
+            "all rows must be summed regardless of order"
+        );
+        assert_eq!(all.fresh_input, 100 + 200 + 5 + 300 + 7 + 10);
+
+        // Cutoff at "75 s ago": should match the 4 rows whose
+        // recent_ago <= 75 (i.e. recent(60), recent(30), recent(15),
+        // recent(60))? Let me re-check by listing:
+        //   recent(60)  → ts > cutoff, included
+        //   recent(120) → ts < cutoff, excluded
+        //   recent(30)  → included
+        //   recent(180) → excluded
+        //   recent(15)  → included
+        //   recent(90)  → excluded
+        // = 3 included. partition_point on this unsorted array would
+        // commonly return the wrong start index and miss rows.
+        let cutoff = recent(75);
+        let recent_summary = summarize_cached(cutoff);
+        assert_eq!(
+            recent_summary.msg_count, 3,
+            "summarize_cached must scan EVERY row, not binary-search a sorted prefix"
+        );
+        assert_eq!(recent_summary.fresh_input, 100 + 5 + 7);
+
+        reset_cache_for_tests();
+    }
+
+    #[test]
+    fn cache_eviction_keeps_recent_rows_in_unsorted_array() {
+        let _g = cache_test_lock();
+        // Same regression class for the retention eviction path. With
+        // ages mixed (some > 31d, some <), partition_point used to
+        // drain a fragile prefix that didn't correspond to "everything
+        // older than 31d"; sometimes recent rows landed in the prefix
+        // and got evicted while ancient rows survived. The retain-based
+        // fix must drop only the truly-ancient rows.
+        let p = TestPaths::new("cache_evict_unsorted");
+        let ledger = p.ledger.clone();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let ancient = now.saturating_sub(MAX_RETENTION_MS + 86_400_000);
+        let r60 = now - 60_000;
+        let r10 = now - 10_000;
+
+        reset_cache_for_tests();
+        // Interleave ancient + recent so any partition-based eviction
+        // would behave wrong.
+        write_csv_rows(
+            &ledger,
+            &[
+                (r60, "claude-opus-4-7", 1, 0, 0, 0),
+                (ancient, "claude-opus-4-7", 999, 0, 0, 0),
+                (r10, "claude-opus-4-7", 2, 0, 0, 0),
+                (ancient + 100, "claude-opus-4-7", 999, 0, 0, 0),
+                (r60 + 200, "claude-opus-4-7", 4, 0, 0, 0),
+            ],
+        );
+        refresh_cache_from(&ledger);
+
+        let all = summarize_cached(0);
+        assert_eq!(
+            all.msg_count, 3,
+            "ancient rows must be evicted, recent rows must survive"
+        );
+        assert_eq!(all.fresh_input, 1 + 2 + 4);
+
+        reset_cache_for_tests();
+    }
+
+    #[test]
     fn cache_evicts_rows_older_than_max_retention() {
+        let _g = cache_test_lock();
         let p = TestPaths::new("cache_evict");
         let ledger = p.ledger.clone();
         let now = SystemTime::now()
