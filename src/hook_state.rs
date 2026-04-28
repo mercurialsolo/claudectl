@@ -14,6 +14,7 @@
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -81,11 +82,37 @@ fn state_path(session_id: &str) -> PathBuf {
     state_dir().join(format!("{session_id}.json"))
 }
 
+/// Process-wide monotonic millisecond timestamp.
+///
+/// Two `record_hook_event` calls back-to-back in the same process easily
+/// land in the same wall-clock millisecond (system clock granularity ≈ ms;
+/// hot-binary record-then-record is sub-ms). When that happens, `is_responding`
+/// and `is_waiting_for_user` (both compare timestamps with strict `>`) become
+/// order-blind: whichever check runs first wins, regardless of which event
+/// was recorded later. That's how tests that record Stop then UserPromptSubmit
+/// flake — both ts_ms are equal so neither comparison is strict-greater.
+///
+/// The fix is to enforce strictly-increasing per-process timestamps. The
+/// atomic holds the most-recently-issued ms; the next call returns
+/// `max(real_now_ms, last + 1)` and updates the atomic. Cross-process the
+/// drift is bounded to a single process's burst of events (sub-millisecond
+/// in practice), and Claude Code's hooks run in separate processes anyway,
+/// so production sessions see real wall-clock timestamps with at most a few
+/// ms of drift on rapid event bursts within one hook script.
 fn now_ms() -> u64 {
-    SystemTime::now()
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let real = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
+        .as_millis() as u64;
+    let mut last = LAST.load(Ordering::Relaxed);
+    loop {
+        let next = real.max(last + 1);
+        match LAST.compare_exchange(last, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(observed) => last = observed,
+        }
+    }
 }
 
 impl HookState {
@@ -468,6 +495,19 @@ mod tests {
         // Until Stop fires again
         s.last_stop_ts_ms = 4000;
         assert!(!is_responding(&s));
+    }
+
+    #[test]
+    fn now_ms_is_strictly_monotonic_within_a_process() {
+        // record_hook_event reads now_ms() per call; two back-to-back calls
+        // must produce distinct ts so order-sensitive checks
+        // (is_responding / is_waiting_for_user, both strict `>`) stay
+        // deterministic when tests record many events in a hot binary.
+        let a = now_ms();
+        let b = now_ms();
+        let c = now_ms();
+        assert!(a < b);
+        assert!(b < c);
     }
 
     #[test]
