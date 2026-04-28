@@ -534,13 +534,15 @@ impl App {
             idle_report: Vec::new(),
         };
         app.refresh();
-        // Seed the ledger up front so the title bar has week/month totals
-        // on the first render. Pays for one full scan_and_append + cache
-        // population (~1–3 s on a heavy ~/.claude/projects tree); steady
-        // state ticks then run only the cheap rollup path until the
-        // every-30 s scan cadence picks up new JSONL bytes.
-        crate::usage_ledger::scan_and_append();
+        // Seed rollups from any rows already in the CSV — instant via
+        // the in-memory ledger cache. Don't block startup on
+        // scan_and_append: a full first-time scan can take 1–3 s on a
+        // heavy ~/.claude/projects tree. Kick it off on a background
+        // thread instead; the title bar renders with the previously
+        // persisted totals immediately, and the background scan
+        // updates them within a few seconds.
         app.refresh_ledger_rollups();
+        crate::usage_ledger::scan_and_append_background();
         if app.visible_session_count() > 0 {
             app.table_state.select(Some(0));
         }
@@ -1216,16 +1218,15 @@ impl App {
         // Check idle mode transition
         self.check_idle_mode();
 
-        // Two cadences for the ledger:
-        // - Rollup refresh: cheap (sub-ms with the in-memory cache);
-        //   keeps the title bar's day/week/month totals current. Every
-        //   3 ticks ≈ 6 s.
-        // - Full scan_and_append: expensive (≥1 s per pass — has to
-        //   stat every JSONL under ~/.claude/projects to detect new
-        //   bytes; on Andre's box that's 2k+ files). Every 15 ticks
-        //   ≈ 30 s. This caps how stale the ledger can get and bounds
-        //   the per-tick freeze frequency without dropping the visible
-        //   refresh rate of the title bar.
+        // Two cadences for the ledger, both non-blocking:
+        // - Rollup refresh: sub-ms thanks to the in-memory ledger cache;
+        //   keeps the title bar's day/week/month totals current. Runs
+        //   every 3 ticks ≈ 6 s.
+        // - Background scan_and_append: kicked off on a worker thread
+        //   every 15 ticks ≈ 30 s. The main thread never blocks on it,
+        //   so a slow JSONL walk no longer freezes the TUI. New rows
+        //   become visible to subsequent rollup refreshes once the
+        //   worker finishes (typically <30 ms steady-state on this box).
         self.ledger_refresh_tick += 1;
         if self.ledger_refresh_tick >= 3 {
             self.ledger_refresh_tick = 0;
@@ -1235,10 +1236,7 @@ impl App {
         self.ledger_scan_tick += 1;
         if self.ledger_scan_tick >= 15 {
             self.ledger_scan_tick = 0;
-            crate::usage_ledger::scan_and_append();
-            // The next rollup refresh will pick up any new rows via the
-            // cache's tail-read path — no need to recompute summaries
-            // here.
+            crate::usage_ledger::scan_and_append_background();
         }
     }
 
