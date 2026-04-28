@@ -158,13 +158,22 @@ fn find_jsonl_files(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn mtime_ms(path: &Path) -> u64 {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+/// Single-stat helper: returns `(mtime_ms, len)` for the path in one
+/// `fs::metadata()` call. Splitting these into separate calls (the older
+/// `mtime_ms()` then a second `fs::metadata()` for `.len()`) doubled the
+/// per-file syscall count in `scan_and_append`, which dominates tick
+/// cost when there are thousands of JSONLs (each tick has to touch every
+/// one to detect new bytes). Returns `None` when the file isn't
+/// stat-able — caller treats that as "skip this file".
+fn metadata_mtime_len(path: &Path) -> Option<(u64, u64)> {
+    let m = fs::metadata(path).ok()?;
+    let mtime = m
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis() as u64;
+    Some((mtime, m.len()))
 }
 
 /// Session id carved from the JSONL filename stem. Works for both the
@@ -223,10 +232,22 @@ pub fn scan_and_append_at(projects_root: &Path, ledger: &Path, offsets_file: &Pa
 
     for jsonl in &files {
         let key = jsonl.display().to_string();
-        let current_mtime = mtime_ms(jsonl);
-        let current_size = fs::metadata(jsonl).map(|m| m.len()).unwrap_or(0);
+        let Some((current_mtime, current_size)) = metadata_mtime_len(jsonl) else {
+            continue;
+        };
 
         let prev = offsets.get(&key).cloned().unwrap_or_default();
+
+        // Fast skip: same mtime AND same size as last scan ⇒ no new
+        // bytes can possibly exist. Avoids the file open + read + parse
+        // for every untouched JSONL, which is the steady-state case for
+        // 2k+ historical sessions on Andre's box (>99% of files per
+        // tick are dormant). Still respect truncation below — only skip
+        // when size matches too, so a `> /dev/null` rewrite that
+        // preserved mtime by accident would still get re-scanned.
+        if current_mtime == prev.mtime_ms && current_size == prev.last_byte {
+            continue;
+        }
 
         // Truncation / rewrite: fall back to full re-scan by resetting offset.
         let mut start = prev.last_byte;
@@ -234,6 +255,17 @@ pub fn scan_and_append_at(projects_root: &Path, ledger: &Path, offsets_file: &Pa
             start = 0;
         }
         if start == current_size {
+            // mtime moved but bytes didn't — touch(1), partial overwrite
+            // that landed exactly at the prior length, etc. Nothing new
+            // to parse but we should still update the cached mtime so
+            // the fast skip above kicks in next tick.
+            offsets.insert(
+                key.clone(),
+                FileOffset {
+                    last_byte: current_size,
+                    mtime_ms: current_mtime,
+                },
+            );
             continue;
         }
 
