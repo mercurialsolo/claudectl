@@ -16,6 +16,68 @@ use crate::session::{ClaudeSession, SessionStatus};
 use crate::terminals;
 use crate::theme::Theme;
 
+/// Output of `do_refresh_io`. Captures everything the I/O-heavy pass
+/// needs to hand back to the main thread for status / conflict / budget
+/// post-processing. All fields are owned values so the struct is `Send`
+/// and can be returned across `tokio::task::spawn_blocking`.
+pub struct RefreshIoOutput {
+    pub sessions: Vec<ClaudeSession>,
+    pub new_pids: Vec<u32>,
+    pub scan_elapsed: std::time::Duration,
+    pub ps_elapsed: std::time::Duration,
+    pub jsonl_elapsed: std::time::Duration,
+}
+
+/// Run the I/O-heavy half of an App refresh and return the enriched
+/// session list plus timing data. This is a pure function over
+/// `prev_sessions`: no borrows of `App`, no shared state, all inputs and
+/// outputs are owned values. Designed to run on
+/// `tokio::task::spawn_blocking` once we wire up async refresh —
+/// extracting it as a free fn first keeps the diff small while letting
+/// us audit "what's actually slow" in isolation.
+///
+/// Side effects: shells out via `discovery`, `process`, `monitor` —
+/// each does its own `std::fs` / `std::process::Command` calls. Total
+/// cost on a typical box (~38 sessions): ~30 ms steady-state.
+pub fn do_refresh_io(prev_sessions: Vec<ClaudeSession>) -> RefreshIoOutput {
+    let scan_start = std::time::Instant::now();
+    let discovered = discovery::scan_sessions();
+    let scan_elapsed = scan_start.elapsed();
+
+    let (mut sessions, new_pids) = merge_discovered_sessions(prev_sessions, discovered);
+
+    let ps_start = std::time::Instant::now();
+    process::fetch_and_enrich(&mut sessions);
+    let ps_elapsed = ps_start.elapsed();
+
+    for session in &mut sessions {
+        if session.jsonl_path.is_none() {
+            discovery::resolve_jsonl_paths(std::slice::from_mut(session));
+        }
+    }
+    discovery::scan_subagents(&mut sessions);
+    discovery::resolve_worktree_ids(&mut sessions);
+
+    // Snapshot previous cost for burn rate BEFORE reading new JSONL data.
+    for session in &mut sessions {
+        session.prev_cost_usd = session.cost_usd;
+    }
+
+    let jsonl_start = std::time::Instant::now();
+    for session in &mut sessions {
+        monitor::update_tokens(session);
+    }
+    let jsonl_elapsed = jsonl_start.elapsed();
+
+    RefreshIoOutput {
+        sessions,
+        new_pids,
+        scan_elapsed,
+        ps_elapsed,
+        jsonl_elapsed,
+    }
+}
+
 /// Refresh-driven application state. Owned exclusively by `App.data` and
 /// swapped atomically each refresh cycle. Render and key-event paths read
 /// snapshots via `App::data_snapshot()`; mutations (refresh) go through
@@ -615,46 +677,19 @@ impl App {
             return;
         }
 
-        // Discover which PIDs have session files
-        let scan_start = std::time::Instant::now();
-        let discovered = discovery::scan_sessions();
-        let scan_elapsed = scan_start.elapsed();
-
-        // Take ownership of the existing sessions vec from the shared
-        // AppData so refresh can mutate freely without holding the
-        // RwLock. We rebuild a fresh AppData at the end and atomic-swap.
-        let existing = self.data_snapshot().sessions.clone();
-        let (mut sessions, new_pids) = merge_discovered_sessions(existing, discovered);
-
-        // Enrich with ps data (CPU, MEM, TTY, command args) + filter dead PIDs
-        let ps_start = std::time::Instant::now();
-        process::fetch_and_enrich(&mut sessions);
-        let ps_elapsed = ps_start.elapsed();
-
-        // Resolve JSONL paths (only for sessions that don't have one yet)
-        for session in &mut sessions {
-            if session.jsonl_path.is_none() {
-                discovery::resolve_jsonl_paths(std::slice::from_mut(session));
-            }
-        }
-
-        // Scan for subagents
-        discovery::scan_subagents(&mut sessions);
-
-        // Resolve git worktree identity (for conflict detection, runs once per session)
-        discovery::resolve_worktree_ids(&mut sessions);
-
-        // Snapshot previous cost for burn rate BEFORE reading new JSONL data
-        for session in &mut sessions {
-            session.prev_cost_usd = session.cost_usd;
-        }
-
-        // Read JSONL incrementally (only new bytes since last offset)
-        let jsonl_start = std::time::Instant::now();
-        for session in &mut sessions {
-            monitor::update_tokens(session);
-        }
-        let jsonl_elapsed = jsonl_start.elapsed();
+        // Run the I/O-heavy phase synchronously. `do_refresh_io` does
+        // all the discovery / ps / monitor / JSONL work and returns a
+        // ready-to-merge result; everything below operates on its
+        // outputs to do the App-state mutations (status detection,
+        // conflict tracking, budget enforcement, etc.).
+        let prev_sessions = self.data_snapshot().sessions.clone();
+        let RefreshIoOutput {
+            mut sessions,
+            new_pids,
+            scan_elapsed,
+            ps_elapsed,
+            jsonl_elapsed,
+        } = do_refresh_io(prev_sessions);
 
         // Compute burn rate from cost delta (skip first tick where prev_cost is 0)
         for session in &mut sessions {
