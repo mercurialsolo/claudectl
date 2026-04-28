@@ -921,6 +921,8 @@ mod tests {
             outcome: None,
             decision_type: DecisionType::Session,
             suggested_at: None,
+            resolved_at: None,
+            override_reason: None,
         }
     }
 
@@ -944,6 +946,8 @@ mod tests {
             outcome: None,
             decision_type: DecisionType::Session,
             suggested_at: None,
+            resolved_at: None,
+            override_reason: None,
         }
     }
 
@@ -1002,6 +1006,8 @@ mod tests {
             outcome: None,
             decision_type: DecisionType::Session,
             suggested_at: None,
+            resolved_at: None,
+            override_reason: None,
         }
     }
 
@@ -1285,6 +1291,8 @@ mod tests {
                 outcome: None,
                 decision_type: DecisionType::Session,
                 suggested_at: None,
+                resolved_at: None,
+                override_reason: None,
             },
             DecisionRecord {
                 timestamp: "2".into(),
@@ -1300,6 +1308,8 @@ mod tests {
                 outcome: None,
                 decision_type: DecisionType::Session,
                 suggested_at: None,
+                resolved_at: None,
+                override_reason: None,
             },
         ];
 
@@ -1334,6 +1344,8 @@ mod tests {
                 outcome: None,
                 decision_type: DecisionType::Session,
                 suggested_at: None,
+                resolved_at: None,
+                override_reason: None,
             });
         }
         // Then user denies
@@ -1351,6 +1363,8 @@ mod tests {
             outcome: None,
             decision_type: DecisionType::Session,
             suggested_at: None,
+            resolved_at: None,
+            override_reason: None,
         });
         // Repeat the streak pattern to reach threshold of 2
         for _ in 0..4 {
@@ -1368,6 +1382,8 @@ mod tests {
                 outcome: None,
                 decision_type: DecisionType::Session,
                 suggested_at: None,
+                resolved_at: None,
+                override_reason: None,
             });
         }
         decisions.push(DecisionRecord {
@@ -1384,6 +1400,8 @@ mod tests {
             outcome: None,
             decision_type: DecisionType::Session,
             suggested_at: None,
+            resolved_at: None,
+            override_reason: None,
         });
 
         let patterns = detect_temporal_patterns(&decisions);

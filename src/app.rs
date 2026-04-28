@@ -263,6 +263,8 @@ pub struct App {
     pub sort_column: usize,
     pub auto_approve: HashSet<u32>,
     pub pending_auto_approve: Option<u32>,
+    /// PID awaiting override reason (1=always safe, 2=one-time, 3=brain is wrong).
+    pub pending_override_reason: Option<u32>,
     pub finished_at: HashMap<u32, std::time::Instant>, // When PIDs were first seen as Finished
     pub debug: bool,
     pub debug_timings: DebugTimings,
@@ -408,6 +410,7 @@ impl App {
             sort_column: 0,
             auto_approve: HashSet::new(),
             pending_auto_approve: None,
+            pending_override_reason: None,
             finished_at: HashMap::new(),
             debug: false,
             debug_timings: DebugTimings::default(),
@@ -1708,6 +1711,27 @@ impl App {
             return true;
         }
 
+        // Override reason prompt: waiting for 1/2/3/Esc
+        if self.pending_override_reason.is_some() {
+            match key.code {
+                KeyCode::Char('1') => {
+                    self.handle_brain_accept_with_reason(Some("always_safe"));
+                }
+                KeyCode::Char('2') => {
+                    self.handle_brain_accept_with_reason(Some("one_time_exception"));
+                }
+                KeyCode::Char('3') => {
+                    self.handle_brain_accept_with_reason(Some("brain_is_wrong"));
+                }
+                KeyCode::Esc => {
+                    self.pending_override_reason = None;
+                    self.status_msg = "Override cancelled".into();
+                }
+                _ => {}
+            }
+            return true;
+        }
+
         // Normal mode
         self.handle_normal_key(key);
         !self.should_quit
@@ -2152,6 +2176,10 @@ impl App {
     }
 
     fn handle_brain_accept(&mut self) {
+        self.handle_brain_accept_with_reason(None);
+    }
+
+    fn handle_brain_accept_with_reason(&mut self, override_reason: Option<&str>) {
         // Clone session data first to avoid borrow conflict with brain_engine
         let Some(session) = self.selected_session().cloned() else {
             return;
@@ -2171,6 +2199,18 @@ impl App {
             self.status_msg = "No brain suggestion pending for this session".into();
             return;
         }
+
+        // If brain suggested deny and no override reason yet, prompt for one
+        if let Some(ref sg) = suggestion {
+            if sg.action.label() == "deny" && override_reason.is_none() {
+                self.pending_override_reason = Some(pid);
+                self.status_msg =
+                    "Override reason: [1] Always safe  [2] One-time exception  [3] Brain is wrong  [Esc] Cancel"
+                        .into();
+                return;
+            }
+        }
+
         if let Some(msg) = engine.accept(pid, &session) {
             if let Some(ref sg) = suggestion {
                 crate::brain::decisions::log_decision(
@@ -2182,11 +2222,13 @@ impl App {
                     "accept",
                     Some(&session),
                     crate::brain::decisions::DecisionType::Session,
+                    override_reason,
                 );
             }
             crate::logger::log("BRAIN", &format!("Accepted: {msg}"));
             self.status_msg = msg;
         }
+        self.pending_override_reason = None;
     }
 
     fn handle_brain_reject(&mut self) {
@@ -2212,6 +2254,7 @@ impl App {
                 "reject",
                 Some(&session),
                 crate::brain::decisions::DecisionType::Session,
+                None,
             );
             let msg = format!(
                 "Rejected brain suggestion: {} ({})",
@@ -2256,20 +2299,6 @@ impl App {
     }
 
     fn toggle_session_recording(&mut self) {
-        // If any recordings are active, R stops ALL of them
-        if !self.session_recordings.is_empty() {
-            let count = self.session_recordings.len();
-            let paths: Vec<String> = self.session_recordings.values().cloned().collect();
-            self.session_recordings.clear();
-            self.status_msg = if count == 1 {
-                format!("Recording stopped → {}", paths[0])
-            } else {
-                format!("{count} recordings stopped")
-            };
-            return;
-        }
-
-        // No recordings active — start recording the selected session
         let info = self
             .selected_session()
             .map(|s| (s.pid, s.display_name().to_string(), s.jsonl_path.is_some()));
@@ -2277,11 +2306,23 @@ impl App {
             return;
         };
 
+        // Per-session toggle: if this session is recording, stop just this one
+        if self.session_recordings.contains_key(&pid) {
+            let path = self.session_recordings.remove(&pid).unwrap_or_default();
+            self.status_msg = format!("Recording stopped → {path}");
+            return;
+        }
+
+        // Start recording the selected session
         if !has_jsonl {
             self.status_msg = "Cannot record — no JSONL file for this session".into();
             return;
         }
-        let path = format!("{}-{}.gif", name, pid);
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let path = format!("{}-{}-{}.gif", name, pid, epoch);
         self.session_recordings.insert(pid, path.clone());
         self.status_msg = format!("Recording {name} → {path} (R to stop)");
     }

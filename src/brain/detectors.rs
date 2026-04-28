@@ -469,6 +469,8 @@ mod tests {
             outcome: None,
             decision_type: DecisionType::Session,
             suggested_at: None,
+            resolved_at: None,
+            override_reason: None,
         }
     }
 

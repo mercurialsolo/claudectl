@@ -133,6 +133,8 @@ pub struct LifecycleConfig {
     pub auto_restart: bool,
     pub restart_threshold_pct: f64,
     pub restart_only_when_idle: bool,
+    /// Retention period for coordination event logs (days). Used by auto-prune.
+    pub retention_days: u64,
 }
 
 impl Default for LifecycleConfig {
@@ -141,6 +143,7 @@ impl Default for LifecycleConfig {
             auto_restart: false,
             restart_threshold_pct: 90.0,
             restart_only_when_idle: true,
+            retention_days: 30,
         }
     }
 }
@@ -351,6 +354,7 @@ struct RawLifecycleConfig {
     auto_restart: Option<bool>,
     restart_threshold_pct: Option<f64>,
     restart_only_when_idle: Option<bool>,
+    retention_days: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -571,6 +575,9 @@ impl Config {
             if let Some(v) = lc.restart_only_when_idle {
                 self.lifecycle.restart_only_when_idle = v;
             }
+            if let Some(v) = lc.retention_days {
+                self.lifecycle.retention_days = v;
+            }
         }
         if let Some(idle) = raw.idle {
             if let Some(v) = idle.enabled {
@@ -690,6 +697,18 @@ impl Config {
             self.health.error_accel_factor,
             self.health.repetition_threshold,
         );
+        println!();
+        println!("  [lifecycle]");
+        println!("  auto_restart:     {}", self.lifecycle.auto_restart);
+        println!(
+            "  restart_threshold: {:.0}%",
+            self.lifecycle.restart_threshold_pct
+        );
+        println!(
+            "  restart_idle_only: {}",
+            self.lifecycle.restart_only_when_idle
+        );
+        println!("  retention_days:   {}", self.lifecycle.retention_days);
         if self.model_overrides.is_empty() {
             println!("  model_overrides: none");
         } else {
@@ -708,8 +727,12 @@ impl Config {
 
     /// Print an annotated default config template to stdout.
     pub fn print_template() {
-        print!(
-            r#"# claudectl configuration
+        print!("{}", Self::template_string());
+    }
+
+    /// Return the config template as a string.
+    pub fn template_string() -> &'static str {
+        r#"# claudectl configuration
 # Place this file at:
 #   Project: .claudectl.toml (in your project root)
 #   Global:  ~/.config/claudectl/config.toml
@@ -848,6 +871,14 @@ impl Config {
 # Available events: on_needs_input, on_finished, on_budget_80,
 #   on_budget_exceeded, on_context_high, on_status_change
 
+# ── Lifecycle ──────────────────────────────────────────────────────
+
+# [lifecycle]
+# auto_restart = false
+# restart_threshold_pct = 90.0
+# restart_only_when_idle = true
+# retention_days = 30           # Coordination event log retention (days)
+
 # ── Brain (Local LLM) ──────────────────────────────────────────────
 
 # [brain]
@@ -891,7 +922,6 @@ impl Config {
 # capabilities = ["code-review", "refactoring"]
 # cwd = "/path/to/project"
 "#
-        );
     }
 }
 
@@ -902,6 +932,13 @@ fn global_config_path() -> Option<PathBuf> {
             .join("claudectl")
             .join("config.toml")
     })
+}
+
+impl Config {
+    /// Path to the global config file (for validation and diagnostics).
+    pub fn global_path() -> Option<PathBuf> {
+        global_config_path()
+    }
 }
 
 /// Minimal TOML parser — avoids adding a toml crate dependency.
@@ -1056,6 +1093,7 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     "auto_restart" => lc.auto_restart = parse_bool(value),
                     "restart_threshold_pct" => lc.restart_threshold_pct = value.parse().ok(),
                     "restart_only_when_idle" => lc.restart_only_when_idle = parse_bool(value),
+                    "retention_days" => lc.retention_days = value.parse().ok(),
                     _ => {}
                 }
             }
@@ -1217,6 +1255,186 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
     }
 
     Some(raw)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Config validation
+// ────────────────────────────────────────────────────────────────────────────
+
+/// A warning or error from config validation.
+pub struct ConfigWarning {
+    pub line: usize,
+    pub message: String,
+}
+
+/// Known sections and their valid keys.
+fn known_keys(section: &str) -> Option<&'static [&'static str]> {
+    match section {
+        "" | "defaults" => Some(&[
+            "interval",
+            "notify",
+            "debug",
+            "grouped",
+            "sort",
+            "budget",
+            "kill_on_budget",
+            "context_warn",
+            "context_warn_threshold",
+            "file_conflicts",
+            "auto_deny_file_conflicts",
+        ]),
+        "webhook" => Some(&["url", "on"]),
+        "budget" => Some(&["daily", "daily_limit", "weekly", "weekly_limit"]),
+        "context" => Some(&["warn", "warn_threshold"]),
+        "orchestrate" => Some(&["file_conflicts", "auto_deny_file_conflicts"]),
+        "health" => Some(&[
+            "cache_critical_pct",
+            "cache_warning_pct",
+            "cache_min_tokens",
+            "cost_spike_critical",
+            "cost_spike_warning",
+            "loop_max_calls",
+            "stall_min_cost",
+            "stall_min_minutes",
+            "context_critical_pct",
+            "context_warning_pct",
+            "decay_compaction_pct",
+            "efficiency_critical_factor",
+            "error_accel_factor",
+            "repetition_threshold",
+        ]),
+        "lifecycle" => Some(&[
+            "auto_restart",
+            "restart_threshold_pct",
+            "restart_only_when_idle",
+            "retention_days",
+        ]),
+        "idle" => Some(&[
+            "enabled",
+            "after_idle_mins",
+            "max_concurrent",
+            "max_cost_usd",
+        ]),
+        "brain" => Some(&[
+            "enabled",
+            "endpoint",
+            "model",
+            "auto",
+            "timeout_ms",
+            "max_context_tokens",
+            "few_shot_count",
+            "max_sessions",
+            "orchestrate",
+            "orchestrate_interval",
+            "orchestrate_interval_secs",
+        ]),
+        "relay" => Some(&[
+            "enabled",
+            "listen_port",
+            "port",
+            "listen_addr",
+            "addr",
+            "max_peers",
+            "heartbeat_interval",
+            "heartbeat_interval_secs",
+            "reconnect_max",
+            "reconnect_max_secs",
+            "auto_connect",
+            "http_port",
+            "auth_token",
+        ]),
+        "hive" => Some(&[
+            "enabled",
+            "default_trust",
+            "auto_trust_drift",
+            "max_propagation",
+            "export_min_evidence",
+            "export_min_tool_decisions",
+            "knowledge_ttl_days",
+            "inject_unverified",
+            "share_categories",
+            "exclude_tools",
+            "exclude_content_types",
+            "max_units",
+            "max_prompt_units",
+            "stale_peer_days",
+        ]),
+        _ => None,
+    }
+}
+
+/// Validate a config file and return warnings for unknown keys/sections.
+pub fn validate_config_file(path: &PathBuf) -> (Vec<ConfigWarning>, bool) {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                vec![ConfigWarning {
+                    line: 0,
+                    message: format!("cannot read file: {e}"),
+                }],
+                true,
+            );
+        }
+    };
+
+    let mut warnings = Vec::new();
+    let mut section = String::new();
+    let mut has_errors = false;
+
+    for (line_num, line) in content.lines().enumerate() {
+        let line_1 = line_num + 1;
+        let line = line.trim();
+
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        // Section header
+        if line.starts_with('[') && line.ends_with(']') {
+            section = line[1..line.len() - 1].trim().to_string();
+            // Check if section is known (accounting for dynamic sections like models.*, rules.*, agents.*, hooks.*, idle.tasks.*)
+            let base = section.split('.').next().unwrap_or(&section);
+            let is_known = known_keys(&section).is_some()
+                || matches!(base, "models" | "rules" | "agents" | "hooks" | "idle");
+            if !is_known {
+                warnings.push(ConfigWarning {
+                    line: line_1,
+                    message: format!("unknown section [{section}]"),
+                });
+            }
+            continue;
+        }
+
+        // Key = value
+        let Some((key, _value)) = line.split_once('=') else {
+            warnings.push(ConfigWarning {
+                line: line_1,
+                message: format!("malformed line (expected key = value): {line}"),
+            });
+            has_errors = true;
+            continue;
+        };
+        let key = key.trim();
+
+        // Skip dynamic sections (models.*, rules.*, agents.*, hooks.*)
+        let base = section.split('.').next().unwrap_or(&section);
+        if matches!(base, "models" | "rules" | "agents" | "hooks" | "idle") {
+            continue;
+        }
+
+        // Check if key is known for this section
+        if let Some(valid_keys) = known_keys(&section) {
+            if !valid_keys.contains(&key) {
+                warnings.push(ConfigWarning {
+                    line: line_1,
+                    message: format!("unknown key \"{key}\" in [{section}]"),
+                });
+            }
+        }
+    }
+
+    (warnings, has_errors)
 }
 
 /// Load hooks from global and project config files.

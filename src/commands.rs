@@ -197,6 +197,78 @@ pub(crate) fn print_doctor() -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_config() -> io::Result<()> {
+    use std::path::PathBuf;
+
+    let mut total_warnings = 0;
+    let mut any_errors = false;
+
+    let files: Vec<PathBuf> = [
+        config::Config::global_path(),
+        Some(PathBuf::from(".claudectl.toml")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    for path in &files {
+        if !path.exists() {
+            println!("  {}: not found (skipped)", path.display());
+            continue;
+        }
+        let (warnings, has_errors) = config::validate_config_file(path);
+        any_errors |= has_errors;
+
+        if warnings.is_empty() {
+            println!("  {}: ok", path.display());
+        } else {
+            println!("  {}:", path.display());
+            for w in &warnings {
+                let prefix = if w.message.starts_with("unknown") {
+                    "warn"
+                } else {
+                    "error"
+                };
+                if w.line > 0 {
+                    println!("    [{prefix}] line {}: {}", w.line, w.message);
+                } else {
+                    println!("    [{prefix}] {}", w.message);
+                }
+            }
+            total_warnings += warnings.len();
+        }
+    }
+
+    println!();
+    if total_warnings == 0 {
+        println!("Config is valid.");
+    } else {
+        println!(
+            "{total_warnings} warning(s) found. Unknown keys are ignored but may indicate typos."
+        );
+    }
+
+    if any_errors {
+        Err(io::Error::other("config has errors"))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn write_config_init() -> io::Result<()> {
+    let path = std::path::PathBuf::from(".claudectl.toml");
+    if path.exists() {
+        eprintln!("Error: .claudectl.toml already exists. Remove it first or edit directly.");
+        return Err(io::Error::other(".claudectl.toml already exists"));
+    }
+
+    let template = config::Config::template_string();
+    std::fs::write(&path, template).map_err(|e| io::Error::other(format!("write: {e}")))?;
+    println!("Created .claudectl.toml with annotated defaults.");
+    println!("Edit the file to customize, then run `claudectl --config-validate` to check.");
+    Ok(())
+}
+
 pub(crate) fn check_brain_endpoint(endpoint: &str, timeout_ms: u64) -> bool {
     let timeout_secs = (timeout_ms / 1000).max(1);
     std::process::Command::new("curl")
@@ -966,7 +1038,9 @@ pub(crate) fn run_headless(
         #[cfg(feature = "coord")]
         if tick_count % 1800 == 0 && tick_count > 0 {
             if let Ok(conn) = crate::coord::store::open() {
-                if let Ok(pruned) = crate::coord::store::prune(&conn, None) {
+                if let Ok(pruned) =
+                    crate::coord::store::prune(&conn, Some(cfg.lifecycle.retention_days))
+                {
                     if pruned > 0 {
                         emit_headless_event(
                             "pruned",

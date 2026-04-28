@@ -722,6 +722,49 @@ pub fn print_false_deny() {
     } else if overall_rate < 5.0 {
         println!("  GOOD: low override rate — brain denials are well-calibrated.");
     }
+
+    // Friction cost: time spent overriding denials
+    let mut override_delays: Vec<u64> = Vec::new();
+    let mut by_reason: HashMap<String, u32> = HashMap::new();
+    for d in &decisions {
+        if d.brain_action == "deny" && d.is_positive() {
+            if let (Some(suggested), Some(resolved)) = (d.suggested_at, d.resolved_at) {
+                let delay = resolved.saturating_sub(suggested);
+                if delay < 3600 {
+                    // Ignore delays > 1 hour (likely stale)
+                    override_delays.push(delay);
+                }
+            }
+            if let Some(ref reason) = d.override_reason {
+                *by_reason.entry(reason.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    if !override_delays.is_empty() {
+        let avg_delay = override_delays.iter().sum::<u64>() as f64 / override_delays.len() as f64;
+        let total_friction = avg_delay * total_overrides as f64;
+        println!();
+        println!("  Friction Cost");
+        println!("  {}", "-".repeat(40));
+        println!("  avg override delay:     {:.1}s", avg_delay,);
+        println!(
+            "  total friction time:    {:.0}s ({:.1} min)",
+            total_friction,
+            total_friction / 60.0,
+        );
+    }
+
+    if !by_reason.is_empty() {
+        println!();
+        println!("  Override Reasons");
+        println!("  {}", "-".repeat(40));
+        let mut reasons: Vec<(String, u32)> = by_reason.into_iter().collect();
+        reasons.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+        for (reason, count) in &reasons {
+            println!("  {:<25} {:>5}", reason, count);
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1872,6 +1915,8 @@ mod tests {
             outcome: None,
             decision_type: DecisionType::Session,
             suggested_at: None,
+            resolved_at: None,
+            override_reason: None,
         }
     }
 
