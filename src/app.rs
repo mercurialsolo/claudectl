@@ -375,7 +375,8 @@ pub struct App {
     pub budget_warned: HashSet<u32>, // PIDs that have been warned at 80%
     pub budget_killed: HashSet<u32>, // PIDs that have been killed
     pub theme: Theme,
-    pub ledger_refresh_tick: u32, // Refresh every N ticks
+    pub ledger_refresh_tick: u32, // Cheap rollup refresh every N ticks
+    pub ledger_scan_tick: u32,    // Expensive scan_and_append every N ticks
     // JSONL-sourced usage aggregates. Independent of session-exit detection,
     // so they stay accurate even for sessions closed via terminal-close.
     pub ledger_today: crate::usage_ledger::UsageSummary,
@@ -498,6 +499,7 @@ impl App {
             budget_killed: HashSet::new(),
             theme: Theme::from_mode(crate::theme::ThemeMode::Dark),
             ledger_refresh_tick: 0,
+            ledger_scan_tick: 0,
             ledger_today: crate::usage_ledger::UsageSummary::default(),
             ledger_week: crate::usage_ledger::UsageSummary::default(),
             ledger_month: crate::usage_ledger::UsageSummary::default(),
@@ -532,9 +534,13 @@ impl App {
             idle_report: Vec::new(),
         };
         app.refresh();
-        // Seed the ledger up front so the title bar has week/month totals on
-        // the first render; subsequent scans are incremental and cheap.
-        app.refresh_ledger_summaries();
+        // Seed the ledger up front so the title bar has week/month totals
+        // on the first render. Pays for one full scan_and_append + cache
+        // population (~1–3 s on a heavy ~/.claude/projects tree); steady
+        // state ticks then run only the cheap rollup path until the
+        // every-30 s scan cadence picks up new JSONL bytes.
+        crate::usage_ledger::scan_and_append();
+        app.refresh_ledger_rollups();
         if app.visible_session_count() > 0 {
             app.table_state.select(Some(0));
         }
@@ -1210,24 +1216,36 @@ impl App {
         // Check idle mode transition
         self.check_idle_mode();
 
-        // Refresh ledger rollups every ~6s (3 ticks at the 2s default
-        // interval). Scan cost is trivial — incremental JSONL reads plus a
-        // ~100k-row CSV aggregation, both sub-millisecond — so the faster
-        // cadence is just a UX choice: the title bar feels live.
+        // Two cadences for the ledger:
+        // - Rollup refresh: cheap (sub-ms with the in-memory cache);
+        //   keeps the title bar's day/week/month totals current. Every
+        //   3 ticks ≈ 6 s.
+        // - Full scan_and_append: expensive (≥1 s per pass — has to
+        //   stat every JSONL under ~/.claude/projects to detect new
+        //   bytes; on Andre's box that's 2k+ files). Every 15 ticks
+        //   ≈ 30 s. This caps how stale the ledger can get and bounds
+        //   the per-tick freeze frequency without dropping the visible
+        //   refresh rate of the title bar.
         self.ledger_refresh_tick += 1;
         if self.ledger_refresh_tick >= 3 {
             self.ledger_refresh_tick = 0;
-            self.refresh_ledger_summaries();
+            self.refresh_ledger_rollups();
             self.check_aggregate_budgets();
+        }
+        self.ledger_scan_tick += 1;
+        if self.ledger_scan_tick >= 15 {
+            self.ledger_scan_tick = 0;
+            crate::usage_ledger::scan_and_append();
+            // The next rollup refresh will pick up any new rows via the
+            // cache's tail-read path — no need to recompute summaries
+            // here.
         }
     }
 
-    /// Walk new JSONL bytes into the append-only ledger, then recompute the
-    /// rolling 24-hour / 7-day / 30-day rollups. These drive the title-bar
-    /// throughput panel AND the daily/weekly budget enforcement in
-    /// `check_aggregate_budgets` / `budget_eta`.
-    fn refresh_ledger_summaries(&mut self) {
-        crate::usage_ledger::scan_and_append();
+    /// Recompute rolling 24-hour / 7-day / 30-day summaries from the
+    /// in-memory ledger cache. Cheap (microseconds), so safe to run
+    /// every tick without freezing the TUI.
+    fn refresh_ledger_rollups(&mut self) {
         let now = crate::usage_ledger::now_ms();
         let day_cutoff = now.saturating_sub(86_400_000);
         let week_cutoff = now.saturating_sub(7 * 86_400_000);
