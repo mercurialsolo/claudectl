@@ -273,11 +273,13 @@ pub(crate) struct Cli {
     pub(crate) uninstall_reaper: bool,
 
     /// Reaper run interval for --install-reaper, in seconds. Range 10..=3600.
-    /// Default 60.
+    /// Default 300 (5 min). Raised from 60s after the cache-skip in
+    /// `reaper.rs` made most ticks no-op, so a longer interval halves
+    /// steady-state cost without meaningfully delaying orphan cleanup.
     #[arg(
         long = "reaper-interval",
         help_heading = "Cleanup",
-        default_value_t = 60
+        default_value_t = 300
     )]
     pub(crate) reaper_interval: u64,
 
