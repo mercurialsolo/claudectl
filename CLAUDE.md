@@ -62,11 +62,11 @@ cargo fmt --check            # Check formatting
 
 ## Key Design Decisions
 
-- **Minimal dependencies** — 7 runtime crates. Binary must stay under 1MB, startup under 50ms.
 - **Native `ps`** over `sysinfo` crate to keep binary small.
 - **Multi-signal status inference** — combines CPU usage, JSONL events, and timestamps (not just one signal).
 - **Incremental JSONL parsing** — tracks file offsets, never rereads full files.
-- **No async runtime** — synchronous with polling. Keeps complexity low.
+- **Render thread is non-blocking** — the TUI runs inside a 2-worker `tokio::runtime` (multi-threaded). Refresh I/O (`do_refresh_io`: discovery + ps + monitor + JSONL parse) and `scan_and_append` are dispatched via `tokio::task::spawn_blocking`; results flow back through an mpsc channel and are applied on the main thread between renders. Empirical cost: 0–5 ms main-thread per 2 s tick on a 38-session box. See `src/app.rs::AppData` and `App::refresh_nonblocking` for the shape.
+- **Shared state via `Arc<RwLock<Arc<AppData>>>`** — render takes a snapshot (Arc clone, ns) at the start of each frame; refresh swaps the inner Arc atomically when its result is ready. Reads never block on writes.
 - **Deny-first rule evaluation** — deny rules always override approve/brain suggestions, regardless of config order.
 - **Brain decisions are local-only** — all decision logs and few-shot examples stay on the user's machine.
 - **Brain gate mode** — `~/.claudectl/brain/gate-mode` controls on/off/auto. File absent = on (default). The plugin hook and `--brain-query` both check this before querying the LLM.

@@ -1259,4 +1259,129 @@ mod tests {
 
         reset_cache_for_tests();
     }
+
+    // ── Perf regression smoke checks ───────────────────────────────────
+    //
+    // These tests prime the in-memory ledger cache with a large number of
+    // rows and assert that hot-path operations stay fast. The bounds are
+    // intentionally generous — they only catch egregious regressions
+    // (e.g. someone reverts a perf optimisation and the path becomes
+    // linear or worse). They will NOT flake on slow CI.
+    //
+    // Calibration on Andre's 2026-04-28 sandbox (Linux, debug build):
+    //   - 50_000-row primed cache:
+    //       summarize_cached:  ~5 ms (linear scan of all rows)
+    //       eviction retain:   ~3 ms
+    //   - 100_000-row primed cache:
+    //       summarize_cached: ~10 ms
+    //       eviction retain:   ~6 ms
+    //
+    // The asserted bounds (200 ms / 500 ms) leave 20× headroom — they
+    // fire only if a path regresses to e.g. O(N²) or accidentally
+    // re-parses the CSV on every call.
+
+    /// Regression: `load_summary` must stay fast on a warm cache.
+    /// Before commit 0d6e2d3a it linear-scanned the full 105 MB CSV
+    /// (~750 ms per call) every time and was called 3× per tick.
+    #[test]
+    fn perf_summarize_cached_stays_fast_with_many_rows() {
+        let _g = cache_test_lock();
+        reset_cache_for_tests();
+        seed_cache_with_synthetic_rows(50_000);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let start = std::time::Instant::now();
+        for _ in 0..3 {
+            // Mimic a tick's day/week/month query trio.
+            let _ = summarize_cached(now.saturating_sub(86_400_000));
+            let _ = summarize_cached(now.saturating_sub(7 * 86_400_000));
+            let _ = summarize_cached(now.saturating_sub(30 * 86_400_000));
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 200,
+            "summarize_cached × 9 over 50k rows took {} ms (regression — \
+             expect <50 ms in release, <200 ms even in debug)",
+            elapsed.as_millis()
+        );
+        reset_cache_for_tests();
+    }
+
+    /// Regression: `refresh_cache_from` eviction must be linear, not
+    /// quadratic. Before the partition_point→retain fix (commit
+    /// 0bb91466) it was using binary search on unsorted data — buggy
+    /// but fast. The retain path is correct AND must remain fast.
+    #[test]
+    fn perf_eviction_stays_linear_with_many_rows() {
+        let _g = cache_test_lock();
+        let p = TestPaths::new("perf_evict");
+        let ledger = p.ledger.clone();
+        reset_cache_for_tests();
+
+        // Write a CSV with 50k rows where roughly half are within
+        // retention and half are ancient — exercises the retain path
+        // on a meaningful slice.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let recent_base = now - 60_000;
+        let ancient_base = now.saturating_sub(MAX_RETENTION_MS + 86_400_000);
+        let mut body = String::from(HEADER);
+        body.push('\n');
+        for i in 0..50_000_u64 {
+            let ts = if i.is_multiple_of(2) {
+                recent_base - i
+            } else {
+                ancient_base - i
+            };
+            body.push_str(&format!("{ts},sess,claude-opus-4-7,1,0,0,1\n"));
+        }
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        std::fs::write(&ledger, body).unwrap();
+
+        let start = std::time::Instant::now();
+        refresh_cache_from(&ledger);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 500,
+            "refresh_cache_from with 50k rows took {} ms (regression — \
+             expect <100 ms in release, <500 ms even in debug)",
+            elapsed.as_millis()
+        );
+
+        // Sanity: roughly half the rows survive eviction (the recent
+        // half). Use a generous bound to stay deterministic.
+        let s = summarize_cached(0);
+        assert!(
+            s.msg_count > 20_000 && s.msg_count < 30_000,
+            "expected ~25k recent rows after eviction, got {}",
+            s.msg_count
+        );
+
+        reset_cache_for_tests();
+    }
+
+    fn seed_cache_with_synthetic_rows(n: usize) {
+        let p = TestPaths::new("perf_seed");
+        let ledger = p.ledger.clone();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let mut body = String::from(HEADER);
+        body.push('\n');
+        for i in 0..n as u64 {
+            // Spread rows across the past 30 days so the day/week/month
+            // cutoff queries each match a distinct subset.
+            let ts = now - (i * (30 * 86_400_000) / n.max(1) as u64);
+            body.push_str(&format!("{ts},sess,claude-opus-4-7,1,0,0,1\n"));
+        }
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        std::fs::write(&ledger, body).unwrap();
+        refresh_cache_from(&ledger);
+    }
 }

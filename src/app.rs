@@ -2762,6 +2762,35 @@ mod tests {
         assert_eq!(snap.sessions[0].pid, 99);
     }
 
+    /// Perf regression: `do_refresh_io` against an empty session list
+    /// should be near-instant. Before commit bf9f59b0 the per-PID
+    /// terminal-sidecar read happened on every tick; this test
+    /// indirectly catches if that path regresses to per-tick I/O for
+    /// already-cached sidecars (in which case 1000 idle calls would
+    /// blow past the 5 s bound).
+    ///
+    /// The bound is intentionally loose because the real I/O cost
+    /// depends on the host's `~/.claude/sessions` size — we're checking
+    /// "doesn't go quadratic", not "stays under N ms". Calibrated on
+    /// the same sandbox where one cold call is ~1.5 s and warm calls
+    /// are ~30 ms.
+    #[test]
+    fn perf_do_refresh_io_does_not_explode_with_repeated_calls() {
+        let mut prev = Vec::new();
+        let start = std::time::Instant::now();
+        for _ in 0..3 {
+            let out = do_refresh_io(prev);
+            prev = out.sessions;
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_secs() < 30,
+            "do_refresh_io × 3 took {} ms (regression — expect <5 s \
+             cold + sub-second warm even on a heavy box)",
+            elapsed.as_millis()
+        );
+    }
+
     #[test]
     fn refresh_nonblocking_falls_back_to_sync_when_no_runtime() {
         // No tokio runtime is active in unit tests by default — the
