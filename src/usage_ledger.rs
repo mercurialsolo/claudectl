@@ -344,16 +344,27 @@ pub fn scan_and_append_background() {
     {
         return;
     }
-    std::thread::Builder::new()
-        .name("ledger-scan".into())
-        .spawn(|| {
-            let _ = scan_and_append();
-            SCAN_IN_FLIGHT.store(false, Ordering::Release);
-        })
-        // If thread spawn fails (PID limit, OS denial), clear the flag
-        // so the next tick can retry instead of getting stuck "in flight".
-        .map_err(|_| SCAN_IN_FLIGHT.store(false, Ordering::Release))
-        .ok();
+    let work = || {
+        let _ = scan_and_append();
+        SCAN_IN_FLIGHT.store(false, Ordering::Release);
+    };
+    // Prefer tokio's blocking-pool thread when we're inside a runtime
+    // (the TUI path goes through `runtime.block_on(run_tui)`), so the
+    // pool can amortise OS thread creation across the long-running
+    // process. Fall back to a fresh std::thread for one-shot CLI
+    // commands and tests, which never set up a runtime.
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn_blocking(work);
+    } else {
+        std::thread::Builder::new()
+            .name("ledger-scan".into())
+            .spawn(work)
+            // If thread spawn fails (PID limit, OS denial), clear the
+            // flag so the next tick can retry instead of getting stuck
+            // "in flight".
+            .map_err(|_| SCAN_IN_FLIGHT.store(false, Ordering::Release))
+            .ok();
+    }
 }
 
 /// Scan every JSONL and append any new assistant `usage` blocks to the
