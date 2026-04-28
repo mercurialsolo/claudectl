@@ -26,6 +26,11 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 ctrlc = "3"
+# Used to keep filesystem I/O and process spawning off the main render
+# thread. We only need rt-multi-thread + time + sync + macros — no
+# tokio::fs / tokio::process: blocking I/O runs on tokio::task::spawn_blocking
+# so existing std::fs / std::process::Command call sites stay untouched.
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
 
 [dev-dependencies]
 tempfile = "3"
