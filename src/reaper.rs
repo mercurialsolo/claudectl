@@ -37,25 +37,39 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// Process-wide cache for the auto-detected sandbox name. Populated lazily
-/// on first call to `sandbox_name()`. The explicit env-var override is NOT
-/// cached here — it's checked on every call so a test that sets/unsets the
-/// var mid-process sees the new value, regardless of cache state.
-static AUTO_SANDBOX_NAME: OnceLock<String> = OnceLock::new();
+/// Process-wide cache for the auto-detected sandbox name. `None` means
+/// `sbx ls` could not pick exactly one running sandbox; the resolver then
+/// falls back to `DEFAULT_SANDBOX_NAME`. Populated lazily on first call.
+static AUTO_SANDBOX_NAME: OnceLock<Option<String>> = OnceLock::new();
 
 const DEFAULT_SANDBOX_NAME: &str = "linera-agent";
 
 fn sandbox_name() -> String {
-    if let Ok(v) = std::env::var("CLAUDECTL_SANDBOX_NAME") {
+    let env = std::env::var("CLAUDECTL_SANDBOX_NAME").ok();
+    let auto = AUTO_SANDBOX_NAME.get_or_init(detect_running_sandbox_name);
+    resolve_sandbox_name(env.as_deref(), auto.as_deref(), DEFAULT_SANDBOX_NAME)
+}
+
+/// Pure resolver. Picks the first non-empty source: explicit env override
+/// → auto-detected name → default. Tests target this directly so they
+/// don't have to mutate process-global env state (which races other tests
+/// under parallel cargo test).
+pub(crate) fn resolve_sandbox_name(
+    env_override: Option<&str>,
+    auto_detected: Option<&str>,
+    default: &str,
+) -> String {
+    if let Some(v) = env_override {
         if !v.is_empty() {
-            return v;
+            return v.to_string();
         }
     }
-    AUTO_SANDBOX_NAME
-        .get_or_init(|| {
-            detect_running_sandbox_name().unwrap_or_else(|| DEFAULT_SANDBOX_NAME.to_string())
-        })
-        .clone()
+    if let Some(v) = auto_detected {
+        if !v.is_empty() {
+            return v.to_string();
+        }
+    }
+    default.to_string()
 }
 
 /// Shell out to `sbx ls` once and try to identify a unique running sandbox.
@@ -1100,29 +1114,39 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_name_picks_up_env_override() {
-        // Real env-var roundtrip. The override wins on every call regardless
-        // of whether AUTO_SANDBOX_NAME has been populated by an earlier test
-        // — `sandbox_name()` checks the env var FIRST and only falls through
-        // to the cache on unset/empty.
-        //
-        // SAFETY: cargo test runs tests in parallel by default and
-        // `set_var`/`remove_var` mutate process-global state, so any other
-        // test reading CLAUDECTL_SANDBOX_NAME at the same time would race.
-        // We're the only test that touches this var.
-        unsafe {
-            std::env::set_var("CLAUDECTL_SANDBOX_NAME", "ndr-private-test-sbx");
-        }
-        assert_eq!(sandbox_name(), "ndr-private-test-sbx");
-        // SAFETY: see comment above on global env mutation.
-        unsafe {
-            std::env::remove_var("CLAUDECTL_SANDBOX_NAME");
-        }
-        // After unset: returns whatever auto-detect produced (cached) OR the
-        // default if auto-detect failed. We can't assert the exact value
-        // because it depends on the host's `sbx ls` state at first call;
-        // we just assert it's non-empty.
-        assert!(!sandbox_name().is_empty());
+    fn resolve_sandbox_name_env_override_wins_over_auto_and_default() {
+        assert_eq!(
+            resolve_sandbox_name(Some("from-env"), Some("from-auto"), "default"),
+            "from-env"
+        );
+    }
+
+    #[test]
+    fn resolve_sandbox_name_falls_back_to_auto_when_env_empty() {
+        assert_eq!(
+            resolve_sandbox_name(Some(""), Some("from-auto"), "default"),
+            "from-auto"
+        );
+    }
+
+    #[test]
+    fn resolve_sandbox_name_falls_back_to_auto_when_env_none() {
+        assert_eq!(
+            resolve_sandbox_name(None, Some("from-auto"), "default"),
+            "from-auto"
+        );
+    }
+
+    #[test]
+    fn resolve_sandbox_name_falls_back_to_default_when_no_signal() {
+        assert_eq!(resolve_sandbox_name(None, None, "default"), "default");
+    }
+
+    #[test]
+    fn resolve_sandbox_name_treats_empty_auto_as_no_signal() {
+        // An empty auto-detect (parser couldn't pick a unique sandbox)
+        // must fall through to the default, not to "".
+        assert_eq!(resolve_sandbox_name(None, Some(""), "default"), "default");
     }
 
     // ---- sbx ls parser tests ------------------------------------------
