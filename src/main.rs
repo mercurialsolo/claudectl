@@ -594,6 +594,18 @@ fn run_main(cli: Cli) -> io::Result<()> {
     let theme_mode = theme::ThemeMode::detect(cli.theme.as_deref());
     let app_theme = theme::Theme::from_mode(theme_mode);
 
+    // Build a tokio multi-threaded runtime to host any background tasks
+    // run_tui spawns (refresh worker, scan_and_append_background, etc.).
+    // The TUI loop itself stays synchronous on the main thread — render
+    // and key handling don't benefit from async — but `block_on` keeps
+    // the runtime alive for the lifetime of the TUI so spawned tasks
+    // can run concurrently. Workers default to 2 threads: more than
+    // enough for a refresh task + an occasional scan_and_append.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+
     if let Some(ref record_path) = cli.record {
         // Recording mode: use TeeWriter to capture exact ANSI output
         let term_size = crossterm::terminal::size().unwrap_or((120, 40));
@@ -609,17 +621,19 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
         let max_dur = cli.duration.map(Duration::from_secs);
 
-        let result = run_tui(
-            &mut terminal,
-            tick_rate,
-            &cfg,
-            app_theme,
-            hook_registry,
-            cli.demo,
-            &filters,
-            max_dur,
-            auto_init_summary.clone(),
-        );
+        let result = runtime.block_on(async {
+            run_tui(
+                &mut terminal,
+                tick_rate,
+                &cfg,
+                app_theme,
+                hook_registry,
+                cli.demo,
+                &filters,
+                max_dur,
+                auto_init_summary.clone(),
+            )
+        });
 
         disable_raw_mode()?;
         execute!(io::stdout(), LeaveAlternateScreen)?;
@@ -646,17 +660,19 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
         let max_dur = cli.duration.map(Duration::from_secs);
 
-        let result = run_tui(
-            &mut terminal,
-            tick_rate,
-            &cfg,
-            app_theme,
-            hook_registry,
-            cli.demo,
-            &filters,
-            max_dur,
-            auto_init_summary.clone(),
-        );
+        let result = runtime.block_on(async {
+            run_tui(
+                &mut terminal,
+                tick_rate,
+                &cfg,
+                app_theme,
+                hook_registry,
+                cli.demo,
+                &filters,
+                max_dur,
+                auto_init_summary.clone(),
+            )
+        });
 
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
