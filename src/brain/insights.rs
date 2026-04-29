@@ -452,6 +452,7 @@ mod tests {
             suggested_at: None,
             resolved_at: None,
             override_reason: None,
+            decision_id: None,
         }
     }
 

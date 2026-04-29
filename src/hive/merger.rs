@@ -1,7 +1,7 @@
 // Conflict resolution for merging incoming knowledge units.
 
 use super::store::HiveStore;
-use super::{KnowledgeUnit, semantic_key};
+use super::{ApproachVariant, KnowledgeContent, KnowledgeUnit, semantic_key};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Merge result
@@ -56,6 +56,44 @@ pub fn merge_unit(
                 return MergeResult::Duplicate;
             }
 
+            // #221 conflict-aware: cluster-vs-cluster unions variants instead
+            // of picking a winner. Local clusters still win on existence —
+            // we never overwrite a local cluster with a peer collapse — but
+            // peer variants can be folded in.
+            if let (
+                KnowledgeContent::ApproachCluster {
+                    problem_key: existing_key,
+                    variants: existing_variants,
+                },
+                KnowledgeContent::ApproachCluster {
+                    problem_key: incoming_key,
+                    variants: incoming_variants,
+                },
+            ) = (&existing.content, &incoming.content)
+            {
+                if existing_key == incoming_key {
+                    let merged_variants = union_variants(existing_variants, incoming_variants);
+                    let mut merged = existing.clone();
+                    merged.content = KnowledgeContent::ApproachCluster {
+                        problem_key: existing_key.clone(),
+                        variants: merged_variants,
+                    };
+                    merged.evidence_count =
+                        if let KnowledgeContent::ApproachCluster { ref variants, .. } =
+                            merged.content
+                        {
+                            variants.iter().map(|v| v.evidence).sum()
+                        } else {
+                            merged.evidence_count
+                        };
+                    merged.last_validated_at =
+                        incoming.last_validated_at.max(existing.last_validated_at);
+                    merged.version = existing.version.max(incoming.version) + 1;
+                    store.insert(merged);
+                    return MergeResult::Updated;
+                }
+            }
+
             // Local-originated knowledge always wins
             if existing.source_peer == local_peer_id {
                 super::store::log_conflict(existing, incoming);
@@ -80,6 +118,49 @@ pub fn merge_unit(
             }
         }
     }
+}
+
+/// Union two variant lists. Variants match when their `approach_summary` and
+/// `conditions` are equal (after normalization). Matching variants accumulate
+/// evidence and union their contributing peers.
+pub fn union_variants(
+    existing: &[ApproachVariant],
+    incoming: &[ApproachVariant],
+) -> Vec<ApproachVariant> {
+    fn key(v: &ApproachVariant) -> String {
+        let mut conds = v.conditions.clone();
+        conds.sort();
+        format!("{}|{}", v.approach_summary, conds.join(","))
+    }
+    let mut by_key: std::collections::HashMap<String, ApproachVariant> =
+        existing.iter().cloned().map(|v| (key(&v), v)).collect();
+    for inc in incoming {
+        let k = key(inc);
+        match by_key.get_mut(&k) {
+            Some(existing_v) => {
+                existing_v.evidence = existing_v.evidence.saturating_add(inc.evidence);
+                for peer in &inc.contributing_peers {
+                    if !existing_v.contributing_peers.iter().any(|p| p == peer) {
+                        existing_v.contributing_peers.push(peer.clone());
+                    }
+                }
+                if existing_v.outcome_ref.is_none() {
+                    existing_v.outcome_ref = inc.outcome_ref.clone();
+                }
+            }
+            None => {
+                by_key.insert(k, inc.clone());
+            }
+        }
+    }
+    let mut out: Vec<ApproachVariant> = by_key.into_values().collect();
+    // Stable display order: highest evidence first, then alphabetical summary.
+    out.sort_by(|a, b| {
+        b.evidence
+            .cmp(&a.evidence)
+            .then_with(|| a.approach_summary.cmp(&b.approach_summary))
+    });
+    out
 }
 
 /// Merge a batch of incoming units. Returns aggregate stats.
@@ -228,6 +309,118 @@ mod tests {
         v2.version = 2;
         assert_eq!(merge_unit(&mut store, &v2, "local"), MergeResult::Updated);
         assert_eq!(store.get("ku_1").unwrap().version, 2);
+    }
+
+    fn make_cluster(
+        id: &str,
+        peer: &str,
+        key: &str,
+        variants: Vec<ApproachVariant>,
+    ) -> KnowledgeUnit {
+        let evidence: u32 = variants.iter().map(|v| v.evidence).sum();
+        KnowledgeUnit {
+            id: id.into(),
+            scope: KnowledgeScope::Universal,
+            category: crate::hive::KnowledgeCategory::Technique,
+            content: KnowledgeContent::ApproachCluster {
+                problem_key: key.into(),
+                variants,
+            },
+            evidence_count: evidence,
+            confidence: 0.5,
+            source_peer: peer.into(),
+            originated_at: 1000,
+            last_validated_at: 2000,
+            propagation_count: 0,
+            version: 1,
+        }
+    }
+
+    fn variant(summary: &str, evidence: u32, peer: &str, conds: Vec<&str>) -> ApproachVariant {
+        ApproachVariant {
+            approach_summary: summary.into(),
+            conditions: conds.into_iter().map(|s| s.into()).collect(),
+            evidence,
+            contributing_peers: vec![peer.into()],
+            outcome_ref: None,
+        }
+    }
+
+    #[test]
+    fn cluster_union_merges_variants() {
+        let mut store = empty_store();
+        let local = make_cluster(
+            "ku_local",
+            "peer-a",
+            "Bash:git push",
+            vec![variant(
+                "approve (90%)",
+                8,
+                "peer-a",
+                vec!["cost_below(1.0)"],
+            )],
+        );
+        store.insert(local);
+
+        let incoming = make_cluster(
+            "ku_remote",
+            "peer-b",
+            "Bash:git push",
+            vec![
+                variant("deny (10%)", 5, "peer-b", vec!["cost_above(1.0)"]),
+                // Same variant peer-a already has — peer list should union, evidence sums.
+                variant("approve (90%)", 4, "peer-b", vec!["cost_below(1.0)"]),
+            ],
+        );
+
+        let result = merge_unit(&mut store, &incoming, "local");
+        assert_eq!(result, MergeResult::Updated);
+
+        let unit = store.get("ku_local").unwrap();
+        if let KnowledgeContent::ApproachCluster {
+            problem_key,
+            variants,
+        } = &unit.content
+        {
+            assert_eq!(problem_key, "Bash:git push");
+            assert_eq!(variants.len(), 2, "approve & deny variants both present");
+            let approve = variants
+                .iter()
+                .find(|v| v.approach_summary.starts_with("approve"))
+                .expect("approve variant");
+            assert_eq!(approve.evidence, 12, "8 + 4 evidence");
+            assert!(
+                approve.contributing_peers.iter().any(|p| p == "peer-a")
+                    && approve.contributing_peers.iter().any(|p| p == "peer-b"),
+                "peer list should union",
+            );
+        } else {
+            panic!("merged unit lost ApproachCluster content");
+        }
+    }
+
+    #[test]
+    fn cluster_disjoint_problem_keys_do_not_merge() {
+        let mut store = empty_store();
+        let local = make_cluster(
+            "ku_a",
+            "peer-a",
+            "Bash:git push",
+            vec![variant("approve", 5, "peer-a", vec![])],
+        );
+        store.insert(local);
+
+        // A unit with a *different* problem_key has a different semantic_key,
+        // so the merger sees no existing collision and inserts it fresh.
+        let incoming = make_cluster(
+            "ku_b",
+            "peer-b",
+            "Bash:cargo test",
+            vec![variant("approve", 5, "peer-b", vec![])],
+        );
+        let result = merge_unit(&mut store, &incoming, "local");
+        assert_eq!(result, MergeResult::Accepted);
+        assert_eq!(store.len(), 2);
     }
 
     #[test]

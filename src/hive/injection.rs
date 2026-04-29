@@ -78,6 +78,29 @@ pub fn build_hive_context(
         lines.push(format!(
             "- [{label}] {summary} — {evidence} decisions from {peer}"
         ));
+
+        // #221 conflict-aware: expand cluster variants inline so the LLM
+        // sees the alternatives rather than just a single collapsed pattern.
+        // Cap at top 3 variants ranked by evidence to keep prompt size bounded.
+        if let KnowledgeContent::ApproachCluster { variants, .. } = &unit.content {
+            let mut sorted = variants.clone();
+            sorted.sort_by(|a, b| b.evidence.cmp(&a.evidence));
+            for (i, v) in sorted.iter().take(3).enumerate() {
+                let label_letter = (b'A' + i as u8) as char;
+                let cond = if v.conditions.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [when: {}]", v.conditions.join(", "))
+                };
+                lines.push(format!(
+                    "    ({label_letter}) {} — n={}{cond}",
+                    v.approach_summary, v.evidence
+                ));
+            }
+            if sorted.len() > 3 {
+                lines.push(format!("    (… {} more variants)", sorted.len() - 3));
+            }
+        }
     }
 
     if lines.is_empty() {
@@ -258,6 +281,95 @@ mod tests {
         let ctx = build_hive_context(&store, &trust_store, true, 0);
         assert!(ctx.contains("[hive]")); // 0.9 = Confirmed
         assert!(!ctx.contains("[hive, suggested]"));
+    }
+
+    fn make_cluster_unit(
+        id: &str,
+        peer: &str,
+        problem_key: &str,
+        variants: Vec<super::super::ApproachVariant>,
+    ) -> super::super::KnowledgeUnit {
+        let evidence: u32 = variants.iter().map(|v| v.evidence).sum();
+        super::super::KnowledgeUnit {
+            id: id.into(),
+            scope: super::super::KnowledgeScope::Universal,
+            category: super::super::KnowledgeCategory::Technique,
+            content: super::super::KnowledgeContent::ApproachCluster {
+                problem_key: problem_key.into(),
+                variants,
+            },
+            evidence_count: evidence,
+            confidence: 0.5,
+            source_peer: peer.into(),
+            originated_at: 1000,
+            last_validated_at: 2000,
+            propagation_count: 0,
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn build_context_expands_cluster_variants_inline() {
+        let mut store = empty_store();
+        store.insert(make_cluster_unit(
+            "ku_cluster",
+            "peer-a",
+            "Bash:git push",
+            vec![
+                super::super::ApproachVariant {
+                    approach_summary: "approve (90%)".into(),
+                    conditions: vec!["cost_below(1.0)".into()],
+                    evidence: 12,
+                    contributing_peers: vec!["peer-a".into()],
+                    outcome_ref: None,
+                },
+                super::super::ApproachVariant {
+                    approach_summary: "deny (15%)".into(),
+                    conditions: vec!["cost_above(1.0)".into()],
+                    evidence: 6,
+                    contributing_peers: vec!["peer-b".into()],
+                    outcome_ref: None,
+                },
+            ],
+        ));
+
+        let trust_store = TrustStore::load_with_default(0.5);
+        let ctx = build_hive_context(&store, &trust_store, true, 0);
+        assert!(ctx.contains("cluster: Bash:git push"));
+        assert!(ctx.contains("(A) approve"));
+        assert!(ctx.contains("(B) deny"));
+        // Higher evidence first → approve labelled (A).
+        let approve_idx = ctx.find("(A)").expect("A label present");
+        let deny_idx = ctx.find("(B)").expect("B label present");
+        assert!(
+            approve_idx < deny_idx,
+            "approve must precede deny in label order"
+        );
+        // Conditions are inlined.
+        assert!(ctx.contains("cost_below(1.0)"));
+    }
+
+    #[test]
+    fn build_context_caps_cluster_variants_at_three() {
+        let mut store = empty_store();
+        let variants: Vec<super::super::ApproachVariant> = (0..5)
+            .map(|i| super::super::ApproachVariant {
+                approach_summary: format!("variant {i}"),
+                conditions: vec![],
+                evidence: 5 + i,
+                contributing_peers: vec!["peer".into()],
+                outcome_ref: None,
+            })
+            .collect();
+        store.insert(make_cluster_unit("ku_big", "peer", "Bash:noisy", variants));
+
+        let trust_store = TrustStore::load_with_default(0.5);
+        let ctx = build_hive_context(&store, &trust_store, true, 0);
+        assert!(ctx.contains("(A)"));
+        assert!(ctx.contains("(B)"));
+        assert!(ctx.contains("(C)"));
+        assert!(!ctx.contains("(D)"), "should cap at 3");
+        assert!(ctx.contains("2 more variants"), "should note overflow");
     }
 
     #[test]
