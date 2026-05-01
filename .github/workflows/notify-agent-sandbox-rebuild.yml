@@ -1,0 +1,31 @@
+name: Notify linera-infra of claudectl update
+
+# Fires a repository_dispatch at linera-io/linera-infra so its
+# agent-sandbox-image workflow rebuilds the sandbox image with
+# tip-of-main claudectl. Without this, claudectl-only commits
+# never trigger an image rebuild — the linera-infra workflow only
+# runs on changes to its own tools/agent-sandbox/ tree, so claudectl
+# fixes silently lag behind in the sandbox until something else
+# bumps that path.
+#
+# Requires repo secret LINERA_INFRA_DISPATCH_TOKEN: a fine-grained
+# PAT (or GitHub App installation token) with actions:write on
+# linera-io/linera-infra.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.LINERA_INFRA_DISPATCH_TOKEN }}
+          repository: linera-io/linera-infra
+          event-type: claudectl-updated
+          client-payload: '{"sha": "${{ github.sha }}", "ref": "${{ github.ref }}"}'
