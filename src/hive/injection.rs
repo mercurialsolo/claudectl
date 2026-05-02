@@ -84,7 +84,7 @@ pub fn build_hive_context(
         // Cap at top 3 variants ranked by evidence to keep prompt size bounded.
         if let KnowledgeContent::ApproachCluster { variants, .. } = &unit.content {
             let mut sorted = variants.clone();
-            sorted.sort_by(|a, b| b.evidence.cmp(&a.evidence));
+            sorted.sort_by_key(|v| std::cmp::Reverse(v.evidence));
             for (i, v) in sorted.iter().take(3).enumerate() {
                 let label_letter = (b'A' + i as u8) as char;
                 let cond = if v.conditions.is_empty() {

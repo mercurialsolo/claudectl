@@ -1399,7 +1399,7 @@ pub(crate) fn run_brain_outcomes(cli: &Cli) -> io::Result<()> {
         .filter(|o| tool_filter.is_none_or(|t| o.tool == t))
         .filter(|o| project_filter.is_none_or(|p| o.project.eq_ignore_ascii_case(p)))
         .collect();
-    rows.sort_by(|a, b| b.ts.cmp(&a.ts));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.ts));
 
     if let Some(n) = cli.top {
         rows.truncate(n);
