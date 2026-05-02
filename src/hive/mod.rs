@@ -4,6 +4,7 @@ pub mod accept;
 pub mod archive;
 pub mod cli;
 pub mod distiller;
+pub mod effectiveness;
 pub mod exposure;
 pub mod feedback;
 #[cfg(feature = "relay")]

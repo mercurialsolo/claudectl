@@ -155,6 +155,38 @@ pub enum HiveCommand {
         /// problem_key (e.g., "Bash:cargo test")
         problem_key: String,
     },
+
+    /// Rank knowledge units by effectiveness (win rate over decided outcomes)
+    Effectiveness {
+        /// Filter by source peer
+        #[arg(long)]
+        peer: Option<String>,
+        /// Filter by category (best_practice, technique, workflow, personal)
+        #[arg(long)]
+        category: Option<String>,
+        /// Filter by injection state (draft, canary, staged, live)
+        #[arg(long)]
+        state: Option<String>,
+        /// Only show units with at least N decided outcomes
+        #[arg(long, default_value_t = 0)]
+        min_decided: u64,
+        /// Cap results to top N rows
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+
+    /// List units that ride along in prompts but rarely match decisions
+    DeadWeight {
+        /// Minimum injections before a unit is eligible for the list
+        #[arg(long, default_value_t = super::effectiveness::DEAD_WEIGHT_MIN_INJECTED)]
+        min_injected: u64,
+        /// Maximum decided outcomes (≤ this counts as dead-weight)
+        #[arg(long, default_value_t = super::effectiveness::DEAD_WEIGHT_MAX_DECIDED)]
+        max_decided: u64,
+    },
+
+    /// Aggregate effectiveness per source peer (weighted by decided outcomes)
+    Peers,
 }
 
 /// Dispatch a hive subcommand.
@@ -199,7 +231,252 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         HiveCommand::Pending { content_type } => cmd_pending(content_type.as_deref(), json_mode),
         HiveCommand::Clusters { problem } => cmd_clusters(problem.as_deref(), json_mode),
         HiveCommand::Cluster { problem_key } => cmd_cluster_show(problem_key, json_mode),
+        HiveCommand::Effectiveness {
+            peer,
+            category,
+            state,
+            min_decided,
+            limit,
+        } => cmd_effectiveness(
+            peer.as_deref(),
+            category.as_deref(),
+            state.as_deref(),
+            *min_decided,
+            *limit,
+            json_mode,
+        ),
+        HiveCommand::DeadWeight {
+            min_injected,
+            max_decided,
+        } => cmd_dead_weight(*min_injected, *max_decided, json_mode),
+        HiveCommand::Peers => cmd_peer_effectiveness(json_mode),
     }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Effectiveness commands (#225)
+// ────────────────────────────────────────────────────────────────────────────
+
+fn parse_injection_state(s: &str) -> Option<super::InjectionState> {
+    match s.to_lowercase().as_str() {
+        "draft" => Some(super::InjectionState::Draft),
+        "canary" => Some(super::InjectionState::Canary),
+        "staged" => Some(super::InjectionState::Staged),
+        "live" => Some(super::InjectionState::Live),
+        _ => None,
+    }
+}
+
+fn cmd_effectiveness(
+    peer: Option<&str>,
+    category: Option<&str>,
+    state: Option<&str>,
+    min_decided: u64,
+    limit: usize,
+    json_mode: bool,
+) -> io::Result<()> {
+    let store = HiveStore::load();
+    let parsed_state = state.and_then(parse_injection_state);
+    if let Some(s) = state {
+        if parsed_state.is_none() {
+            eprintln!("Unknown state '{s}'. Expected one of: draft, canary, staged, live.");
+            return Err(io::Error::other("invalid state"));
+        }
+    }
+    let filter = super::effectiveness::EffectivenessFilter {
+        peer,
+        category,
+        state: parsed_state,
+        min_decided,
+    };
+    let mut rows = super::effectiveness::unit_effectiveness(&store, &filter);
+    if limit > 0 && rows.len() > limit {
+        rows.truncate(limit);
+    }
+
+    if json_mode {
+        let arr: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "id": r.unit.id,
+                    "peer": r.unit.source_peer,
+                    "scope": r.unit.scope.to_string(),
+                    "category": r.unit.category.label(),
+                    "state": r.unit.injection_state.label(),
+                    "injected": r.injected,
+                    "accepted": r.accepted,
+                    "overridden": r.overridden,
+                    "decided": r.decided,
+                    "win_rate": r.win_rate,
+                    "summary": r.unit.content.summary_line(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&arr).unwrap());
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!("No units match the filter (or no decided outcomes yet).");
+        return Ok(());
+    }
+
+    println!(
+        "{:<12} {:<8} {:<8} {:<6} {:<6} {:<6} {:<20} CONTENT",
+        "ID", "ROLLOUT", "WIN", "INJ", "ACC", "OVR", "PEER"
+    );
+    println!("{}", "─".repeat(96));
+    for r in &rows {
+        let id_short = if r.unit.id.len() > 11 {
+            &r.unit.id[..11]
+        } else {
+            &r.unit.id
+        };
+        let win = if r.decided > 0 {
+            format!("{:.0}%", r.win_rate * 100.0)
+        } else {
+            "—".to_string()
+        };
+        let peer_short = if r.unit.source_peer.len() > 19 {
+            &r.unit.source_peer[..19]
+        } else {
+            &r.unit.source_peer
+        };
+        println!(
+            "{:<12} {:<8} {:<8} {:<6} {:<6} {:<6} {:<20} {}",
+            id_short,
+            r.unit.injection_state.label(),
+            win,
+            r.injected,
+            r.accepted,
+            r.overridden,
+            peer_short,
+            r.unit.content.summary_line(),
+        );
+    }
+    println!();
+    println!("{} rows", rows.len());
+    Ok(())
+}
+
+fn cmd_dead_weight(min_injected: u64, max_decided: u64, json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let rows = super::effectiveness::dead_weight(&store, min_injected, max_decided);
+
+    if json_mode {
+        let arr: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|u| {
+                serde_json::json!({
+                    "id": u.id,
+                    "peer": u.source_peer,
+                    "state": u.injection_state.label(),
+                    "injected": u.injection_stats.injected_count,
+                    "decided": u.injection_stats.decided(),
+                    "summary": u.content.summary_line(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&arr).unwrap());
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!(
+            "No dead-weight units (≥{min_injected} injections, ≤{max_decided} decided outcomes)."
+        );
+        return Ok(());
+    }
+
+    println!(
+        "{:<12} {:<8} {:<6} {:<6} {:<20} CONTENT",
+        "ID", "ROLLOUT", "INJ", "DEC", "PEER"
+    );
+    println!("{}", "─".repeat(96));
+    for u in &rows {
+        let id_short = if u.id.len() > 11 { &u.id[..11] } else { &u.id };
+        let peer_short = if u.source_peer.len() > 19 {
+            &u.source_peer[..19]
+        } else {
+            &u.source_peer
+        };
+        println!(
+            "{:<12} {:<8} {:<6} {:<6} {:<20} {}",
+            id_short,
+            u.injection_state.label(),
+            u.injection_stats.injected_count,
+            u.injection_stats.decided(),
+            peer_short,
+            u.content.summary_line(),
+        );
+    }
+    println!();
+    println!(
+        "{} dead-weight units (threshold: ≥{min_injected} injections, ≤{max_decided} decided)",
+        rows.len()
+    );
+    Ok(())
+}
+
+fn cmd_peer_effectiveness(json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let rows = super::effectiveness::peer_effectiveness(&store);
+
+    if json_mode {
+        let arr: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "peer_id": p.peer_id,
+                    "unit_count": p.unit_count,
+                    "total_injected": p.total_injected,
+                    "total_accepted": p.total_accepted,
+                    "total_overridden": p.total_overridden,
+                    "total_decided": p.total_decided(),
+                    "weighted_win_rate": p.weighted_win_rate,
+                    "dead_weight_count": p.dead_weight_count,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&arr).unwrap());
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!("No peers with knowledge in the store.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<24} {:<6} {:<6} {:<8} {:<8} {:<8} {:<6}",
+        "PEER", "UNITS", "INJ", "DEC", "WIN", "DEAD", ""
+    );
+    println!("{}", "─".repeat(80));
+    for p in &rows {
+        let win = if p.total_decided() > 0 {
+            format!("{:.0}%", p.weighted_win_rate * 100.0)
+        } else {
+            "—".to_string()
+        };
+        let peer_short = if p.peer_id.len() > 23 {
+            &p.peer_id[..23]
+        } else {
+            &p.peer_id
+        };
+        println!(
+            "{:<24} {:<6} {:<6} {:<8} {:<8} {:<8} ",
+            peer_short,
+            p.unit_count,
+            p.total_injected,
+            p.total_decided(),
+            win,
+            p.dead_weight_count,
+        );
+    }
+    println!();
+    println!("{} peers", rows.len());
+    Ok(())
 }
 
 /// `claudectl hive clusters [--problem <key>]`
