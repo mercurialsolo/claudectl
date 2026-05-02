@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn unit_effectiveness_sorts_by_win_rate() {
-        let mut store = store_with(vec![
+        let store = store_with(vec![
             make_unit(
                 "ku_low",
                 "peer-a",
@@ -303,8 +303,6 @@ mod tests {
                 },
             ),
         ]);
-        // ID collision protection — make_unit uses different ids so semantic_key matters
-        let _ = store.len();
 
         let rows = unit_effectiveness(&store, &EffectivenessFilter::default());
         assert_eq!(rows.len(), 3);
