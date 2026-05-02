@@ -5,7 +5,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
-use super::{KnowledgeUnit, semantic_key};
+use super::{KnowledgeUnit, effective_confidence, epoch_secs, semantic_key};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Paths
@@ -216,12 +216,20 @@ impl HiveStore {
             }
         }
 
-        // 3. Enforce max_units cap — evict lowest confidence * evidence score
+        // 3. Enforce max_units cap — evict lowest effective_confidence * evidence
+        // score. Effective confidence (#224) applies time decay so stale units
+        // are preferentially evicted before fresh ones.
         if max_units > 0 && self.units.len() > max_units {
+            let now = epoch_secs();
             let mut scored: Vec<(String, f64)> = self
                 .units
                 .values()
-                .map(|u| (u.id.clone(), u.confidence * u.evidence_count as f64))
+                .map(|u| {
+                    (
+                        u.id.clone(),
+                        effective_confidence(u, now) * u.evidence_count as f64,
+                    )
+                })
                 .collect();
             scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -353,6 +361,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 

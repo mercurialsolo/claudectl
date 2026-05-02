@@ -1107,6 +1107,7 @@ fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -
         last_validated_at: now,
         propagation_count: 0,
         version: 1,
+        revalidation_interval_secs: 0,
     };
 
     let summary = unit.content.summary_line();

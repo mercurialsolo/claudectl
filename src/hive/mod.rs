@@ -88,10 +88,82 @@ pub struct KnowledgeUnit {
     pub propagation_count: u32,
     /// Monotonic version — incremented when the originator updates this unit.
     pub version: u32,
+    /// How long (seconds) before this unit is considered stale and decays.
+    /// Defaults from `default_revalidation_interval(content)` for old records
+    /// that didn't write the field.
+    #[serde(default)]
+    pub revalidation_interval_secs: u64,
 }
 
 fn default_category() -> KnowledgeCategory {
     KnowledgeCategory::BestPractice
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Staleness & decay (#224)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Default revalidation interval per content type, in seconds.
+/// Patterns and accuracy stats live longer than insights or temporal observations
+/// because the underlying behavior is more durable.
+pub fn default_revalidation_interval(content: &KnowledgeContent) -> u64 {
+    const DAY: u64 = 86_400;
+    match content {
+        // Durable preferences: 30 days
+        KnowledgeContent::Pattern { .. }
+        | KnowledgeContent::ToolAccuracy { .. }
+        | KnowledgeContent::PromotedRule { .. }
+        | KnowledgeContent::ApproachCluster { .. } => 30 * DAY,
+        // Outcomes age moderately (workflows shift): 14 days
+        KnowledgeContent::ApproachOutcome { .. } => 14 * DAY,
+        // Time-of-day and friction insights: 7 days — they reflect current habits
+        KnowledgeContent::Temporal { .. } | KnowledgeContent::Insight { .. } => 7 * DAY,
+        // Shared artifacts: tied to versioned bodies; revalidate quarterly
+        KnowledgeContent::Skill { .. }
+        | KnowledgeContent::Command { .. }
+        | KnowledgeContent::HookConfig { .. } => 90 * DAY,
+    }
+}
+
+/// Effective confidence after time-based decay.
+///
+/// Decay is applied per overdue revalidation interval: each interval past
+/// `last_validated_at + revalidation_interval_secs` multiplies confidence by 0.9.
+/// Returns the original confidence when the unit is fresh (or interval is 0).
+pub fn effective_confidence(unit: &KnowledgeUnit, now: u64) -> f64 {
+    let interval = if unit.revalidation_interval_secs == 0 {
+        default_revalidation_interval(&unit.content)
+    } else {
+        unit.revalidation_interval_secs
+    };
+    if interval == 0 {
+        return unit.confidence;
+    }
+    let age = now.saturating_sub(unit.last_validated_at);
+    if age <= interval {
+        return unit.confidence;
+    }
+    // Number of full decay rounds: 1 round for ages in (interval, 2*interval],
+    // 2 rounds for (2*interval, 3*interval], etc. `(age - 1) / interval` is
+    // safe because age > interval ≥ 1 here, and avoids the off-by-one at
+    // exact integer multiples.
+    let overdue_intervals = (age - 1) / interval;
+    const MAX_DECAY_ROUNDS: u32 = 50;
+    let n = overdue_intervals.min(MAX_DECAY_ROUNDS as u64) as i32;
+    unit.confidence * 0.9_f64.powi(n)
+}
+
+/// Whether the unit is past its revalidation deadline.
+pub fn is_stale(unit: &KnowledgeUnit, now: u64) -> bool {
+    let interval = if unit.revalidation_interval_secs == 0 {
+        default_revalidation_interval(&unit.content)
+    } else {
+        unit.revalidation_interval_secs
+    };
+    if interval == 0 {
+        return false;
+    }
+    now.saturating_sub(unit.last_validated_at) > interval
 }
 
 /// Scope determines where knowledge applies.
@@ -1098,6 +1170,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 
@@ -1142,6 +1215,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         };
         assert_eq!(semantic_key(&unit), "universal/accuracy:Bash");
     }
@@ -1206,6 +1280,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         };
         // Must not panic — truncates at char boundary, not byte boundary
         let key = semantic_key(&unit);
@@ -1232,6 +1307,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         };
         let key = semantic_key(&unit);
         assert!(key.starts_with("universal/insight:error_loop:"));
@@ -1258,6 +1334,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 
@@ -1280,6 +1357,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 
@@ -1302,6 +1380,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 
@@ -1757,5 +1836,87 @@ FOO=bar claudectl --list
         let unit = sample_skill_unit();
         // Default requires is empty — should show "?"
         assert_eq!(compat_label(&unit.content), "?");
+    }
+
+    // ── Staleness / decay (#224) ───────────────────────────────────────
+
+    #[test]
+    fn default_revalidation_interval_per_content_type() {
+        let pat = sample_pattern_unit("Bash", Some("ls"));
+        let day = 86_400_u64;
+        assert_eq!(default_revalidation_interval(&pat.content), 30 * day);
+
+        let temporal = KnowledgeContent::Temporal {
+            description: "x".into(),
+            strength: 0.5,
+        };
+        assert_eq!(default_revalidation_interval(&temporal), 7 * day);
+
+        let outcome = KnowledgeContent::ApproachOutcome {
+            approach_ref: "pattern:Bash:ls".into(),
+            success_rate: 0.9,
+            sample_count: 10,
+            median_cost_usd: None,
+            median_duration_ms: None,
+            conditions: vec![],
+        };
+        assert_eq!(default_revalidation_interval(&outcome), 14 * day);
+
+        let skill = sample_skill_unit();
+        assert_eq!(default_revalidation_interval(&skill.content), 90 * day);
+    }
+
+    #[test]
+    fn effective_confidence_returns_full_when_fresh() {
+        let mut unit = sample_pattern_unit("Bash", Some("ls"));
+        unit.last_validated_at = 1_000_000;
+        // now == validation_at, age = 0 → no decay
+        assert!((effective_confidence(&unit, 1_000_000) - unit.confidence).abs() < 1e-9);
+    }
+
+    #[test]
+    fn effective_confidence_decays_when_overdue() {
+        let mut unit = sample_pattern_unit("Bash", Some("ls"));
+        unit.confidence = 1.0;
+        unit.last_validated_at = 0;
+        unit.revalidation_interval_secs = 100;
+
+        // age = 50 (under interval) → no decay
+        assert!((effective_confidence(&unit, 50) - 1.0).abs() < 1e-9);
+
+        // age = 150 (1 interval over) → 0.9
+        assert!((effective_confidence(&unit, 150) - 0.9).abs() < 1e-9);
+
+        // age = 250 (2 intervals over) → 0.81
+        assert!((effective_confidence(&unit, 250) - 0.81).abs() < 1e-9);
+
+        // age = 350 (3 intervals over) → 0.729
+        assert!((effective_confidence(&unit, 350) - 0.729).abs() < 1e-3);
+    }
+
+    #[test]
+    fn effective_confidence_falls_back_to_default_interval() {
+        let mut unit = sample_pattern_unit("Bash", Some("ls"));
+        unit.revalidation_interval_secs = 0; // sentinel: use default
+        unit.last_validated_at = 0;
+        unit.confidence = 1.0;
+
+        let day = 86_400;
+        // Pattern default = 30 days. At 30 days exactly: still fresh.
+        assert!((effective_confidence(&unit, 30 * day) - 1.0).abs() < 1e-9);
+
+        // At 60 days (1 interval over): 0.9
+        assert!((effective_confidence(&unit, 60 * day) - 0.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn is_stale_after_interval() {
+        let mut unit = sample_pattern_unit("Bash", Some("ls"));
+        unit.revalidation_interval_secs = 100;
+        unit.last_validated_at = 0;
+
+        assert!(!is_stale(&unit, 50));
+        assert!(!is_stale(&unit, 100));
+        assert!(is_stale(&unit, 200));
     }
 }

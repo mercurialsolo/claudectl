@@ -1,9 +1,14 @@
 // Build hive knowledge context for brain prompt injection.
 // Also provides concordance checking for trust drift.
 
-use super::KnowledgeContent;
 use super::store::HiveStore;
 use super::trust::{TrustStore, TrustTier};
+use super::{KnowledgeContent, effective_confidence, epoch_secs};
+
+/// Effective confidence floor below which a unit is too decayed to inject,
+/// regardless of peer trust. Keeps stale knowledge out of the prompt even when
+/// the originating peer is still trusted.
+const DECAYED_NOISE_FLOOR: f64 = 0.1;
 
 // ────────────────────────────────────────────────────────────────────────────
 // Brain prompt context builder
@@ -25,7 +30,11 @@ pub fn build_hive_context(
         return String::new();
     }
 
-    // Score and sort: higher confidence * evidence first
+    let now = epoch_secs();
+
+    // Score and sort: higher (effective) confidence * evidence first.
+    // Effective confidence applies time-based decay (#224) so stale knowledge
+    // sinks even when its peer is still Confirmed.
     // Skip Skill/Command/HookConfig — they aren't decision guidance for the brain.
     // Users discover them via `claudectl hive shared`.
     let mut scored: Vec<(&super::KnowledgeUnit, f64, TrustTier)> = all
@@ -50,7 +59,14 @@ pub fn build_hive_context(
                 return None;
             }
 
-            let score = unit.confidence * unit.evidence_count as f64;
+            let eff = effective_confidence(unit, now);
+            // Drop heavily-decayed units even if peer trust is fine.
+            // `inject_unverified` keeps them visible (debugging / cold start).
+            if !inject_unverified && eff < DECAYED_NOISE_FLOOR {
+                return None;
+            }
+
+            let score = eff * unit.evidence_count as f64;
             Some((*unit, score, tier))
         })
         .collect();
@@ -74,9 +90,14 @@ pub fn build_hive_context(
         let summary = unit.content.summary_line();
         let evidence = unit.evidence_count;
         let peer = &unit.source_peer;
+        let stale_tag = if super::is_stale(unit, now) {
+            " [stale]"
+        } else {
+            ""
+        };
 
         lines.push(format!(
-            "- [{label}] {summary} — {evidence} decisions from {peer}"
+            "- [{label}] {summary} — {evidence} decisions from {peer}{stale_tag}"
         ));
 
         // #221 conflict-aware: expand cluster variants inline so the LLM
@@ -229,6 +250,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 
@@ -305,6 +327,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 
@@ -504,6 +527,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         });
 
         let trust_store = TrustStore::load_with_default(0.5);
@@ -531,5 +555,51 @@ mod tests {
         // "user_input" is neither approve nor deny
         let results = check_concordance(Some("Bash"), Some("test"), "user_input", &store);
         assert!(results.is_empty());
+    }
+
+    // ── Staleness / decay (#224) ───────────────────────────────────────
+
+    #[test]
+    fn build_context_drops_decayed_units() {
+        let mut store = empty_store();
+        // Long-stale unit: 1.0 confidence × 0.9^N decay below floor.
+        // Pattern default interval = 30 days = 2_592_000 s.
+        // 30 intervals overdue → 0.9^31 ≈ 0.038, well below floor 0.1.
+        let mut unit = make_pattern_unit("ku_old", "Bash", Some("ls"), "approve", "peer-a");
+        unit.confidence = 1.0;
+        unit.last_validated_at = 0;
+        // Re-insert with the staleness baked in.
+        store.insert(unit);
+
+        let trust_store = TrustStore::load_with_default(0.9); // Confirmed peer
+        // Without inject_unverified, decayed units are dropped
+        let now_far_future: u64 = 100 * 365 * 86_400; // ~100 years
+        // The function uses real time, so we can't manipulate `now` directly;
+        // instead use a unit whose last_validated_at is in the deep past.
+        let _ = now_far_future;
+        let ctx = build_hive_context(&store, &trust_store, false, 0);
+        assert!(
+            ctx.is_empty(),
+            "decayed unit should be filtered when inject_unverified=false; got: {ctx}"
+        );
+
+        // With inject_unverified=true, the unit reappears
+        let ctx_unverified = build_hive_context(&store, &trust_store, true, 0);
+        assert!(ctx_unverified.contains("ku_") || ctx_unverified.contains("Bash"));
+    }
+
+    #[test]
+    fn build_context_marks_stale_units() {
+        let mut store = empty_store();
+        let mut unit = make_pattern_unit("ku_stale", "Bash", Some("ls"), "approve", "peer-a");
+        unit.confidence = 0.9;
+        // 60 days ago: stale (default Pattern interval is 30 days), but only
+        // 1 interval overdue → effective = 0.81 (above noise floor 0.1).
+        unit.last_validated_at = super::epoch_secs().saturating_sub(60 * 86_400);
+        store.insert(unit);
+
+        let trust_store = TrustStore::load_with_default(0.9);
+        let ctx = build_hive_context(&store, &trust_store, false, 0);
+        assert!(ctx.contains("[stale]"), "expected stale tag in: {ctx}");
     }
 }

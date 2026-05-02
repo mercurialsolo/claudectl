@@ -218,6 +218,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 
@@ -333,6 +334,7 @@ mod tests {
             last_validated_at: 2000,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 

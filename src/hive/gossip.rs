@@ -454,6 +454,7 @@ mod tests {
             last_validated_at: epoch_secs(),
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         }
     }
 

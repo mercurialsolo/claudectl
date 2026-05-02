@@ -264,6 +264,7 @@ pub fn distill_outcomes(
             last_validated_at: now,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         });
     }
     out
@@ -366,6 +367,7 @@ pub fn detect_clusters(
             last_validated_at: now,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         });
     }
     units
@@ -430,6 +432,7 @@ fn pattern_to_unit(
         last_validated_at: now,
         propagation_count: 0,
         version: 1,
+        revalidation_interval_secs: 0,
     })
 }
 
@@ -464,6 +467,7 @@ fn accuracy_to_unit(
         last_validated_at: now,
         propagation_count: 0,
         version: 1,
+        revalidation_interval_secs: 0,
     })
 }
 
@@ -521,6 +525,7 @@ fn temporal_to_unit(
         last_validated_at: now,
         propagation_count: 0,
         version: 1,
+        revalidation_interval_secs: 0,
     })
 }
 
@@ -1012,6 +1017,7 @@ mod tests {
             last_validated_at: 0,
             propagation_count: 0,
             version: 1,
+            revalidation_interval_secs: 0,
         };
         let mut unit_b = unit_a.clone();
         unit_b.source_peer = "peer-b".into();
