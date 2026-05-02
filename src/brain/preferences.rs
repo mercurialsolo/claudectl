@@ -923,6 +923,7 @@ mod tests {
             suggested_at: None,
             resolved_at: None,
             override_reason: None,
+            decision_id: None,
         }
     }
 
@@ -948,6 +949,7 @@ mod tests {
             suggested_at: None,
             resolved_at: None,
             override_reason: None,
+            decision_id: None,
         }
     }
 
@@ -1008,6 +1010,7 @@ mod tests {
             suggested_at: None,
             resolved_at: None,
             override_reason: None,
+            decision_id: None,
         }
     }
 
@@ -1293,6 +1296,7 @@ mod tests {
                 suggested_at: None,
                 resolved_at: None,
                 override_reason: None,
+                decision_id: None,
             },
             DecisionRecord {
                 timestamp: "2".into(),
@@ -1310,6 +1314,7 @@ mod tests {
                 suggested_at: None,
                 resolved_at: None,
                 override_reason: None,
+                decision_id: None,
             },
         ];
 
@@ -1346,6 +1351,7 @@ mod tests {
                 suggested_at: None,
                 resolved_at: None,
                 override_reason: None,
+                decision_id: None,
             });
         }
         // Then user denies
@@ -1365,6 +1371,7 @@ mod tests {
             suggested_at: None,
             resolved_at: None,
             override_reason: None,
+            decision_id: None,
         });
         // Repeat the streak pattern to reach threshold of 2
         for _ in 0..4 {
@@ -1384,6 +1391,7 @@ mod tests {
                 suggested_at: None,
                 resolved_at: None,
                 override_reason: None,
+                decision_id: None,
             });
         }
         decisions.push(DecisionRecord {
@@ -1402,6 +1410,7 @@ mod tests {
             suggested_at: None,
             resolved_at: None,
             override_reason: None,
+            decision_id: None,
         });
 
         let patterns = detect_temporal_patterns(&decisions);

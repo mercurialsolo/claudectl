@@ -1296,6 +1296,284 @@ pub(crate) fn run_insights(cfg: &config::Config, cli: &Cli, arg: &str) -> io::Re
     Ok(())
 }
 
+/// Record a tool-call outcome to the pending-outcomes spool.
+/// Reads PendingOutcome JSON from stdin if present and non-empty;
+/// otherwise builds one from CLI flags (`--tool`, `--exit-code`, …).
+/// Used by the Claude Code PostToolUse hook for #220 baselining.
+pub(crate) fn run_record_outcome(cli: &Cli) -> io::Result<()> {
+    use brain::outcomes::{PendingOutcome, truncate_stderr, write_pending};
+    use std::io::Read;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // Try stdin first — hook scripts pipe a JSON blob in.
+    let mut stdin_buf = String::new();
+    let stdin_has_data =
+        std::io::stdin().read_to_string(&mut stdin_buf).is_ok() && !stdin_buf.trim().is_empty();
+
+    let outcome = if stdin_has_data {
+        match serde_json::from_str::<PendingOutcome>(&stdin_buf) {
+            Ok(mut p) => {
+                if p.ts == 0 {
+                    p.ts = ts;
+                }
+                if let Some(s) = p.stderr_tail.as_ref() {
+                    p.stderr_tail = Some(truncate_stderr(s));
+                }
+                p
+            }
+            Err(e) => {
+                eprintln!("--record-outcome: invalid JSON on stdin: {e}");
+                std::process::exit(2);
+            }
+        }
+    } else {
+        let tool = cli.tool.clone().unwrap_or_default();
+        if tool.is_empty() {
+            eprintln!("--record-outcome: --tool is required when stdin is empty");
+            std::process::exit(2);
+        }
+        let project = cli.project.clone().unwrap_or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "unknown".into())
+        });
+        PendingOutcome {
+            tool,
+            command: cli.tool_input.clone().filter(|s| !s.is_empty()),
+            project,
+            session_id: cli.session_id.clone(),
+            tool_use_id: cli.tool_use_id.clone(),
+            exit_code: cli.exit_code,
+            duration_ms: cli.duration_ms,
+            stderr_tail: cli.stderr_tail.as_deref().map(truncate_stderr),
+            ts,
+        }
+    };
+
+    match write_pending(&outcome) {
+        Ok(path) => {
+            if cli.json {
+                let v = serde_json::json!({
+                    "status": "recorded",
+                    "path": path.display().to_string(),
+                });
+                println!("{}", serde_json::to_string(&v).unwrap());
+            }
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("--record-outcome: write failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// List resolved outcomes (joined with their decisions). Filterable by
+/// --tool and --project.
+pub(crate) fn run_brain_outcomes(cli: &Cli) -> io::Result<()> {
+    // Reap first so the freshest data shows up.
+    let _ = brain::outcomes::reap();
+    let resolved = brain::outcomes::load_resolved_map();
+    if resolved.is_empty() {
+        if cli.json {
+            println!("[]");
+        } else {
+            println!(
+                "No attributed outcomes yet. Pending: {}",
+                brain::outcomes::list_pending().len()
+            );
+        }
+        return Ok(());
+    }
+
+    let tool_filter = cli.tool.as_deref();
+    let project_filter = cli.project.as_deref();
+
+    let mut rows: Vec<&brain::outcomes::ResolvedOutcome> = resolved
+        .values()
+        .filter(|o| tool_filter.is_none_or(|t| o.tool == t))
+        .filter(|o| project_filter.is_none_or(|p| o.project.eq_ignore_ascii_case(p)))
+        .collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.ts));
+
+    if let Some(n) = cli.top {
+        rows.truncate(n);
+    }
+
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
+        );
+    } else {
+        println!(
+            "{:<10} {:<8} {:<10} {:<28} COMMAND",
+            "EXIT", "DURMS", "TOOL", "PROJECT"
+        );
+        for r in rows {
+            let exit = r
+                .exit_code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".into());
+            let dur = r
+                .duration_ms
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "?".into());
+            let cmd = r.command.as_deref().unwrap_or("");
+            let cmd_short = if cmd.len() > 60 { &cmd[..60] } else { cmd };
+            println!(
+                "{:<10} {:<8} {:<10} {:<28} {}",
+                exit,
+                dur,
+                truncate_col(&r.tool, 10),
+                truncate_col(&r.project, 28),
+                cmd_short
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Rank approaches by outcome data: success_rate * sample_count.
+pub(crate) fn run_brain_baseline(cli: &Cli) -> io::Result<()> {
+    let _ = brain::outcomes::reap();
+    let decisions = brain::decisions::read_all_decisions();
+    let resolved = brain::outcomes::load_resolved_map();
+    let scope = match cli.project.as_deref() {
+        Some(p) => crate::hive::KnowledgeScope::Project(p.to_string()),
+        None => crate::hive::KnowledgeScope::Universal,
+    };
+    let units = crate::hive::distiller::distill_outcomes(
+        &decisions,
+        &resolved,
+        "local",
+        &scope,
+        cli.project.as_deref(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        // Lower the threshold for the CLI view so users see partial signal.
+        &crate::hive::distiller::ExportThresholds {
+            min_outcome_samples: 1,
+            ..Default::default()
+        },
+    );
+
+    type BaselineRow = (String, f64, u32, Option<f64>, Option<u64>);
+    let mut rows: Vec<BaselineRow> = units
+        .into_iter()
+        .filter_map(|u| {
+            if let crate::hive::KnowledgeContent::ApproachOutcome {
+                approach_ref,
+                success_rate,
+                sample_count,
+                median_cost_usd,
+                median_duration_ms,
+                ..
+            } = u.content
+            {
+                if let Some(t) = cli.tool.as_deref() {
+                    if !approach_ref.contains(&format!(":{t}:")) {
+                        return None;
+                    }
+                }
+                Some((
+                    approach_ref,
+                    success_rate,
+                    sample_count,
+                    median_cost_usd,
+                    median_duration_ms,
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Rank by success_rate * sample_count, desc.
+    rows.sort_by(|a, b| {
+        let av = a.1 * a.2 as f64;
+        let bv = b.1 * b.2 as f64;
+        bv.partial_cmp(&av).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    if let Some(n) = cli.top {
+        rows.truncate(n);
+    }
+
+    if cli.json {
+        let arr: Vec<serde_json::Value> = rows
+            .into_iter()
+            .map(|(r, sr, n, c, d)| {
+                serde_json::json!({
+                    "approach_ref": r,
+                    "success_rate": sr,
+                    "sample_count": n,
+                    "median_cost_usd": c,
+                    "median_duration_ms": d,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string(&arr).unwrap());
+    } else if rows.is_empty() {
+        println!("No baseline data yet. Need at least 1 attributed outcome.");
+    } else {
+        println!(
+            "{:<8} {:<6} {:<10} {:<10} APPROACH",
+            "SUCC%", "N", "MED_COST", "MED_MS"
+        );
+        for (r, sr, n, c, d) in rows {
+            let cost = c.map(|x| format!("${x:.4}")).unwrap_or_else(|| "-".into());
+            let dur = d.map(|x| x.to_string()).unwrap_or_else(|| "-".into());
+            println!(
+                "{:<8.0} {:<6} {:<10} {:<10} {}",
+                sr * 100.0,
+                n,
+                cost,
+                dur,
+                r
+            );
+        }
+    }
+    Ok(())
+}
+
+fn truncate_col(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(width.saturating_sub(1)).collect();
+        format!("{truncated}…")
+    }
+}
+
+/// Reap pending outcomes and attribute them to decisions.
+pub(crate) fn run_reap_outcomes(cli: &Cli) -> io::Result<()> {
+    let stats = brain::outcomes::reap();
+    if cli.json {
+        let v = serde_json::json!({
+            "scanned": stats.scanned,
+            "attributed": stats.attributed,
+            "orphaned": stats.orphaned,
+            "still_pending": stats.still_pending,
+            "errors": stats.errors,
+        });
+        println!("{}", serde_json::to_string(&v).unwrap());
+    } else {
+        println!(
+            "Outcomes reaped: scanned={} attributed={} orphaned={} still_pending={} errors={}",
+            stats.scanned, stats.attributed, stats.orphaned, stats.still_pending, stats.errors
+        );
+    }
+    Ok(())
+}
+
 /// Standalone brain query: builds a minimal context from CLI args, calls the
 /// local LLM, and prints a JSON decision to stdout. Designed to be called
 /// by Claude Code plugin hooks (PreToolUse) for inline approve/deny.

@@ -10,6 +10,7 @@ pub mod evals;
 pub mod insights;
 pub mod mailbox;
 pub mod metrics;
+pub mod outcomes;
 pub mod pref_store;
 pub mod preferences;
 pub mod prompts;

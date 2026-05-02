@@ -1075,3 +1075,241 @@ fn resolve_jsonl_telemetry_available_after_resolution() {
     assert!(s.usage_metrics_available);
     assert!(s.own_output_tokens > 0, "should have parsed output tokens");
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// #220 baselining — reaper attribution tests
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Each test isolates a tempdir HOME (under HOME_LOCK), seeds a decisions.jsonl
+// and a pending-outcome file, runs the reaper, then asserts on the resulting
+// outcomes/ and pending-outcomes/ directories. HOME is restored on teardown.
+
+use claudectl::brain::outcomes;
+
+struct HomeGuard {
+    original: Option<String>,
+    _tempdir: tempfile::TempDir,
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match self.original.take() {
+            Some(h) => unsafe { std::env::set_var("HOME", h) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+}
+
+fn isolated_home() -> HomeGuard {
+    let original = std::env::var("HOME").ok();
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("HOME", dir.path()) };
+    HomeGuard {
+        original,
+        _tempdir: dir,
+    }
+}
+
+fn write_decision_jsonl(line: &str) {
+    let path = std::env::var("HOME").unwrap();
+    let dir = std::path::PathBuf::from(path).join(".claudectl/brain");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("decisions.jsonl"))
+        .unwrap();
+    writeln!(f, "{line}").unwrap();
+}
+
+fn write_pending_file(p: &outcomes::PendingOutcome) {
+    let path = outcomes::write_pending(p).unwrap();
+    assert!(path.exists());
+}
+
+#[test]
+fn reaper_attributes_outcome_to_recent_decision() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let dec_ts = now - 30;
+    let decision_id = format!("dec_{dec_ts}_42_0");
+
+    write_decision_jsonl(&format!(
+        r#"{{"ts":"{dec_ts}","pid":42,"project":"alpha","tool":"Bash","command":"cargo test","brain_action":"approve","brain_confidence":0.9,"brain_reasoning":"safe","user_action":"accept","decision_type":"session","decision_id":"{decision_id}"}}"#
+    ));
+
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("cargo test".into()),
+        project: "alpha".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(0),
+        duration_ms: Some(2_400),
+        stderr_tail: None,
+        ts: now,
+    });
+
+    let stats = outcomes::reap();
+    assert_eq!(stats.attributed, 1, "exactly one outcome should attribute");
+    assert_eq!(stats.still_pending, 0);
+    assert_eq!(stats.orphaned, 0);
+
+    let resolved = outcomes::load_resolved_map();
+    assert_eq!(resolved.len(), 1);
+    let r = resolved.get(&decision_id).expect("resolved by decision_id");
+    assert_eq!(r.exit_code, Some(0));
+    assert_eq!(r.duration_ms, Some(2_400));
+}
+
+#[test]
+fn reaper_leaves_orphaned_outcome_pending_within_window() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    // No decisions written at all → outcome can't attribute, but isn't old
+    // enough to be orphaned either.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("ls".into()),
+        project: "p".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(0),
+        duration_ms: None,
+        stderr_tail: None,
+        ts: now,
+    });
+
+    let stats = outcomes::reap();
+    assert_eq!(stats.attributed, 0);
+    assert_eq!(stats.still_pending, 1);
+    assert_eq!(stats.orphaned, 0);
+    assert!(outcomes::load_resolved_map().is_empty());
+}
+
+#[test]
+fn reaper_orphans_old_unattributed_outcome() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    // Outcome older than ORPHAN_AFTER_SECS (24h) with no matching decision.
+    let stale_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        - 90_000; // 25h ago
+
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("rm -rf /tmp/stale".into()),
+        project: "p".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(0),
+        duration_ms: None,
+        stderr_tail: None,
+        ts: stale_ts,
+    });
+
+    let stats = outcomes::reap();
+    assert_eq!(stats.attributed, 0);
+    assert_eq!(stats.orphaned, 1);
+
+    // The pending dir is empty; the orphaned dir has the file.
+    let pending: Vec<_> = std::fs::read_dir(outcomes::pending_dir())
+        .unwrap()
+        .collect();
+    assert!(pending.is_empty(), "pending dir should be drained");
+    let orphaned: Vec<_> = std::fs::read_dir(outcomes::orphaned_dir())
+        .unwrap()
+        .collect();
+    assert_eq!(orphaned.len(), 1);
+}
+
+#[test]
+fn reaper_will_not_double_attribute_one_decision() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let dec_ts = now - 5;
+    let decision_id = format!("dec_{dec_ts}_7_0");
+    write_decision_jsonl(&format!(
+        r#"{{"ts":"{dec_ts}","pid":7,"project":"p","tool":"Bash","command":"echo hi","brain_action":"approve","brain_confidence":1.0,"brain_reasoning":"","user_action":"accept","decision_type":"session","decision_id":"{decision_id}"}}"#
+    ));
+
+    // Two pending outcomes for the same approach.
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("echo hi".into()),
+        project: "p".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(0),
+        duration_ms: Some(1),
+        stderr_tail: None,
+        ts: now,
+    });
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("echo hi".into()),
+        project: "p".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(0),
+        duration_ms: Some(2),
+        stderr_tail: None,
+        ts: now + 1,
+    });
+
+    let stats = outcomes::reap();
+    // Only one attributes; the other stays pending until a future decision
+    // is logged.
+    assert_eq!(stats.attributed, 1);
+    assert_eq!(stats.still_pending, 1);
+    assert_eq!(outcomes::load_resolved_map().len(), 1);
+}
+
+#[test]
+fn reaper_skips_decisions_lacking_decision_id() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // Old-style record (no decision_id field) — must be skipped.
+    write_decision_jsonl(&format!(
+        r#"{{"ts":"{}","pid":1,"project":"p","tool":"Bash","command":"ls","brain_action":"approve","brain_confidence":0.9,"brain_reasoning":"","user_action":"accept","decision_type":"session"}}"#,
+        now - 5
+    ));
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("ls".into()),
+        project: "p".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(0),
+        duration_ms: None,
+        stderr_tail: None,
+        ts: now,
+    });
+
+    let stats = outcomes::reap();
+    assert_eq!(stats.attributed, 0);
+    assert_eq!(stats.still_pending, 1);
+}
