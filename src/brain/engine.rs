@@ -380,12 +380,18 @@ impl BrainEngine {
                 let store = crate::hive::store::HiveStore::load();
                 let trust_store =
                     crate::hive::trust::TrustStore::load_with_default(hive_cfg.default_trust);
-                brain_ctx.hive_context = crate::hive::injection::build_hive_context(
+                let (ctx, injected_ids) = crate::hive::injection::build_hive_context_for_session(
                     &store,
                     &trust_store,
                     hive_cfg.inject_unverified,
                     hive_cfg.max_prompt_units,
+                    Some(pid),
                 );
+                brain_ctx.hive_context = ctx;
+                // Stash the injected unit ids so the matching log_decision call
+                // can attribute the outcome back to each unit (#223 feedback loop).
+                let _ = crate::hive::feedback::stash_pending(pid, &injected_ids);
+                crate::hive::feedback::record_injections(&injected_ids);
             }
         }
 

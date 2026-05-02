@@ -5,6 +5,7 @@ pub mod archive;
 pub mod cli;
 pub mod distiller;
 pub mod exposure;
+pub mod feedback;
 #[cfg(feature = "relay")]
 pub mod gossip;
 pub mod injection;
@@ -93,10 +94,103 @@ pub struct KnowledgeUnit {
     /// that didn't write the field.
     #[serde(default)]
     pub revalidation_interval_secs: u64,
+    /// Rollout state for prompt injection (#223). Controls what fraction of
+    /// brain prompts include this unit, so freshly-distilled knowledge can be
+    /// validated against outcomes before going wide.
+    #[serde(default)]
+    pub injection_state: InjectionState,
+    /// Cumulative stats from prompts that included this unit. Used by the
+    /// state machine to advance Canary → Staged → Live or roll back to Draft.
+    #[serde(default)]
+    pub injection_stats: InjectionStats,
 }
 
 fn default_category() -> KnowledgeCategory {
     KnowledgeCategory::BestPractice
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Injection state machine (#223)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Rollout state for a knowledge unit's prompt injection.
+///
+/// New distillations start at `Canary` so they're validated against outcomes
+/// before reaching every prompt. The default for *deserialised* units is
+/// `Live` — preserves the pre-#223 behaviour for units that already exist on
+/// disk without this field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InjectionState {
+    /// Not injected at all. Used for units quarantined after repeated bad
+    /// outcomes, or for distillations that haven't yet been promoted.
+    Draft,
+    /// Injected into ~10% of prompts (sampled by pid).
+    Canary,
+    /// Injected into ~50% of prompts.
+    Staged,
+    /// Injected into every eligible prompt.
+    /// Pre-#223 units (no field on disk) deserialise as Live — they were
+    /// already at full rollout, so this keeps their behaviour stable.
+    #[default]
+    Live,
+}
+
+impl InjectionState {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Canary => "canary",
+            Self::Staged => "staged",
+            Self::Live => "live",
+        }
+    }
+
+    /// Sampling rate for this state (out of 10).
+    pub fn sample_buckets(&self) -> u8 {
+        match self {
+            Self::Draft => 0,
+            Self::Canary => 1,
+            Self::Staged => 5,
+            Self::Live => 10,
+        }
+    }
+}
+
+/// Cumulative outcome stats for a knowledge unit's prompt injections.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InjectionStats {
+    /// Total times this unit appeared in a brain prompt.
+    #[serde(default)]
+    pub injected_count: u64,
+    /// Decisions where the brain's suggestion was accepted by the user.
+    #[serde(default)]
+    pub accepted_count: u64,
+    /// Decisions where the brain's suggestion was overridden by the user.
+    #[serde(default)]
+    pub overridden_count: u64,
+    /// Last time this unit was injected (epoch secs).
+    #[serde(default)]
+    pub last_injected_at: u64,
+    /// Last time we received an outcome for this unit (epoch secs).
+    #[serde(default)]
+    pub last_outcome_at: u64,
+}
+
+impl InjectionStats {
+    /// Win rate over decided injections; 0.0 when there's no signal yet.
+    pub fn win_rate(&self) -> f64 {
+        let decided = self.accepted_count + self.overridden_count;
+        if decided == 0 {
+            return 0.0;
+        }
+        self.accepted_count as f64 / decided as f64
+    }
+
+    /// Total decided outcomes recorded against this unit.
+    pub fn decided(&self) -> u64 {
+        self.accepted_count + self.overridden_count
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1171,6 +1265,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         }
     }
 
@@ -1216,6 +1318,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         };
         assert_eq!(semantic_key(&unit), "universal/accuracy:Bash");
     }
@@ -1281,6 +1391,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         };
         // Must not panic — truncates at char boundary, not byte boundary
         let key = semantic_key(&unit);
@@ -1308,6 +1426,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         };
         let key = semantic_key(&unit);
         assert!(key.starts_with("universal/insight:error_loop:"));
@@ -1335,6 +1461,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         }
     }
 
@@ -1358,6 +1492,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         }
     }
 
@@ -1381,6 +1523,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         }
     }
 

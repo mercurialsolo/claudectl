@@ -349,6 +349,12 @@ pub fn log_decision(
         );
     }
 
+    // #223 injection feedback loop: attribute this decision's outcome back to
+    // every hive unit that appeared in the prompt for `pid`. No-op when hive
+    // wasn't injected for this session (no pending stash).
+    #[cfg(feature = "hive")]
+    crate::hive::feedback::record_outcome(pid, user_action);
+
     // Re-distill preferences in a background thread every Nth decision.
     // The file append above is fast (single write), but distillation reads
     // the full history and computes patterns — must not block the TUI.

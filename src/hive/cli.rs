@@ -748,22 +748,29 @@ fn cmd_knowledge(
         println!("No knowledge units found.");
     } else {
         println!(
-            "{:<12} {:<15} {:<8} {:<6} CONTENT",
-            "ID", "SCOPE", "CONF", "EVID"
+            "{:<12} {:<15} {:<8} {:<6} {:<8} {:<8} CONTENT",
+            "ID", "SCOPE", "CONF", "EVID", "ROLLOUT", "WIN"
         );
-        println!("{}", "─".repeat(80));
+        println!("{}", "─".repeat(96));
         for unit in &units {
             let id_short = if unit.id.len() > 11 {
                 &unit.id[..11]
             } else {
                 &unit.id
             };
+            let win = if unit.injection_stats.decided() > 0 {
+                format!("{:.0}%", unit.injection_stats.win_rate() * 100.0)
+            } else {
+                "—".to_string()
+            };
             println!(
-                "{:<12} {:<15} {:<8.0}% {:<6} {}",
+                "{:<12} {:<15} {:<8.0}% {:<6} {:<8} {:<8} {}",
                 id_short,
                 unit.scope.to_string(),
                 unit.confidence * 100.0,
                 unit.evidence_count,
+                unit.injection_state.label(),
+                win,
                 unit.content.summary_line(),
             );
         }
@@ -1108,6 +1115,14 @@ fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -
         propagation_count: 0,
         version: 1,
         revalidation_interval_secs: 0,
+        injection_state: crate::hive::InjectionState::Live,
+        injection_stats: crate::hive::InjectionStats {
+            injected_count: 0,
+            accepted_count: 0,
+            overridden_count: 0,
+            last_injected_at: 0,
+            last_outcome_at: 0,
+        },
     };
 
     let summary = unit.content.summary_line();

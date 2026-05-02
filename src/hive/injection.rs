@@ -1,6 +1,7 @@
 // Build hive knowledge context for brain prompt injection.
 // Also provides concordance checking for trust drift.
 
+use super::feedback::passes_rollout;
 use super::store::HiveStore;
 use super::trust::{TrustStore, TrustTier};
 use super::{KnowledgeContent, effective_confidence, epoch_secs};
@@ -25,9 +26,23 @@ pub fn build_hive_context(
     inject_unverified: bool,
     max_units: usize,
 ) -> String {
+    build_hive_context_for_session(store, trust_store, inject_unverified, max_units, None).0
+}
+
+/// Same as [`build_hive_context`] but applies #223 rollout sampling per session
+/// pid and returns the IDs of units that ended up in the prompt. Callers
+/// should pass `Some(pid)` to opt into Canary/Staged sampling and feed the
+/// returned IDs into `feedback::stash_pending` so outcomes can be attributed.
+pub fn build_hive_context_for_session(
+    store: &HiveStore,
+    trust_store: &TrustStore,
+    inject_unverified: bool,
+    max_units: usize,
+    pid: Option<u32>,
+) -> (String, Vec<String>) {
     let all = store.all_units();
     if all.is_empty() {
-        return String::new();
+        return (String::new(), Vec::new());
     }
 
     let now = epoch_secs();
@@ -66,6 +81,13 @@ pub fn build_hive_context(
                 return None;
             }
 
+            // #223 rollout sampling — Draft units never appear, Canary in
+            // ~10% of prompts, Staged in ~50%, Live always. When pid is None
+            // (CLI listings, tests), every state passes.
+            if !passes_rollout(unit, pid) {
+                return None;
+            }
+
             let score = eff * unit.evidence_count as f64;
             Some((*unit, score, tier))
         })
@@ -82,9 +104,11 @@ pub fn build_hive_context(
 
     let mut lines = Vec::new();
     let mut peer_count = std::collections::HashSet::new();
+    let mut injected_ids: Vec<String> = Vec::new();
 
     for (unit, _, tier) in scored.iter().take(limit) {
         peer_count.insert(unit.source_peer.clone());
+        injected_ids.push(unit.id.clone());
 
         let label = tier.label();
         let summary = unit.content.summary_line();
@@ -125,7 +149,7 @@ pub fn build_hive_context(
     }
 
     if lines.is_empty() {
-        return String::new();
+        return (String::new(), Vec::new());
     }
 
     let total = scored.len();
@@ -142,7 +166,7 @@ pub fn build_hive_context(
         shown,
         truncated,
     );
-    header + &lines.join("\n")
+    (header + &lines.join("\n"), injected_ids)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -251,6 +275,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         }
     }
 
@@ -328,6 +360,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         }
     }
 
@@ -528,6 +568,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         });
 
         let trust_store = TrustStore::load_with_default(0.5);

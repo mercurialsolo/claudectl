@@ -114,7 +114,8 @@ pub fn distill_to_knowledge_stable(
     let mut units = distill_to_knowledge(prefs, source_peer, project, thresholds);
 
     // For each unit, check if a semantically equivalent one already exists.
-    // If so, reuse the ID and bump the version.
+    // If so, reuse the ID and bump the version. Otherwise mark it as Canary
+    // (#223) so its rollout is gated by outcome stats before going wider.
     for unit in &mut units {
         let sk = semantic_key(unit);
         if let Some(existing_unit) = existing.find_by_semantic_key(&sk) {
@@ -123,7 +124,15 @@ pub fn distill_to_knowledge_stable(
                 unit.version = existing_unit.version + 1;
                 unit.originated_at = existing_unit.originated_at;
                 unit.propagation_count = existing_unit.propagation_count;
+                // Preserve rollout state and stats — the unit's history is
+                // what tells us whether it's earned promotion.
+                unit.injection_state = existing_unit.injection_state;
+                unit.injection_stats = existing_unit.injection_stats.clone();
             }
+        } else {
+            // Truly new: start in Canary so we collect outcome signal before
+            // exposing it to every prompt.
+            unit.injection_state = super::InjectionState::Canary;
         }
     }
 
@@ -265,6 +274,14 @@ pub fn distill_outcomes(
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         });
     }
     out
@@ -368,6 +385,14 @@ pub fn detect_clusters(
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         });
     }
     units
@@ -433,6 +458,14 @@ fn pattern_to_unit(
         propagation_count: 0,
         version: 1,
         revalidation_interval_secs: 0,
+        injection_state: crate::hive::InjectionState::Live,
+        injection_stats: crate::hive::InjectionStats {
+            injected_count: 0,
+            accepted_count: 0,
+            overridden_count: 0,
+            last_injected_at: 0,
+            last_outcome_at: 0,
+        },
     })
 }
 
@@ -468,6 +501,14 @@ fn accuracy_to_unit(
         propagation_count: 0,
         version: 1,
         revalidation_interval_secs: 0,
+        injection_state: crate::hive::InjectionState::Live,
+        injection_stats: crate::hive::InjectionStats {
+            injected_count: 0,
+            accepted_count: 0,
+            overridden_count: 0,
+            last_injected_at: 0,
+            last_outcome_at: 0,
+        },
     })
 }
 
@@ -526,6 +567,14 @@ fn temporal_to_unit(
         propagation_count: 0,
         version: 1,
         revalidation_interval_secs: 0,
+        injection_state: crate::hive::InjectionState::Live,
+        injection_stats: crate::hive::InjectionStats {
+            injected_count: 0,
+            accepted_count: 0,
+            overridden_count: 0,
+            last_injected_at: 0,
+            last_outcome_at: 0,
+        },
     })
 }
 
@@ -1018,6 +1067,14 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats {
+                injected_count: 0,
+                accepted_count: 0,
+                overridden_count: 0,
+                last_injected_at: 0,
+                last_outcome_at: 0,
+            },
         };
         let mut unit_b = unit_a.clone();
         unit_b.source_peer = "peer-b".into();
