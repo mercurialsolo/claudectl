@@ -34,6 +34,8 @@ pub(super) use super::preferences::{save_preferences, save_project_preferences};
 static DECISION_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Guard to prevent concurrent distillation threads.
 static DISTILLING: AtomicBool = AtomicBool::new(false);
+/// Monotonic counter for decision_id uniqueness within a process.
+static DECISION_ID_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 /// How often to re-distill preferences (every N decisions).
 const DISTILL_INTERVAL: u32 = 10;
@@ -94,6 +96,20 @@ pub struct DecisionRecord {
     pub resolved_at: Option<u64>,
     /// Why the user overrode a brain denial (if applicable).
     pub override_reason: Option<String>,
+    /// Stable id for outcome attribution (#220 baselining). None on records
+    /// written before the field existed; outcomes for those can't be joined.
+    pub decision_id: Option<String>,
+}
+
+/// Generate a unique decision id.
+pub fn gen_decision_id() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let pid = std::process::id();
+    let seq = DECISION_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("dec_{secs}_{pid}_{seq}")
 }
 
 /// Outcome of a decision, backfilled during distillation by looking at
@@ -299,6 +315,7 @@ pub fn log_decision(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+    let decision_id = gen_decision_id();
     let mut record = serde_json::json!({
         "ts": timestamp_now(),
         "pid": pid,
@@ -313,6 +330,7 @@ pub fn log_decision(
         "suggested_at": suggestion.suggested_at,
         "resolved_at": resolved_at,
         "override_reason": override_reason,
+        "decision_id": decision_id,
     });
     if let Some(s) = session {
         record["context"] = snapshot_context(s);
@@ -348,6 +366,7 @@ pub fn log_observation(
     observed_action: &str, // "user_approve", "user_input", "rule_approve", "rule_deny", etc.
     session: Option<&crate::session::ClaudeSession>,
 ) {
+    let decision_id = gen_decision_id();
     let mut record = serde_json::json!({
         "ts": timestamp_now(),
         "pid": pid,
@@ -358,6 +377,7 @@ pub fn log_observation(
         "brain_confidence": 0.0,
         "brain_reasoning": "",
         "user_action": observed_action,
+        "decision_id": decision_id,
     });
     if let Some(s) = session {
         record["context"] = snapshot_context(s);
@@ -640,6 +660,10 @@ pub fn read_all_decisions() -> Vec<DecisionRecord> {
                     .get("override_reason")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
+                decision_id: json
+                    .get("decision_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
             })
         })
         .collect()
@@ -681,6 +705,7 @@ mod tests {
             suggested_at: None,
             resolved_at: None,
             override_reason: None,
+            decision_id: None,
         }
     }
 
@@ -736,6 +761,7 @@ mod tests {
             suggested_at: None,
             resolved_at: None,
             override_reason: None,
+            decision_id: None,
         }
     }
 

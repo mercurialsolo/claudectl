@@ -197,6 +197,48 @@ pub enum KnowledgeContent {
         #[serde(default)]
         requires: ArtifactRequires,
     },
+    /// Outcome statistics for a recurring approach (#220 baselining).
+    /// `approach_ref` matches the semantic_key of the underlying Pattern/Rule/Skill
+    /// so outcomes can be joined back to the approach they describe and shared
+    /// across peers as evidence — not as a new approach itself.
+    ApproachOutcome {
+        approach_ref: String,
+        success_rate: f64,
+        sample_count: u32,
+        #[serde(default)]
+        median_cost_usd: Option<f64>,
+        #[serde(default)]
+        median_duration_ms: Option<u64>,
+        #[serde(default)]
+        conditions: Vec<String>,
+    },
+    /// A cluster of competing approaches to the same problem (#221).
+    /// `problem_key` is a stable identifier (typically the underlying tool
+    /// or canonical task name) that groups variants. Variants are not
+    /// collapsed during merge — they are unioned across peers so the gate
+    /// can present alternatives instead of one winning answer.
+    ApproachCluster {
+        problem_key: String,
+        variants: Vec<ApproachVariant>,
+    },
+}
+
+/// One competing approach within an `ApproachCluster`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApproachVariant {
+    /// Free-text summary the gate-time prompt shows to the LLM.
+    pub approach_summary: String,
+    /// When this variant tends to win (project, language, time-of-day, …).
+    #[serde(default)]
+    pub conditions: Vec<String>,
+    /// How many decisions back this variant.
+    pub evidence: u32,
+    /// Peers that have contributed evidence for this variant.
+    #[serde(default)]
+    pub contributing_peers: Vec<String>,
+    /// Optional pointer to an `ApproachOutcome` semantic_key for ranking.
+    #[serde(default)]
+    pub outcome_ref: Option<String>,
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -248,6 +290,12 @@ pub fn semantic_key(unit: &KnowledgeUnit) -> String {
         }
         KnowledgeContent::HookConfig { event, matcher, .. } => {
             format!("hook:{}:{}", event.to_lowercase(), matcher.to_lowercase())
+        }
+        KnowledgeContent::ApproachOutcome { approach_ref, .. } => {
+            format!("outcome:{approach_ref}")
+        }
+        KnowledgeContent::ApproachCluster { problem_key, .. } => {
+            format!("cluster:{problem_key}")
         }
     };
     format!("{scope_part}/{content_part}")
@@ -990,6 +1038,23 @@ impl KnowledgeContent {
                 ..
             } => {
                 format!("hook: {event}[{matcher}] — {description}")
+            }
+            Self::ApproachOutcome {
+                approach_ref,
+                success_rate,
+                sample_count,
+                ..
+            } => {
+                format!(
+                    "outcome: {approach_ref} — {:.0}% over {sample_count}",
+                    success_rate * 100.0
+                )
+            }
+            Self::ApproachCluster {
+                problem_key,
+                variants,
+            } => {
+                format!("cluster: {problem_key} ({} variants)", variants.len())
             }
         }
     }

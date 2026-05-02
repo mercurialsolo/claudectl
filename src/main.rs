@@ -241,6 +241,54 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Brain (Local LLM)")]
     pub(crate) mode: Option<String>,
 
+    /// Record a tool-call outcome to the pending-outcomes spool.
+    /// Used by the Claude Code PostToolUse hook for #220 baselining.
+    /// Reads pending-outcome JSON from stdin (preferred) or builds one from
+    /// --tool, --tool-input, --project, --exit-code, --duration-ms, --stderr-tail.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) record_outcome: bool,
+
+    /// Tool exit code for --record-outcome (0 = success).
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) exit_code: Option<i32>,
+
+    /// Tool wall-clock duration in milliseconds for --record-outcome.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) duration_ms: Option<u64>,
+
+    /// Tail of stderr / tool error output for --record-outcome
+    /// (truncated to MAX_STDERR_TAIL_BYTES).
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) stderr_tail: Option<String>,
+
+    /// Claude Code session id (passed through hook payload), optional.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) session_id: Option<String>,
+
+    /// Claude Code tool_use_id (passed through hook payload), optional.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) tool_use_id: Option<String>,
+
+    /// Reap pending outcomes: attribute each to a matching decision and
+    /// archive orphans older than 24h. Exits with the reap stats as JSON
+    /// when --json is set, otherwise human-readable.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) reap_outcomes: bool,
+
+    /// List resolved tool-call outcomes attributed to brain decisions.
+    /// Filterable by --tool and --project. Honours --json.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) brain_outcomes: bool,
+
+    /// Rank approaches by outcome data (success_rate * sample_count).
+    /// Filterable by --tool and --project. Honours --json.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) brain_baseline: bool,
+
+    /// Limit baseline ranking output to top N rows.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) top: Option<usize>,
+
     /// Show auto-generated insights, or set mode (on/off/status).
     /// Requires --brain or brain.enabled in config.
     /// Without argument: show current insights.
@@ -529,6 +577,22 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if cli.brain_query {
         return commands::run_brain_query(&cfg, &cli);
+    }
+
+    if cli.record_outcome {
+        return commands::run_record_outcome(&cli);
+    }
+
+    if cli.reap_outcomes {
+        return commands::run_reap_outcomes(&cli);
+    }
+
+    if cli.brain_outcomes {
+        return commands::run_brain_outcomes(&cli);
+    }
+
+    if cli.brain_baseline {
+        return commands::run_brain_baseline(&cli);
     }
 
     if let Some(ref mode) = cli.mode {

@@ -142,6 +142,19 @@ pub enum HiveCommand {
         #[arg(long, name = "type")]
         content_type: Option<String>,
     },
+
+    /// List approach clusters (#221: competing approaches to the same problem).
+    Clusters {
+        /// Filter by problem_key substring
+        #[arg(long)]
+        problem: Option<String>,
+    },
+
+    /// Show one cluster in detail (variants, contributing peers, outcome refs).
+    Cluster {
+        /// problem_key (e.g., "Bash:cargo test")
+        problem_key: String,
+    },
 }
 
 /// Dispatch a hive subcommand.
@@ -184,6 +197,154 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         } => cmd_install(unit_id, target.as_deref(), *force, json_mode),
         HiveCommand::AcceptMode { mode } => cmd_accept_mode(mode.as_deref(), json_mode),
         HiveCommand::Pending { content_type } => cmd_pending(content_type.as_deref(), json_mode),
+        HiveCommand::Clusters { problem } => cmd_clusters(problem.as_deref(), json_mode),
+        HiveCommand::Cluster { problem_key } => cmd_cluster_show(problem_key, json_mode),
+    }
+}
+
+/// `claudectl hive clusters [--problem <key>]`
+fn cmd_clusters(problem_filter: Option<&str>, json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let units = store.all_units();
+    let clusters: Vec<&super::KnowledgeUnit> = units
+        .iter()
+        .copied()
+        .filter(|u| matches!(u.content, super::KnowledgeContent::ApproachCluster { .. }))
+        .filter(|u| {
+            let Some(needle) = problem_filter else {
+                return true;
+            };
+            if let super::KnowledgeContent::ApproachCluster { problem_key, .. } = &u.content {
+                problem_key.contains(needle)
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    if json_mode {
+        let arr: Vec<serde_json::Value> = clusters
+            .iter()
+            .map(|u| {
+                if let super::KnowledgeContent::ApproachCluster {
+                    problem_key,
+                    variants,
+                } = &u.content
+                {
+                    serde_json::json!({
+                        "id": u.id,
+                        "problem_key": problem_key,
+                        "variant_count": variants.len(),
+                        "evidence_count": u.evidence_count,
+                        "source_peer": u.source_peer,
+                        "scope": u.scope.to_string(),
+                    })
+                } else {
+                    serde_json::Value::Null
+                }
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&arr).unwrap());
+    } else if clusters.is_empty() {
+        println!("No approach clusters in the hive yet.");
+    } else {
+        println!(
+            "{:<6} {:<8} {:<26} {:<20} PROBLEM",
+            "VRNTS", "EVID", "PEER", "SCOPE"
+        );
+        for u in clusters {
+            if let super::KnowledgeContent::ApproachCluster {
+                problem_key,
+                variants,
+            } = &u.content
+            {
+                println!(
+                    "{:<6} {:<8} {:<26} {:<20} {}",
+                    variants.len(),
+                    u.evidence_count,
+                    truncate_col_cli(&u.source_peer, 26),
+                    truncate_col_cli(&u.scope.to_string(), 20),
+                    problem_key
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `claudectl hive cluster <problem_key>`
+fn cmd_cluster_show(problem_key: &str, json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let units = store.all_units();
+    let cluster = units.iter().find(|u| {
+        if let super::KnowledgeContent::ApproachCluster {
+            problem_key: pk, ..
+        } = &u.content
+        {
+            pk == problem_key
+        } else {
+            false
+        }
+    });
+
+    let Some(unit) = cluster else {
+        if json_mode {
+            println!("null");
+        } else {
+            println!("No cluster with problem_key {problem_key:?}.");
+        }
+        return Ok(());
+    };
+    let super::KnowledgeContent::ApproachCluster {
+        problem_key,
+        variants,
+    } = &unit.content
+    else {
+        unreachable!();
+    };
+
+    if json_mode {
+        let v = serde_json::json!({
+            "id": unit.id,
+            "problem_key": problem_key,
+            "scope": unit.scope.to_string(),
+            "source_peer": unit.source_peer,
+            "evidence_count": unit.evidence_count,
+            "version": unit.version,
+            "variants": variants,
+        });
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+    } else {
+        println!("Cluster: {problem_key}");
+        println!("  ID:       {}", unit.id);
+        println!("  Scope:    {}", unit.scope);
+        println!("  Owner:    {}", unit.source_peer);
+        println!("  Version:  {}", unit.version);
+        println!("  Evidence: {}", unit.evidence_count);
+        println!("  Variants:");
+        for (i, v) in variants.iter().enumerate() {
+            let label = (b'A' + i as u8) as char;
+            println!("    ({label}) {} (n={})", v.approach_summary, v.evidence);
+            if !v.conditions.is_empty() {
+                println!("        when: {}", v.conditions.join(", "));
+            }
+            if !v.contributing_peers.is_empty() {
+                println!("        peers: {}", v.contributing_peers.join(", "));
+            }
+            if let Some(ref outcome) = v.outcome_ref {
+                println!("        outcome_ref: {outcome}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn truncate_col_cli(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(width.saturating_sub(1)).collect();
+        format!("{truncated}…")
     }
 }
 
