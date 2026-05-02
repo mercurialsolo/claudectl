@@ -35,6 +35,7 @@ pub struct GossipEngine {
     knowledge_ttl_days: u32,
     local_peer_id: String,
     sharing_filter: super::SharingFilter,
+    share_mode: super::exposure::ShareMode,
 }
 
 impl GossipEngine {
@@ -46,12 +47,18 @@ impl GossipEngine {
             knowledge_ttl_days,
             local_peer_id: local_peer_id.to_string(),
             sharing_filter: super::SharingFilter::default(),
+            share_mode: super::exposure::ShareMode::Auto,
         }
     }
 
     /// Set the user's sharing filter (from HiveConfig).
     pub fn set_sharing_filter(&mut self, filter: super::SharingFilter) {
         self.sharing_filter = filter;
+    }
+
+    /// Set the share mode (auto = expose by default, manual = hide by default).
+    pub fn set_share_mode(&mut self, mode: super::exposure::ShareMode) {
+        self.share_mode = mode;
     }
 
     /// Create a fresh engine with no persisted sync state (for testing).
@@ -63,6 +70,7 @@ impl GossipEngine {
             knowledge_ttl_days,
             local_peer_id: local_peer_id.to_string(),
             sharing_filter: super::SharingFilter::default(),
+            share_mode: super::exposure::ShareMode::Auto,
         }
     }
 
@@ -81,6 +89,8 @@ impl GossipEngine {
         let ttl_secs = self.knowledge_ttl_days as u64 * 86400;
         let identity = self.local_peer_id.clone();
         let filter = self.sharing_filter.clone();
+        let exposure = super::exposure::ExposureStore::load();
+        let share_mode = self.share_mode;
 
         for peer in connected_peers {
             let peer_id = peer.0.clone();
@@ -101,6 +111,7 @@ impl GossipEngine {
                     !sync_state.units_sent.contains(&u.id)
                         && u.source_peer != peer_id // don't echo back
                         && is_propagatable_static(u, max_prop, ttl_secs, &filter)
+                        && is_exposed_for_peer(u, &identity, &exposure, share_mode)
                 })
                 .collect();
 
@@ -191,12 +202,21 @@ impl GossipEngine {
             .collect()
     }
 
-    /// Handle an incoming KnowledgeSnapshot.
-    pub fn handle_snapshot(&mut self, store: &mut HiveStore, msg: &RelayMessage) -> MergeStats {
+    /// Handle an incoming KnowledgeSnapshot. Returns merge stats and the units
+    /// that were merged (so callers can run auto-accept on artifacts).
+    pub fn handle_snapshot(
+        &mut self,
+        store: &mut HiveStore,
+        msg: &RelayMessage,
+    ) -> (MergeStats, Vec<KnowledgeUnit>) {
         let units = parse_units_from_payload(msg);
         let stats = merger::merge_batch(store, &units, &self.local_peer_id);
+        let merged: Vec<KnowledgeUnit> = units
+            .into_iter()
+            .filter(|u| store.get(&u.id).is_some())
+            .collect();
         let _ = store.save();
-        stats
+        (stats, merged)
     }
 
     /// Build a KnowledgeRequest message for requesting a snapshot from a peer.
@@ -289,6 +309,21 @@ impl GossipEngine {
     pub fn all_sync_states(&self) -> &HashMap<String, PeerSyncState> {
         &self.sync_states
     }
+}
+
+/// True if this unit is allowed to leave the local node, given the user's
+/// outbound exposure choices. Only locally-originated units consult the
+/// exposure store; peer-originated units flow through (relay role).
+pub fn is_exposed_for_peer(
+    unit: &KnowledgeUnit,
+    local_peer_id: &str,
+    exposure: &super::exposure::ExposureStore,
+    mode: super::exposure::ShareMode,
+) -> bool {
+    if unit.source_peer != local_peer_id {
+        return true;
+    }
+    exposure.is_exposed(&unit.id, mode)
 }
 
 /// Check propagation eligibility without borrowing self.
@@ -455,6 +490,44 @@ mod tests {
     }
 
     #[test]
+    fn is_exposed_local_units_respect_mode() {
+        let local_unit = make_unit("ku_local", "Bash", "local");
+        let peer_unit = make_unit("ku_peer", "Bash", "peer-a");
+        let exposure = crate::hive::exposure::ExposureStore::default();
+
+        // Auto mode: local units exposed by default; peer units always exposed
+        assert!(is_exposed_for_peer(
+            &local_unit,
+            "local",
+            &exposure,
+            crate::hive::exposure::ShareMode::Auto
+        ));
+        assert!(is_exposed_for_peer(
+            &peer_unit,
+            "local",
+            &exposure,
+            crate::hive::exposure::ShareMode::Manual
+        ));
+
+        // Manual mode: local unit hidden until explicitly exposed
+        assert!(!is_exposed_for_peer(
+            &local_unit,
+            "local",
+            &exposure,
+            crate::hive::exposure::ShareMode::Manual
+        ));
+
+        let mut exposure_explicit = exposure;
+        exposure_explicit.set("ku_local", crate::hive::exposure::ExposureState::Expose);
+        assert!(is_exposed_for_peer(
+            &local_unit,
+            "local",
+            &exposure_explicit,
+            crate::hive::exposure::ShareMode::Manual
+        ));
+    }
+
+    #[test]
     fn dont_echo_back_to_source() {
         let mut store = empty_store();
         // Unit originated from peer-a
@@ -519,8 +592,9 @@ mod tests {
         let units = vec![make_unit("ku_1", "Bash", "peer-a")];
         let msg = build_snapshot_message(&units, "peer-a", 1, 1);
 
-        let stats = engine.handle_snapshot(&mut store, &msg);
+        let (stats, merged) = engine.handle_snapshot(&mut store, &msg);
         assert_eq!(stats.accepted, 1);
+        assert_eq!(merged.len(), 1);
         assert_eq!(store.len(), 1);
     }
 

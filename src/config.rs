@@ -235,6 +235,9 @@ pub struct HiveConfig {
     pub max_prompt_units: usize,
     /// Days after which a peer's knowledge is pruned if the peer hasn't been seen.
     pub stale_peer_days: u32,
+    /// Outbound exposure mode: "auto" gossips everything that passes filters;
+    /// "manual" keeps new units hidden until the user runs `claudectl hive expose`.
+    pub share_mode: String,
 }
 
 impl Default for HiveConfig {
@@ -255,6 +258,7 @@ impl Default for HiveConfig {
             max_units: 500,
             max_prompt_units: 20,
             stale_peer_days: 90,
+            share_mode: "auto".into(),
         }
     }
 }
@@ -347,6 +351,7 @@ struct RawHiveConfig {
     max_units: Option<usize>,
     max_prompt_units: Option<usize>,
     stale_peer_days: Option<u32>,
+    share_mode: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -563,6 +568,11 @@ impl Config {
             }
             if let Some(v) = raw_hive.stale_peer_days {
                 hive.stale_peer_days = v;
+            }
+            if let Some(v) = raw_hive.share_mode {
+                if crate::hive::exposure::ShareMode::parse(&v).is_some() {
+                    hive.share_mode = v.trim().to_lowercase();
+                }
             }
         }
         if let Some(lc) = raw.lifecycle {
@@ -913,6 +923,7 @@ impl Config {
 # export_min_tool_decisions = 10
 # knowledge_ttl_days = 30
 # inject_unverified = true
+# share_mode = "auto"           # "auto" = expose by default, "manual" = pre-flight curation
 
 # ── External Agents ─────────────────────────────────────────────────
 #
@@ -1234,6 +1245,9 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     "stale_peer_days" => {
                         hive.stale_peer_days = value.parse().ok();
                     }
+                    "share_mode" => {
+                        hive.share_mode = Some(unquote(value));
+                    }
                     _ => {}
                 }
             }
@@ -1358,6 +1372,7 @@ fn known_keys(section: &str) -> Option<&'static [&'static str]> {
             "max_units",
             "max_prompt_units",
             "stale_peer_days",
+            "share_mode",
         ]),
         _ => None,
     }
