@@ -3,6 +3,7 @@
 pub mod accept;
 pub mod archive;
 pub mod cli;
+pub mod convergence;
 pub mod discovery;
 pub mod distiller;
 pub mod effectiveness;

@@ -235,6 +235,9 @@ pub enum HiveCommand {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+
+    /// Show per-peer gossip convergence (#229: how widely we've propagated)
+    Convergence,
 }
 
 /// Dispatch a hive subcommand.
@@ -318,6 +321,7 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         HiveCommand::Experts { category, limit } => cmd_experts(category, *limit, json_mode),
         HiveCommand::Welcome => cmd_welcome(json_mode),
         HiveCommand::Resolutions { limit } => cmd_resolutions(*limit, json_mode),
+        HiveCommand::Convergence => cmd_convergence(json_mode),
     }
 }
 
@@ -360,6 +364,66 @@ fn cmd_resolutions(limit: usize, json_mode: bool) -> io::Result<()> {
     }
     println!();
     println!("{} resolutions shown", rows.len());
+    Ok(())
+}
+
+fn cmd_convergence(json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let rows = super::convergence::peer_convergence(&store);
+    let median = super::convergence::median_convergence(&rows);
+    let converged = super::convergence::converged_peer_count(&rows);
+
+    if json_mode {
+        let payload = serde_json::json!({
+            "local_total": store.len(),
+            "peer_count": rows.len(),
+            "converged_count": converged,
+            "median_ratio": median,
+            "peers": rows.iter().map(|r| serde_json::json!({
+                "peer_id": r.peer_id,
+                "local_total": r.local_total,
+                "units_sent": r.units_sent,
+                "ratio": r.ratio,
+                "last_sync_epoch": r.last_sync_epoch,
+                "converged": r.is_converged(),
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload).unwrap());
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!("No gossip sync state recorded (no peers, or relay feature disabled).");
+        return Ok(());
+    }
+
+    println!("Local store: {} units", store.len());
+    if let Some(m) = median {
+        println!("Median peer convergence: {:.0}%", m * 100.0);
+    }
+    println!("Converged peers (≥90%): {} / {}", converged, rows.len());
+    println!();
+    println!(
+        "{:<24} {:<8} {:<10} {:<8}",
+        "PEER", "RATIO", "SENT/TOTAL", "STATUS"
+    );
+    println!("{}", "─".repeat(64));
+    for r in &rows {
+        let peer_short = if r.peer_id.len() > 23 {
+            &r.peer_id[..23]
+        } else {
+            &r.peer_id
+        };
+        let status = if r.is_converged() { "✓" } else { "lagging" };
+        println!(
+            "{:<24} {:<8.0}% {:>4}/{:<5} {:<8}",
+            peer_short,
+            r.ratio * 100.0,
+            r.units_sent,
+            r.local_total,
+            status,
+        );
+    }
     Ok(())
 }
 
