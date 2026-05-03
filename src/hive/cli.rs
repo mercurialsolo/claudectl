@@ -194,6 +194,40 @@ pub enum HiveCommand {
         #[arg(long)]
         unfreeze: Option<String>,
     },
+
+    /// Browse what the hive knows before it auto-injects (#227)
+    Explore {
+        /// Filter by category (best_practice, technique, workflow, personal)
+        #[arg(long)]
+        category: Option<String>,
+        /// Filter by scope (universal, language:X, project:X)
+        #[arg(long)]
+        scope: Option<String>,
+        /// Filter by source peer
+        #[arg(long)]
+        peer: Option<String>,
+        /// Minimum effective confidence (0.0 to 1.0)
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f64,
+        /// Include shared artifacts (skills/commands/hooks)
+        #[arg(long)]
+        include_artifacts: bool,
+        /// Cap results to top N rows
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+
+    /// Rank peers by avg confidence in a category (who to learn from)
+    Experts {
+        /// Category to rank by (best_practice, technique, workflow, personal)
+        category: String,
+        /// Cap results to top N peers
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// Preview the curated welcome snapshot a fresh peer would receive
+    Welcome,
 }
 
 /// Dispatch a hive subcommand.
@@ -258,6 +292,24 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         } => cmd_dead_weight(*min_injected, *max_decided, json_mode),
         HiveCommand::Peers => cmd_peer_effectiveness(json_mode),
         HiveCommand::Review { unfreeze } => cmd_review(unfreeze.as_deref(), json_mode),
+        HiveCommand::Explore {
+            category,
+            scope,
+            peer,
+            min_confidence,
+            include_artifacts,
+            limit,
+        } => cmd_explore(
+            category.as_deref(),
+            scope.as_deref(),
+            peer.as_deref(),
+            *min_confidence,
+            *include_artifacts,
+            *limit,
+            json_mode,
+        ),
+        HiveCommand::Experts { category, limit } => cmd_experts(category, *limit, json_mode),
+        HiveCommand::Welcome => cmd_welcome(json_mode),
     }
 }
 
@@ -332,6 +384,199 @@ fn cmd_review(unfreeze: Option<&str>, json_mode: bool) -> io::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Discovery commands (#227)
+// ────────────────────────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_explore(
+    category: Option<&str>,
+    scope: Option<&str>,
+    peer: Option<&str>,
+    min_confidence: f64,
+    include_artifacts: bool,
+    limit: usize,
+    json_mode: bool,
+) -> io::Result<()> {
+    let store = HiveStore::load();
+    let trust = super::trust::TrustStore::load();
+    let parsed_scope = scope.map(parse_scope);
+    let filter = super::discovery::ExploreFilter {
+        category,
+        scope: parsed_scope.as_ref(),
+        peer,
+        min_confidence,
+        include_artifacts,
+    };
+    let rows = super::discovery::explore(&store, &trust, &filter, limit);
+
+    if json_mode {
+        let arr: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "id": r.unit.id,
+                    "scope": r.unit.scope.to_string(),
+                    "category": r.unit.category.label(),
+                    "peer": r.unit.source_peer,
+                    "tier": r.tier.label(),
+                    "effective_confidence": r.effective_confidence,
+                    "evidence": r.unit.evidence_count,
+                    "rollout": r.unit.injection_state.label(),
+                    "summary": r.unit.content.summary_line(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&arr).unwrap());
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!("No knowledge units match the filter.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<12} {:<20} {:<6} {:<20} CONTENT",
+        "ID", "TIER", "CONF", "PEER"
+    );
+    println!("{}", "─".repeat(96));
+    for r in &rows {
+        let id_short = if r.unit.id.len() > 11 {
+            &r.unit.id[..11]
+        } else {
+            &r.unit.id
+        };
+        let peer_short = if r.unit.source_peer.len() > 19 {
+            &r.unit.source_peer[..19]
+        } else {
+            &r.unit.source_peer
+        };
+        println!(
+            "{:<12} {:<20} {:<6.0}% {:<20} {}",
+            id_short,
+            r.tier.label(),
+            r.effective_confidence * 100.0,
+            peer_short,
+            r.unit.content.summary_line(),
+        );
+    }
+    println!();
+    println!("{} units shown", rows.len());
+    Ok(())
+}
+
+fn cmd_experts(category: &str, limit: usize, json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let trust = super::trust::TrustStore::load();
+    let rows = super::discovery::experts(&store, &trust, category, limit);
+
+    if json_mode {
+        let arr: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "peer_id": r.peer_id,
+                    "category": r.category,
+                    "tier": r.tier.label(),
+                    "unit_count": r.unit_count,
+                    "avg_confidence": r.avg_confidence,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&arr).unwrap());
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!("No peers contribute to category '{category}'.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<24} {:<20} {:<6} {:<6}",
+        "PEER", "TIER", "UNITS", "AVG CONF"
+    );
+    println!("{}", "─".repeat(72));
+    for r in &rows {
+        let peer_short = if r.peer_id.len() > 23 {
+            &r.peer_id[..23]
+        } else {
+            &r.peer_id
+        };
+        println!(
+            "{:<24} {:<20} {:<6} {:<6.0}%",
+            peer_short,
+            r.tier.label(),
+            r.unit_count,
+            r.avg_confidence * 100.0,
+        );
+    }
+    println!();
+    println!("{} peers in category '{category}'", rows.len());
+    Ok(())
+}
+
+fn cmd_welcome(json_mode: bool) -> io::Result<()> {
+    let store = HiveStore::load();
+    let trust = super::trust::TrustStore::load();
+    let units = super::discovery::welcome_snapshot(&store, &trust);
+
+    if json_mode {
+        let arr: Vec<serde_json::Value> = units
+            .iter()
+            .map(|u| {
+                serde_json::json!({
+                    "id": u.id,
+                    "scope": u.scope.to_string(),
+                    "category": u.category.label(),
+                    "peer": u.source_peer,
+                    "confidence": u.confidence,
+                    "summary": u.content.summary_line(),
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "size": units.len(),
+            "max_units": super::discovery::WELCOME_MAX_UNITS,
+            "min_confidence": super::discovery::WELCOME_MIN_CONFIDENCE,
+            "units": arr,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload).unwrap());
+        return Ok(());
+    }
+
+    println!(
+        "Welcome snapshot ({} units, max {}, min confidence {:.0}%):",
+        units.len(),
+        super::discovery::WELCOME_MAX_UNITS,
+        super::discovery::WELCOME_MIN_CONFIDENCE * 100.0
+    );
+    if units.is_empty() {
+        println!();
+        println!("(empty — no Live units from Suggested+ peers above the confidence floor)");
+        return Ok(());
+    }
+    println!("{}", "─".repeat(96));
+    println!("{:<12} {:<6} {:<20} CONTENT", "ID", "CONF", "PEER");
+    for u in &units {
+        let id_short = if u.id.len() > 11 { &u.id[..11] } else { &u.id };
+        let peer_short = if u.source_peer.len() > 19 {
+            &u.source_peer[..19]
+        } else {
+            &u.source_peer
+        };
+        println!(
+            "{:<12} {:<6.0}% {:<20} {}",
+            id_short,
+            u.confidence * 100.0,
+            peer_short,
+            u.content.summary_line(),
+        );
+    }
     Ok(())
 }
 
