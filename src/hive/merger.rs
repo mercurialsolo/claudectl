@@ -1,4 +1,12 @@
 // Conflict resolution for merging incoming knowledge units.
+//
+// #228 transparency: every non-trivial merge decision is appended to
+// `~/.claudectl/hive/resolutions.jsonl` with the rationale and the scores
+// involved, so operators can replay why the merger picked what it picked.
+
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 
 use super::store::HiveStore;
 use super::{ApproachVariant, KnowledgeContent, KnowledgeUnit, semantic_key};
@@ -20,6 +28,21 @@ pub enum MergeResult {
     RejectedPeer,
     /// Already have this exact version — duplicate.
     Duplicate,
+    /// Cluster-vs-cluster: variants unioned into the existing cluster.
+    ClusterUnioned,
+}
+
+impl MergeResult {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Updated => "updated",
+            Self::RejectedLocal => "rejected_local",
+            Self::RejectedPeer => "rejected_peer",
+            Self::Duplicate => "duplicate",
+            Self::ClusterUnioned => "cluster_unioned",
+        }
+    }
 }
 
 /// Aggregate stats for a batch merge.
@@ -72,7 +95,10 @@ pub fn merge_unit(
             ) = (&existing.content, &incoming.content)
             {
                 if existing_key == incoming_key {
+                    let existing_variant_count = existing_variants.len();
+                    let incoming_variant_count = incoming_variants.len();
                     let merged_variants = union_variants(existing_variants, incoming_variants);
+                    let merged_variant_count = merged_variants.len();
                     let mut merged = existing.clone();
                     merged.content = KnowledgeContent::ApproachCluster {
                         problem_key: existing_key.clone(),
@@ -89,14 +115,40 @@ pub fn merge_unit(
                     merged.last_validated_at =
                         incoming.last_validated_at.max(existing.last_validated_at);
                     merged.version = existing.version.max(incoming.version) + 1;
+                    let merged_id = merged.id.clone();
+                    let merged_peer = merged.source_peer.clone();
                     store.insert(merged);
-                    return MergeResult::Updated;
+                    log_resolution(MergeResolution {
+                        result: MergeResult::ClusterUnioned,
+                        semantic_key: sk,
+                        winner_id: merged_id,
+                        winner_peer: merged_peer,
+                        loser_id: incoming.id.clone(),
+                        loser_peer: incoming.source_peer.clone(),
+                        winner_score: 0.0, // not applicable for union
+                        loser_score: 0.0,
+                        rationale: format!(
+                            "cluster union: {existing_variant_count} + {incoming_variant_count} → {merged_variant_count} variants"
+                        ),
+                    });
+                    return MergeResult::ClusterUnioned;
                 }
             }
 
             // Local-originated knowledge always wins
             if existing.source_peer == local_peer_id {
                 super::store::log_conflict(existing, incoming);
+                log_resolution(MergeResolution {
+                    result: MergeResult::RejectedLocal,
+                    semantic_key: sk,
+                    winner_id: existing.id.clone(),
+                    winner_peer: existing.source_peer.clone(),
+                    loser_id: incoming.id.clone(),
+                    loser_peer: incoming.source_peer.clone(),
+                    winner_score: existing.confidence * existing.evidence_count as f64,
+                    loser_score: incoming.confidence * incoming.evidence_count as f64,
+                    rationale: "local-originated unit wins by policy".into(),
+                });
                 return MergeResult::RejectedLocal;
             }
 
@@ -104,16 +156,50 @@ pub fn merge_unit(
             let existing_score = existing.confidence * existing.evidence_count as f64;
             let incoming_score = incoming.confidence * incoming.evidence_count as f64;
             let scores_equal = (incoming_score - existing_score).abs() < 1e-9;
+            let existing_id = existing.id.clone();
+            let existing_peer = existing.source_peer.clone();
 
             if incoming_score > existing_score
                 || (scores_equal && incoming.version > existing.version)
             {
                 // Incoming is better — update
+                let rationale = if scores_equal {
+                    format!(
+                        "scores tied at {incoming_score:.2}; newer version v{} > v{}",
+                        incoming.version, existing.version
+                    )
+                } else {
+                    format!("incoming score {incoming_score:.2} > existing {existing_score:.2}")
+                };
                 store.insert(incoming.clone());
+                log_resolution(MergeResolution {
+                    result: MergeResult::Updated,
+                    semantic_key: sk,
+                    winner_id: incoming.id.clone(),
+                    winner_peer: incoming.source_peer.clone(),
+                    loser_id: existing_id,
+                    loser_peer: existing_peer,
+                    winner_score: incoming_score,
+                    loser_score: existing_score,
+                    rationale,
+                });
                 MergeResult::Updated
             } else {
                 // Existing is better — reject
                 super::store::log_conflict(existing, incoming);
+                let rationale =
+                    format!("existing score {existing_score:.2} ≥ incoming {incoming_score:.2}");
+                log_resolution(MergeResolution {
+                    result: MergeResult::RejectedPeer,
+                    semantic_key: sk,
+                    winner_id: existing_id,
+                    winner_peer: existing_peer,
+                    loser_id: incoming.id.clone(),
+                    loser_peer: incoming.source_peer.clone(),
+                    winner_score: existing_score,
+                    loser_score: incoming_score,
+                    rationale,
+                });
                 MergeResult::RejectedPeer
             }
         }
@@ -174,13 +260,85 @@ pub fn merge_batch(
     for unit in units {
         match merge_unit(store, unit, local_peer_id) {
             MergeResult::Accepted => stats.accepted += 1,
-            MergeResult::Updated => stats.updated += 1,
+            MergeResult::Updated | MergeResult::ClusterUnioned => stats.updated += 1,
             MergeResult::RejectedLocal | MergeResult::RejectedPeer => stats.rejected += 1,
             MergeResult::Duplicate => stats.duplicates += 1,
         }
     }
 
     stats
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// MergeResolution — autopsy trail for merger decisions (#228)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// A single merge decision recorded for replay. Written to
+/// `~/.claudectl/hive/resolutions.jsonl` as JSON, one per line.
+#[derive(Debug, Clone)]
+pub struct MergeResolution {
+    pub result: MergeResult,
+    pub semantic_key: String,
+    pub winner_id: String,
+    pub winner_peer: String,
+    pub loser_id: String,
+    pub loser_peer: String,
+    /// confidence × evidence at decision time. 0.0 for cluster unions where
+    /// the score model doesn't apply.
+    pub winner_score: f64,
+    pub loser_score: f64,
+    pub rationale: String,
+}
+
+fn resolutions_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home)
+        .join(".claudectl")
+        .join("hive")
+        .join("resolutions.jsonl")
+}
+
+/// Append a merge resolution to the audit log. Best-effort — failures are
+/// swallowed so a logging hiccup never blocks gossip.
+pub fn log_resolution(resolution: MergeResolution) {
+    let path = resolutions_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let record = serde_json::json!({
+        "ts": super::epoch_secs(),
+        "result": resolution.result.label(),
+        "semantic_key": resolution.semantic_key,
+        "winner_id": resolution.winner_id,
+        "winner_peer": resolution.winner_peer,
+        "loser_id": resolution.loser_id,
+        "loser_peer": resolution.loser_peer,
+        "winner_score": resolution.winner_score,
+        "loser_score": resolution.loser_score,
+        "rationale": resolution.rationale,
+    });
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(
+            file,
+            "{}",
+            serde_json::to_string(&record).unwrap_or_default()
+        );
+    }
+}
+
+/// Read the recent N resolutions for `hive resolutions` CLI display.
+pub fn recent_resolutions(limit: usize) -> Vec<serde_json::Value> {
+    let path = resolutions_path();
+    let raw = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let lines: Vec<&str> = raw.lines().collect();
+    let start = lines.len().saturating_sub(limit);
+    lines[start..]
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -392,7 +550,7 @@ mod tests {
         );
 
         let result = merge_unit(&mut store, &incoming, "local");
-        assert_eq!(result, MergeResult::Updated);
+        assert_eq!(result, MergeResult::ClusterUnioned);
 
         let unit = store.get("ku_local").unwrap();
         if let KnowledgeContent::ApproachCluster {
@@ -458,5 +616,74 @@ mod tests {
         assert_eq!(stats.accepted, 2);
         assert_eq!(stats.rejected, 1);
         assert_eq!(stats.duplicates, 0);
+    }
+
+    // ── Merge transparency (#228) ──────────────────────────────────────
+
+    #[test]
+    fn merge_result_label_covers_all_variants() {
+        // Catch-all so adding a new MergeResult requires updating label().
+        let labels = [
+            MergeResult::Accepted.label(),
+            MergeResult::Updated.label(),
+            MergeResult::RejectedLocal.label(),
+            MergeResult::RejectedPeer.label(),
+            MergeResult::Duplicate.label(),
+            MergeResult::ClusterUnioned.label(),
+        ];
+        // All distinct, no empty.
+        for &l in &labels {
+            assert!(!l.is_empty());
+        }
+        let unique: std::collections::HashSet<&&str> = labels.iter().collect();
+        assert_eq!(unique.len(), labels.len(), "labels must be unique");
+    }
+
+    #[test]
+    fn cluster_union_returns_new_variant() {
+        // The cluster union path should now report ClusterUnioned (#228) so
+        // downstream observers can distinguish it from a peer-vs-peer Update.
+        let mut store = empty_store();
+        let local = make_cluster(
+            "ku_local",
+            "peer-a",
+            "Bash:test",
+            vec![variant("approve", 5, "peer-a", vec![])],
+        );
+        store.insert(local);
+
+        let incoming = make_cluster(
+            "ku_remote",
+            "peer-b",
+            "Bash:test",
+            vec![variant("deny", 3, "peer-b", vec![])],
+        );
+        let result = merge_unit(&mut store, &incoming, "local");
+        assert_eq!(result, MergeResult::ClusterUnioned);
+    }
+
+    #[test]
+    fn cluster_union_counted_as_updated_in_batch_stats() {
+        // Backward-compatible aggregate: batch stats lumps ClusterUnioned
+        // under `updated` so existing dashboards keep working.
+        let mut store = empty_store();
+        store.insert(make_cluster(
+            "ku_local",
+            "peer-a",
+            "Bash:test",
+            vec![variant("approve", 5, "peer-a", vec![])],
+        ));
+        let stats = merge_batch(
+            &mut store,
+            &[make_cluster(
+                "ku_remote",
+                "peer-b",
+                "Bash:test",
+                vec![variant("deny", 3, "peer-b", vec![])],
+            )],
+            "local",
+        );
+        assert_eq!(stats.updated, 1);
+        assert_eq!(stats.accepted, 0);
     }
 }

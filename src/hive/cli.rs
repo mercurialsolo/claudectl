@@ -228,6 +228,13 @@ pub enum HiveCommand {
 
     /// Preview the curated welcome snapshot a fresh peer would receive
     Welcome,
+
+    /// Show recent merge resolutions (autopsy trail for merger decisions, #228)
+    Resolutions {
+        /// How many recent resolutions to show (most recent first)
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
 }
 
 /// Dispatch a hive subcommand.
@@ -310,7 +317,50 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         ),
         HiveCommand::Experts { category, limit } => cmd_experts(category, *limit, json_mode),
         HiveCommand::Welcome => cmd_welcome(json_mode),
+        HiveCommand::Resolutions { limit } => cmd_resolutions(*limit, json_mode),
     }
+}
+
+fn cmd_resolutions(limit: usize, json_mode: bool) -> io::Result<()> {
+    let rows = super::merger::recent_resolutions(limit);
+
+    if json_mode {
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap());
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!("No merge resolutions recorded yet.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<16} {:<10} {:<8} {:<8} RATIONALE",
+        "RESULT", "WIN-PEER", "WIN-S", "LOSE-S"
+    );
+    println!("{}", "─".repeat(96));
+    for r in &rows {
+        let result = r.get("result").and_then(|v| v.as_str()).unwrap_or("?");
+        let winner_peer = r.get("winner_peer").and_then(|v| v.as_str()).unwrap_or("?");
+        let winner_score = r
+            .get("winner_score")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let loser_score = r.get("loser_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let rationale = r.get("rationale").and_then(|v| v.as_str()).unwrap_or("");
+        let peer_short = if winner_peer.len() > 9 {
+            &winner_peer[..9]
+        } else {
+            winner_peer
+        };
+        println!(
+            "{:<16} {:<10} {:<8.2} {:<8.2} {}",
+            result, peer_short, winner_score, loser_score, rationale
+        );
+    }
+    println!();
+    println!("{} resolutions shown", rows.len());
+    Ok(())
 }
 
 fn cmd_review(unfreeze: Option<&str>, json_mode: bool) -> io::Result<()> {
