@@ -91,9 +91,13 @@ impl GossipEngine {
         let filter = self.sharing_filter.clone();
         let exposure = super::exposure::ExposureStore::load();
         let share_mode = self.share_mode;
+        // #230: load trust store so we can check per-unit sharing_consent
+        // against each target peer's tier.
+        let trust = super::trust::TrustStore::load();
 
         for peer in connected_peers {
             let peer_id = peer.0.clone();
+            let target_rank = peer_consent_rank(&trust, &peer_id);
             let sync_state =
                 self.sync_states
                     .entry(peer_id.clone())
@@ -112,6 +116,7 @@ impl GossipEngine {
                         && u.source_peer != peer_id // don't echo back
                         && is_propagatable_static(u, max_prop, ttl_secs, &filter)
                         && is_exposed_for_peer(u, &identity, &exposure, share_mode)
+                        && consent_allows(u, &peer_id, target_rank, now)
                 })
                 .collect();
 
@@ -265,7 +270,12 @@ impl GossipEngine {
             return messages;
         }
 
+        // #230: per-unit sharing consent gate against each target peer.
+        let trust = super::trust::TrustStore::load();
+
         for peer in target_peers {
+            let peer_id_str = peer.0.clone();
+            let target_rank = peer_consent_rank(&trust, &peer_id_str);
             let sync_state =
                 self.sync_states
                     .entry(peer.0.clone())
@@ -278,6 +288,7 @@ impl GossipEngine {
             let unsent: Vec<KnowledgeUnit> = propagatable
                 .iter()
                 .filter(|u| !sync_state.units_sent.contains(&u.id))
+                .filter(|u| consent_allows(u, &peer_id_str, target_rank, now))
                 .map(|u| (*u).clone())
                 .collect();
 
@@ -397,6 +408,37 @@ fn parse_units_from_payload(msg: &RelayMessage) -> Vec<KnowledgeUnit> {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Sharing consent gating (#230)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Recipient rank used for the `min_trust_tier` consent check. Mirrors the
+/// internal rank in `MinTrustTier` so the comparison stays consistent.
+fn peer_consent_rank(trust: &super::trust::TrustStore, peer_id: &str) -> u8 {
+    trust
+        .get(peer_id)
+        .map(|p| match p.tier() {
+            super::trust::TrustTier::Confirmed => 4,
+            super::trust::TrustTier::Suggested => 3,
+            super::trust::TrustTier::Unverified => 2,
+            super::trust::TrustTier::Ignored => 1,
+        })
+        // Unknown peers are treated as Suggested — same default the injection
+        // path uses, so peer-with-no-trust-record doesn't get gated harder
+        // than someone we've explicitly seen.
+        .unwrap_or(3)
+}
+
+/// Per-unit consent check: when a unit carries a `sharing_consent`, gossip
+/// must respect its allow/exclude/expiry/min-tier gates. Units without a
+/// consent block fall through (no per-unit constraint).
+fn consent_allows(unit: &KnowledgeUnit, target_peer: &str, target_rank: u8, now: u64) -> bool {
+    match &unit.sharing_consent {
+        None => true,
+        Some(c) => c.allows(target_peer, target_rank, now),
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Sybil resistance (#226)
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -501,6 +543,7 @@ mod tests {
                 last_injected_at: 0,
                 last_outcome_at: 0,
             },
+            sharing_consent: None,
         }
     }
 

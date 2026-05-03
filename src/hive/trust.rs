@@ -730,6 +730,7 @@ mod tests {
             revalidation_interval_secs: 0,
             injection_state: super::super::InjectionState::Live,
             injection_stats: super::super::InjectionStats::default(),
+            sharing_consent: None,
         }
     }
 

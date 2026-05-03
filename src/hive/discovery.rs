@@ -314,6 +314,7 @@ mod tests {
             revalidation_interval_secs: 0,
             injection_state: state,
             injection_stats: InjectionStats::default(),
+            sharing_consent: None,
         }
     }
 
@@ -339,6 +340,7 @@ mod tests {
             revalidation_interval_secs: 0,
             injection_state: InjectionState::Live,
             injection_stats: InjectionStats::default(),
+            sharing_consent: None,
         }
     }
 
@@ -746,6 +748,7 @@ mod tests {
             revalidation_interval_secs: 0,
             injection_state: InjectionState::Live,
             injection_stats: InjectionStats::default(),
+            sharing_consent: None,
         };
         let store = pop_store(vec![cluster]);
         let trust = TrustStore::empty(0.6);

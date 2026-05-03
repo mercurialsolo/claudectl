@@ -106,10 +106,123 @@ pub struct KnowledgeUnit {
     /// state machine to advance Canary → Staged → Live or roll back to Draft.
     #[serde(default)]
     pub injection_stats: InjectionStats,
+    /// Per-unit sharing consent (#230). When None, the unit follows the
+    /// global SharingFilter and exposure mode. When Some, additional
+    /// per-unit gates apply: expiry, peer allow/deny lists, minimum trust
+    /// tier the recipient peer must hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sharing_consent: Option<SharingConsent>,
 }
 
 fn default_category() -> KnowledgeCategory {
     KnowledgeCategory::BestPractice
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Per-unit sharing consent (#230)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Minimum recipient trust required to share a unit.
+///
+/// Mirrors `trust::TrustTier` but kept separate so KnowledgeUnit can carry
+/// the constraint without depending on TrustStore types in its public API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MinTrustTier {
+    Confirmed,
+    Suggested,
+    Unverified,
+    /// No tier gate beyond what the global SharingFilter already enforces.
+    #[default]
+    Any,
+}
+
+impl MinTrustTier {
+    fn rank(&self) -> u8 {
+        match self {
+            Self::Confirmed => 4,
+            Self::Suggested => 3,
+            Self::Unverified => 2,
+            Self::Any => 1,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Confirmed => "confirmed",
+            Self::Suggested => "suggested",
+            Self::Unverified => "unverified",
+            Self::Any => "any",
+        }
+    }
+
+    pub fn from_label(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "confirmed" => Some(Self::Confirmed),
+            "suggested" => Some(Self::Suggested),
+            "unverified" => Some(Self::Unverified),
+            "any" => Some(Self::Any),
+            _ => None,
+        }
+    }
+
+    /// True when `peer_rank` (0..=4) meets this minimum.
+    pub fn admits_rank(&self, peer_rank: u8) -> bool {
+        peer_rank >= self.rank()
+    }
+}
+
+/// Per-unit sharing consent. All fields default to "no constraint", so
+/// having a `SharingConsent::default()` on a unit is the same as `None`
+/// from the gossip layer's perspective. The struct exists so users can
+/// add constraints declaratively.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SharingConsent {
+    /// Hard deadline (epoch secs) past which the unit is no longer
+    /// gossiped to anyone. None = no expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    /// If non-empty, share *only* with these peer ids. Empty/None = any peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_peers: Option<std::collections::HashSet<String>>,
+    /// Hard exclusions — never share with these peers, even if they're in
+    /// `allow_peers`. (Both lists can be set; exclude wins.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_peers: Option<std::collections::HashSet<String>>,
+    /// Minimum trust tier the recipient must hold. Default `Any` means no
+    /// tier gate beyond what the global SharingFilter already enforces.
+    #[serde(default = "default_min_tier")]
+    pub min_trust_tier: MinTrustTier,
+}
+
+fn default_min_tier() -> MinTrustTier {
+    MinTrustTier::Any
+}
+
+impl SharingConsent {
+    /// Whether this consent permits sharing with `target_peer` at the given
+    /// recipient trust rank. `now` is supplied so the function is pure.
+    pub fn allows(&self, target_peer: &str, target_rank: u8, now: u64) -> bool {
+        if let Some(deadline) = self.expires_at {
+            if now > deadline {
+                return false;
+            }
+        }
+        if let Some(ex) = &self.exclude_peers {
+            if ex.contains(target_peer) {
+                return false;
+            }
+        }
+        if let Some(allow) = &self.allow_peers {
+            if !allow.contains(target_peer) {
+                return false;
+            }
+        }
+        if !self.min_trust_tier.admits_rank(target_rank) {
+            return false;
+        }
+        true
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1276,6 +1389,7 @@ mod tests {
                 last_injected_at: 0,
                 last_outcome_at: 0,
             },
+            sharing_consent: None,
         }
     }
 
@@ -1329,6 +1443,7 @@ mod tests {
                 last_injected_at: 0,
                 last_outcome_at: 0,
             },
+            sharing_consent: None,
         };
         assert_eq!(semantic_key(&unit), "universal/accuracy:Bash");
     }
@@ -1402,6 +1517,7 @@ mod tests {
                 last_injected_at: 0,
                 last_outcome_at: 0,
             },
+            sharing_consent: None,
         };
         // Must not panic — truncates at char boundary, not byte boundary
         let key = semantic_key(&unit);
@@ -1437,6 +1553,7 @@ mod tests {
                 last_injected_at: 0,
                 last_outcome_at: 0,
             },
+            sharing_consent: None,
         };
         let key = semantic_key(&unit);
         assert!(key.starts_with("universal/insight:error_loop:"));
@@ -1472,6 +1589,7 @@ mod tests {
                 last_injected_at: 0,
                 last_outcome_at: 0,
             },
+            sharing_consent: None,
         }
     }
 
@@ -1503,6 +1621,7 @@ mod tests {
                 last_injected_at: 0,
                 last_outcome_at: 0,
             },
+            sharing_consent: None,
         }
     }
 
@@ -1534,6 +1653,7 @@ mod tests {
                 last_injected_at: 0,
                 last_outcome_at: 0,
             },
+            sharing_consent: None,
         }
     }
 
@@ -2071,5 +2191,109 @@ FOO=bar claudectl --list
         assert!(!is_stale(&unit, 50));
         assert!(!is_stale(&unit, 100));
         assert!(is_stale(&unit, 200));
+    }
+
+    // ── Per-unit sharing consent (#230) ────────────────────────────────
+
+    #[test]
+    fn consent_default_allows_anyone_at_any_tier() {
+        let c = SharingConsent::default();
+        assert!(c.allows("any-peer", 1, 0));
+        assert!(c.allows("another", 4, 100));
+    }
+
+    #[test]
+    fn consent_expires_at_blocks_after_deadline() {
+        let mut c = SharingConsent {
+            expires_at: Some(1000),
+            ..Default::default()
+        };
+        assert!(c.allows("peer-a", 4, 999));
+        assert!(c.allows("peer-a", 4, 1000));
+        assert!(!c.allows("peer-a", 4, 1001));
+        // Clearing expiry restores forever
+        c.expires_at = None;
+        assert!(c.allows("peer-a", 4, u64::MAX));
+    }
+
+    #[test]
+    fn consent_allow_list_restricts_recipients() {
+        let mut allow = std::collections::HashSet::new();
+        allow.insert("peer-a".to_string());
+        allow.insert("peer-b".to_string());
+        let c = SharingConsent {
+            allow_peers: Some(allow),
+            ..Default::default()
+        };
+        assert!(c.allows("peer-a", 4, 0));
+        assert!(c.allows("peer-b", 4, 0));
+        assert!(!c.allows("peer-c", 4, 0));
+    }
+
+    #[test]
+    fn consent_exclude_list_overrides_allow() {
+        let mut allow = std::collections::HashSet::new();
+        allow.insert("peer-a".to_string());
+        let mut exclude = std::collections::HashSet::new();
+        exclude.insert("peer-a".to_string());
+        let c = SharingConsent {
+            allow_peers: Some(allow),
+            exclude_peers: Some(exclude),
+            ..Default::default()
+        };
+        // exclude wins even if peer is in allow_peers
+        assert!(!c.allows("peer-a", 4, 0));
+    }
+
+    #[test]
+    fn consent_min_trust_tier_gates_low_tier_peers() {
+        let c = SharingConsent {
+            min_trust_tier: MinTrustTier::Suggested,
+            ..Default::default()
+        };
+        // ranks: Confirmed=4, Suggested=3, Unverified=2, Ignored=1
+        assert!(c.allows("p", 4, 0));
+        assert!(c.allows("p", 3, 0));
+        assert!(!c.allows("p", 2, 0));
+        assert!(!c.allows("p", 1, 0));
+    }
+
+    #[test]
+    fn consent_serde_roundtrip_omits_none_fields() {
+        let c = SharingConsent {
+            expires_at: Some(2000),
+            min_trust_tier: MinTrustTier::Confirmed,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        // allow_peers / exclude_peers are None → omitted
+        assert!(!json.contains("allow_peers"));
+        assert!(!json.contains("exclude_peers"));
+        let back: SharingConsent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.expires_at, Some(2000));
+        assert_eq!(back.min_trust_tier, MinTrustTier::Confirmed);
+    }
+
+    #[test]
+    fn min_trust_tier_label_roundtrip() {
+        for tier in [
+            MinTrustTier::Confirmed,
+            MinTrustTier::Suggested,
+            MinTrustTier::Unverified,
+            MinTrustTier::Any,
+        ] {
+            assert_eq!(MinTrustTier::from_label(tier.label()), Some(tier));
+        }
+        assert_eq!(MinTrustTier::from_label("nonsense"), None);
+    }
+
+    #[test]
+    fn old_unit_deserializes_with_no_consent() {
+        // Pre-#230 KU on disk doesn't carry the field.
+        let old_json = serde_json::to_string(&sample_pattern_unit("Bash", Some("ls"))).unwrap();
+        // Strip the `sharing_consent` field if it's there to simulate old format.
+        let stripped = old_json.replace(r#","sharing_consent":null"#, "");
+        let back: KnowledgeUnit = serde_json::from_str(&stripped).unwrap();
+        assert!(back.sharing_consent.is_none());
     }
 }

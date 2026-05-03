@@ -467,6 +467,7 @@ mod tests {
                 last_injected_at: 0,
                 last_outcome_at: 0,
             },
+            sharing_consent: None,
         }
     }
 

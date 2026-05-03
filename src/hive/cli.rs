@@ -238,6 +238,27 @@ pub enum HiveCommand {
 
     /// Show per-peer gossip convergence (#229: how widely we've propagated)
     Convergence,
+
+    /// Set or clear per-unit sharing consent (#230)
+    Consent {
+        /// Knowledge unit ID
+        unit_id: String,
+        /// Set an expiry (e.g., "7d", "12h"). Pass "never" to clear.
+        #[arg(long)]
+        expires_in: Option<String>,
+        /// Add a peer to the allow list (only these peers receive the unit)
+        #[arg(long)]
+        allow_peer: Vec<String>,
+        /// Add a peer to the exclude list (these peers never receive the unit)
+        #[arg(long)]
+        exclude_peer: Vec<String>,
+        /// Minimum recipient trust tier (confirmed, suggested, unverified, any)
+        #[arg(long)]
+        min_tier: Option<String>,
+        /// Clear all consent constraints for this unit
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 /// Dispatch a hive subcommand.
@@ -322,6 +343,22 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         HiveCommand::Welcome => cmd_welcome(json_mode),
         HiveCommand::Resolutions { limit } => cmd_resolutions(*limit, json_mode),
         HiveCommand::Convergence => cmd_convergence(json_mode),
+        HiveCommand::Consent {
+            unit_id,
+            expires_in,
+            allow_peer,
+            exclude_peer,
+            min_tier,
+            clear,
+        } => cmd_consent(
+            unit_id,
+            expires_in.as_deref(),
+            allow_peer,
+            exclude_peer,
+            min_tier.as_deref(),
+            *clear,
+            json_mode,
+        ),
     }
 }
 
@@ -424,6 +461,136 @@ fn cmd_convergence(json_mode: bool) -> io::Result<()> {
             status,
         );
     }
+    Ok(())
+}
+
+fn parse_duration_secs(s: &str) -> Option<u64> {
+    if s == "never" {
+        return Some(0);
+    }
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (num_str, unit) = trimmed.split_at(trimmed.len() - 1);
+    let n: u64 = num_str.parse().ok()?;
+    let multiplier = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3_600,
+        "d" => 86_400,
+        _ => return None,
+    };
+    Some(n.saturating_mul(multiplier))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_consent(
+    unit_id: &str,
+    expires_in: Option<&str>,
+    allow_peer: &[String],
+    exclude_peer: &[String],
+    min_tier: Option<&str>,
+    clear: bool,
+    json_mode: bool,
+) -> io::Result<()> {
+    let mut store = HiveStore::load();
+    let mut unit = match store.get(unit_id) {
+        Some(u) => u.clone(),
+        None => {
+            eprintln!("Unknown unit: {unit_id}");
+            return Err(io::Error::other("unknown unit"));
+        }
+    };
+
+    if clear {
+        unit.sharing_consent = None;
+    } else {
+        let mut consent = unit.sharing_consent.clone().unwrap_or_default();
+
+        if let Some(expr) = expires_in {
+            if expr == "never" {
+                consent.expires_at = None;
+            } else {
+                let secs = parse_duration_secs(expr).ok_or_else(|| {
+                    io::Error::other(format!(
+                        "invalid duration '{expr}' (use 7d, 12h, 30m, 60s, or 'never')"
+                    ))
+                })?;
+                consent.expires_at = Some(super::epoch_secs() + secs);
+            }
+        }
+
+        if !allow_peer.is_empty() {
+            let entry = consent
+                .allow_peers
+                .get_or_insert_with(std::collections::HashSet::new);
+            for p in allow_peer {
+                entry.insert(p.clone());
+            }
+        }
+
+        if !exclude_peer.is_empty() {
+            let entry = consent
+                .exclude_peers
+                .get_or_insert_with(std::collections::HashSet::new);
+            for p in exclude_peer {
+                entry.insert(p.clone());
+            }
+        }
+
+        if let Some(tier_str) = min_tier {
+            consent.min_trust_tier =
+                super::MinTrustTier::from_label(tier_str).ok_or_else(|| {
+                    io::Error::other(format!(
+                        "invalid tier '{tier_str}' (use confirmed, suggested, unverified, any)"
+                    ))
+                })?;
+        }
+
+        unit.sharing_consent = Some(consent);
+    }
+
+    store.insert(unit.clone());
+    store
+        .save()
+        .map_err(|e| io::Error::other(format!("save: {e}")))?;
+
+    if json_mode {
+        let payload = serde_json::json!({
+            "unit_id": unit.id,
+            "sharing_consent": unit.sharing_consent,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload).unwrap());
+        return Ok(());
+    }
+
+    match &unit.sharing_consent {
+        None => {
+            println!("Cleared sharing consent for {unit_id}.");
+        }
+        Some(c) => {
+            println!("Sharing consent for {unit_id}:");
+            if let Some(e) = c.expires_at {
+                let remaining = e.saturating_sub(super::epoch_secs());
+                println!("  expires_at: {e} ({}s from now)", remaining);
+            } else {
+                println!("  expires_at: never");
+            }
+            println!("  min_trust_tier: {}", c.min_trust_tier.label());
+            if let Some(allow) = &c.allow_peers {
+                let mut v: Vec<&String> = allow.iter().collect();
+                v.sort();
+                println!("  allow_peers: {v:?}");
+            }
+            if let Some(ex) = &c.exclude_peers {
+                let mut v: Vec<&String> = ex.iter().collect();
+                v.sort();
+                println!("  exclude_peers: {v:?}");
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1841,6 +2008,7 @@ fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -
             last_injected_at: 0,
             last_outcome_at: 0,
         },
+        sharing_consent: None,
     };
 
     let summary = unit.content.summary_line();

@@ -257,6 +257,7 @@ mod tests {
             revalidation_interval_secs: 0,
             injection_state: state,
             injection_stats: stats,
+            sharing_consent: None,
         }
     }
 
