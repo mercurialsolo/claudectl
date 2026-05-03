@@ -187,6 +187,13 @@ pub enum HiveCommand {
 
     /// Aggregate effectiveness per source peer (weighted by decided outcomes)
     Peers,
+
+    /// Show peers in quarantine or pending manual review (#226)
+    Review {
+        /// Unfreeze a specific peer (clear the manual freeze flag)
+        #[arg(long)]
+        unfreeze: Option<String>,
+    },
 }
 
 /// Dispatch a hive subcommand.
@@ -250,7 +257,82 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
             max_decided,
         } => cmd_dead_weight(*min_injected, *max_decided, json_mode),
         HiveCommand::Peers => cmd_peer_effectiveness(json_mode),
+        HiveCommand::Review { unfreeze } => cmd_review(unfreeze.as_deref(), json_mode),
     }
+}
+
+fn cmd_review(unfreeze: Option<&str>, json_mode: bool) -> io::Result<()> {
+    let mut trust = super::trust::TrustStore::load();
+
+    if let Some(peer) = unfreeze {
+        if trust.get(peer).is_none() {
+            eprintln!("Unknown peer: {peer}");
+            return Err(io::Error::other("unknown peer"));
+        }
+        trust.unfreeze(peer);
+        trust
+            .save()
+            .map_err(|e| io::Error::other(format!("save: {e}")))?;
+        println!("Unfroze peer {peer}.");
+        return Ok(());
+    }
+
+    let now = super::epoch_secs();
+    let frozen = trust.frozen_peers();
+    let quarantined: Vec<&super::trust::PeerTrust> = trust
+        .all()
+        .into_iter()
+        .filter(|p| !p.frozen && p.quarantine_active(now))
+        .collect();
+
+    if json_mode {
+        let payload = serde_json::json!({
+            "frozen": frozen.iter().map(|p| serde_json::json!({
+                "peer_id": p.peer_id,
+                "trust_level": p.trust_level,
+                "freeze_reason": p.freeze_reason,
+                "first_seen": p.first_seen,
+                "received_today": p.received_today(now),
+                "last_anomaly_at": p.last_anomaly_at,
+            })).collect::<Vec<_>>(),
+            "quarantined": quarantined.iter().map(|p| serde_json::json!({
+                "peer_id": p.peer_id,
+                "trust_level": p.trust_level,
+                "quarantined_until": p.quarantined_until,
+                "first_seen": p.first_seen,
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload).unwrap());
+        return Ok(());
+    }
+
+    if frozen.is_empty() && quarantined.is_empty() {
+        println!("No peers in review (no quarantines, no freezes).");
+        return Ok(());
+    }
+
+    if !frozen.is_empty() {
+        println!("Frozen peers ({}):", frozen.len());
+        for p in &frozen {
+            let reason = p.freeze_reason.as_deref().unwrap_or("(no reason recorded)");
+            println!("  • {} — {reason}", p.peer_id);
+        }
+        println!("  Clear with: claudectl hive review --unfreeze <peer_id>");
+        println!();
+    }
+
+    if !quarantined.is_empty() {
+        println!("Quarantined peers ({}):", quarantined.len());
+        for p in &quarantined {
+            let remaining_days = p.quarantined_until.saturating_sub(now).div_ceil(86_400);
+            println!(
+                "  • {} — {remaining_days}d remaining (trust {:.2})",
+                p.peer_id, p.trust_level
+            );
+        }
+    }
+
+    Ok(())
 }
 
 // ────────────────────────────────────────────────────────────────────────────

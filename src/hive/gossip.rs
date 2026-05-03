@@ -144,6 +144,7 @@ impl GossipEngine {
         msg: &RelayMessage,
     ) -> (MergeStats, Vec<KnowledgeUnit>) {
         let units = parse_units_from_payload(msg);
+        sybil_check(store, &msg.from_peer, &units, &self.local_peer_id);
         let stats = merger::merge_batch(store, &units, &self.local_peer_id);
 
         // Collect accepted units for propagation
@@ -210,6 +211,7 @@ impl GossipEngine {
         msg: &RelayMessage,
     ) -> (MergeStats, Vec<KnowledgeUnit>) {
         let units = parse_units_from_payload(msg);
+        sybil_check(store, &msg.from_peer, &units, &self.local_peer_id);
         let stats = merger::merge_batch(store, &units, &self.local_peer_id);
         let merged: Vec<KnowledgeUnit> = units
             .into_iter()
@@ -392,6 +394,42 @@ fn parse_units_from_payload(msg: &RelayMessage) -> Vec<KnowledgeUnit> {
         .get("units")
         .and_then(|v| serde_json::from_value::<Vec<KnowledgeUnit>>(v.clone()).ok())
         .unwrap_or_default()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sybil resistance (#226)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Apply rate-cap and collision-freeze checks to an incoming batch *before*
+/// it reaches the merger. Loads + saves the trust store on its own so it
+/// composes cleanly with the existing gossip flow.
+fn sybil_check(store: &HiveStore, from_peer: &str, units: &[KnowledgeUnit], local_peer_id: &str) {
+    if units.is_empty() {
+        return;
+    }
+    let mut trust = super::trust::TrustStore::load();
+
+    // 1. Rate cap — count incoming units against the from-peer's daily budget.
+    if trust.record_received(from_peer, units.len() as u32) {
+        let now = epoch_secs();
+        let received = trust
+            .get(from_peer)
+            .map(|p| p.received_today(now))
+            .unwrap_or(0);
+        trust.freeze(
+            from_peer,
+            &format!("rate cap exceeded: {received} units in 24h"),
+        );
+    }
+
+    // 2. Collision detection — incoming units that disagree sharply with what
+    //    we already have get both peers frozen.
+    let collisions = super::trust::detect_collisions(store, units);
+    if !collisions.is_empty() {
+        let _ = super::trust::apply_collisions(&mut trust, local_peer_id, &collisions);
+    }
+
+    let _ = trust.save();
 }
 
 // ────────────────────────────────────────────────────────────────────────────

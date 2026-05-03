@@ -74,6 +74,14 @@ pub fn build_hive_context_for_session(
                 return None;
             }
 
+            // #226: peers in their quarantine window or manually frozen are
+            // excluded from prompt injection. Their knowledge is still stored
+            // and gossiped — we just don't let untested peers shape decisions.
+            // `inject_unverified` (debugging / cold-start mode) bypasses this.
+            if !inject_unverified && trust_store.is_blocked_from_injection(&unit.source_peer) {
+                return None;
+            }
+
             let eff = effective_confidence(unit, now);
             // Drop heavily-decayed units even if peer trust is fine.
             // `inject_unverified` keeps them visible (debugging / cold start).
@@ -293,7 +301,7 @@ mod tests {
     #[test]
     fn build_context_empty_store() {
         let store = empty_store();
-        let trust_store = TrustStore::load_with_default(0.5);
+        let trust_store = TrustStore::empty(0.5);
         let ctx = build_hive_context(&store, &trust_store, true, 0);
         assert!(ctx.is_empty());
     }
@@ -310,7 +318,7 @@ mod tests {
         ));
         store.insert(make_pattern_unit("ku_2", "Write", None, "deny", "peer-b"));
 
-        let trust_store = TrustStore::load_with_default(0.5);
+        let trust_store = TrustStore::empty(0.5);
         let ctx = build_hive_context(&store, &trust_store, true, 0);
 
         assert!(ctx.contains("## Hive Knowledge"));
@@ -329,7 +337,7 @@ mod tests {
             "peer-a",
         ));
 
-        let mut trust_store = TrustStore::load_with_default(0.5);
+        let mut trust_store = TrustStore::empty(0.5);
         trust_store.set_trust("peer-a", 0.9);
 
         let ctx = build_hive_context(&store, &trust_store, true, 0);
@@ -396,7 +404,7 @@ mod tests {
             ],
         ));
 
-        let trust_store = TrustStore::load_with_default(0.5);
+        let trust_store = TrustStore::empty(0.5);
         let ctx = build_hive_context(&store, &trust_store, true, 0);
         assert!(ctx.contains("cluster: Bash:git push"));
         assert!(ctx.contains("(A) approve"));
@@ -426,7 +434,7 @@ mod tests {
             .collect();
         store.insert(make_cluster_unit("ku_big", "peer", "Bash:noisy", variants));
 
-        let trust_store = TrustStore::load_with_default(0.5);
+        let trust_store = TrustStore::empty(0.5);
         let ctx = build_hive_context(&store, &trust_store, true, 0);
         assert!(ctx.contains("(A)"));
         assert!(ctx.contains("(B)"));
@@ -446,7 +454,7 @@ mod tests {
             "peer-a",
         ));
 
-        let mut trust_store = TrustStore::load_with_default(0.5);
+        let mut trust_store = TrustStore::empty(0.5);
         trust_store.set_trust("peer-a", 0.1); // Ignored tier
 
         // Without inject_unverified: excluded
@@ -578,7 +586,7 @@ mod tests {
             },
         });
 
-        let trust_store = TrustStore::load_with_default(0.5);
+        let trust_store = TrustStore::empty(0.5);
         let ctx = build_hive_context(&store, &trust_store, true, 0);
 
         // Should contain the pattern unit but NOT the skill
@@ -619,7 +627,7 @@ mod tests {
         // Re-insert with the staleness baked in.
         store.insert(unit);
 
-        let trust_store = TrustStore::load_with_default(0.9); // Confirmed peer
+        let trust_store = TrustStore::empty(0.9); // Confirmed peer
         // Without inject_unverified, decayed units are dropped
         let now_far_future: u64 = 100 * 365 * 86_400; // ~100 years
         // The function uses real time, so we can't manipulate `now` directly;
@@ -646,7 +654,9 @@ mod tests {
         unit.last_validated_at = super::epoch_secs().saturating_sub(60 * 86_400);
         store.insert(unit);
 
-        let trust_store = TrustStore::load_with_default(0.9);
+        // In-memory store so this test isn't affected by disk-state pollution
+        // from sybil tests that exercise `freeze` and persist via gossip.
+        let trust_store = TrustStore::empty(0.9);
         let ctx = build_hive_context(&store, &trust_store, false, 0);
         assert!(ctx.contains("[stale]"), "expected stale tag in: {ctx}");
     }
