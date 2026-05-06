@@ -167,6 +167,16 @@ pub fn merge_discovered_sessions(
                 prev.elapsed = new.elapsed;
                 prev.started_at = new.started_at;
                 prev.session_name = new.session_name;
+                // Claude Code can rotate `sessionId` under the same OS PID
+                // (/clear, compaction, resume-into-new-file). The transcript
+                // file path changes but `do_refresh_io` skips re-resolution
+                // while jsonl_path.is_some(), so without this the TUI keeps
+                // reading the abandoned transcript and "Last" never advances.
+                if prev.session_id != new.session_id {
+                    prev.session_id = new.session_id;
+                    prev.jsonl_path = None;
+                    prev.jsonl_offset = 0;
+                }
                 prev
             } else {
                 new_pids.push(new.pid);
@@ -3394,5 +3404,65 @@ mod tests {
         let pids: Vec<u32> = merged.iter().map(|s| s.pid).collect();
         assert_eq!(pids, vec![1], "PID 2 is gone, so it must drop from output");
         assert_eq!(new_pids, vec![] as Vec<u32>);
+    }
+
+    #[test]
+    fn merge_adopts_new_session_id_and_clears_jsonl_path_on_rotation() {
+        // Repro for the "Last never updates" bug. Claude Code keeps the
+        // same OS PID but rotates `sessionId` in ~/.claude/sessions/<PID>.json
+        // (/clear, compaction, resume-into-new-file). Without the fix,
+        // merge preserves prev.session_id + prev.jsonl_path, and
+        // `do_refresh_io` skips re-resolution because jsonl_path.is_some(),
+        // so claudectl keeps reading the abandoned transcript forever.
+        let mut existing = named_session(42, "session", "proj", 1_000);
+        existing.session_id = "old-session-id".into();
+        existing.jsonl_path = Some(std::path::PathBuf::from("/tmp/old-session-id.jsonl"));
+        existing.jsonl_offset = 4096;
+
+        let mut fresh = named_session(42, "session", "proj", 0);
+        fresh.session_id = "new-session-id".into();
+        fresh.jsonl_path = None;
+        fresh.jsonl_offset = 0;
+
+        let (merged, _) = merge_discovered_sessions(vec![existing], vec![fresh]);
+        assert_eq!(merged.len(), 1);
+        let s = &merged[0];
+        assert_eq!(
+            s.session_id, "new-session-id",
+            "merge must adopt the freshly-discovered session_id when it rotates"
+        );
+        assert!(
+            s.jsonl_path.is_none(),
+            "stale jsonl_path must be cleared so resolve_jsonl_paths re-runs"
+        );
+        assert_eq!(
+            s.jsonl_offset, 0,
+            "jsonl_offset must reset since we'll be reading a new file from byte 0"
+        );
+    }
+
+    #[test]
+    fn merge_preserves_jsonl_path_when_session_id_unchanged() {
+        // Counter-test: when session_id matches across discovery,
+        // accumulated jsonl_path/offset must still be preserved.
+        let mut existing = named_session(42, "session", "proj", 1_000);
+        existing.session_id = "stable-id".into();
+        existing.jsonl_path = Some(std::path::PathBuf::from("/tmp/stable-id.jsonl"));
+        existing.jsonl_offset = 4096;
+
+        let mut fresh = named_session(42, "session", "proj", 0);
+        fresh.session_id = "stable-id".into();
+        fresh.jsonl_path = None;
+        fresh.jsonl_offset = 0;
+
+        let (merged, _) = merge_discovered_sessions(vec![existing], vec![fresh]);
+        let s = &merged[0];
+        assert_eq!(s.session_id, "stable-id");
+        assert_eq!(
+            s.jsonl_path,
+            Some(std::path::PathBuf::from("/tmp/stable-id.jsonl")),
+            "jsonl_path must survive when session_id is unchanged"
+        );
+        assert_eq!(s.jsonl_offset, 4096, "jsonl_offset must survive too");
     }
 }
