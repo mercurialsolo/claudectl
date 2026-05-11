@@ -1635,6 +1635,39 @@ pub(crate) fn run_reap_outcomes(cli: &Cli) -> io::Result<()> {
     Ok(())
 }
 
+/// Pure parser: turn a Claude Code hook payload string into a `DiffDigest`.
+/// Returns `None` on missing/blank input, invalid JSON, or missing `tool_input`.
+fn digest_from_hook_payload(
+    tool_name: &str,
+    payload: &str,
+) -> Option<brain::diff_digest::DiffDigest> {
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let tool_input = value.get("tool_input")?;
+    Some(brain::diff_digest::build_digest(tool_name, tool_input))
+}
+
+/// Try to parse a `DiffDigest` from stdin (the raw Claude Code hook payload).
+///
+/// Brain-gate.sh pipes the full tool_use JSON to `claudectl --brain-query`.
+/// We only read when stdin is not a TTY — otherwise `read_to_string` would
+/// block waiting for EOF. Failures here are not fatal: missing stdin just
+/// means we degrade to pre-#237 behaviour.
+fn read_diff_digest_from_stdin(tool_name: &str) -> Option<brain::diff_digest::DiffDigest> {
+    use std::io::{IsTerminal, Read};
+    if std::io::stdin().is_terminal() {
+        return None;
+    }
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_err() {
+        return None;
+    }
+    digest_from_hook_payload(tool_name, &buf)
+}
+
 /// Standalone brain query: builds a minimal context from CLI args, calls the
 /// local LLM, and prints a JSON decision to stdout. Designed to be called
 /// by Claude Code plugin hooks (PreToolUse) for inline approve/deny.
@@ -1667,6 +1700,12 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_else(|| "unknown".into())
     });
+
+    // #237: brain-gate may pipe the full Claude Code hook payload on stdin.
+    // We try to parse it into a `DiffDigest` for richer prompt context and
+    // structured decision-log attribution. Missing/invalid stdin is fine —
+    // the rest of the flow degrades to the pre-#237 behaviour.
+    let diff_digest = read_diff_digest_from_stdin(&tool_name);
 
     // Step 1: Check static deny rules first (instant, no LLM needed)
     let auto_rules = cfg.rules.clone();
@@ -1734,6 +1773,12 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
         "Project: {project} | Status: Needs Input | Pending tool: {tool_name} | Command: {command}"
     );
 
+    // #237: include the diff digest when we have one.
+    let diff_section = match diff_digest.as_ref() {
+        Some(d) => format!("\n\n## Proposed change\n{}", d.format_for_prompt()),
+        None => String::new(),
+    };
+
     // Load distilled preferences
     let pref_section = if let Some(prefs) = brain::decisions::load_preferences_for_project(&project)
     {
@@ -1762,12 +1807,14 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
     let prompt = format!(
         "You are a session supervisor deciding whether to approve or deny a tool call.\n\
          \n## Session\n{session_summary}\
+         {diff_section}\
          {pref_section}\
          {few_shot_section}\n\
          \n## Decision\n\
          The session wants to run [{tool_display}]. \
-         Should this be approved or denied? \
-         Respond with JSON: {{\"action\": \"approve\"|\"deny\", \
+         Weigh the proposed change against the learned preferences and past \
+         decisions. Be more cautious when sensitive paths or risky tokens are \
+         present. Respond with JSON: {{\"action\": \"approve\"|\"deny\", \
          \"message\": \"...\", \"reasoning\": \"...\", \"confidence\": 0.0-1.0}}"
     );
 
@@ -1777,7 +1824,7 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             let threshold = brain::decisions::adaptive_threshold(Some(&tool_name)).unwrap_or(0.6);
             let below_threshold = suggestion.confidence < threshold;
 
-            let result = serde_json::json!({
+            let mut result = serde_json::json!({
                 "action": suggestion.action.label(),
                 "reasoning": suggestion.reasoning,
                 "confidence": suggestion.confidence,
@@ -1786,6 +1833,9 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
                 "below_threshold": below_threshold,
                 "threshold": threshold,
             });
+            if let Some(d) = diff_digest.as_ref() {
+                result["diff_digest"] = d.to_log_json();
+            }
             println!("{}", serde_json::to_string(&result).unwrap());
             Ok(())
         }
@@ -1800,5 +1850,46 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             println!("{}", serde_json::to_string(&result).unwrap());
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod digest_parser_tests {
+    use super::*;
+
+    #[test]
+    fn parses_edit_payload() {
+        let payload = r#"{
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": ".env",
+                "old_string": "",
+                "new_string": "DB_PASSWORD=hunter2"
+            }
+        }"#;
+        let d = digest_from_hook_payload("Edit", payload).expect("digest");
+        assert_eq!(d.files, vec![".env".to_string()]);
+        assert!(d.risky_paths.iter().any(|t| t == ".env"));
+        assert!(
+            d.risky_tokens
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case("password="))
+        );
+    }
+
+    #[test]
+    fn returns_none_when_payload_missing_tool_input() {
+        assert!(digest_from_hook_payload("Edit", "{}").is_none());
+    }
+
+    #[test]
+    fn returns_none_for_blank_input() {
+        assert!(digest_from_hook_payload("Edit", "   ").is_none());
+        assert!(digest_from_hook_payload("Edit", "").is_none());
+    }
+
+    #[test]
+    fn returns_none_for_invalid_json() {
+        assert!(digest_from_hook_payload("Edit", "{not json").is_none());
     }
 }

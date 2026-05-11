@@ -6,6 +6,7 @@ pub mod client;
 pub mod context;
 pub mod decisions;
 pub mod detectors;
+pub mod diff_digest;
 pub mod engine;
 pub mod evals;
 pub mod garden;

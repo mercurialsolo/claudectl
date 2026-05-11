@@ -56,8 +56,11 @@ esac
 # Resolve project name from cwd
 PROJECT=$(basename "${PWD:-unknown}")
 
-# Query the brain (--brain enables it even without config)
-RESULT=$(claudectl --brain --brain-query --tool "$TOOL_NAME" --tool-input "$COMMAND" --project "$PROJECT" 2>/dev/null) || exit 0
+# Query the brain (--brain enables it even without config).
+# We pipe the full hook payload on stdin so that claudectl can extract a
+# structured diff digest (file_path, old/new_string, content, ...) for
+# richer prompt context — see #237.
+RESULT=$(printf '%s' "$INPUT" | claudectl --brain --brain-query --tool "$TOOL_NAME" --tool-input "$COMMAND" --project "$PROJECT" 2>/dev/null) || exit 0
 
 # Parse the action from the JSON result
 ACTION=$(echo "$RESULT" | sed -n 's/.*"action" *: *"\([^"]*\)".*/\1/p')
