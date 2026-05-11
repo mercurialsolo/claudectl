@@ -1,12 +1,14 @@
 pub mod agents;
 pub mod autopsy;
 pub mod baseline;
+pub mod briefing;
 pub mod client;
 pub mod context;
 pub mod decisions;
 pub mod detectors;
 pub mod engine;
 pub mod evals;
+pub mod garden;
 pub mod insights;
 pub mod mailbox;
 pub mod metrics;
@@ -16,6 +18,7 @@ pub mod preferences;
 pub mod prompts;
 pub mod retrieval;
 pub mod risk;
+pub mod sequences;
 
 use std::path::PathBuf;
 

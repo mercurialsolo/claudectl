@@ -454,6 +454,11 @@ fn maybe_distill_background() {
                 }
             }
 
+            // Mine and persist the anti-pattern library (#201). Cheap to run
+            // alongside distillation; reads decision history we already have.
+            let library = super::sequences::mine_antipatterns(&all);
+            let _ = super::sequences::save_library(&library);
+
             // Generate insights if insights mode is on
             if super::insights::read_insights_mode() == "on" {
                 let insights = super::insights::generate_insights(&all, &prefs);

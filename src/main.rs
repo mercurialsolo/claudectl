@@ -296,6 +296,23 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Brain (Local LLM)", num_args = 0..=1, default_missing_value = "")]
     pub(crate) insights: Option<String>,
 
+    /// Propose CLAUDE.md additions from high-confidence brain preferences.
+    /// Use --project to scope to a specific project's preferences, and --apply
+    /// to write the suggestions to CLAUDE.md.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) brain_garden: bool,
+
+    /// Apply changes alongside actions that propose them
+    /// (currently used with --brain-garden).
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) apply: bool,
+
+    /// Print a markdown session briefing for the given --project.
+    /// Aggregates recent decisions, learned preferences, and known
+    /// anti-patterns into context suitable for injection at session start.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) brain_briefing: bool,
+
     // ── Orchestration ──────────────────────────────────────────────────
     /// Analyze a prompt and suggest parallel sub-tasks (outputs TaskFile JSON)
     #[arg(long, help_heading = "Orchestration")]
@@ -601,6 +618,14 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if let Some(ref insights_arg) = cli.insights {
         return commands::run_insights(&cfg, &cli, insights_arg);
+    }
+
+    if cli.brain_garden {
+        return commands::run_brain_garden(&cli);
+    }
+
+    if cli.brain_briefing {
+        return commands::run_brain_briefing(&cli);
     }
 
     if let Some(ref prompt) = cli.decompose {
