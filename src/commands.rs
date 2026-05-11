@@ -356,6 +356,67 @@ pub(crate) fn apply_filters(app: &mut App, filters: &ViewFilters) {
     }
 }
 
+/// Build a per-project session briefing (#198) and print to stdout.
+pub(crate) fn run_brain_briefing(cli: &Cli) -> io::Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let project = cli.project.clone().or_else(|| {
+        cwd.file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+    });
+    let opts = brain::briefing::BriefingOptions {
+        project,
+        max_decisions: None,
+        include_claude_md_check: true,
+    };
+    let briefing = brain::briefing::build_briefing(&opts, &cwd);
+    if cli.json {
+        let json = serde_json::json!({
+            "project": opts.project,
+            "briefing": briefing,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap_or_else(|_| "{}".into())
+        );
+    } else {
+        println!("{briefing}");
+    }
+    Ok(())
+}
+
+/// Propose CLAUDE.md additions from high-confidence brain preferences (#199).
+pub(crate) fn run_brain_garden(cli: &Cli) -> io::Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let report = brain::garden::run_garden(cli.project.as_deref(), cli.apply, &cwd);
+    if cli.json {
+        let json = serde_json::json!({
+            "project": report.project,
+            "claude_md_path": report.claude_md_path.as_ref().map(|p| p.display().to_string()),
+            "considered": report.considered,
+            "already_covered": report.already_covered,
+            "applied": report.applied,
+            "suggestions": report.kept.iter().map(|s| serde_json::json!({
+                "kind": match s.kind {
+                    brain::garden::SuggestionKind::Codify => "codify",
+                    brain::garden::SuggestionKind::Contradiction => "contradiction",
+                },
+                "line": s.line,
+                "rationale": s.rationale,
+                "tool": s.tool,
+                "cmd_keyword": s.cmd_keyword,
+            })).collect::<Vec<_>>(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap_or_else(|_| "{}".into())
+        );
+    } else {
+        println!("{}", brain::garden::format_report(&report));
+    }
+    Ok(())
+}
+
 /// Run a post-mortem autopsy on a completed session transcript.
 /// Resolves the session from: direct JSONL path, session ID, or most recent.
 pub(crate) fn run_autopsy(session_arg: Option<&str>, json_output: bool) -> io::Result<()> {

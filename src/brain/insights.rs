@@ -19,6 +19,8 @@ pub enum InsightCategory {
     AccuracyGap,
     TemporalFriction,
     CostPattern,
+    AntiPattern,
+    CodificationSuggestion,
 }
 
 impl InsightCategory {
@@ -31,6 +33,8 @@ impl InsightCategory {
             InsightCategory::AccuracyGap => "accuracy_gap",
             InsightCategory::TemporalFriction => "temporal_friction",
             InsightCategory::CostPattern => "cost_pattern",
+            InsightCategory::AntiPattern => "antipattern",
+            InsightCategory::CodificationSuggestion => "codification_suggestion",
         }
     }
 
@@ -43,6 +47,8 @@ impl InsightCategory {
             "accuracy_gap" => Some(InsightCategory::AccuracyGap),
             "temporal_friction" => Some(InsightCategory::TemporalFriction),
             "cost_pattern" => Some(InsightCategory::CostPattern),
+            "antipattern" => Some(InsightCategory::AntiPattern),
+            "codification_suggestion" => Some(InsightCategory::CodificationSuggestion),
             _ => None,
         }
     }
@@ -56,6 +62,8 @@ impl InsightCategory {
             InsightCategory::AccuracyGap => "Accuracy Gaps",
             InsightCategory::TemporalFriction => "Temporal Patterns",
             InsightCategory::CostPattern => "Cost Patterns",
+            InsightCategory::AntiPattern => "Anti-Pattern Sequences",
+            InsightCategory::CodificationSuggestion => "CLAUDE.md Suggestions",
         }
     }
 }
@@ -305,6 +313,7 @@ pub fn generate_insights(
     insights.extend(detect_accuracy_gaps(prefs));
     insights.extend(detect_temporal_friction(prefs));
     insights.extend(detect_cost_patterns(decisions));
+    insights.extend(super::sequences::detect_antipattern_sequences(decisions));
 
     // Sort by severity descending, then by evidence count descending
     insights.sort_by(|a, b| {
@@ -340,7 +349,9 @@ fn format_insights(insights: &[Insight], header: &str) -> String {
         InsightCategory::FrictionPattern,
         InsightCategory::ErrorLoop,
         InsightCategory::ContextBlowout,
+        InsightCategory::AntiPattern,
         InsightCategory::MissingRule,
+        InsightCategory::CodificationSuggestion,
         InsightCategory::AccuracyGap,
         InsightCategory::TemporalFriction,
         InsightCategory::CostPattern,
