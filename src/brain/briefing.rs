@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn antipatterns_filtered_to_project_tools() {
-        let owned = vec![dec("p", "Edit", "src/lib.rs", "accept", 1000)];
+        let owned = [dec("p", "Edit", "src/lib.rs", "accept", 1000)];
         let recent_refs: Vec<&DecisionRecord> = owned.iter().collect();
         let library = vec![
             AntiPattern {
