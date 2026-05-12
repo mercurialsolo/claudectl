@@ -113,11 +113,16 @@ pub fn gen_decision_id() -> String {
 }
 
 /// Outcome of a decision, backfilled during distillation by looking at
-/// consecutive same-PID records.
+/// consecutive same-PID records and resolved test-runner outcomes.
 #[derive(Debug, Clone)]
 pub enum DecisionOutcome {
     Success,
     Error(String),
+    /// A test-runner command failed within the attribution window after this
+    /// edit was approved (#238). Carries the failing command for diagnostics.
+    /// Weighted more strongly than `Error` in distillation because a broken
+    /// build is a stronger negative signal than a transient tool error.
+    TestFailed(String),
 }
 
 /// Snapshot of session state captured at decision time.

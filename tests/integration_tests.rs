@@ -1313,3 +1313,209 @@ fn reaper_skips_decisions_lacking_decision_id() {
     assert_eq!(stats.attributed, 0);
     assert_eq!(stats.still_pending, 1);
 }
+
+// ── #238: test-failure fan-out attribution ────────────────────────────
+
+fn default_runners() -> Vec<String> {
+    ["cargo test", "npm test", "pytest", "go test", "bun test"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+#[test]
+fn reaper_attributes_test_failure_to_recent_edit() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let edit_ts = now - 30;
+    let edit_id = format!("dec_{edit_ts}_42_0");
+
+    // A brain-approved Edit decision, then a Bash cargo test that fails.
+    write_decision_jsonl(&format!(
+        r#"{{"ts":"{edit_ts}","pid":42,"project":"alpha","tool":"Edit","command":"src/lib.rs","brain_action":"approve","brain_confidence":0.9,"brain_reasoning":"safe","user_action":"accept","decision_type":"session","decision_id":"{edit_id}"}}"#
+    ));
+
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("cargo test --release".into()),
+        project: "alpha".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(101),
+        duration_ms: Some(3_200),
+        stderr_tail: Some("FAILED my_test::failing_case".into()),
+        ts: now,
+    });
+
+    let stats = outcomes::reap_with_runners(&default_runners());
+    assert_eq!(
+        stats.test_failures_attributed, 1,
+        "edit decision should receive one test-failure marker"
+    );
+
+    let markers = outcomes::load_test_failures();
+    let m = markers
+        .get(&edit_id)
+        .expect("marker keyed by edit decision_id");
+    assert_eq!(m.failed_test_command, "cargo test --release");
+}
+
+#[test]
+fn reaper_test_failure_skips_passing_run() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let edit_ts = now - 30;
+    let edit_id = format!("dec_{edit_ts}_42_0");
+
+    write_decision_jsonl(&format!(
+        r#"{{"ts":"{edit_ts}","pid":42,"project":"alpha","tool":"Edit","command":"src/lib.rs","brain_action":"approve","brain_confidence":0.9,"brain_reasoning":"safe","user_action":"accept","decision_type":"session","decision_id":"{edit_id}"}}"#
+    ));
+
+    // Successful test run → no fan-out marker.
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("cargo test".into()),
+        project: "alpha".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(0),
+        duration_ms: Some(2_400),
+        stderr_tail: None,
+        ts: now,
+    });
+
+    let stats = outcomes::reap_with_runners(&default_runners());
+    assert_eq!(stats.test_failures_attributed, 0);
+    assert!(outcomes::load_test_failures().is_empty());
+}
+
+#[test]
+fn reaper_test_failure_only_taps_edit_like_tools() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let read_ts = now - 30;
+    let read_id = format!("dec_{read_ts}_42_0");
+
+    // A Read decision — should NOT be tagged even though it precedes a failed test.
+    write_decision_jsonl(&format!(
+        r#"{{"ts":"{read_ts}","pid":42,"project":"alpha","tool":"Read","command":"src/lib.rs","brain_action":"approve","brain_confidence":0.9,"brain_reasoning":"safe","user_action":"accept","decision_type":"session","decision_id":"{read_id}"}}"#
+    ));
+
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("pytest".into()),
+        project: "alpha".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(1),
+        duration_ms: Some(500),
+        stderr_tail: None,
+        ts: now,
+    });
+
+    let stats = outcomes::reap_with_runners(&default_runners());
+    assert_eq!(stats.test_failures_attributed, 0);
+    assert!(outcomes::load_test_failures().is_empty());
+}
+
+#[test]
+fn reaper_test_failure_is_idempotent() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let edit_ts = now - 30;
+    let edit_id = format!("dec_{edit_ts}_99_0");
+
+    write_decision_jsonl(&format!(
+        r#"{{"ts":"{edit_ts}","pid":99,"project":"alpha","tool":"Write","command":"new.rs","brain_action":"approve","brain_confidence":0.9,"brain_reasoning":"safe","user_action":"accept","decision_type":"session","decision_id":"{edit_id}"}}"#
+    ));
+
+    // First failing test run.
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("cargo test".into()),
+        project: "alpha".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(101),
+        duration_ms: Some(1_000),
+        stderr_tail: None,
+        ts: now,
+    });
+    let first = outcomes::reap_with_runners(&default_runners());
+    assert_eq!(first.test_failures_attributed, 1);
+
+    // A second failing run after attribution must not double-tag the same
+    // edit — markers are written with create_new.
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("cargo test".into()),
+        project: "alpha".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(101),
+        duration_ms: Some(1_000),
+        stderr_tail: None,
+        ts: now + 5,
+    });
+    let second = outcomes::reap_with_runners(&default_runners());
+    assert_eq!(
+        second.test_failures_attributed, 0,
+        "second pass should not re-tag the same edit"
+    );
+    assert_eq!(outcomes::load_test_failures().len(), 1);
+}
+
+#[test]
+fn reaper_test_failure_respects_fanout_window() {
+    let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _home = isolated_home();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // Edit is 10 minutes older than the test run — outside the 5-minute window.
+    let edit_ts = now - 600;
+    let edit_id = format!("dec_{edit_ts}_42_0");
+    write_decision_jsonl(&format!(
+        r#"{{"ts":"{edit_ts}","pid":42,"project":"alpha","tool":"Edit","command":"src/lib.rs","brain_action":"approve","brain_confidence":0.9,"brain_reasoning":"safe","user_action":"accept","decision_type":"session","decision_id":"{edit_id}"}}"#
+    ));
+
+    write_pending_file(&outcomes::PendingOutcome {
+        tool: "Bash".into(),
+        command: Some("cargo test".into()),
+        project: "alpha".into(),
+        session_id: None,
+        tool_use_id: None,
+        exit_code: Some(1),
+        duration_ms: None,
+        stderr_tail: None,
+        ts: now,
+    });
+
+    let stats = outcomes::reap_with_runners(&default_runners());
+    assert_eq!(
+        stats.test_failures_attributed, 0,
+        "edits outside the fan-out window should not be tagged"
+    );
+}

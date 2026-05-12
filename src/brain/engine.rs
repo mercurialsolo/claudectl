@@ -831,6 +831,7 @@ mod tests {
             max_sessions: 10,
             orchestrate: false,
             orchestrate_interval_secs: 30,
+            test_runners: crate::config::default_test_runners(),
         }
     }
 

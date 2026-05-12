@@ -108,6 +108,35 @@ pub struct BrainConfig {
     pub max_sessions: usize,
     pub orchestrate: bool,
     pub orchestrate_interval_secs: u64,
+    /// Command prefixes that identify test-runner invocations. When one of
+    /// these fails (non-zero exit), the reaper fans the failure out to recent
+    /// brain-approved edits as a `TestFailed` outcome (#238). Empty disables
+    /// test-failure attribution.
+    pub test_runners: Vec<String>,
+}
+
+/// Default test-runner command prefixes. Matched as command-line prefix on
+/// the normalized command (whitespace-collapsed, lowercased). Users override
+/// via `test_runners` in the `[brain]` config section.
+pub fn default_test_runners() -> Vec<String> {
+    [
+        "cargo test",
+        "cargo nextest",
+        "npm test",
+        "npm run test",
+        "pnpm test",
+        "yarn test",
+        "bun test",
+        "pytest",
+        "go test",
+        "jest",
+        "vitest",
+        "mix test",
+        "rspec",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 impl Default for BrainConfig {
@@ -123,6 +152,7 @@ impl Default for BrainConfig {
             max_sessions: 10,
             orchestrate: false,
             orchestrate_interval_secs: 30,
+            test_runners: default_test_runners(),
         }
     }
 }
@@ -902,6 +932,7 @@ impl Config {
 # max_sessions = 10
 # orchestrate = false
 # orchestrate_interval = 30
+# test_runners = ["cargo test", "npm test", "pytest", "go test", "bun test"]
 
 # ── Relay / Hive (feature: relay) ─────────────────────────────────────
 #
@@ -1163,6 +1194,12 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                             brain.orchestrate_interval_secs = v;
                         }
                     }
+                    "test_runners" => {
+                        let parsed = parse_string_array(value);
+                        if !parsed.is_empty() {
+                            brain.test_runners = parsed;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1341,6 +1378,7 @@ fn known_keys(section: &str) -> Option<&'static [&'static str]> {
             "orchestrate",
             "orchestrate_interval",
             "orchestrate_interval_secs",
+            "test_runners",
         ]),
         "relay" => Some(&[
             "enabled",

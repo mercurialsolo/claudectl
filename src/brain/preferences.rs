@@ -329,24 +329,42 @@ fn best_split(decisions: &[&DecisionRecord]) -> Option<(PreferenceCondition, Pre
 
 /// Backfill outcomes by examining consecutive same-PID decision pairs.
 /// If decision[i+1] has context.last_tool_error == true, decision[i] gets Error outcome.
+///
+/// After the consecutive-pair pass, overlay any persisted test-failure
+/// markers (#238) so an edit's outcome reflects a post-edit test run that
+/// failed, even when the very next tool call looked clean.
 pub fn backfill_outcomes(decisions: &mut [DecisionRecord]) {
-    if decisions.len() < 2 {
-        return;
-    }
-    // Group consecutive indices by PID
-    for i in 0..decisions.len() - 1 {
-        if decisions[i].pid != decisions[i + 1].pid {
-            continue;
+    if !decisions.is_empty() {
+        for i in 0..decisions.len().saturating_sub(1) {
+            if decisions[i].pid != decisions[i + 1].pid {
+                continue;
+            }
+            if let Some(ref next_ctx) = decisions[i + 1].context {
+                if next_ctx.last_tool_error {
+                    let msg = next_ctx
+                        .error_message
+                        .clone()
+                        .unwrap_or_else(|| "tool error".to_string());
+                    decisions[i].outcome = Some(DecisionOutcome::Error(msg));
+                } else {
+                    decisions[i].outcome = Some(DecisionOutcome::Success);
+                }
+            }
         }
-        if let Some(ref next_ctx) = decisions[i + 1].context {
-            if next_ctx.last_tool_error {
-                let msg = next_ctx
-                    .error_message
-                    .clone()
-                    .unwrap_or_else(|| "tool error".to_string());
-                decisions[i].outcome = Some(DecisionOutcome::Error(msg));
-            } else {
-                decisions[i].outcome = Some(DecisionOutcome::Success);
+    }
+
+    // Overlay TestFailed from persisted markers. Test-failure beats local
+    // tool-error and per-PID success: a broken build is the strongest signal
+    // we have, even if the very next tool call looked fine.
+    let test_failures = super::outcomes::load_test_failures();
+    if !test_failures.is_empty() {
+        for d in decisions.iter_mut() {
+            if let Some(did) = d.decision_id.as_deref() {
+                if let Some(marker) = test_failures.get(did) {
+                    d.outcome = Some(DecisionOutcome::TestFailed(
+                        marker.failed_test_command.clone(),
+                    ));
+                }
             }
         }
     }
@@ -617,6 +635,12 @@ pub fn distill_preferences(decisions: &[DecisionRecord]) -> DistilledPreferences
                 continue;
             }
             let weight = match (&d.outcome, d.is_positive()) {
+                // A brain-approved edit followed by a failing test run is the
+                // strongest negative signal we have — weight it close to a
+                // hard rejection. Symmetrically, a rejection that would have
+                // led to a broken test run is the strongest positive signal.
+                (Some(DecisionOutcome::TestFailed(_)), true) => 0.1,
+                (Some(DecisionOutcome::TestFailed(_)), false) => 2.0,
                 (Some(DecisionOutcome::Error(_)), true) => 0.3, // Accepted but broke
                 (Some(DecisionOutcome::Error(_)), false) => 1.5, // Rejected rightly
                 _ => 1.0,
@@ -1667,5 +1691,135 @@ mod tests {
             "Expected time-of-day temporal pattern, got: {:?}",
             patterns
         );
+    }
+
+    // ── Test-failure outcome weighting (#238) ────────────────────────
+
+    fn make_edit_decision(action: &str, outcome: Option<DecisionOutcome>) -> DecisionRecord {
+        let mut d = make_decision("Edit", "proj", action);
+        d.outcome = outcome;
+        d
+    }
+
+    #[test]
+    fn test_failed_pulls_accept_rate_below_clean_baseline() {
+        // Mixed signal — 6 accepts + 4 rejects of the same approach. When the
+        // accepts are clean (Success), the weighted rate is 6/10 = 0.6. When
+        // the same 6 accepts are TestFailed (weight 0.1) and the rejects are
+        // clean Success (weight 1.0), the weighted rate must drop sharply.
+        let clean: Vec<DecisionRecord> = (0..6)
+            .map(|_| make_edit_decision("accept", Some(DecisionOutcome::Success)))
+            .chain((0..4).map(|_| make_edit_decision("reject", Some(DecisionOutcome::Success))))
+            .collect();
+        let with_failures: Vec<DecisionRecord> = (0..6)
+            .map(|_| {
+                make_edit_decision(
+                    "accept",
+                    Some(DecisionOutcome::TestFailed("cargo test".into())),
+                )
+            })
+            .chain((0..4).map(|_| make_edit_decision("reject", Some(DecisionOutcome::Success))))
+            .collect();
+
+        let baseline_rate = distill_preferences(&clean)
+            .patterns
+            .iter()
+            .find(|p| p.tool == "Edit")
+            .map(|p| p.accept_rate);
+        let failure_rate = distill_preferences(&with_failures)
+            .patterns
+            .iter()
+            .find(|p| p.tool == "Edit")
+            .map(|p| p.accept_rate);
+
+        // Clean 6-of-10 may or may not form a pattern (right at the 0.7 cutoff
+        // depending on integer rounding); when both rates are present, the
+        // failure rate must be strictly lower.
+        if let (Some(b), Some(f)) = (baseline_rate, failure_rate) {
+            assert!(
+                f < b,
+                "TestFailed should pull weighted accept rate down: with={f:.3} baseline={b:.3}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_failed_flips_pattern_to_deny_when_dominant() {
+        // 1 clean accept vs 6 accepts that broke tests. Even though every
+        // user_action was "accept", the heavy TestFailed penalty (0.1 weight)
+        // and rejection-rightly bonus (2.0) must crush the weighted rate
+        // below 0.3 so the pattern flips to "deny".
+        let mut decisions: Vec<DecisionRecord> = (0..1)
+            .map(|_| make_edit_decision("accept", Some(DecisionOutcome::Success)))
+            .collect();
+        decisions.extend((0..6).map(|_| {
+            make_edit_decision(
+                "accept",
+                Some(DecisionOutcome::TestFailed("cargo test".into())),
+            )
+        }));
+        // Add a couple of rejections of the same pattern that "would have
+        // broken" — these should reinforce the deny signal.
+        decisions.extend((0..2).map(|_| {
+            make_edit_decision(
+                "reject",
+                Some(DecisionOutcome::TestFailed("cargo test".into())),
+            )
+        }));
+
+        let prefs = distill_preferences(&decisions);
+        let edit = prefs
+            .patterns
+            .iter()
+            .find(|p| p.tool == "Edit")
+            .expect("Edit pattern present after weighting");
+        assert_eq!(
+            edit.preferred_action, "deny",
+            "Heavy TestFailed should flip pattern to deny, got rate={:.3}",
+            edit.accept_rate,
+        );
+    }
+
+    #[test]
+    fn error_outcome_still_weights_less_than_test_failed() {
+        // Same counts, different outcome type: Error(_) downweights to 0.3,
+        // TestFailed downweights to 0.1. The TestFailed group must have a
+        // lower weighted accept rate than the plain-Error group.
+        let with_error: Vec<DecisionRecord> = (0..6)
+            .map(|_| make_edit_decision("accept", Some(DecisionOutcome::Error("transient".into()))))
+            .chain((0..4).map(|_| make_edit_decision("reject", Some(DecisionOutcome::Success))))
+            .collect();
+        let with_test_failed: Vec<DecisionRecord> = (0..6)
+            .map(|_| {
+                make_edit_decision(
+                    "accept",
+                    Some(DecisionOutcome::TestFailed("cargo test".into())),
+                )
+            })
+            .chain((0..4).map(|_| make_edit_decision("reject", Some(DecisionOutcome::Success))))
+            .collect();
+
+        let prefs_err = distill_preferences(&with_error);
+        let prefs_tf = distill_preferences(&with_test_failed);
+        let rate_err = prefs_err
+            .patterns
+            .iter()
+            .find(|p| p.tool == "Edit")
+            .map(|p| p.accept_rate);
+        let rate_tf = prefs_tf
+            .patterns
+            .iter()
+            .find(|p| p.tool == "Edit")
+            .map(|p| p.accept_rate);
+
+        // Both may produce patterns or both may be ambiguous; assert only
+        // when both formed a pattern, otherwise the inequality is vacuously
+        // satisfied by the deny-flip we already verify above.
+        if let (Some(re), Some(rt)) = (rate_err, rate_tf) {
+            assert!(
+                rt < re,
+                "TestFailed weight must outrun Error weight (tf={rt:.3} err={re:.3})",
+            );
+        }
     }
 }

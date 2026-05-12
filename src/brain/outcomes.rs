@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use super::decisions::{decisions_dir, read_all_decisions};
+use super::decisions::{DecisionRecord, decisions_dir, read_all_decisions};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -32,6 +32,19 @@ const ORPHAN_AFTER_SECS: u64 = 86_400;
 
 /// Cap on stderr_tail bytes stored — protects against runaway log capture.
 pub const MAX_STDERR_TAIL_BYTES: usize = 2_048;
+
+/// Lookback window (seconds) for attributing a test-runner failure to recent
+/// brain-approved edits (#238). Shorter than `ATTRIBUTION_WINDOW_SECS` because
+/// the signal degrades quickly — edits 10 minutes before a failing test run
+/// are less likely to be the cause.
+const TEST_FAILURE_FANOUT_WINDOW_SECS: u64 = 300;
+
+/// Cap on how many recent edits a single test failure attributes to. Prevents
+/// long stretches of refactor edits from all sharing one failure.
+const TEST_FAILURE_FANOUT_MAX_EDITS: usize = 5;
+
+/// Edit-like tools whose decisions get tagged when a subsequent test run fails.
+const EDIT_LIKE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 // ────────────────────────────────────────────────────────────────────────────
 // Types
@@ -91,6 +104,20 @@ pub struct ReapStats {
     pub orphaned: u32,
     pub still_pending: u32,
     pub errors: u32,
+    /// Edit decisions newly tagged as `TestFailed` from a fan-out attribution.
+    pub test_failures_attributed: u32,
+}
+
+/// Marker file written into `test-failures/<decision_id>.json` when a
+/// test-runner command failed shortly after a brain-approved edit (#238).
+/// Backfilled into `DecisionOutcome::TestFailed` during distillation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestFailureMarker {
+    pub decision_id: String,
+    /// The exact failing command (e.g. "cargo test", "npm test --watch=false").
+    pub failed_test_command: String,
+    /// Epoch seconds when the failure was observed.
+    pub outcome_ts: u64,
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -111,6 +138,11 @@ pub fn outcomes_dir() -> PathBuf {
 /// are quarantined for inspection.
 pub fn orphaned_dir() -> PathBuf {
     decisions_dir().join("outcomes-orphaned")
+}
+
+/// Directory where test-failure attribution markers live, keyed by `<decision_id>.json`.
+pub fn test_failures_dir() -> PathBuf {
+    decisions_dir().join("test-failures")
 }
 
 fn ensure_dir(path: &PathBuf) -> std::io::Result<()> {
@@ -216,6 +248,150 @@ pub fn load_resolved_map() -> std::collections::HashMap<String, ResolvedOutcome>
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Test failure attribution (#238)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Check whether `cmd` is invocation of one of the configured test runners.
+/// Match is a normalized, case-insensitive prefix comparison on whitespace-
+/// collapsed forms — so `"  CARGO   test --release "` matches `"cargo test"`.
+pub fn is_test_runner_cmd(cmd: &str, runners: &[String]) -> bool {
+    let cmd_norm = normalize_command(cmd).to_lowercase();
+    if cmd_norm.is_empty() {
+        return false;
+    }
+    runners.iter().any(|r| {
+        let r_norm = normalize_command(r).to_lowercase();
+        if r_norm.is_empty() {
+            return false;
+        }
+        // Prefix match on token boundary (either equal or followed by space/end).
+        if cmd_norm == r_norm {
+            return true;
+        }
+        if let Some(rest) = cmd_norm.strip_prefix(&r_norm) {
+            return rest.starts_with(' ');
+        }
+        false
+    })
+}
+
+/// Load existing test-failure markers, keyed by decision_id.
+pub fn load_test_failures() -> std::collections::HashMap<String, TestFailureMarker> {
+    let mut map = std::collections::HashMap::new();
+    let dir = test_failures_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return map,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Ok(m) = serde_json::from_str::<TestFailureMarker>(&content) {
+            map.insert(m.decision_id.clone(), m);
+        }
+    }
+    map
+}
+
+/// Fan a failed test-runner pending outcome out to the most recent brain-
+/// approved edits in the same project, writing one marker per edit decision.
+///
+/// Returns the number of new markers written. Idempotent: existing markers
+/// for a decision_id are never overwritten.
+fn fanout_test_failures(
+    pending: &[(PathBuf, PendingOutcome)],
+    decisions: &[DecisionRecord],
+    runners: &[String],
+) -> u32 {
+    if runners.is_empty() {
+        return 0;
+    }
+    let existing = load_test_failures();
+    let dir = test_failures_dir();
+    let _ = ensure_dir(&dir);
+    let mut written = 0u32;
+
+    for (_, p) in pending {
+        if p.exit_code.unwrap_or(0) == 0 {
+            continue;
+        }
+        let Some(cmd) = &p.command else {
+            continue;
+        };
+        if !is_test_runner_cmd(cmd, runners) {
+            continue;
+        }
+
+        // Collect candidate edit decisions: same project, positive outcome,
+        // edit-like tool, timestamp inside the fan-out window before this run.
+        let mut candidates: Vec<&DecisionRecord> = decisions
+            .iter()
+            .filter(|d| {
+                let Some(_did) = d.decision_id.as_deref() else {
+                    return false;
+                };
+                if !d.project.eq_ignore_ascii_case(&p.project) {
+                    return false;
+                }
+                let tool = d.tool.as_deref().unwrap_or("");
+                if !EDIT_LIKE_TOOLS.contains(&tool) {
+                    return false;
+                }
+                if !d.is_positive() {
+                    return false;
+                }
+                let Some(d_ts) = parse_ts(&d.timestamp) else {
+                    return false;
+                };
+                d_ts <= p.ts && p.ts.saturating_sub(d_ts) <= TEST_FAILURE_FANOUT_WINDOW_SECS
+            })
+            .collect();
+
+        // Most recent first so we attribute the last N edits.
+        candidates.sort_by(|a, b| {
+            parse_ts(&b.timestamp)
+                .unwrap_or(0)
+                .cmp(&parse_ts(&a.timestamp).unwrap_or(0))
+        });
+
+        for d in candidates.iter().take(TEST_FAILURE_FANOUT_MAX_EDITS) {
+            let did = match d.decision_id.as_deref() {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if existing.contains_key(&did) {
+                continue;
+            }
+            let marker = TestFailureMarker {
+                decision_id: did.clone(),
+                failed_test_command: cmd.clone(),
+                outcome_ts: p.ts,
+            };
+            let dest = dir.join(format!("{did}.json"));
+            let Ok(json) = serde_json::to_string(&marker) else {
+                continue;
+            };
+            // create_new makes this idempotent: if a marker already exists on
+            // disk (from a previous reap pass), we skip silently.
+            match OpenOptions::new().create_new(true).write(true).open(&dest) {
+                Ok(mut file) => {
+                    if file.write_all(json.as_bytes()).is_ok() {
+                        written += 1;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+    written
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Reaper
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -242,6 +418,16 @@ fn parse_ts(s: &str) -> Option<u64> {
 ///   - decision has a `decision_id`
 ///   - no resolved outcome exists yet for that `decision_id`
 pub fn reap() -> ReapStats {
+    let runners = crate::config::Config::load()
+        .brain
+        .map(|b| b.test_runners)
+        .unwrap_or_else(crate::config::default_test_runners);
+    reap_with_runners(&runners)
+}
+
+/// `reap()` with explicit test-runner patterns. Exposed for tests so they
+/// don't depend on a Config layered TOML load.
+pub fn reap_with_runners(test_runners: &[String]) -> ReapStats {
     let mut stats = ReapStats::default();
     let pending = list_pending();
     if pending.is_empty() {
@@ -254,6 +440,10 @@ pub fn reap() -> ReapStats {
     let decisions = read_all_decisions();
     let resolved = load_resolved_map();
     let now = epoch_secs();
+
+    // #238: fan failing test runs out to recent brain-approved edits before
+    // we mutate the pending list. Idempotent — re-running is safe.
+    stats.test_failures_attributed = fanout_test_failures(&pending, &decisions, test_runners);
     // Track decisions claimed within this reap pass so a single decision
     // doesn't get attributed to two pending outcomes when we run before
     // the resolved map is reloaded.
@@ -429,5 +619,63 @@ mod tests {
         let a = gen_pending_id();
         let b = gen_pending_id();
         assert_ne!(a, b);
+    }
+
+    // ── Test-runner detection (#238) ──────────────────────────────────
+
+    fn runners() -> Vec<String> {
+        ["cargo test", "npm test", "pytest", "go test", "bun test"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn is_test_runner_cmd_matches_exact_prefix() {
+        assert!(is_test_runner_cmd("cargo test", &runners()));
+        assert!(is_test_runner_cmd("pytest", &runners()));
+        assert!(is_test_runner_cmd("go test", &runners()));
+    }
+
+    #[test]
+    fn is_test_runner_cmd_matches_with_args() {
+        assert!(is_test_runner_cmd("cargo test --release", &runners()));
+        assert!(is_test_runner_cmd("pytest tests/foo.py", &runners()));
+        assert!(is_test_runner_cmd("npm test -- --watch=false", &runners()));
+    }
+
+    #[test]
+    fn is_test_runner_cmd_case_insensitive_and_whitespace() {
+        assert!(is_test_runner_cmd("  CARGO   TEST --release  ", &runners()));
+        assert!(is_test_runner_cmd("Cargo\tTest", &runners()));
+    }
+
+    #[test]
+    fn is_test_runner_cmd_rejects_unrelated() {
+        assert!(!is_test_runner_cmd("ls", &runners()));
+        assert!(!is_test_runner_cmd("cargo build", &runners()));
+        // Substring without token boundary must not match.
+        assert!(!is_test_runner_cmd("cargotest", &runners()));
+        // Empty command is not a test run.
+        assert!(!is_test_runner_cmd("", &runners()));
+    }
+
+    #[test]
+    fn is_test_runner_cmd_empty_runners_never_matches() {
+        assert!(!is_test_runner_cmd("cargo test", &[]));
+    }
+
+    #[test]
+    fn test_failure_marker_round_trip_json() {
+        let m = TestFailureMarker {
+            decision_id: "dec_1_2_3".into(),
+            failed_test_command: "cargo test".into(),
+            outcome_ts: 100,
+        };
+        let s = serde_json::to_string(&m).unwrap();
+        let back: TestFailureMarker = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.decision_id, "dec_1_2_3");
+        assert_eq!(back.failed_test_command, "cargo test");
+        assert_eq!(back.outcome_ts, 100);
     }
 }
