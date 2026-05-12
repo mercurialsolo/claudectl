@@ -1519,3 +1519,238 @@ fn reaper_test_failure_respects_fanout_window() {
         "edits outside the fan-out window should not be tagged"
     );
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// #249: brain-gate.sh continueOnBlock envelope
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Each test sets HOME and PATH to a tempdir, drops a stub `claudectl` shell
+// script that emits a scripted JSON response, runs `brain-gate.sh` with a
+// hook payload on stdin, and asserts on the resulting envelope.
+
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+fn hook_script_path() -> std::path::PathBuf {
+    // CARGO_MANIFEST_DIR points at the crate root regardless of where `cargo
+    // test` was invoked from.
+    let manifest = std::env::var("CARGO_MANIFEST_DIR")
+        .expect("CARGO_MANIFEST_DIR is set by cargo when running tests");
+    std::path::PathBuf::from(manifest).join("claude-plugin/hooks/scripts/brain-gate.sh")
+}
+
+/// Drop a stub `claudectl` executable into `dir/bin/`. The stub prints
+/// `stdout_body` verbatim (one line). Returns the bin/ directory to prepend
+/// onto PATH.
+fn install_stub_claudectl(dir: &Path, stdout_body: &str) -> std::path::PathBuf {
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("claudectl");
+    let script = format!("#!/usr/bin/env bash\ncat <<'CTL_EOF'\n{stdout_body}\nCTL_EOF\n");
+    std::fs::write(&stub, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(&stub).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&stub, perms).unwrap();
+    bin
+}
+
+/// Run brain-gate.sh with the given stdin payload, returning (stdout, status).
+fn run_brain_gate(
+    home: &Path,
+    stub_bin: Option<&Path>,
+    stdin_payload: &str,
+) -> (String, std::process::ExitStatus) {
+    let mut cmd = Command::new("bash");
+    cmd.arg(hook_script_path());
+    cmd.env("HOME", home);
+    if let Some(bin) = stub_bin {
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{}:{original_path}", bin.display()));
+    } else {
+        // Force claudectl off the PATH so the hook exits early.
+        cmd.env("PATH", "/usr/bin:/bin");
+    }
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn bash");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(stdin_payload.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().expect("hook output");
+    (
+        String::from_utf8(output.stdout).expect("utf8 stdout"),
+        output.status,
+    )
+}
+
+#[test]
+fn brain_gate_deny_emits_continue_on_block_envelope() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = install_stub_claudectl(
+        tmp.path(),
+        r#"{"action":"deny","reasoning":"writes look like an AWS access key","confidence":0.95,"source":"brain","below_threshold":false}"#,
+    );
+
+    let (stdout, status) = run_brain_gate(
+        tmp.path(),
+        Some(&bin),
+        r#"{"tool_name":"Bash","tool_input":{"command":"echo secret"}}"#,
+    );
+    assert!(status.success(), "hook exited non-zero: {status:?}");
+
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("hook stdout not JSON: {e}\n{stdout}"));
+
+    // Legacy fields for older Claude Code runtimes.
+    assert_eq!(v["decision"], "deny");
+    assert!(
+        v["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("AWS access key"),
+        "legacy reason missing brain reasoning: {stdout}",
+    );
+
+    // New continueOnBlock envelope so the reasoning surfaces in Claude's
+    // next turn (#249).
+    let hso = &v["hookSpecificOutput"];
+    assert_eq!(hso["hookEventName"], "PreToolUse");
+    assert_eq!(hso["permissionDecision"], "deny");
+    assert_eq!(hso["continueOnBlock"], serde_json::Value::Bool(true));
+    assert!(
+        hso["permissionDecisionReason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("AWS access key"),
+    );
+    assert!(
+        hso["systemMessage"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("AWS access key"),
+    );
+}
+
+#[test]
+fn brain_gate_confident_approve_uses_legacy_envelope_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = install_stub_claudectl(
+        tmp.path(),
+        r#"{"action":"approve","reasoning":"safe read","confidence":0.95,"source":"brain","below_threshold":false}"#,
+    );
+    let (stdout, status) = run_brain_gate(
+        tmp.path(),
+        Some(&bin),
+        r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#,
+    );
+    assert!(status.success());
+
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("approve JSON");
+    assert_eq!(v["decision"], "approve");
+    // We don't need hookSpecificOutput on a confident approval — the tool
+    // call sails through with no extra context noise.
+    assert!(v.get("hookSpecificOutput").is_none(), "stdout: {stdout}");
+}
+
+#[test]
+fn brain_gate_below_threshold_emits_advisory_additional_context() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = install_stub_claudectl(
+        tmp.path(),
+        r#"{"action":"approve","reasoning":"writing to .env — confidence low","confidence":0.4,"source":"brain","below_threshold":true}"#,
+    );
+    let (stdout, status) = run_brain_gate(
+        tmp.path(),
+        Some(&bin),
+        r#"{"tool_name":"Write","tool_input":{"file_path":".env"}}"#,
+    );
+    assert!(status.success());
+
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("advisory JSON");
+    // No decision → does not block; just surfaces context to Claude.
+    assert!(v.get("decision").is_none(), "stdout: {stdout}");
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        ctx.contains("uncertain"),
+        "advisory ctx missing prefix: {ctx}"
+    );
+    assert!(
+        ctx.contains("writing to .env"),
+        "advisory ctx missing reasoning: {ctx}"
+    );
+}
+
+#[test]
+fn brain_gate_off_mode_produces_no_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = install_stub_claudectl(
+        tmp.path(),
+        r#"{"action":"deny","reasoning":"would have blocked","confidence":0.99,"source":"brain","below_threshold":false}"#,
+    );
+    // Flip gate off.
+    let gate_dir = tmp.path().join(".claudectl/brain");
+    std::fs::create_dir_all(&gate_dir).unwrap();
+    std::fs::write(gate_dir.join("gate-mode"), "off").unwrap();
+
+    let (stdout, status) = run_brain_gate(
+        tmp.path(),
+        Some(&bin),
+        r#"{"tool_name":"Bash","tool_input":{"command":"echo secret"}}"#,
+    );
+    assert!(status.success());
+    assert!(
+        stdout.is_empty(),
+        "gate=off must emit nothing, got: {stdout:?}"
+    );
+}
+
+#[test]
+fn brain_gate_missing_claudectl_falls_through_silently() {
+    let tmp = tempfile::tempdir().unwrap();
+    // No stub installed → claudectl not on PATH.
+    let (stdout, status) = run_brain_gate(
+        tmp.path(),
+        None,
+        r#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#,
+    );
+    assert!(status.success());
+    assert!(
+        stdout.is_empty(),
+        "missing claudectl must fall through, got: {stdout:?}",
+    );
+}
+
+#[test]
+fn brain_gate_deny_preserves_special_chars_in_reasoning() {
+    // Brain returns reasoning that includes characters that would have broken
+    // the old sed-based extraction or an unescaped printf: embedded double
+    // quotes, a backslash, and a newline.
+    let tmp = tempfile::tempdir().unwrap();
+    // The brain's own JSON escapes the special chars; the stub emits it raw.
+    let stub_output = r#"{"action":"deny","reasoning":"saw \"AKIA\" prefix and a path C:\\Users\\secret\nrejecting","confidence":0.97,"source":"brain","below_threshold":false}"#;
+    let bin = install_stub_claudectl(tmp.path(), stub_output);
+    let (stdout, status) = run_brain_gate(
+        tmp.path(),
+        Some(&bin),
+        r#"{"tool_name":"Bash","tool_input":{"command":"echo k"}}"#,
+    );
+    assert!(status.success());
+
+    // The hook's stdout must still parse as JSON. This is the regression
+    // gate: prior implementation embedded reasoning into a printf format
+    // string and would corrupt output on quotes/newlines.
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("hook stdout not JSON: {e}\n{stdout}"));
+    assert_eq!(v["decision"], "deny");
+    let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("AKIA"), "reason lost content: {reason}");
+}
