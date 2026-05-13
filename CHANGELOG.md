@@ -2,6 +2,22 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.48.0] - 2026-05-12
+
+### Added
+- **Test-failure feedback loop** -- when a configured test runner (`cargo test`, `npm test`, `pytest`, `go test`, `bun test`, ...) exits non-zero, the reaper fans the failure out to the most recent brain-approved `Edit`/`Write`/`MultiEdit`/`NotebookEdit` decisions in the same project within a 5-minute window and tags them as `DecisionOutcome::TestFailed` (#238). Distillation weights `TestFailed` more strongly than transient `Error` (0.1 vs 0.3 for accepted-but-broken; 2.0 vs 1.5 for rejected-rightly), so a broken build is the strongest negative signal the brain has.
+- **`test_runners` config** -- `[brain]` section accepts an override list; sensible defaults cover the major language runners. Empty list disables fan-out.
+- **`continueOnBlock` for deny reasoning** -- `brain-gate.sh` emits the `hookSpecificOutput.continueOnBlock` envelope alongside the legacy `{decision, reason}` so newer Claude Code surfaces `permissionDecisionReason` and `systemMessage` into the model's next turn instead of blocking opaquely (#249). The brain stops being a wall and starts being a teacher.
+- **Below-threshold approval advisory** -- uncertain approvals (below the adaptive threshold) emit `hookSpecificOutput.additionalContext` so Claude picks up the brain's hesitation without being blocked.
+- **Robust hook output** -- `brain-gate.sh` now prefers `jq` for parsing the brain's response and constructing its envelope, with a manual JSON-escape fallback. Fixes a latent bug where reasoning containing quotes, backslashes, or newlines could corrupt the hook's stdout.
+
+### Technical details
+- `DecisionOutcome::TestFailed(String)` carries the failing test command; backfill overlays it onto `DecisionRecord.outcome` after the consecutive-pair pass so a marker beats a clean tool-error signal.
+- `BrainConfig.test_runners: Vec<String>` parsed from `[brain]` TOML; `default_test_runners()` exposed for tests.
+- Fan-out is idempotent via `create_new` on `test-failures/<decision_id>.json` markers; 5-minute attribution window, capped at 5 recent edits per failure.
+- New hook envelope is unconditional -- Claude Code < 2.1.138 ignores the extra fields and falls back to the legacy deny.
+- 1240 tests passing across all build configurations (12 new for this release).
+
 ## [0.45.0] - 2026-04-28
 
 ### Added
