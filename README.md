@@ -56,7 +56,7 @@ cargo install claudectl                       # Cargo (any platform)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mercurialsolo/claudectl/main/install.sh | sh
 nix run github:mercurialsolo/claudectl
-git clone https://github.com/mercurialsolo/claudectl.git && cd claudectl && cargo install --path .
+git clone https://github.com/linera-io/claudectl.git && cd claudectl && cargo install --path .
 ```
 
 </details>
