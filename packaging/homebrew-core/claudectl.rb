@@ -1,8 +1,8 @@
 class Claudectl < Formula
-  desc "Mission control for Claude Code: supervise, orchestrate, and connect coding agents"
+  desc "Supervise, orchestrate, and connect Claude Code coding agents"
   homepage "https://github.com/mercurialsolo/claudectl"
-  url "https://github.com/mercurialsolo/claudectl/archive/refs/tags/v0.49.2.tar.gz"
-  sha256 "REPLACE_WITH_SHA256_OF_SOURCE_TARBALL"
+  url "https://github.com/mercurialsolo/claudectl/archive/refs/tags/v0.49.3.tar.gz"
+  sha256 "601bad4b04822b5910ddd05833de955d238874476270f0a0a26262a8a513b6fd"
   license "MIT"
   head "https://github.com/mercurialsolo/claudectl.git", branch: "main"
 
