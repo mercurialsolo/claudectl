@@ -504,11 +504,31 @@ enum KnowledgeContent {
 | `TemporalPattern` | Scoped | Time-of-day patterns may be user-specific |
 | `Insight` | Yes | Friction patterns help everyone |
 | Promoted rules | Yes | High-confidence workflow guards |
+| Skills (`Skill` units) | On request | User shares via `claudectl hive share skill` or the TUI's `K` view (≤32 KiB) |
+| Commands (`Command` units) | On request | Same as skills — user-initiated, ≤16 KiB |
+| Hook configs (`HookConfig` units) | On request | User-initiated, ≤4 KiB, never auto-installed on the receiver |
 | Raw decision logs | **No** | Too noisy, contains private context |
 | Decision context snapshots | **No** | Contains cost/model/file details |
 | API keys, credentials | **No** | Obviously not |
 | User-specific overrides | **No** | Personal preference stays personal |
 | Prompt template customizations | **No** | Local customization is intentional |
+
+### Sharing Skills / Commands / Hooks from the TUI
+
+Two equivalent paths:
+
+```bash
+# CLI
+claudectl hive share skill ~/.claude/skills/my-skill/SKILL.md
+claudectl hive share command ~/.claude/commands/review.md
+claudectl hive share hook hook-config.json
+
+# TUI (added in v0.49.2)
+claudectl           # press K to open Skills & Hive
+                    # j/k to highlight a skill, s to share it with the hive
+```
+
+The TUI scans `~/.claude/skills`, `~/.claude/plugins/*/skills`, and `<cwd>/.claude/skills`. A `✓` marker shows which skills are already in the local hive. Shared skills propagate via the normal gossip channels to peers connected through the relay, subject to your sharing filter (`HiveConfig.exclude_content_types`).
 
 ### Distillation Pipeline
 

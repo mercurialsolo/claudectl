@@ -119,6 +119,13 @@ Connect claudectl instances across machines. Share brain learnings, delegate tas
 </div>
 <div class="feature-item" markdown>
 
+### Skills & Hive TUI
+
+Press `K` in the dashboard to discover every Claude Code skill on disk and share it to the hive with one keystroke. Same view also starts a listener, mints invites, and joins peers - no CLI gymnastics. [Learn more](reference.md#skills--hive-mode-k)
+
+</div>
+<div class="feature-item" markdown>
+
 ### Headless Daemon
 
 Run without the TUI via `--headless`. Brain, coordination, and context rot prevention stay active while you work. Attach a dashboard from another terminal anytime.
