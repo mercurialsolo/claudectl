@@ -1864,8 +1864,38 @@ fn build_requires(
     }
 }
 
+/// Share a skill, command, or hook from disk into the local hive store.
+///
+/// Public wrapper around the internal `cmd_share` so callers outside the CLI
+/// dispatch (e.g. the TUI) can share artifacts without duplicating the
+/// frontmatter/scope plumbing. Returns the new unit ID and its summary line.
+pub fn share_artifact_from_path(
+    content_type: &str,
+    path: &str,
+    scope_str: &str,
+) -> io::Result<(String, String)> {
+    share_inner(content_type, path, scope_str)
+}
+
 /// `claudectl hive share <type> <path> [--scope X]`
 fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -> io::Result<()> {
+    let (unit_id, summary) = share_inner(content_type, path, scope_str)?;
+    if json_mode {
+        let output = serde_json::json!({
+            "action": "shared",
+            "unit_id": unit_id,
+            "content_type": content_type,
+            "summary": summary,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("Shared {content_type}: {summary}");
+        println!("  Unit ID: {unit_id}");
+    }
+    Ok(())
+}
+
+fn share_inner(content_type: &str, path: &str, scope_str: &str) -> io::Result<(String, String)> {
     let body =
         std::fs::read_to_string(path).map_err(|e| io::Error::other(format!("read {path}: {e}")))?;
 
@@ -2024,20 +2054,7 @@ fn cmd_share(content_type: &str, path: &str, scope_str: &str, json_mode: bool) -
     #[cfg(feature = "relay")]
     super::signal_new_knowledge(1);
 
-    if json_mode {
-        let output = serde_json::json!({
-            "action": "shared",
-            "unit_id": unit_id,
-            "content_type": content_type,
-            "summary": summary,
-        });
-        println!("{}", serde_json::to_string_pretty(&output).unwrap());
-    } else {
-        println!("Shared {content_type}: {summary}");
-        println!("  Unit ID: {unit_id}");
-    }
-
-    Ok(())
+    Ok((unit_id, summary))
 }
 
 /// Outcome of an artifact write — used by both interactive install and auto-accept.

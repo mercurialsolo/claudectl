@@ -344,6 +344,54 @@ pub struct App {
     /// Remote sessions received from connected worker peers (relay heartbeats).
     #[cfg(feature = "relay")]
     pub remote_sessions: Vec<crate::session::ClaudeSession>,
+
+    // ── Skills & Hive overlay state ────────────────────────────────────────
+    /// Whether the skills/hive overlay is open.
+    pub show_skills: bool,
+    /// Which tab is currently active inside the overlay.
+    pub skills_tab: SkillsTab,
+    /// Currently selected index into `skills`.
+    pub skills_selected: usize,
+    /// Discovered skills (refreshed when the overlay opens or `r` is pressed).
+    pub skills: Vec<crate::skills::DiscoveredSkill>,
+    /// Semantic keys (`skill:<name>`) for skills already present in the hive store.
+    pub shared_skill_keys: std::collections::HashSet<String>,
+    /// Transient status message shown in the overlay footer.
+    pub skills_status_msg: Option<String>,
+    /// True when a `claudectl relay serve` subprocess has been started from the TUI.
+    pub hive_listener_running: bool,
+    /// Local peer identity, populated when the Hive tab is opened.
+    pub hive_identity: Option<String>,
+    /// Known peers from the local relay state (peer id, optional last address).
+    pub hive_known_peers: Vec<(String, Option<String>)>,
+    /// Last invite generated from the TUI (held in memory only).
+    pub hive_last_invite: Option<HiveInvite>,
+    /// When true, the overlay captures text input for a join code.
+    pub hive_join_input_mode: bool,
+    /// Buffer for the join input.
+    pub hive_join_buffer: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillsTab {
+    Skills,
+    Hive,
+}
+
+impl SkillsTab {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Skills => Self::Hive,
+            Self::Hive => Self::Skills,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HiveInvite {
+    pub relay_code: String,
+    pub invite_link: String,
+    pub word_phrase: String,
 }
 
 #[derive(Default, Clone)]
@@ -482,6 +530,18 @@ impl App {
             relay_peers: Vec::new(),
             #[cfg(feature = "relay")]
             remote_sessions: Vec::new(),
+            show_skills: false,
+            skills_tab: SkillsTab::Skills,
+            skills_selected: 0,
+            skills: Vec::new(),
+            shared_skill_keys: std::collections::HashSet::new(),
+            skills_status_msg: None,
+            hive_listener_running: false,
+            hive_identity: None,
+            hive_known_peers: Vec::new(),
+            hive_last_invite: None,
+            hive_join_input_mode: false,
+            hive_join_buffer: String::new(),
         };
         #[cfg(feature = "coord")]
         app.coord_refresh();
@@ -1711,6 +1771,12 @@ impl App {
             return true;
         }
 
+        // Skills overlay: dedicated keymap (j/k navigate, s share, h serve, r rescan, Esc/K close)
+        if self.show_skills {
+            self.handle_skills_key(key);
+            return true;
+        }
+
         // Override reason prompt: waiting for 1/2/3/Esc
         if self.pending_override_reason.is_some() {
             match key.code {
@@ -1807,6 +1873,205 @@ impl App {
         }
     }
 
+    pub fn open_skills_overlay(&mut self) {
+        self.refresh_skills();
+        self.refresh_hive_view();
+        self.skills_selected = 0;
+        self.skills_status_msg = None;
+        self.hive_join_input_mode = false;
+        self.hive_join_buffer.clear();
+        self.show_skills = true;
+    }
+
+    pub fn refresh_skills(&mut self) {
+        let cwd = std::env::current_dir().ok();
+        self.skills = crate::skills::discover(cwd.as_deref());
+        self.shared_skill_keys = load_shared_skill_keys();
+        if self.skills_selected >= self.skills.len() {
+            self.skills_selected = self.skills.len().saturating_sub(1);
+        }
+    }
+
+    pub fn refresh_hive_view(&mut self) {
+        let snapshot = load_hive_view_snapshot();
+        self.hive_identity = snapshot.identity;
+        self.hive_known_peers = snapshot.peers;
+    }
+
+    fn handle_skills_key(&mut self, key: KeyEvent) {
+        if self.hive_join_input_mode {
+            self.handle_hive_join_input(key);
+            return;
+        }
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) | (KeyCode::Char('K'), _) | (KeyCode::Char('q'), _) => {
+                self.show_skills = false;
+                self.skills_status_msg = None;
+                return;
+            }
+            (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {
+                self.skills_tab = self.skills_tab.toggle();
+                self.skills_status_msg = None;
+                return;
+            }
+            _ => {}
+        }
+
+        match self.skills_tab {
+            SkillsTab::Skills => self.handle_skills_tab_key(key),
+            SkillsTab::Hive => self.handle_hive_tab_key(key),
+        }
+    }
+
+    fn handle_skills_tab_key(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('j'), _) | (KeyCode::Down, _)
+                if !self.skills.is_empty() && self.skills_selected + 1 < self.skills.len() =>
+            {
+                self.skills_selected += 1;
+            }
+            (KeyCode::Char('k'), _) | (KeyCode::Up, _) if self.skills_selected > 0 => {
+                self.skills_selected -= 1;
+            }
+            (KeyCode::Char('r'), _) => {
+                self.refresh_skills();
+                self.skills_status_msg = Some(format!("Rescanned: {} skills", self.skills.len()));
+            }
+            (KeyCode::Char('s'), _) => {
+                self.share_selected_skill();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_hive_tab_key(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('h'), _) => {
+                self.start_hive_listener();
+                self.refresh_hive_view();
+            }
+            (KeyCode::Char('i'), _) => {
+                self.generate_hive_invite();
+            }
+            (KeyCode::Char('J'), _) => {
+                self.hive_join_input_mode = true;
+                self.hive_join_buffer.clear();
+                self.skills_status_msg =
+                    Some("Paste invite (relay code, link, or word phrase); Enter to join".into());
+            }
+            (KeyCode::Char('r'), _) => {
+                self.refresh_hive_view();
+                self.skills_status_msg =
+                    Some(format!("Known peers: {}", self.hive_known_peers.len()));
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_hive_join_input(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                let code = self.hive_join_buffer.trim().to_string();
+                self.hive_join_input_mode = false;
+                if code.is_empty() {
+                    self.skills_status_msg = Some("Join cancelled (empty)".into());
+                    return;
+                }
+                match spawn_relay_join(&code) {
+                    Ok(()) => {
+                        self.skills_status_msg = Some(format!(
+                            "Join started (claudectl relay join {} detached)",
+                            short_id(&code)
+                        ));
+                    }
+                    Err(e) => {
+                        self.skills_status_msg = Some(format!("Join failed: {e}"));
+                    }
+                }
+                self.hive_join_buffer.clear();
+            }
+            KeyCode::Esc => {
+                self.hive_join_input_mode = false;
+                self.hive_join_buffer.clear();
+                self.skills_status_msg = Some("Join cancelled".into());
+            }
+            KeyCode::Backspace => {
+                self.hive_join_buffer.pop();
+            }
+            KeyCode::Char(c) if self.hive_join_buffer.len() < 256 => {
+                self.hive_join_buffer.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    fn generate_hive_invite(&mut self) {
+        match generate_invite_via_cli() {
+            Ok(invite) => {
+                self.skills_status_msg = Some(format!("Invite: {}", invite.relay_code));
+                self.hive_last_invite = Some(invite);
+            }
+            Err(e) => {
+                self.skills_status_msg = Some(format!("Invite failed: {e}"));
+            }
+        }
+    }
+
+    fn share_selected_skill(&mut self) {
+        let Some(skill) = self.skills.get(self.skills_selected).cloned() else {
+            self.skills_status_msg = Some("No skill selected".into());
+            return;
+        };
+        if !cfg!(feature = "hive") {
+            self.skills_status_msg = Some("hive feature disabled in this build".into());
+            return;
+        }
+        if !skill.within_share_limit() {
+            self.skills_status_msg = Some("Skill exceeds 32kb share limit".into());
+            return;
+        }
+        if self.shared_skill_keys.contains(&skill.semantic_key()) {
+            self.skills_status_msg = Some("Already shared".into());
+            return;
+        }
+        match share_skill_to_hive(&skill) {
+            Ok(unit_id) => {
+                self.shared_skill_keys.insert(skill.semantic_key());
+                self.skills_status_msg = Some(format!(
+                    "Shared '{}' → unit {}",
+                    skill.name,
+                    short_id(&unit_id)
+                ));
+            }
+            Err(e) => {
+                self.skills_status_msg = Some(format!("Share failed: {e}"));
+            }
+        }
+    }
+
+    fn start_hive_listener(&mut self) {
+        if !cfg!(feature = "relay") {
+            self.skills_status_msg =
+                Some("relay feature not built — rebuild with --features relay,hive".into());
+            return;
+        }
+        if self.hive_listener_running {
+            self.skills_status_msg = Some("Hive listener already running".into());
+            return;
+        }
+        match spawn_relay_serve() {
+            Ok(()) => {
+                self.hive_listener_running = true;
+                self.skills_status_msg =
+                    Some("Hive listener started (claudectl relay serve detached)".into());
+            }
+            Err(e) => {
+                self.skills_status_msg = Some(format!("Start failed: {e}"));
+            }
+        }
+    }
+
     fn handle_normal_key(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => {
@@ -1873,6 +2138,11 @@ impl App {
                 self.cancel_pending_kill();
                 self.cancel_pending_auto_approve();
                 self.show_help = !self.show_help;
+            }
+            (KeyCode::Char('K'), _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.open_skills_overlay();
             }
             (KeyCode::Char('s'), _) => {
                 self.cancel_pending_kill();
@@ -2451,6 +2721,173 @@ impl App {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         result
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Skills overlay helpers — kept at module scope so the App methods stay short.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Collect semantic keys for skills already in the local hive store.
+///
+/// The hive `semantic_key` is `<scope>/skill:<lowered-name>`; we strip the
+/// scope prefix here because `DiscoveredSkill::semantic_key()` is scope-less.
+fn load_shared_skill_keys() -> std::collections::HashSet<String> {
+    #[cfg(feature = "hive")]
+    {
+        let store = crate::hive::store::HiveStore::load();
+        let mut out = std::collections::HashSet::new();
+        for unit in store.all_units() {
+            if let crate::hive::KnowledgeContent::Skill { name, .. } = &unit.content {
+                out.insert(format!("skill:{}", name.to_lowercase().replace(' ', "-")));
+            }
+        }
+        out
+    }
+    #[cfg(not(feature = "hive"))]
+    {
+        std::collections::HashSet::new()
+    }
+}
+
+/// Share a discovered skill into the local hive store. Returns the new unit ID.
+fn share_skill_to_hive(skill: &crate::skills::DiscoveredSkill) -> Result<String, String> {
+    #[cfg(feature = "hive")]
+    {
+        let path_str = skill.path.to_string_lossy().to_string();
+        crate::hive::cli::share_artifact_from_path("skill", &path_str, "universal")
+            .map(|(unit_id, _summary)| unit_id)
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(feature = "hive"))]
+    {
+        let _ = skill;
+        Err("hive feature disabled".into())
+    }
+}
+
+/// Detach a `claudectl relay serve` child so the TUI keeps running.
+#[cfg(feature = "relay")]
+fn spawn_relay_serve() -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    Command::new(std::env::current_exe().unwrap_or_else(|_| "claudectl".into()))
+        .args(["relay", "serve"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "relay"))]
+fn spawn_relay_serve() -> Result<(), String> {
+    Err("relay feature not built".into())
+}
+
+/// Detach a `claudectl relay join <code>` child so the TUI keeps running.
+#[cfg(feature = "relay")]
+fn spawn_relay_join(code: &str) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    Command::new(std::env::current_exe().unwrap_or_else(|_| "claudectl".into()))
+        .args(["relay", "join", code])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "relay"))]
+fn spawn_relay_join(_code: &str) -> Result<(), String> {
+    Err("relay feature not built".into())
+}
+
+/// Snapshot of local hive state the overlay reads to render the Hive tab.
+pub struct HiveViewSnapshot {
+    pub identity: Option<String>,
+    /// (peer_id, optional last-known address)
+    pub peers: Vec<(String, Option<String>)>,
+}
+
+#[cfg(feature = "relay")]
+fn load_hive_view_snapshot() -> HiveViewSnapshot {
+    let identity = Some(crate::relay::load_or_create_identity().as_str().to_string());
+    let peers = crate::relay::list_known_peers()
+        .into_iter()
+        .map(|id| {
+            let addr = crate::relay::load_peer_meta(&id).and_then(|v| {
+                v.get("addr")
+                    .and_then(|a| a.as_str())
+                    .map(|s| s.to_string())
+            });
+            (id, addr)
+        })
+        .collect();
+    HiveViewSnapshot { identity, peers }
+}
+
+#[cfg(not(feature = "relay"))]
+fn load_hive_view_snapshot() -> HiveViewSnapshot {
+    HiveViewSnapshot {
+        identity: None,
+        peers: Vec::new(),
+    }
+}
+
+/// Shell out to `claudectl relay invite --json` and parse the result. We use
+/// the existing CLI path rather than re-implementing because invite generation
+/// has multiple components (crypto, LAN-IP detection, encoding) that already
+/// live there.
+#[cfg(feature = "relay")]
+fn generate_invite_via_cli() -> Result<HiveInvite, String> {
+    use std::process::Command;
+    let bin = std::env::current_exe().map_err(|e| e.to_string())?;
+    let output = Command::new(bin)
+        .args(["--json", "relay", "invite", "--words"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| e.to_string())?;
+    let relay_code = parsed
+        .get("relay_code")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let invite_link = parsed
+        .get("invite_link")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let word_phrase = parsed
+        .get("word_phrase")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if relay_code.is_empty() {
+        return Err("invite payload missing relay_code".into());
+    }
+    Ok(HiveInvite {
+        relay_code,
+        invite_link,
+        word_phrase,
+    })
+}
+
+#[cfg(not(feature = "relay"))]
+fn generate_invite_via_cli() -> Result<HiveInvite, String> {
+    Err("relay feature not built".into())
+}
+
+fn short_id(id: &str) -> String {
+    if id.len() <= 12 {
+        id.to_string()
+    } else {
+        format!("{}…", &id[..11])
     }
 }
 

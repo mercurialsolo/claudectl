@@ -31,6 +31,7 @@ pub mod relay;
 pub mod rules;
 pub mod session;
 pub mod session_recorder;
+pub mod skills;
 pub mod terminals;
 pub mod theme;
 pub mod transcript;

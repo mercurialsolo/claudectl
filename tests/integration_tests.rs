@@ -1575,12 +1575,19 @@ fn run_brain_gate(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     let mut child = cmd.spawn().expect("spawn bash");
-    child
+    // BrokenPipe is expected when the hook exits before reading stdin (e.g.
+    // the missing-claudectl path returns at line 21 of brain-gate.sh, before
+    // the `cat` that consumes stdin). Treat it like the parent's job is done.
+    match child
         .stdin
         .as_mut()
         .unwrap()
         .write_all(stdin_payload.as_bytes())
-        .unwrap();
+    {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(e) => panic!("write_all failed: {e:?}"),
+    }
     let output = child.wait_with_output().expect("hook output");
     (
         String::from_utf8(output.stdout).expect("utf8 stdout"),

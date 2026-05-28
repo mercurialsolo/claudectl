@@ -111,6 +111,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw("  Force refresh"),
         ]),
         Line::from(vec![
+            Span::styled("  K              ", Style::default().fg(t.highlight_key)),
+            Span::raw("  Skills & Hive — list skills, share to hive, start/invite/join"),
+        ]),
+        Line::from(vec![
             Span::styled("  ?              ", Style::default().fg(t.highlight_key)),
             Span::raw("  Toggle this help"),
         ]),

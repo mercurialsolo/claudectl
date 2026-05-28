@@ -68,7 +68,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                         .fg(t.highlight_key)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" for help.", Style::default().fg(t.text_muted)),
+                Span::styled(" for help, ", Style::default().fg(t.text_muted)),
+                Span::styled(
+                    "K",
+                    Style::default()
+                        .fg(t.highlight_key)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" for Skills & Hive.", Style::default().fg(t.text_muted)),
             ]),
         ];
 
@@ -306,11 +313,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         // Contextual hints based on selected session state
         let hint = match app.selected_session().map(|s| s.status) {
             Some(SessionStatus::NeedsInput) => {
-                "  y:approve i:type c:compact R:record Tab:go f/v:filter /:search z:clear d:kill ?:help".to_string()
+                "  y:approve i:type c:compact R:record Tab:go f/v:filter /:search z:clear d:kill K:skills ?:help".to_string()
             }
             _ => {
                 format!(
-                    "  q:quit j/k:nav Tab:go y:approve i:input c:compact R:record f/v:filter /:search z:clear d:kill s:sort({sort_name}) ?:help"
+                    "  q:quit j/k:nav Tab:go y:approve i:input c:compact R:record f/v:filter /:search z:clear d:kill s:sort({sort_name}) K:skills ?:help"
                 )
             }
         };
