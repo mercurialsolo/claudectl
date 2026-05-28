@@ -46,9 +46,37 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 | `R` | Record session highlight reel (toggle) |
 | `b` | Accept brain suggestion for selected session |
 | `B` | Reject brain suggestion |
+| `K` | Open Skills & Hive mode (see below) |
 | `r` | Force refresh |
 | `?` | Toggle help overlay |
 | `q`/`Esc` | Quit |
+
+### Skills & Hive mode (`K`)
+
+A full-screen mode for discovering Claude Code skills and managing the local hive. Two tabs, toggle with `Tab`.
+
+**Skills tab** scans `~/.claude/skills`, `~/.claude/plugins/*/skills`, and `<cwd>/.claude/skills`. A `✓` marks skills already in the local hive store. Hotkeys:
+
+| Key | Action |
+|-----|--------|
+| `j`/`k` | Navigate the skill list |
+| `s` | Share selected skill with the local hive (must be ≤32 KiB) |
+| `r` | Re-scan disk |
+| `Tab` | Switch to Hive tab |
+| `Esc`/`K`/`q` | Return to session table |
+
+**Hive tab** shows your peer identity, listener status, and known peers (read from `~/.claudectl/relay/peers/`). Hotkeys:
+
+| Key | Action |
+|-----|--------|
+| `h` | Start hive listener (spawns `claudectl relay serve` detached) |
+| `i` | Generate invite — relay code, word phrase, and invite link shown inline |
+| `J` | Join via a pasted relay code, invite link, or word phrase |
+| `r` | Refresh peer list |
+| `Tab` | Switch to Skills tab |
+| `Esc`/`K`/`q` | Return to session table |
+
+Long-running relay subprocesses run detached so the TUI event loop stays responsive. Requires the `relay` feature to be built in.
 
 ## CLI Reference
 
