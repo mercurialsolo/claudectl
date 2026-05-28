@@ -1926,15 +1926,13 @@ impl App {
 
     fn handle_skills_tab_key(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
-            (KeyCode::Char('j'), _) | (KeyCode::Down, _) => {
-                if !self.skills.is_empty() && self.skills_selected + 1 < self.skills.len() {
-                    self.skills_selected += 1;
-                }
+            (KeyCode::Char('j'), _) | (KeyCode::Down, _)
+                if !self.skills.is_empty() && self.skills_selected + 1 < self.skills.len() =>
+            {
+                self.skills_selected += 1;
             }
-            (KeyCode::Char('k'), _) | (KeyCode::Up, _) => {
-                if self.skills_selected > 0 {
-                    self.skills_selected -= 1;
-                }
+            (KeyCode::Char('k'), _) | (KeyCode::Up, _) if self.skills_selected > 0 => {
+                self.skills_selected -= 1;
             }
             (KeyCode::Char('r'), _) => {
                 self.refresh_skills();
@@ -2001,10 +1999,8 @@ impl App {
             KeyCode::Backspace => {
                 self.hive_join_buffer.pop();
             }
-            KeyCode::Char(c) => {
-                if self.hive_join_buffer.len() < 256 {
-                    self.hive_join_buffer.push(c);
-                }
+            KeyCode::Char(c) if self.hive_join_buffer.len() < 256 => {
+                self.hive_join_buffer.push(c);
             }
             _ => {}
         }

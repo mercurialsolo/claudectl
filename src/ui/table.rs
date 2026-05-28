@@ -75,10 +75,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                         .fg(t.highlight_key)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    " for Skills & Hive.",
-                    Style::default().fg(t.text_muted),
-                ),
+                Span::styled(" for Skills & Hive.", Style::default().fg(t.text_muted)),
             ]),
         ];
 

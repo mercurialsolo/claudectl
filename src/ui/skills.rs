@@ -22,9 +22,7 @@ pub fn render_skills_screen(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" claudectl ", Style::default().fg(t.text_primary)),
         Span::styled(
             "│ Skills & Hive ",
-            Style::default()
-                .fg(t.header)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.header).add_modifier(Modifier::BOLD),
         ),
     ]);
     let block = Block::default()
@@ -384,9 +382,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         if !msg.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!(" {msg}"),
-                Style::default()
-                    .fg(t.success)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.success).add_modifier(Modifier::BOLD),
             )));
         }
     }
