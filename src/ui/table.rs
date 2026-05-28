@@ -90,6 +90,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         if app.show_help {
             render_help_overlay(frame, area, app);
         }
+        if app.show_skills {
+            super::skills::render_skills_overlay(frame, area, app);
+        }
         return;
     }
 
@@ -126,6 +129,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
         if app.show_help {
             render_help_overlay(frame, area, app);
+        }
+        if app.show_skills {
+            super::skills::render_skills_overlay(frame, area, app);
         }
         return;
     }
@@ -421,6 +427,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // Help overlay
     if app.show_help {
         render_help_overlay(frame, area, app);
+    }
+    if app.show_skills {
+        super::skills::render_skills_overlay(frame, area, app);
     }
 }
 

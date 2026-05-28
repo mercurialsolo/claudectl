@@ -32,6 +32,7 @@ mod relay;
 mod rules;
 mod session;
 mod session_recorder;
+mod skills;
 mod terminals;
 mod theme;
 mod transcript;

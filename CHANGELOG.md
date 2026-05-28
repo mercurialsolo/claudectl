@@ -2,6 +2,20 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.49.0] - 2026-05-27
+
+### Added
+- **Skills & Hive TUI overlay** — press `K` from the TUI to open a Skills & Hive panel. Two tabs (Tab to switch):
+  - **Skills tab** lists every Claude Code skill on disk (scans `~/.claude/skills`, `~/.claude/plugins/*/skills`, and `<cwd>/.claude/skills`). A `✓` marker shows which skills are already shared with the local hive; `s` shares the highlighted skill via the existing hive pipeline. Honours the 32 KiB skill-share limit and surfaces a warning when a skill exceeds it.
+  - **Hive tab** shows local identity, listener status, and known peers (read from `~/.claudectl/relay/peers/`). Hotkeys: `h` start hive listener (spawns detached `claudectl relay serve`), `i` generate an invite (relay code, word phrase, and invite link, shown inline), `J` join a hive via pasted code/link/words (detached `claudectl relay join`), `r` refresh peers.
+- **`hive::cli::share_artifact_from_path()`** — public wrapper around the previously private CLI-only `cmd_share` so callers outside the dispatch table (the new TUI overlay) can share skills/commands/hooks without reimplementing frontmatter + scope parsing.
+- **`src/skills.rs`** — new skill discovery module with YAML frontmatter parsing, source classification (user / plugin / project), and a shared-key lookup that aligns with the hive's `skill:<lowercased-name>` semantic key.
+
+### Technical details
+- Detached subprocess spawning for `relay serve` and `relay join` keeps the TUI event loop responsive; the invite generator shells out to `claudectl --json relay invite --words` and parses the JSON envelope.
+- New module wired into `src/lib.rs`, `src/main.rs`, and `src/ui/mod.rs`; help overlay (`?`) gains a `K` entry.
+- 585 tests passing (5 new: 3 for the skills module, 2 for the overlay rendering).
+
 ## [0.48.0] - 2026-05-12
 
 ### Added
