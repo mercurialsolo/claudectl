@@ -41,7 +41,8 @@ mod ui;
 use std::io;
 use std::time::{Duration, Instant};
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use crossterm::{
     event::{self, Event},
     execute,
@@ -80,6 +81,16 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: coord::cli::CoordCommand,
     },
+
+    /// Print a shell completion script for the given shell (bash, zsh, fish, …) to stdout
+    Completions {
+        /// Shell to emit completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+
+    /// Print a roff-formatted man page to stdout
+    Man,
 }
 
 #[derive(Parser)]
@@ -590,6 +601,21 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
             #[cfg(feature = "coord")]
             Command::Coord { command } => return coord::cli::dispatch_command(command, cli.json),
+
+            Command::Completions { shell } => {
+                let mut cmd = Cli::command();
+                let name = cmd.get_name().to_string();
+                clap_complete::generate(*shell, &mut cmd, name, &mut io::stdout());
+                return Ok(());
+            }
+
+            Command::Man => {
+                let cmd = Cli::command();
+                clap_mangen::Man::new(cmd)
+                    .render(&mut io::stdout())
+                    .map_err(io::Error::other)?;
+                return Ok(());
+            }
         }
     }
 
