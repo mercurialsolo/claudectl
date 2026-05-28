@@ -1,36 +1,38 @@
-// TUI overlay: lists Claude Code skills discovered on disk and, on its second
-// tab, exposes hive controls (identity, peers, invite, join, start). All
-// hive-side actions resolve to `claudectl relay …` subprocesses so the TUI
-// event loop stays responsive.
+// Full-screen Skills & Hive mode. When `app.show_skills` is set, the main
+// draw loop hands the whole frame to `render_skills_screen` instead of the
+// session table. Two tabs: Skills (discovered Claude Code skills + share)
+// and Hive (identity, peers, invite, join, start listener). All hive-side
+// actions resolve to `claudectl relay …` subprocesses so the TUI event loop
+// stays responsive.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::app::{App, SkillsTab};
 use crate::skills::DiscoveredSkill;
 use crate::theme::Theme;
 
-use super::help::centered_rect;
-
-pub fn render_skills_overlay(frame: &mut Frame, area: Rect, app: &App) {
+pub fn render_skills_screen(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.theme;
-    let popup = centered_rect(82, 82, area);
 
-    frame.render_widget(Clear, popup);
-
-    let title = match app.skills_tab {
-        SkillsTab::Skills => " Skills & Hive — Skills ",
-        SkillsTab::Hive => " Skills & Hive — Hive ",
-    };
-    let outer = Block::default()
+    let title = Line::from(vec![
+        Span::styled(" claudectl ", Style::default().fg(t.text_primary)),
+        Span::styled(
+            "│ Skills & Hive ",
+            Style::default()
+                .fg(t.header)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(t.header));
-    let inner = outer.inner(popup);
-    frame.render_widget(outer, popup);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -38,7 +40,7 @@ pub fn render_skills_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Constraint::Length(2), // tab row
             Constraint::Length(2), // header
             Constraint::Min(3),    // body
-            Constraint::Length(8), // footer
+            Constraint::Length(9), // footer
         ])
         .split(inner);
 

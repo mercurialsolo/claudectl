@@ -2,6 +2,12 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.49.1] - 2026-05-27
+
+### Changed
+- **Skills & Hive is now a full-screen mode**, not a centered overlay. Pressing `K` swaps the entire frame from the session table to the Skills & Hive view; `Esc` / `K` / `q` returns to the table. Same two tabs (Skills, Hive) and same hotkeys as before.
+- **`K:skills` hint added to the bottom footer** of the session table so the shortcut is discoverable. Empty-state hint (no sessions) also calls out `K`.
+
 ## [0.49.0] - 2026-05-27
 
 ### Added

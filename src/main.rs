@@ -872,6 +872,12 @@ fn run_tui<W: io::Write>(
         terminal.draw(|frame| {
             let area = frame.area();
 
+            // Full-screen mode: Skills & Hive takes over the entire frame.
+            if app.show_skills {
+                ui::skills::render_skills_screen(frame, area, &app);
+                return;
+            }
+
             #[cfg(feature = "relay")]
             let main_area = if app.show_peers_panel {
                 let chunks = ratatui::layout::Layout::default()
