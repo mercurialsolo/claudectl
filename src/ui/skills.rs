@@ -34,13 +34,26 @@ pub fn render_skills_screen(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Footer height adapts to whether there's a transient status message;
+    // either way it stays anchored to the bottom because the body uses Min.
+    let footer_height = if app
+        .skills_status_msg
+        .as_deref()
+        .map(|m| !m.is_empty())
+        .unwrap_or(false)
+    {
+        2
+    } else {
+        1
+    };
+
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // tab row
-            Constraint::Length(2), // header
-            Constraint::Min(3),    // body
-            Constraint::Length(9), // footer
+            Constraint::Length(2),             // tab row
+            Constraint::Length(2),             // header
+            Constraint::Min(3),                // body (list + detail)
+            Constraint::Length(footer_height), // hint strip
         ])
         .split(inner);
 
@@ -145,6 +158,12 @@ fn render_skills_body(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
+    // Split body into the list (top) and a 2-line selected-skill detail (bottom).
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(2)])
+        .split(area);
+
     let items: Vec<ListItem> = app
         .skills
         .iter()
@@ -159,7 +178,39 @@ fn render_skills_body(frame: &mut Frame, area: Rect, app: &App) {
     let list = List::new(items)
         .highlight_style(Style::default().fg(t.header).add_modifier(Modifier::BOLD))
         .highlight_symbol("▶ ");
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, chunks[0], &mut state);
+
+    let detail = if let Some(s) = app.skills.get(app.skills_selected) {
+        let shared = crate::skills::is_shared(s, &app.shared_skill_keys);
+        let status = if shared {
+            "✓ already shared with hive"
+        } else if !s.within_share_limit() {
+            "⚠ too large to share (>32kb)"
+        } else if !cfg!(feature = "hive") {
+            "hive feature disabled in this build"
+        } else {
+            "press s to share with hive"
+        };
+        vec![
+            Line::from(vec![
+                Span::styled("Path:   ", Style::default().fg(t.text_muted)),
+                Span::styled(
+                    s.path.display().to_string(),
+                    Style::default().fg(t.text_primary),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(t.text_muted)),
+                Span::styled(status, Style::default().fg(t.text_primary)),
+            ]),
+        ]
+    } else {
+        vec![Line::from(Span::styled(
+            "Select a skill with j/k.",
+            Style::default().fg(t.text_muted),
+        ))]
+    };
+    frame.render_widget(Paragraph::new(detail), chunks[1]);
 }
 
 fn render_hive_body(frame: &mut Frame, area: Rect, app: &App) {
@@ -292,88 +343,55 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Thin hint strip pinned to the bottom of the screen. Line 1 is the
+/// hotkey legend for the active tab; line 2 (if present) is a transient
+/// status message. The body section uses `Min` so this stays at the bottom.
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.theme;
     let mut lines = Vec::new();
 
-    match app.skills_tab {
-        SkillsTab::Skills => {
-            if let Some(s) = app.skills.get(app.skills_selected) {
-                let shared = crate::skills::is_shared(s, &app.shared_skill_keys);
-                lines.push(Line::from(vec![
-                    Span::styled("Path: ", Style::default().fg(t.text_muted)),
-                    Span::styled(
-                        s.path.display().to_string(),
-                        Style::default().fg(t.text_primary),
-                    ),
-                ]));
-                let status = if shared {
-                    "✓ already shared with hive"
-                } else if !s.within_share_limit() {
-                    "⚠ too large to share (>32kb)"
-                } else if !cfg!(feature = "hive") {
-                    "hive feature disabled in this build"
-                } else {
-                    "press s to share with hive"
-                };
-                lines.push(Line::from(vec![
-                    Span::styled("Status: ", Style::default().fg(t.text_muted)),
-                    Span::styled(status, Style::default().fg(t.text_primary)),
-                ]));
-            } else {
-                lines.push(Line::from(Span::styled(
-                    "Select a skill with j/k.",
-                    Style::default().fg(t.text_muted),
-                )));
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("  j/k", Style::default().fg(t.highlight_key)),
-                Span::raw("  navigate     "),
-                Span::styled("s", Style::default().fg(t.highlight_key)),
-                Span::raw("  share with hive     "),
-                Span::styled("r", Style::default().fg(t.highlight_key)),
-                Span::raw("  rescan     "),
-                Span::styled("Tab", Style::default().fg(t.highlight_key)),
-                Span::raw("  Hive view     "),
-                Span::styled("Esc/K", Style::default().fg(t.highlight_key)),
-                Span::raw("  close"),
-            ]));
-        }
-        SkillsTab::Hive => {
-            lines.push(Line::from(Span::styled(
-                "Manage your hive — start a listener, invite peers, or join an existing one.",
-                Style::default().fg(t.text_muted),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("  h", Style::default().fg(t.highlight_key)),
-                Span::raw("  start listener     "),
-                Span::styled("i", Style::default().fg(t.highlight_key)),
-                Span::raw("  generate invite     "),
-                Span::styled("J", Style::default().fg(t.highlight_key)),
-                Span::raw("  join via code     "),
-                Span::styled("r", Style::default().fg(t.highlight_key)),
-                Span::raw("  refresh peers     "),
-                Span::styled("Tab", Style::default().fg(t.highlight_key)),
-                Span::raw("  Skills view     "),
-                Span::styled("Esc/K", Style::default().fg(t.highlight_key)),
-                Span::raw("  close"),
-            ]));
-        }
-    }
+    let hint = match app.skills_tab {
+        SkillsTab::Skills => Line::from(vec![
+            Span::styled(" j/k", Style::default().fg(t.highlight_key)),
+            Span::raw(":nav  "),
+            Span::styled("s", Style::default().fg(t.highlight_key)),
+            Span::raw(":share  "),
+            Span::styled("r", Style::default().fg(t.highlight_key)),
+            Span::raw(":rescan  "),
+            Span::styled("Tab", Style::default().fg(t.highlight_key)),
+            Span::raw(":Hive  "),
+            Span::styled("Esc/K", Style::default().fg(t.highlight_key)),
+            Span::raw(":close"),
+        ]),
+        SkillsTab::Hive => Line::from(vec![
+            Span::styled(" h", Style::default().fg(t.highlight_key)),
+            Span::raw(":start  "),
+            Span::styled("i", Style::default().fg(t.highlight_key)),
+            Span::raw(":invite  "),
+            Span::styled("J", Style::default().fg(t.highlight_key)),
+            Span::raw(":join  "),
+            Span::styled("r", Style::default().fg(t.highlight_key)),
+            Span::raw(":refresh  "),
+            Span::styled("Tab", Style::default().fg(t.highlight_key)),
+            Span::raw(":Skills  "),
+            Span::styled("Esc/K", Style::default().fg(t.highlight_key)),
+            Span::raw(":close"),
+        ]),
+    };
+    lines.push(hint);
 
     if let Some(msg) = &app.skills_status_msg {
         if !msg.is_empty() {
             lines.push(Line::from(Span::styled(
-                format!("  {msg}"),
-                Style::default().fg(t.success).add_modifier(Modifier::BOLD),
+                format!(" {msg}"),
+                Style::default()
+                    .fg(t.success)
+                    .add_modifier(Modifier::BOLD),
             )));
         }
     }
 
-    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
-    frame.render_widget(para, area);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 #[cfg(test)]

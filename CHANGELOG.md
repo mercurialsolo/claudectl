@@ -2,6 +2,11 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.49.2] - 2026-05-27
+
+### Fixed
+- **Skills & Hive footer now sticks to the bottom** of the screen. The previous version reserved 9 rows for the footer but only filled 3–4, leaving a band of empty space above the bottom border. Restructured so the body uses `Min` and the hint strip is a tight 1–2 rows pinned at the bottom; selected-skill detail (path + status) moves into the body section above the hint.
+
 ## [0.49.1] - 2026-05-27
 
 ### Changed
