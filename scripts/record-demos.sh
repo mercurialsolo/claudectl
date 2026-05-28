@@ -13,6 +13,7 @@
 #   health     - Health monitoring showcase (~20s)
 #   brain      - Brain + rules showcase (~26s)
 #   overview   - Quick dashboard overview (~12s)
+#   skills     - Skills & Hive mode (~30s, requires CLAUDECTL_DEMO_SKILLS=1)
 #
 # Requirements:
 #   - agg (cargo install agg, or: brew install agg)
@@ -106,6 +107,14 @@ case "$target" in
         record_gif "demo-overview" 12 "Live dashboard — status, cost, context at a glance"
         ;;&
 
+    skills|all)
+        # Skills & Hive mode — auto-opens K view, cycles Skills → Hive → Skills.
+        # 30s captures ~2 full cycles of the scripted tab rotation in refresh_demo.
+        export CLAUDECTL_DEMO_SKILLS=1
+        record_gif "claudectl-demo-skills" 30 "Skills & Hive — discover, share, invite, join"
+        unset CLAUDECTL_DEMO_SKILLS
+        ;;&
+
     social)
         # 30-second showcase for social media (README, Twitter, etc.)
         record_gif "demo-social" 30 "30s social media showcase — brain + health + orchestration"
@@ -117,9 +126,9 @@ case "$target" in
         ;;
 
     *)
-        if [ "$target" != "all" ] && [ "$target" != "hero" ] && [ "$target" != "health" ] && [ "$target" != "brain" ] && [ "$target" != "overview" ] && [ "$target" != "social" ]; then
+        if [ "$target" != "all" ] && [ "$target" != "hero" ] && [ "$target" != "health" ] && [ "$target" != "brain" ] && [ "$target" != "overview" ] && [ "$target" != "social" ] && [ "$target" != "skills" ]; then
             echo "Unknown target: $target"
-            echo "Usage: $0 [all|hero|health|brain|overview|social]"
+            echo "Usage: $0 [all|hero|health|brain|overview|social|skills]"
             exit 1
         fi
         ;;

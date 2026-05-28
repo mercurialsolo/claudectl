@@ -55,6 +55,9 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 
 A full-screen mode for discovering Claude Code skills and managing the local hive. Two tabs, toggle with `Tab`.
 
+![Skills & Hive mode](assets/claudectl-demo-skills.gif){ .terminal-screenshot }
+
+
 **Skills tab** scans `~/.claude/skills`, `~/.claude/plugins/*/skills`, and `<cwd>/.claude/skills`. A `✓` marks skills already in the local hive store. Hotkeys:
 
 | Key | Action |

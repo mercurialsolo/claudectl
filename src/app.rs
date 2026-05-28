@@ -1038,6 +1038,33 @@ impl App {
         self.demo_tick += 1;
         let mut sessions = crate::demo::generate_sessions(self.demo_tick);
 
+        // When the Skills & Hive view is open during a demo, scripted
+        // navigation: cycle selection on the Skills tab, then flip to Hive
+        // around tick 6, then back to Skills around tick 12.
+        if self.show_skills {
+            let phase = self.demo_tick % 14;
+            match phase {
+                1..=5 => {
+                    self.skills_tab = SkillsTab::Skills;
+                    if !self.skills.is_empty() {
+                        self.skills_selected =
+                            ((phase as usize - 1) % self.skills.len()).min(self.skills.len() - 1);
+                    }
+                }
+                6 => {
+                    self.skills_tab = SkillsTab::Hive;
+                    self.skills_status_msg = Some("Hive: 2 peers connected".into());
+                }
+                7..=11 => {
+                    self.skills_tab = SkillsTab::Hive;
+                }
+                _ => {
+                    self.skills_tab = SkillsTab::Skills;
+                    self.skills_status_msg = None;
+                }
+            }
+        }
+
         // Track NeedsInput wait times (same as real mode)
         let now_instant = std::time::Instant::now();
         for session in &sessions {

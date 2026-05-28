@@ -848,6 +848,24 @@ fn run_tui<W: io::Write>(
         }
         // Re-refresh to replace real sessions discovered during App::new()
         app.refresh();
+
+        // Optional: auto-open the Skills & Hive view for recording demo GIFs.
+        // `CLAUDECTL_DEMO_SKILLS=1 claudectl --demo --record demo-skills.cast`.
+        if std::env::var("CLAUDECTL_DEMO_SKILLS").as_deref() == Ok("1") {
+            app.open_skills_overlay();
+            // Seed a fake invite so the Hive tab has something to show when
+            // we flip to it (don't actually shell out to relay invite).
+            app.hive_last_invite = Some(app::HiveInvite {
+                relay_code: "MUR7-K2F9-XQ3T".into(),
+                word_phrase: "swift-otter-storm-glass-meadow".into(),
+                invite_link: "cctl://share?id=demo-mbp-a1b2&addr=192.168.1.42:9847&psk=...".into(),
+            });
+            app.hive_identity = Some("demo-mbp-a1b2".into());
+            app.hive_known_peers = vec![
+                ("alice-mbp-f3a1".into(), Some("192.168.1.17:9847".into())),
+                ("ci-runner-9d1e".into(), Some("10.4.0.23:9847".into())),
+            ];
+        }
     }
 
     let mut last_tick = Instant::now();
