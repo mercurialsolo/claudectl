@@ -2,6 +2,13 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.49.3] - 2026-05-27
+
+### Added
+- **`CLAUDECTL_DEMO_SKILLS=1` demo recording hook.** With this env var plus `--demo`, claudectl boots straight into the Skills & Hive mode with a scripted tab-rotation in `refresh_demo` (Skills → Hive → Skills every 14 ticks) and seeded peer/invite data so the Hive tab renders convincingly even without the `relay` feature compiled in. Lets `scripts/record-demos.sh skills` produce a deterministic GIF for launch posts.
+- **`scripts/record-demos.sh skills` target** — records `docs/assets/claudectl-demo-skills.gif` (30 s, both tabs) using the same agg flags as the other demo gifs. Bundled into the `all` target.
+- **`docs/assets/claudectl-demo-skills.gif`** — embedded in `docs/index.md` Screenshots and `docs/reference.md` Skills & Hive section.
+
 ## [0.49.2] - 2026-05-27
 
 ### Fixed

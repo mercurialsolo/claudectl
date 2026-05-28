@@ -135,6 +135,10 @@ Post-mortem analysis on completed sessions via `--autopsy`. Inspect what went wr
 
 ## Screenshots
 
+Skills & Hive mode (press `K` in the dashboard):
+
+![claudectl Skills & Hive mode](assets/claudectl-demo-skills.gif){ .terminal-screenshot }
+
 Dashboard health monitoring:
 
 ![claudectl health monitoring](assets/demo-health.gif){ .terminal-screenshot }
