@@ -227,9 +227,21 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Brain (Local LLM)")]
     pub(crate) brain_prompts: bool,
 
-    /// Brain statistics and metrics (subcommands: learning-curve, accuracy, baseline, false-approve, help)
+    /// Brain statistics and metrics (subcommands: scorecard, tier, latency, cache, counterfactual, learning-curve, accuracy, baseline, false-approve, help)
     #[arg(long, help_heading = "Brain (Local LLM)")]
     pub(crate) brain_stats: Option<String>,
+
+    /// Interactive review of the highest-value brain decisions. Walks through
+    /// counterfactual hits, Critical-tier safety cases, and high-confidence
+    /// misses; lets you mark each as canonical (teaching material).
+    /// Pass "list" / "queue" to print the queue non-interactively.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) brain_review: Option<Option<String>>,
+
+    /// Mark a specific decision_id as canonical without going through the
+    /// interactive review (used by `brain counterfactual` output).
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) brain_mark_canonical: Option<String>,
 
     /// Query the brain for a single tool-call decision and exit (JSON output).
     /// Used by Claude Code plugin hooks for inline approve/deny.
@@ -588,6 +600,31 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if let Some(ref subcommand) = cli.brain_stats {
         brain::metrics::dispatch(subcommand);
+        return Ok(());
+    }
+
+    if let Some(ref id) = cli.brain_mark_canonical {
+        match brain::review::mark_by_id(id, None) {
+            Ok(()) => {
+                println!("Marked decision {id} as canonical.");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Could not mark decision {id} canonical: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(ref maybe_arg) = cli.brain_review {
+        match maybe_arg.as_deref() {
+            Some("list") | Some("queue") | Some("print") => {
+                brain::review::print_queue();
+            }
+            _ => {
+                brain::review::run_interactive();
+            }
+        }
         return Ok(());
     }
 

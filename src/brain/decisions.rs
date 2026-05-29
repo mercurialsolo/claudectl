@@ -99,6 +99,17 @@ pub struct DecisionRecord {
     /// Stable id for outcome attribution (#220 baselining). None on records
     /// written before the field existed; outcomes for those can't be joined.
     pub decision_id: Option<String>,
+    /// Wall-clock latency of the brain decision in milliseconds (LLM call +
+    /// few-shot retrieval). None for records before instrumentation or for
+    /// pure observations where the brain wasn't invoked.
+    pub brain_decision_ms: Option<u64>,
+    /// True when the suggestion was satisfied entirely from the few-shot
+    /// cache without an LLM call. None for records before the field existed.
+    pub cache_hit: Option<bool>,
+    /// True when the user has marked this decision as canonical training
+    /// material via `claudectl brain review`. Canonical decisions get a
+    /// large score boost in few-shot retrieval. None == not reviewed.
+    pub canonical: Option<bool>,
 }
 
 /// Generate a unique decision id.
@@ -316,6 +327,38 @@ pub fn log_decision(
     decision_type: DecisionType,
     override_reason: Option<&str>,
 ) {
+    log_decision_full(
+        pid,
+        project,
+        tool,
+        command,
+        suggestion,
+        user_action,
+        session,
+        decision_type,
+        override_reason,
+        None,
+        None,
+    );
+}
+
+/// Same as `log_decision` but accepts measured latency and cache-hit signals.
+/// Use this from the engine call site once instrumentation is wired; legacy
+/// `log_decision` call sites continue to work and emit `None` for those fields.
+#[allow(clippy::too_many_arguments)]
+pub fn log_decision_full(
+    pid: u32,
+    project: &str,
+    tool: Option<&str>,
+    command: Option<&str>,
+    suggestion: &BrainSuggestion,
+    user_action: &str,
+    session: Option<&crate::session::ClaudeSession>,
+    decision_type: DecisionType,
+    override_reason: Option<&str>,
+    brain_decision_ms: Option<u64>,
+    cache_hit: Option<bool>,
+) {
     let resolved_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -336,6 +379,8 @@ pub fn log_decision(
         "resolved_at": resolved_at,
         "override_reason": override_reason,
         "decision_id": decision_id,
+        "brain_decision_ms": brain_decision_ms,
+        "cache_hit": cache_hit,
     });
     if let Some(s) = session {
         record["context"] = snapshot_context(s);
@@ -606,6 +651,8 @@ pub fn read_all_decisions() -> Vec<DecisionRecord> {
         Err(_) => return Vec::new(),
     };
 
+    let canonical_set = read_canonical_ids();
+
     content
         .lines()
         .filter_map(|line| {
@@ -680,7 +727,75 @@ pub fn read_all_decisions() -> Vec<DecisionRecord> {
                     .get("decision_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
+                brain_decision_ms: json.get("brain_decision_ms").and_then(|v| v.as_u64()),
+                cache_hit: json.get("cache_hit").and_then(|v| v.as_bool()),
+                canonical: {
+                    // Inline canonical flag wins; otherwise check the side store.
+                    let inline = json.get("canonical").and_then(|v| v.as_bool());
+                    let dec_id = json.get("decision_id").and_then(|v| v.as_str());
+                    match (inline, dec_id) {
+                        (Some(b), _) => Some(b),
+                        (None, Some(id)) if canonical_set.contains(id) => Some(true),
+                        _ => None,
+                    }
+                },
             })
+        })
+        .collect()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Canonical-marks side store
+// ────────────────────────────────────────────────────────────────────────────
+
+fn canonical_path() -> PathBuf {
+    decisions_dir().join("canonical.jsonl")
+}
+
+/// Persist a canonical mark for the given decision id.
+/// Idempotent: appending the same id twice is harmless — the set dedupes on read.
+pub fn mark_canonical(decision_id: &str, note: Option<&str>) -> Result<(), String> {
+    let path = canonical_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let record = serde_json::json!({
+        "decision_id": decision_id,
+        "marked_at": ts,
+        "note": note,
+    });
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("open canonical store: {e}"))?;
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&record).unwrap_or_default()
+    )
+    .map_err(|e| format!("write canonical mark: {e}"))?;
+    Ok(())
+}
+
+/// Read the set of decision ids that have been marked canonical.
+pub fn read_canonical_ids() -> std::collections::HashSet<String> {
+    let path = canonical_path();
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+    content
+        .lines()
+        .filter_map(|line| {
+            let json: serde_json::Value = serde_json::from_str(line).ok()?;
+            json.get("decision_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
         })
         .collect()
 }
@@ -722,6 +837,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 
@@ -778,6 +896,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 

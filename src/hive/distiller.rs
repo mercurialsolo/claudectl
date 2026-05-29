@@ -770,6 +770,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: Some(id.into()),
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 

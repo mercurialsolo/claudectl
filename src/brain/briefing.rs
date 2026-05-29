@@ -258,6 +258,9 @@ mod tests {
             resolved_at: Some(ts),
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 

@@ -83,6 +83,12 @@ pub fn retrieve_similar(
                 score += rejection_weight; // Rejected = correction signal, weight scales with ratio
             }
 
+            // Canonical decisions (user-marked teaching examples via `brain review`)
+            // dominate retrieval — they're the supervised-training signal.
+            if d.canonical == Some(true) {
+                score += 50;
+            }
+
             // Recency bonus: newer decisions reflect current preferences
             // idx is position in filtered list (0=oldest), scale to 0-2 bonus
             let recency = if filtered.len() > 1 {
@@ -174,6 +180,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 

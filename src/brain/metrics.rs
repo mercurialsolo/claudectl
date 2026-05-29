@@ -1791,6 +1791,621 @@ fn compute_milestones(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Per-risk-tier breakdown
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Summary row of accuracy + safety on one risk tier.
+#[derive(Debug, Clone)]
+pub struct TierStats {
+    pub tier: RiskTier,
+    pub n: usize,
+    pub correct: usize,
+    pub false_approves: usize,
+    pub false_denies: usize,
+    pub override_rate: f64,
+}
+
+impl TierStats {
+    pub fn accuracy_pct(&self) -> f64 {
+        if self.n == 0 {
+            return 0.0;
+        }
+        (self.correct as f64 / self.n as f64) * 100.0
+    }
+
+    pub fn false_approve_pct(&self) -> f64 {
+        if self.n == 0 {
+            return 0.0;
+        }
+        (self.false_approves as f64 / self.n as f64) * 100.0
+    }
+}
+
+/// Compute per-tier stats over every decision record where the brain was involved.
+/// Observations (brain_action == "") are excluded — we can't score what the brain didn't predict.
+pub fn compute_tier_stats(decisions: &[DecisionRecord]) -> Vec<TierStats> {
+    let tiers = [
+        RiskTier::Low,
+        RiskTier::Medium,
+        RiskTier::High,
+        RiskTier::Critical,
+    ];
+    tiers
+        .into_iter()
+        .map(|tier| {
+            let matching: Vec<&DecisionRecord> = decisions
+                .iter()
+                .filter(|d| !d.brain_action.is_empty())
+                .filter(|d| classify_risk(d.tool.as_deref(), d.command.as_deref()) == tier)
+                .collect();
+            let n = matching.len();
+            let correct = matching.iter().filter(|d| d.is_positive()).count();
+            let false_approves = matching
+                .iter()
+                .filter(|d| d.brain_action == "approve" && d.is_negative())
+                .count();
+            let false_denies = matching
+                .iter()
+                .filter(|d| d.brain_action == "deny" && d.is_negative())
+                .count();
+            let overrides = matching.iter().filter(|d| d.is_negative()).count();
+            let override_rate = if n > 0 {
+                overrides as f64 / n as f64
+            } else {
+                0.0
+            };
+            TierStats {
+                tier,
+                n,
+                correct,
+                false_approves,
+                false_denies,
+                override_rate,
+            }
+        })
+        .collect()
+}
+
+/// Print the per-tier breakdown.
+pub fn print_tier_breakdown() {
+    let decisions = read_all_decisions();
+    let stats = compute_tier_stats(&decisions);
+
+    println!("Per-Risk-Tier Accuracy");
+    println!("======================");
+    println!();
+    println!(
+        "  {:<10}  {:>6}  {:>9}  {:>14}  {:>13}",
+        "Tier", "n", "Accuracy", "False approves", "Override rate"
+    );
+    for s in &stats {
+        if s.n == 0 {
+            println!(
+                "  {:<10}  {:>6}  {:>8}   {:>13}   {:>12}",
+                s.tier.label(),
+                0,
+                "—",
+                "—",
+                "—"
+            );
+            continue;
+        }
+        let marker = if matches!(s.tier, RiskTier::Critical) && s.false_approves > 0 {
+            " ⚠"
+        } else {
+            ""
+        };
+        println!(
+            "  {:<10}  {:>6}  {:>8.1}%  {:>13.1}%  {:>12.1}%{}",
+            s.tier.label(),
+            s.n,
+            s.accuracy_pct(),
+            s.false_approve_pct(),
+            s.override_rate * 100.0,
+            marker,
+        );
+    }
+    println!();
+    println!("Notes:");
+    println!("  - Critical-tier false-approves are the safety-critical number; target = 0.");
+    println!("  - Override rate trending DOWN over time = brain is learning your patterns.");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Latency
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Brain decision latency summary.
+#[derive(Debug, Clone, Default)]
+pub struct LatencySummary {
+    pub n: usize,
+    pub p50_ms: u64,
+    pub p95_ms: u64,
+    pub p99_ms: u64,
+    pub mean_ms: u64,
+    pub max_ms: u64,
+}
+
+/// Compute latency percentiles from decisions that have `brain_decision_ms` set.
+pub fn compute_latency(decisions: &[DecisionRecord]) -> LatencySummary {
+    let mut samples: Vec<u64> = decisions
+        .iter()
+        .filter_map(|d| d.brain_decision_ms)
+        .collect();
+    if samples.is_empty() {
+        return LatencySummary::default();
+    }
+    samples.sort_unstable();
+    let n = samples.len();
+    let pct = |p: f64| -> u64 {
+        let idx = ((n as f64 - 1.0) * p).round() as usize;
+        samples[idx.min(n - 1)]
+    };
+    let sum: u64 = samples.iter().sum();
+    LatencySummary {
+        n,
+        p50_ms: pct(0.50),
+        p95_ms: pct(0.95),
+        p99_ms: pct(0.99),
+        mean_ms: sum / n as u64,
+        max_ms: *samples.last().unwrap_or(&0),
+    }
+}
+
+/// Print a latency report with histogram. Skips gracefully when no
+/// instrumented records exist yet.
+pub fn print_latency() {
+    let decisions = read_all_decisions();
+    let summary = compute_latency(&decisions);
+
+    println!("Brain Decision Latency");
+    println!("======================");
+    println!();
+
+    if summary.n == 0 {
+        println!("No instrumented latency samples yet.");
+        println!();
+        println!("Latency is recorded automatically once brain decisions are made");
+        println!("with the instrumented logging path. Existing decision history will");
+        println!("not have this field — only new decisions count.");
+        return;
+    }
+
+    let p95_marker = if summary.p95_ms <= 1000 {
+        "✓"
+    } else if summary.p95_ms <= 2000 {
+        "⚠"
+    } else {
+        "✗"
+    };
+
+    println!("  Samples: {}", summary.n);
+    println!("  p50:     {} ms", summary.p50_ms);
+    println!(
+        "  p95:     {} ms  {} (gating budget: ≤ 1000 ms)",
+        summary.p95_ms, p95_marker
+    );
+    println!("  p99:     {} ms", summary.p99_ms);
+    println!("  mean:    {} ms", summary.mean_ms);
+    println!("  max:     {} ms", summary.max_ms);
+    println!();
+
+    // Histogram
+    let buckets = [
+        ("[0-100ms]", 0u64, 100u64),
+        ("[100-300]", 100, 300),
+        ("[300ms-1s]", 300, 1_000),
+        ("[1s-3s]", 1_000, 3_000),
+        ("[3s+]", 3_000, u64::MAX),
+    ];
+    let counts: Vec<usize> = buckets
+        .iter()
+        .map(|(_, lo, hi)| {
+            decisions
+                .iter()
+                .filter_map(|d| d.brain_decision_ms)
+                .filter(|&ms| ms >= *lo && ms < *hi)
+                .count()
+        })
+        .collect();
+    let total: usize = counts.iter().sum();
+
+    println!("  Distribution:");
+    for (i, (label, _, _)) in buckets.iter().enumerate() {
+        let pct = if total > 0 {
+            (counts[i] as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let bar_width = (pct / 2.5).round() as usize; // 100% = 40 chars
+        let bar = "█".repeat(bar_width);
+        println!(
+            "    {:<11}  {:<40} {:5.1}%  ({})",
+            label, bar, pct, counts[i]
+        );
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Cache hit rate
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Cache hit summary.
+#[derive(Debug, Clone, Default)]
+pub struct CacheSummary {
+    pub instrumented: usize,
+    pub hits: usize,
+    pub misses: usize,
+}
+
+impl CacheSummary {
+    pub fn hit_rate(&self) -> f64 {
+        if self.instrumented == 0 {
+            return 0.0;
+        }
+        (self.hits as f64 / self.instrumented as f64) * 100.0
+    }
+}
+
+pub fn compute_cache(decisions: &[DecisionRecord]) -> CacheSummary {
+    let hits = decisions
+        .iter()
+        .filter(|d| d.cache_hit == Some(true))
+        .count();
+    let misses = decisions
+        .iter()
+        .filter(|d| d.cache_hit == Some(false))
+        .count();
+    CacheSummary {
+        instrumented: hits + misses,
+        hits,
+        misses,
+    }
+}
+
+pub fn print_cache_hits() {
+    let decisions = read_all_decisions();
+    let summary = compute_cache(&decisions);
+
+    println!("Few-Shot Cache Hit Rate");
+    println!("=======================");
+    println!();
+    if summary.instrumented == 0 {
+        println!("No instrumented cache samples yet.");
+        println!();
+        println!("Cache hits are recorded when a brain suggestion is satisfied from");
+        println!("the few-shot store without a full LLM call. Older history won't");
+        println!("have this field.");
+        return;
+    }
+    println!("  Samples:    {}", summary.instrumented);
+    println!(
+        "  Cache hits: {} ({:.1}%)  — handled without an LLM call",
+        summary.hits,
+        summary.hit_rate()
+    );
+    println!(
+        "  Misses:     {} ({:.1}%)  — full brain pass",
+        summary.misses,
+        100.0 - summary.hit_rate()
+    );
+    println!();
+    println!("  Each cache hit saves the LLM latency + tokens. Healthy hit rate climbs");
+    println!("  over time as the few-shot store fills with diverse past decisions.");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Counterfactual analyzer
+// ────────────────────────────────────────────────────────────────────────────
+
+/// A counterfactual finding: brain disagreed with the user, and the outcome
+/// validated the brain (or, less commonly, the user).
+#[derive(Debug, Clone)]
+pub struct Counterfactual {
+    pub decision_id: Option<String>,
+    pub project: String,
+    pub tool: Option<String>,
+    pub command: Option<String>,
+    pub brain_action: String,
+    pub user_action: String,
+    pub brain_confidence: f64,
+    /// True when the *brain* was likely right — user overrode and the outcome
+    /// degraded (TestFailed or Error). These are the highest-value review
+    /// candidates: marking them canonical teaches the few-shot store.
+    pub brain_was_right: bool,
+    pub outcome_summary: String,
+}
+
+/// Find counterfactual cases: where brain and user disagreed, and the
+/// subsequent outcome went badly. Heuristic: a `TestFailed` or `Error`
+/// outcome on a same-PID decision within `WINDOW` records after this one.
+pub fn compute_counterfactuals(decisions: &[DecisionRecord]) -> Vec<Counterfactual> {
+    const WINDOW: usize = 5;
+    let mut out = Vec::new();
+    for (i, d) in decisions.iter().enumerate() {
+        // We only care about cases where brain was involved AND user disagreed.
+        if d.brain_action.is_empty() {
+            continue;
+        }
+        if !d.is_negative() {
+            continue;
+        }
+        // Look ahead WINDOW records on the same PID for an attributable failure.
+        let mut failing: Option<String> = None;
+        let upper = (i + 1 + WINDOW).min(decisions.len());
+        for next in &decisions[i + 1..upper] {
+            if next.pid != d.pid {
+                continue;
+            }
+            match &next.outcome {
+                Some(super::decisions::DecisionOutcome::TestFailed(cmd)) => {
+                    failing = Some(format!("TestFailed: {}", truncate(cmd, 60)));
+                    break;
+                }
+                Some(super::decisions::DecisionOutcome::Error(msg)) => {
+                    failing = Some(format!("Error: {}", truncate(msg, 60)));
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if let Some(summary) = failing {
+            // brain_action == "deny" and user accepted → user-accepted thing
+            // led to failure → brain was right.
+            let brain_was_right = d.brain_action == "deny" || d.brain_action == "ask";
+            out.push(Counterfactual {
+                decision_id: d.decision_id.clone(),
+                project: d.project.clone(),
+                tool: d.tool.clone(),
+                command: d.command.clone(),
+                brain_action: d.brain_action.clone(),
+                user_action: d.user_action.clone(),
+                brain_confidence: d.brain_confidence,
+                brain_was_right,
+                outcome_summary: summary,
+            });
+        }
+    }
+    out
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
+}
+
+pub fn print_counterfactuals() {
+    let decisions = read_all_decisions();
+    let cfs = compute_counterfactuals(&decisions);
+
+    println!("Counterfactual Analysis");
+    println!("=======================");
+    println!();
+
+    if cfs.is_empty() {
+        println!("No counterfactual cases found.");
+        println!();
+        println!("Counterfactuals are user-overrides that the subsequent outcome");
+        println!("argued against — strong signal for the few-shot store.");
+        return;
+    }
+
+    let brain_right: Vec<&Counterfactual> = cfs.iter().filter(|c| c.brain_was_right).collect();
+    let user_right: Vec<&Counterfactual> = cfs.iter().filter(|c| !c.brain_was_right).collect();
+
+    println!(
+        "  Brain was likely right (user overrode → outcome failed): {}",
+        brain_right.len()
+    );
+    println!(
+        "  User was likely right (brain over-cautious):            {}",
+        user_right.len()
+    );
+    println!();
+
+    if !brain_right.is_empty() {
+        println!("Top brain-was-right cases (review candidates):");
+        println!();
+        for cf in brain_right.iter().take(10) {
+            println!(
+                "  • [{}] {} → {} (conf {:.0}%)",
+                cf.tool.as_deref().unwrap_or("?"),
+                cf.brain_action,
+                cf.user_action,
+                cf.brain_confidence * 100.0
+            );
+            if let Some(cmd) = &cf.command {
+                println!("    cmd: {}", truncate(cmd, 80));
+            }
+            println!("    outcome: {}", cf.outcome_summary);
+            if let Some(id) = &cf.decision_id {
+                println!("    mark canonical: claudectl brain review --mark {}", id);
+            }
+            println!();
+        }
+    }
+
+    if !user_right.is_empty() {
+        println!("Top brain-over-cautious cases (consider relaxing):");
+        println!();
+        for cf in user_right.iter().take(5) {
+            println!(
+                "  • [{}] brain said {} (conf {:.0}%) → user accepted, outcome ok",
+                cf.tool.as_deref().unwrap_or("?"),
+                cf.brain_action,
+                cf.brain_confidence * 100.0
+            );
+            if let Some(cmd) = &cf.command {
+                println!("    cmd: {}", truncate(cmd, 80));
+            }
+            println!();
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Composite scorecard
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Render every key metric in one screen — the periodic-review surface.
+pub fn print_scorecard() {
+    let decisions = read_all_decisions();
+
+    println!("Brain Scorecard");
+    println!("===============");
+    println!();
+
+    // North-star: auto-handled accuracy.
+    let total_with_brain = decisions
+        .iter()
+        .filter(|d| !d.brain_action.is_empty())
+        .count();
+    let correct = decisions
+        .iter()
+        .filter(|d| !d.brain_action.is_empty() && d.is_positive())
+        .count();
+    let north_star = if total_with_brain > 0 {
+        (correct as f64 / total_with_brain as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    println!("NORTH STAR");
+    if total_with_brain == 0 {
+        println!("  Auto-handled accuracy:  —  (no brain decisions yet)");
+    } else {
+        let marker = if north_star >= 85.0 { "✓" } else { "⚠" };
+        println!(
+            "  Auto-handled accuracy:  {:.1}% {}   (n = {}, target ≥ 85%)",
+            north_star, marker, total_with_brain
+        );
+    }
+    println!();
+
+    // Guardrails.
+    println!("GUARDRAILS");
+    let tier_stats = compute_tier_stats(&decisions);
+    let critical = tier_stats
+        .iter()
+        .find(|s| matches!(s.tier, RiskTier::Critical));
+    match critical {
+        Some(s) if s.n > 0 => {
+            let marker = if s.false_approves == 0 { "✓" } else { "✗" };
+            println!(
+                "  False-approve on Critical tier:  {} of {} ({:.1}%) {}   target = 0",
+                s.false_approves,
+                s.n,
+                s.false_approve_pct(),
+                marker
+            );
+        }
+        _ => {
+            println!("  False-approve on Critical tier:  no Critical samples yet");
+        }
+    }
+
+    let override_window: Vec<&DecisionRecord> = decisions
+        .iter()
+        .rev()
+        .filter(|d| !d.brain_action.is_empty())
+        .take(50)
+        .collect();
+    if !override_window.is_empty() {
+        let n_overrides = override_window.iter().filter(|d| d.is_negative()).count();
+        let rate = (n_overrides as f64 / override_window.len() as f64) * 100.0;
+        let marker = if rate < 20.0 { "✓" } else { "⚠" };
+        println!(
+            "  Override rate (last 50):         {:.1}% {}   target ↓ (learning)",
+            rate, marker
+        );
+    }
+    println!();
+
+    // Latency
+    let lat = compute_latency(&decisions);
+    println!("LATENCY");
+    if lat.n == 0 {
+        println!("  No instrumented samples yet — see `brain latency` after some traffic.");
+    } else {
+        let marker = if lat.p95_ms <= 1000 { "✓" } else { "⚠" };
+        println!(
+            "  p50 {} ms  |  p95 {} ms {}  |  p99 {} ms  |  n = {}",
+            lat.p50_ms, lat.p95_ms, marker, lat.p99_ms, lat.n
+        );
+    }
+    println!();
+
+    // Cache hit rate
+    let cache = compute_cache(&decisions);
+    println!("CACHE HIT RATE");
+    if cache.instrumented == 0 {
+        println!("  No instrumented samples yet — see `brain cache` after some traffic.");
+    } else {
+        println!(
+            "  {:.1}%  ({} of {} decisions handled without an LLM call)",
+            cache.hit_rate(),
+            cache.hits,
+            cache.instrumented
+        );
+    }
+    println!();
+
+    // Per-tier accuracy
+    println!("PER-RISK-TIER ACCURACY");
+    for s in &tier_stats {
+        if s.n == 0 {
+            println!("  {:<10}  n = 0", s.tier.label());
+        } else {
+            println!(
+                "  {:<10}  {:.1}%   n = {}",
+                s.tier.label(),
+                s.accuracy_pct(),
+                s.n
+            );
+        }
+    }
+    println!();
+
+    // Counterfactual summary
+    let cfs = compute_counterfactuals(&decisions);
+    let brain_right = cfs.iter().filter(|c| c.brain_was_right).count();
+    let user_right = cfs.len() - brain_right;
+    println!("COUNTERFACTUAL HITS");
+    println!(
+        "  Brain was right (user override → failure):  {}",
+        brain_right
+    );
+    println!(
+        "  User was right (brain over-cautious):       {}",
+        user_right
+    );
+    println!();
+
+    // Review status
+    let canonical_count = decisions
+        .iter()
+        .filter(|d| d.canonical == Some(true))
+        .count();
+    println!("REVIEW STATUS");
+    println!("  Total decisions:       {}", decisions.len());
+    println!(
+        "  Marked canonical:      {} ({:.1}% of total)",
+        canonical_count,
+        if decisions.is_empty() {
+            0.0
+        } else {
+            (canonical_count as f64 / decisions.len() as f64) * 100.0
+        }
+    );
+    println!();
+
+    println!("→ Run `claudectl brain review` to triage the highest-value cases.");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Dispatch
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1809,6 +2424,11 @@ pub fn dispatch(subcommand: &str) {
         "calibration" | "cal" => print_calibration(),
         "incidents" | "postmortem" => print_incidents(),
         "time-to-correct" | "ttc" => print_time_to_correct(),
+        "tier" | "tiers" | "risk" => print_tier_breakdown(),
+        "latency" | "lat" => print_latency(),
+        "cache" | "cache-hits" => print_cache_hits(),
+        "counterfactual" | "cf" => print_counterfactuals(),
+        "scorecard" | "card" | "summary" => print_scorecard(),
         "help" | "" => print_help(),
         _ => {
             eprintln!("Unknown brain-stats subcommand: '{subcommand}'");
@@ -1837,9 +2457,15 @@ fn print_help() {
     println!("  false-deny      False-deny rate and friction cost");
     println!("  incidents       Post-mortem analysis of every false approval");
     println!("  time-to-correct How quickly users respond to brain suggestions");
+    println!("  tier            Per-risk-tier accuracy + safety breakdown");
+    println!("  latency         Brain decision latency (p50/p95/p99 + histogram)");
+    println!("  cache           Few-shot cache hit rate");
+    println!("  counterfactual  Where user-overrides led to bad outcomes (or didn't)");
+    println!("  scorecard       One-screen composite review — start here");
     println!("  help            Show this help");
     println!();
-    println!("Aliases: evo, curve, acc, rules, fa, fd, dist, novel, cal, postmortem, ttc");
+    println!("Aliases: evo, curve, acc, rules, fa, fd, dist, novel, cal, postmortem,");
+    println!("         ttc, tiers, risk, lat, cf, card, summary");
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1918,6 +2544,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 

@@ -469,6 +469,9 @@ mod tests {
             resolved_at: Some(1000 + pid as u64),
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 

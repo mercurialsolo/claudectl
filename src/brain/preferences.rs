@@ -948,6 +948,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 
@@ -974,6 +977,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 
@@ -1035,6 +1041,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         }
     }
 
@@ -1321,6 +1330,9 @@ mod tests {
                 resolved_at: None,
                 override_reason: None,
                 decision_id: None,
+                brain_decision_ms: None,
+                cache_hit: None,
+                canonical: None,
             },
             DecisionRecord {
                 timestamp: "2".into(),
@@ -1339,6 +1351,9 @@ mod tests {
                 resolved_at: None,
                 override_reason: None,
                 decision_id: None,
+                brain_decision_ms: None,
+                cache_hit: None,
+                canonical: None,
             },
         ];
 
@@ -1376,6 +1391,9 @@ mod tests {
                 resolved_at: None,
                 override_reason: None,
                 decision_id: None,
+                brain_decision_ms: None,
+                cache_hit: None,
+                canonical: None,
             });
         }
         // Then user denies
@@ -1396,6 +1414,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         });
         // Repeat the streak pattern to reach threshold of 2
         for _ in 0..4 {
@@ -1416,6 +1437,9 @@ mod tests {
                 resolved_at: None,
                 override_reason: None,
                 decision_id: None,
+                brain_decision_ms: None,
+                cache_hit: None,
+                canonical: None,
             });
         }
         decisions.push(DecisionRecord {
@@ -1435,6 +1459,9 @@ mod tests {
             resolved_at: None,
             override_reason: None,
             decision_id: None,
+            brain_decision_ms: None,
+            cache_hit: None,
+            canonical: None,
         });
 
         let patterns = detect_temporal_patterns(&decisions);
