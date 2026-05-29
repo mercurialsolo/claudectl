@@ -80,7 +80,7 @@ pub fn build_queue(decisions: &[DecisionRecord]) -> Vec<ReviewItem> {
     items.dedup_by(|a, b| {
         a.record.decision_id.is_some() && a.record.decision_id == b.record.decision_id
     });
-    items.sort_by(|a, b| b.score.cmp(&a.score));
+    items.sort_by_key(|x| std::cmp::Reverse(x.score));
     items
 }
 
