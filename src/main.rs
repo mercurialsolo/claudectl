@@ -959,6 +959,12 @@ fn run_tui<W: io::Write>(
                 return;
             }
 
+            // Full-screen mode: Brain Review (scorecard + review queue).
+            if app.show_brain {
+                ui::brain::render_brain_screen(frame, area, &app);
+                return;
+            }
+
             #[cfg(feature = "relay")]
             let main_area = if app.show_peers_panel {
                 let chunks = ratatui::layout::Layout::default()
