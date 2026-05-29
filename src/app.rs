@@ -370,6 +370,24 @@ pub struct App {
     pub hive_join_input_mode: bool,
     /// Buffer for the join input.
     pub hive_join_buffer: String,
+
+    // ── Brain review overlay state ─────────────────────────────────────────
+    /// Whether the brain review/scorecard overlay is open.
+    pub show_brain: bool,
+    /// Which tab is currently active inside the brain overlay.
+    pub brain_tab: BrainTab,
+    /// Currently selected index into `brain_queue`.
+    pub brain_review_selected: usize,
+    /// Prioritized review candidates (refreshed when the overlay opens or `r` is pressed).
+    pub brain_queue: Vec<crate::brain::review::ReviewItem>,
+    /// All decision records loaded for the scorecard view.
+    pub brain_decisions_cache: Vec<crate::brain::decisions::DecisionRecord>,
+    /// Transient status message shown in the overlay footer.
+    pub brain_status_msg: Option<String>,
+    /// When true, the overlay captures text input for a canonical-note.
+    pub brain_note_input_mode: bool,
+    /// Buffer for the in-progress note.
+    pub brain_note_buffer: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -383,6 +401,21 @@ impl SkillsTab {
         match self {
             Self::Skills => Self::Hive,
             Self::Hive => Self::Skills,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrainTab {
+    Scorecard,
+    Review,
+}
+
+impl BrainTab {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Scorecard => Self::Review,
+            Self::Review => Self::Scorecard,
         }
     }
 }
@@ -542,6 +575,14 @@ impl App {
             hive_last_invite: None,
             hive_join_input_mode: false,
             hive_join_buffer: String::new(),
+            show_brain: false,
+            brain_tab: BrainTab::Scorecard,
+            brain_review_selected: 0,
+            brain_queue: Vec::new(),
+            brain_decisions_cache: Vec::new(),
+            brain_status_msg: None,
+            brain_note_input_mode: false,
+            brain_note_buffer: String::new(),
         };
         #[cfg(feature = "coord")]
         app.coord_refresh();
@@ -1804,6 +1845,12 @@ impl App {
             return true;
         }
 
+        // Brain overlay: dedicated keymap (j/k navigate, Tab switch, m mark, n note, r refresh, Esc/B close)
+        if self.show_brain {
+            self.handle_brain_key(key);
+            return true;
+        }
+
         // Override reason prompt: waiting for 1/2/3/Esc
         if self.pending_override_reason.is_some() {
             match key.code {
@@ -1923,6 +1970,144 @@ impl App {
         let snapshot = load_hive_view_snapshot();
         self.hive_identity = snapshot.identity;
         self.hive_known_peers = snapshot.peers;
+    }
+
+    // ── Brain review overlay ──────────────────────────────────────────────
+
+    pub fn open_brain_overlay(&mut self) {
+        self.refresh_brain();
+        self.brain_review_selected = 0;
+        self.brain_status_msg = None;
+        self.brain_note_input_mode = false;
+        self.brain_note_buffer.clear();
+        self.brain_tab = BrainTab::Scorecard;
+        self.show_brain = true;
+    }
+
+    pub fn refresh_brain(&mut self) {
+        self.brain_decisions_cache = crate::brain::decisions::read_all_decisions();
+        self.brain_queue = crate::brain::review::build_queue(&self.brain_decisions_cache);
+        if self.brain_review_selected >= self.brain_queue.len() {
+            self.brain_review_selected = self.brain_queue.len().saturating_sub(1);
+        }
+    }
+
+    fn handle_brain_key(&mut self, key: KeyEvent) {
+        if self.brain_note_input_mode {
+            self.handle_brain_note_input(key);
+            return;
+        }
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) | (KeyCode::Char('M'), _) | (KeyCode::Char('q'), _) => {
+                self.show_brain = false;
+                self.brain_status_msg = None;
+                return;
+            }
+            (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {
+                self.brain_tab = self.brain_tab.toggle();
+                self.brain_status_msg = None;
+                return;
+            }
+            (KeyCode::Char('r'), _) => {
+                self.refresh_brain();
+                self.brain_status_msg = Some("Refreshed.".into());
+                return;
+            }
+            _ => {}
+        }
+
+        if matches!(self.brain_tab, BrainTab::Review) {
+            self.handle_brain_review_tab_key(key);
+        }
+    }
+
+    fn handle_brain_review_tab_key(&mut self, key: KeyEvent) {
+        if self.brain_queue.is_empty() {
+            return;
+        }
+        let last = self.brain_queue.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.brain_review_selected < last {
+                    self.brain_review_selected += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if self.brain_review_selected > 0 {
+                    self.brain_review_selected -= 1;
+                }
+            }
+            KeyCode::Char('g') | KeyCode::Home => self.brain_review_selected = 0,
+            KeyCode::Char('G') | KeyCode::End => self.brain_review_selected = last,
+            KeyCode::Char('m') => self.mark_selected_canonical(None),
+            KeyCode::Char('n') => {
+                self.brain_note_input_mode = true;
+                self.brain_note_buffer.clear();
+                self.brain_status_msg = Some("Type a note, Enter to save, Esc to cancel.".into());
+            }
+            KeyCode::Char('s') | KeyCode::Right | KeyCode::Char('l')
+                if self.brain_review_selected < last =>
+            {
+                self.brain_review_selected += 1;
+                self.brain_status_msg = Some("Skipped.".into());
+            }
+            _ => {}
+        }
+    }
+
+    fn mark_selected_canonical(&mut self, note: Option<&str>) {
+        let Some(item) = self.brain_queue.get(self.brain_review_selected) else {
+            return;
+        };
+        let Some(id) = item.record.decision_id.clone() else {
+            self.brain_status_msg = Some("No decision_id — older record, can't mark.".into());
+            return;
+        };
+        match crate::brain::review::mark_by_id(&id, note) {
+            Ok(()) => {
+                self.brain_status_msg = Some(if note.is_some() {
+                    format!("Marked canonical with note: {id}")
+                } else {
+                    format!("Marked canonical: {id}")
+                });
+                // Drop the marked item and advance selection naturally.
+                self.brain_queue.remove(self.brain_review_selected);
+                if self.brain_review_selected >= self.brain_queue.len() {
+                    self.brain_review_selected = self.brain_queue.len().saturating_sub(1);
+                }
+            }
+            Err(e) => {
+                self.brain_status_msg = Some(format!("Could not mark canonical: {e}"));
+            }
+        }
+    }
+
+    fn handle_brain_note_input(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                let note = self.brain_note_buffer.trim().to_string();
+                self.brain_note_input_mode = false;
+                self.brain_note_buffer.clear();
+                if note.is_empty() {
+                    self.brain_status_msg = Some("Empty note — not saved.".into());
+                } else {
+                    self.mark_selected_canonical(Some(&note));
+                }
+            }
+            KeyCode::Esc => {
+                self.brain_note_input_mode = false;
+                self.brain_note_buffer.clear();
+                self.brain_status_msg = Some("Note cancelled.".into());
+            }
+            KeyCode::Backspace => {
+                self.brain_note_buffer.pop();
+            }
+            KeyCode::Char(c) => {
+                self.brain_note_buffer.push(c);
+            }
+            _ => {}
+        }
     }
 
     fn handle_skills_key(&mut self, key: KeyEvent) {
@@ -2170,6 +2355,11 @@ impl App {
                 self.cancel_pending_kill();
                 self.cancel_pending_auto_approve();
                 self.open_skills_overlay();
+            }
+            (KeyCode::Char('M'), _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.open_brain_overlay();
             }
             (KeyCode::Char('s'), _) => {
                 self.cancel_pending_kill();

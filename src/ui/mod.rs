@@ -1,3 +1,4 @@
+pub mod brain;
 pub mod detail;
 pub mod help;
 #[cfg(feature = "relay")]

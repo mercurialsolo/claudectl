@@ -115,6 +115,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw("  Skills & Hive — list skills, share to hive, start/invite/join"),
         ]),
         Line::from(vec![
+            Span::styled("  M              ", Style::default().fg(t.highlight_key)),
+            Span::raw("  Brain Metrics — scorecard + interactive review/teach loop"),
+        ]),
+        Line::from(vec![
             Span::styled("  ?              ", Style::default().fg(t.highlight_key)),
             Span::raw("  Toggle this help"),
         ]),
