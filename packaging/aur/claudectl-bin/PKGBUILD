@@ -3,7 +3,7 @@
 pkgname=claudectl-bin
 pkgver=0.16.0
 pkgrel=1
-pkgdesc='Mission control TUI for Claude Code sessions'
+pkgdesc='Orchestrate a swarm of Claude Code agents with a learning local-LLM brain'
 arch=('x86_64')
 url='https://github.com/mercurialsolo/claudectl'
 license=('MIT')

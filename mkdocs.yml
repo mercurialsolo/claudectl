@@ -1,6 +1,6 @@
 site_name: claudectl
 site_url: https://mercurialsolo.github.io/claudectl/
-site_description: Mission control for Claude Code — supervise, orchestrate, and connect your coding agents with a local LLM brain and hive mind.
+site_description: Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.
 repo_url: https://github.com/mercurialsolo/claudectl
 repo_name: mercurialsolo/claudectl
 

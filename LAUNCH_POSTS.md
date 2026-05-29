@@ -44,7 +44,7 @@ Reason:
 
 Title:
 
-`claudectl`: mission control for Claude Code
+`claudectl`: orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you
 
 Body:
 
@@ -112,7 +112,7 @@ If this matches how you use Claude Code, I’d like to know what breaks first fo
 
 Title:
 
-Mission control for Claude Code: supervising multiple sessions from one terminal
+Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you
 
 Body:
 
@@ -168,7 +168,7 @@ Attach:
 
 Title:
 
-Show HN: claudectl, mission control for Claude Code
+Show HN: claudectl – orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you
 
 Body:
 

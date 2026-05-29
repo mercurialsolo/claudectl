@@ -13,7 +13,7 @@ BASE_URL="https://github.com/mercurialsolo/claudectl/releases/download/${TAG}"
 
 cat <<EOF
 class Claudectl < Formula
-  desc "TUI for monitoring and managing Claude Code CLI sessions"
+  desc "Orchestrate a swarm of Claude Code agents with a learning local-LLM brain"
   homepage "https://github.com/mercurialsolo/claudectl"
   version "${VERSION}"
   license "MIT"

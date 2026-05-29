@@ -31,7 +31,7 @@ rustPlatform.buildRustPackage rec {
   cargoHash = lib.fakeHash;
 
   meta = {
-    description = "TUI for monitoring and managing Claude Code CLI agents";
+    description = "Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.";
     homepage = "https://github.com/mercurialsolo/claudectl";
     license = lib.licenses.mit;
     mainProgram = "claudectl";

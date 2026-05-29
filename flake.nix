@@ -1,5 +1,5 @@
 {
-  description = "claudectl - TUI for monitoring and managing Claude Code CLI agents";
+  description = "Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -19,7 +19,7 @@
           cargoLock.lockFile = ./Cargo.lock;
 
           meta = with pkgs.lib; {
-            description = "TUI for monitoring and managing Claude Code CLI agents";
+            description = "Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.";
             homepage = "https://github.com/mercurialsolo/claudectl";
             license = licenses.mit;
             mainProgram = "claudectl";

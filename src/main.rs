@@ -97,7 +97,7 @@ pub(crate) enum Command {
 #[command(
     name = "claudectl",
     version,
-    about = "Monitor and manage Claude Code CLI agents"
+    about = "Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you."
 )]
 pub(crate) struct Cli {
     // ── Dashboard ───────────────────────────────────────────────────────

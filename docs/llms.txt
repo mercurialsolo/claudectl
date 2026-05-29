@@ -1,6 +1,6 @@
 # claudectl
 
-> Mission control for Claude Code - supervise, budget, orchestrate, and auto-pilot sessions with a local LLM brain.
+> Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.
 
 claudectl is a Rust TUI that monitors all your Claude Code sessions from one terminal. It shows which agent is blocked, burning budget, waiting for approval, or stalled - and lets you intervene without tab hunting.
 

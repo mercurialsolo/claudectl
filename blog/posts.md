@@ -151,7 +151,7 @@ Happy to answer questions about keeping the dependency count low or the no-async
 
 ## 5. r/commandline
 
-**Title:** claudectl: TUI mission control for Claude Code — local LLM brain that learns to auto-approve your sessions
+**Title:** claudectl: orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you
 
 **Body:**
 

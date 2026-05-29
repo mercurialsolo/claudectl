@@ -1,6 +1,6 @@
 # claudectl
 
-**Mission control for Claude Code** - supervise, budget, orchestrate, and auto-pilot sessions with a local LLM brain.
+**Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.**
 
 <p class="hero-tagline">
 Know which agent is blocked, burning budget, waiting for approval, or stalled - and intervene without tab hunting.
