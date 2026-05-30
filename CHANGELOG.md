@@ -2,6 +2,29 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.50.0] - 2026-05-29
+
+### Added
+- **Brain Scorecard** (`claudectl --brain-stats scorecard`). One-screen periodic-review surface: north-star auto-handled accuracy, guardrails (Critical-tier false-approve count + rolling override rate), latency p50/p95/p99, few-shot cache hit rate, per-risk-tier accuracy breakdown, counterfactual summary, and review status. The single command you want to run to see whether the brain is healthy.
+- **Per-risk-tier breakdown** (`--brain-stats tier`). Accuracy, false-approves, false-denies, and override rate split by `Low` / `Medium` / `High` / `Critical` tier. Critical-tier false-approves are flagged with a warning marker — they are the safety-critical number.
+- **Latency report** (`--brain-stats latency`). p50/p95/p99/mean/max + ASCII distribution histogram over the new `brain_decision_ms` field. Reads gracefully on histories without instrumentation.
+- **Cache hit report** (`--brain-stats cache`). Percentage of decisions handled from the few-shot store without an LLM call, over the new `cache_hit` field.
+- **Counterfactual analyzer** (`--brain-stats counterfactual`). Surfaces user-overrides where the subsequent same-PID outcome failed (brain was right) or succeeded (brain over-cautious). Each entry prints a one-shot `--brain-mark-canonical <id>` command for promotion.
+- **Interactive review CLI** (`claudectl --brain-review`). Walks the prioritized queue (counterfactual brain-was-right → Critical-tier false-approves → high-confidence calibration misses) one decision at a time with `m`/`n`/`s`/`d`/`q` controls. `--brain-review list` prints the queue non-interactively.
+- **Canonical teaching store**. Decisions marked canonical (via the review flow or `--brain-mark-canonical <id>`) are appended to `~/.claudectl/brain/canonical.jsonl` and get a `+50` score boost in `retrieval::retrieve_similar`, so reviewed examples dominate future few-shots. Each review pass becomes supervised training signal.
+- **Brain Review TUI mode** (`M` hotkey). Full-screen mode integrated with the dashboard: Scorecard tab mirrors the CLI scorecard; Review tab provides a list + detail split with `j/k` navigate, `m` mark canonical, `n` mark with inline note, `s` skip, `r` refresh, `Tab` cycle, `Esc/M/q` close. Marked items drop from the queue in-place and selection advances — triage is one keystroke per item.
+- **DecisionRecord schema extensions**. `brain_decision_ms: Option<u64>`, `cache_hit: Option<bool>`, `canonical: Option<bool>` on every record. `Option`-wrapped for full backward compat with existing decision logs. New `log_decision_full(..., brain_decision_ms, cache_hit)` for instrumented call sites; the legacy `log_decision` continues to work and writes `None`.
+- **Source-built `packaging/homebrew-core/claudectl.rb`** formula template with `livecheck`, `generate_completions_from_executable`, `man1` install, and a real `test do` block. Submitted to Homebrew/homebrew-core (declined for now per the self-submission notability bar — re-pursueable when star/fork/watcher thresholds are cleared).
+
+### Changed
+- **Repositioned every public-facing surface** to the new tagline: *"Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you."* Lands in the README hero, mkdocs site description, `docs/index.md`, `docs/llms.txt`, `Cargo.toml` description, clap `--help`, `flake.nix`, `AGENTS.md`, `CLAUDE.md`, `LAUNCH_POSTS.md`, `blog/posts.md`, the nixpkgs handoff README, and the GitHub repo description. Homebrew `desc` and AUR `pkgdesc` use the 73-char trimmed variant *"Orchestrate a swarm of Claude Code agents with a learning local-LLM brain"* to fit their 80-char cap.
+- **Homebrew-core template** `desc` trimmed from 82 → 61 chars to clear `brew audit --strict --new --online`'s 80-char limit, and pinned to the v0.49.3 source-tarball sha256 so future bumps start from a known-good baseline instead of the `REPLACE_WITH_SHA256` placeholder.
+
+### Internals
+- Bulk-extended every `DecisionRecord` construction site across `briefing.rs`, `detectors.rs`, `insights.rs`, `metrics.rs`, `pref_store.rs`, `preferences.rs`, `retrieval.rs`, `sequences.rs`, and `hive/distiller.rs` for the three new fields. All existing tests pass without modification.
+- `src/brain/review.rs` (new): `ReviewItem`, `build_queue`, `mark_by_id`, `run_interactive`, `print_queue`.
+- `src/ui/brain.rs` (new): full-screen renderer mirroring the Skills & Hive K-screen pattern.
+
 ## [0.49.3] - 2026-05-27
 
 ### Added

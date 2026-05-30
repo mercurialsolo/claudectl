@@ -1,6 +1,6 @@
 [package]
 name = "claudectl"
-version = "0.49.3"
+version = "0.50.0"
 edition = "2024"
 description = "Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you."
 license = "MIT"
