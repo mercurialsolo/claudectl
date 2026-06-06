@@ -16,12 +16,17 @@ use claudectl_core::runtime::Runtime;
 
 mod actions;
 mod brain;
+mod brain_driver;
 mod bus;
 mod coord;
 mod sessions;
 
 pub use actions::LiveActions;
 pub use brain::LiveBrainView;
+// LiveBrainDriver is the only stateful runtime adapter; the TUI's `App` is the
+// owner. Re-exported for tests and the future `App::new` wiring (next PR).
+#[allow(unused_imports)]
+pub use brain_driver::LiveBrainDriver;
 pub use bus::LiveBusView;
 pub use coord::LiveCoordView;
 pub use sessions::LiveSessionSource;

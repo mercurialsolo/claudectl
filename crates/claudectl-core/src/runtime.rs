@@ -251,6 +251,80 @@ pub trait Actions: Send + Sync {
 }
 
 // ============================================================================
+// Brain driver (stateful)
+// ============================================================================
+
+/// One pending brain suggestion the user can accept or reject. Mirrors the
+/// binary's `brain::client::BrainSuggestion` without exposing brain types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingSuggestion {
+    /// PID of the session this suggestion applies to.
+    pub pid: u32,
+    /// String label of the suggested action — `"approve"`, `"deny"`,
+    /// `"send"`, `"terminate"`. String to avoid pulling `RuleAction`'s enum
+    /// shape into the contract (it's already in `claudectl-core::rules` but
+    /// callers may want to add new categories without bumping the trait).
+    pub action: String,
+    /// Suggested message body (a prompt to inject, a rationale to surface).
+    pub message: Option<String>,
+    /// Why the brain suggested this — used for the detail panel and the
+    /// rejection log.
+    pub reasoning: String,
+    /// 0.0–1.0 confidence the brain assigned.
+    pub confidence: f64,
+    /// Epoch seconds when the suggestion was created. Drives time-to-correct
+    /// telemetry.
+    pub suggested_at: u64,
+}
+
+/// Stateful brain orchestration. Unlike the read-only views, this needs
+/// `&mut` per tick — the engine accumulates pending suggestions, cleans up
+/// after exited sessions, and applies user accept/reject decisions.
+///
+/// Boxed as `Box<dyn BrainDriver>` rather than `Arc<dyn BrainDriver>`
+/// because there is exactly one owner (the TUI's `App`) and every method
+/// needs `&mut self`. Sharing across threads is not a goal here.
+///
+/// Implementations may be `None` — the brain is opt-in (`--brain` flag).
+/// When the field is `None` the TUI renders without brain interaction.
+pub trait BrainDriver: Send {
+    /// Run one tick of the brain loop against the current session set and
+    /// the operator's deny rules. Returns `(pid, status_message)` pairs
+    /// for any actions the brain decided on this tick — the TUI surfaces
+    /// the messages in the status bar.
+    fn tick(
+        &mut self,
+        sessions: &[SessionSnapshot],
+        deny_rules: &[crate::rules::AutoRule],
+    ) -> Vec<(u32, String)>;
+
+    /// Drop pending suggestions for sessions that have exited. Called every
+    /// refresh so the pending map stays bounded by the live session count.
+    fn cleanup(&mut self, sessions: &[SessionSnapshot]);
+
+    /// User accepted the pending suggestion for `pid`. Implementations
+    /// return the log message the TUI should surface (`None` when there's
+    /// no suggestion to accept).
+    fn accept(&mut self, pid: u32) -> Option<String>;
+
+    /// User rejected the pending suggestion for `pid`. Returns the
+    /// suggestion that was rejected — the TUI logs it for replay /
+    /// counterfactual analysis.
+    fn reject(&mut self, pid: u32) -> Option<PendingSuggestion>;
+
+    /// Lookup the pending suggestion for `pid`, if any. Used by detail
+    /// panels and the status bar.
+    fn pending_for(&self, pid: u32) -> Option<PendingSuggestion>;
+
+    /// Total pending suggestion count. Used by the status bar.
+    fn pending_count(&self) -> usize;
+
+    /// Drop every pending suggestion. Called when the brain mode flips
+    /// off or the operator resets state.
+    fn clear_pending(&mut self);
+}
+
+// ============================================================================
 // Runtime aggregate
 // ============================================================================
 
