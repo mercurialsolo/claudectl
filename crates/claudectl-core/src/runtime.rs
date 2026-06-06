@@ -87,6 +87,24 @@ pub enum BrainGateMode {
     Auto,
 }
 
+impl BrainGateMode {
+    /// Canonical lowercase label — the form persisted to
+    /// `~/.claudectl/brain/gate-mode` and emitted by the TUI status messages.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+impl std::fmt::Display for BrainGateMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A single past brain decision, projected for display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionSummary {

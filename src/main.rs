@@ -979,6 +979,11 @@ fn run_tui<W: io::Write>(
     max_duration: Option<Duration>,
 ) -> io::Result<()> {
     let mut app = App::new();
+    // Replace the App's default in-memory MockRuntime with a real one wired
+    // to the live brain / coord / bus / discovery subsystems. App::new
+    // intentionally uses a mock so its many test call sites stay parameter-
+    // free; the production wiring happens here, in main.
+    app.runtime = runtime::build_runtime();
     app.notify = cfg.notify;
     app.debug = cfg.debug;
     app.webhook_url = cfg.webhook.clone();

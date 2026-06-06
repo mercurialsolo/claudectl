@@ -4,9 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
 use crate::discovery;
-use crate::helpers::{
-    create_aggregate_session, dirs_home, fire_notification, fire_webhook, kill_process,
-};
+use crate::helpers::{create_aggregate_session, dirs_home, fire_notification, fire_webhook};
 use crate::hooks::{HookEvent, HookRegistry};
 use crate::launch::{self, LaunchRequest};
 use crate::monitor;
@@ -388,6 +386,13 @@ pub struct App {
     pub brain_note_input_mode: bool,
     /// Buffer for the in-progress note.
     pub brain_note_buffer: String,
+
+    /// UI ↔ runtime contract (epic #279, issue #275). `App::new` starts with
+    /// an in-memory `MockRuntime`; `main` swaps in the live runtime at
+    /// startup. Call sites prefer `self.runtime.{view,actions,...}.method()`
+    /// over `crate::brain::*` / `crate::coord::*` so that future TUI
+    /// extraction is a mechanical file move.
+    pub runtime: claudectl_core::runtime::Runtime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,6 +479,23 @@ impl Default for App {
     }
 }
 
+/// Build a runtime `ObservationInput` from the live session + an observed-
+/// action label. Centralizes the projection so call sites don't repeat the
+/// field plumbing (cf. the 5 sites that used to call
+/// `brain::decisions::log_observation` directly).
+fn observation_from(
+    session: &ClaudeSession,
+    action: &str,
+) -> claudectl_core::runtime::ObservationInput {
+    claudectl_core::runtime::ObservationInput {
+        session_pid: session.pid,
+        project: session.display_name().to_string(),
+        tool: session.pending_tool_name.clone(),
+        command: session.pending_tool_input.clone(),
+        observed_action: action.to_string(),
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         let mut app = Self {
@@ -538,6 +560,7 @@ impl App {
             health_thresholds: crate::config::HealthThresholds::default(),
             brain_config: None,
             brain_engine: None,
+            runtime: claudectl_core::runtime::MockRuntime::default().into_runtime(),
             idle_config: crate::config::IdleConfig::default(),
             last_user_interaction: std::time::Instant::now(),
             idle_mode_active: false,
@@ -704,7 +727,7 @@ impl App {
                 if pct >= 100.0 && !self.budget_killed.contains(&session.pid) {
                     self.budget_killed.insert(session.pid);
                     if self.kill_on_budget {
-                        let _ = kill_process(session.pid);
+                        let _ = self.runtime.actions.terminate_session(session.pid);
                         self.status_msg = format!(
                             "BUDGET EXCEEDED: Killed {} (${:.2}/${:.2})",
                             session.display_name(),
@@ -1516,14 +1539,10 @@ impl App {
 
         for pid in legacy_pids {
             if let Some(session) = self.sessions.iter().find(|s| s.pid == pid) {
-                crate::brain::decisions::log_observation(
-                    session.pid,
-                    session.display_name(),
-                    session.pending_tool_name.as_deref(),
-                    session.pending_tool_input.as_deref(),
-                    "user_approve",
-                    Some(session),
-                );
+                let _ = self
+                    .runtime
+                    .actions
+                    .log_observation(observation_from(session, "user_approve"));
                 match terminals::approve_session(session) {
                     Ok(()) => self.status_msg = format!("Auto-approved {}", session.display_name()),
                     Err(e) => self.status_msg = format!("Auto-approve error: {e}"),
@@ -1567,17 +1586,13 @@ impl App {
                 }
                 if let Some(session) = self.sessions.iter().find(|s| s.pid == pid) {
                     // Log passive observation: conflict auto-deny
-                    crate::brain::decisions::log_observation(
-                        session.pid,
-                        session.display_name(),
-                        session.pending_tool_name.as_deref(),
-                        session.pending_tool_input.as_deref(),
-                        "conflict_deny",
-                        Some(session),
-                    );
+                    let _ = self
+                        .runtime
+                        .actions
+                        .log_observation(observation_from(session, "conflict_deny"));
                     let short = file.rsplit('/').next().unwrap_or(&file);
                     let msg = format!("File {short} is being edited by {other}");
-                    match terminals::send_input(session, &msg) {
+                    match self.runtime.actions.inject_text(&session.session_id, &msg) {
                         Ok(()) => {
                             let status = format!(
                                 "File conflict: denied {} edit to {short}",
@@ -1631,14 +1646,10 @@ impl App {
 
                 // Log passive observation: static rule fired
                 let obs_action = format!("rule_{}", rule_match.action.label());
-                crate::brain::decisions::log_observation(
-                    session.pid,
-                    session.display_name(),
-                    session.pending_tool_name.as_deref(),
-                    session.pending_tool_input.as_deref(),
-                    &obs_action,
-                    Some(session),
-                );
+                let _ = self
+                    .runtime
+                    .actions
+                    .log_observation(observation_from(session, &obs_action));
 
                 let msg = crate::rules::execute(&rule_match, session);
                 match msg {
@@ -1777,7 +1788,7 @@ impl App {
         let name = session.display_name().to_string();
 
         if self.pending_kill == Some(pid) {
-            match kill_process(pid) {
+            match self.runtime.actions.terminate_session(pid) {
                 Ok(()) => {
                     self.status_msg = format!("Killed {name} (PID {pid})");
                     self.auto_approve.remove(&pid);
@@ -1883,16 +1894,12 @@ impl App {
                 if let Some(pid) = self.input_target_pid {
                     if let Some(session) = self.sessions.iter().find(|s| s.pid == pid) {
                         // Log passive observation: user sent manual input
-                        crate::brain::decisions::log_observation(
-                            session.pid,
-                            session.display_name(),
-                            session.pending_tool_name.as_deref(),
-                            session.pending_tool_input.as_deref(),
-                            "user_input",
-                            Some(session),
-                        );
+                        let _ = self
+                            .runtime
+                            .actions
+                            .log_observation(observation_from(session, "user_input"));
                         let text = format!("{}\n", self.input_buffer);
-                        match terminals::send_input(session, &text) {
+                        match self.runtime.actions.inject_text(&session.session_id, &text) {
                             Ok(()) => {
                                 self.status_msg = format!("Sent to {}", session.display_name())
                             }
@@ -2064,7 +2071,11 @@ impl App {
             self.brain_status_msg = Some("No decision_id — older record, can't mark.".into());
             return;
         };
-        match crate::brain::review::mark_by_id(&id, note) {
+        match self
+            .runtime
+            .actions
+            .mark_canonical(&id, note.map(String::from))
+        {
             Ok(()) => {
                 self.brain_status_msg = Some(if note.is_some() {
                     format!("Marked canonical with note: {id}")
@@ -2644,14 +2655,10 @@ impl App {
             }
             if session.status == SessionStatus::NeedsInput {
                 // Log passive observation: user approved without brain involvement
-                crate::brain::decisions::log_observation(
-                    session.pid,
-                    session.display_name(),
-                    session.pending_tool_name.as_deref(),
-                    session.pending_tool_input.as_deref(),
-                    "user_approve",
-                    Some(session),
-                );
+                let _ = self
+                    .runtime
+                    .actions
+                    .log_observation(observation_from(session, "user_approve"));
                 match terminals::approve_session(session) {
                     Ok(()) => self.status_msg = format!("Approved {}", session.display_name()),
                     Err(e) => self.status_msg = format!("Error: {e}"),
@@ -2756,30 +2763,25 @@ impl App {
     }
 
     fn toggle_brain_gate(&mut self) {
-        let current = crate::brain::read_gate_mode();
-        let next = match current.as_str() {
-            "on" => "off",
-            "off" => "on",
-            "auto" => "off",
-            _ => "on",
+        use claudectl_core::runtime::BrainGateMode;
+        let current = self.runtime.brain.gate_mode();
+        // Toggle: On → Off, Off → On, Auto → Off. The wizard flips through
+        // runtime.actions so the on-disk format stays in sync with what
+        // BrainView reports next refresh.
+        let next = match current {
+            BrainGateMode::On => BrainGateMode::Off,
+            BrainGateMode::Off => BrainGateMode::On,
+            BrainGateMode::Auto => BrainGateMode::Off,
         };
-
-        let path = crate::brain::gate_mode_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        if next == "on" {
-            // "on" is the default — remove the file so absence = on
-            let _ = std::fs::remove_file(&path);
-        } else {
-            let _ = std::fs::write(&path, next);
+        if let Err(e) = self.runtime.actions.set_gate_mode(next) {
+            self.status_msg = format!("Brain: gate-mode update failed: {e}");
+            return;
         }
 
         let description = match next {
-            "on" => "active — evaluating tool calls",
-            "off" => "disabled — normal permission flow",
-            _ => unreachable!(),
+            BrainGateMode::On => "active — evaluating tool calls",
+            BrainGateMode::Off => "disabled — normal permission flow",
+            BrainGateMode::Auto => "auto — automatic decisions",
         };
         self.status_msg = format!("Brain: {description}");
         crate::logger::log("BRAIN", &format!("Gate mode toggled: {current} → {next}"));
@@ -2822,7 +2824,11 @@ impl App {
             }
             match session.status {
                 SessionStatus::WaitingInput | SessionStatus::Idle => {
-                    match terminals::send_input(session, "/compact\n") {
+                    match self
+                        .runtime
+                        .actions
+                        .inject_text(&session.session_id, "/compact\n")
+                    {
                         Ok(()) => {
                             self.status_msg = format!("Sent /compact to {}", session.display_name())
                         }
