@@ -140,6 +140,10 @@ pub struct LeaseSummary {
     pub resource_value: String,
     pub mode: String,
     pub acquired_at: String,
+    /// ISO timestamp when the lease expires. `None` for leases held without
+    /// an explicit deadline.
+    #[serde(default)]
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

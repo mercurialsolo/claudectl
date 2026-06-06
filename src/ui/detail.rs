@@ -254,13 +254,13 @@ pub fn render_detail_panel(frame: &mut Frame, area: Rect, session: &ClaudeSessio
     // Coordination section (leases and handoffs for this session)
     #[cfg(feature = "coord")]
     {
-        let session_leases: Vec<&crate::coord::types::Lease> = app
+        let session_leases: Vec<&claudectl_core::runtime::LeaseSummary> = app
             .coord_leases
             .iter()
             .filter(|l| l.owner_session_id == session.session_id)
             .collect();
 
-        let session_handoffs: Vec<&crate::coord::types::Handoff> = app
+        let session_handoffs: Vec<&claudectl_core::runtime::HandoffSummary> = app
             .coord_handoffs
             .iter()
             .filter(|h| {
@@ -319,7 +319,7 @@ pub fn render_detail_panel(frame: &mut Frame, area: Rect, session: &ClaudeSessio
             }
 
             // Pending interrupts targeting this session
-            let session_interrupts: Vec<&crate::coord::types::Interrupt> = app
+            let session_interrupts: Vec<&claudectl_core::runtime::InterruptSummary> = app
                 .coord_pending_interrupts
                 .iter()
                 .filter(|i| i.target_session_id == session.session_id)

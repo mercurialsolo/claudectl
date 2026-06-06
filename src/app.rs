@@ -319,9 +319,9 @@ pub struct App {
     pub idle_report: Vec<String>,
     // Coordination layer (feature-gated)
     #[cfg(feature = "coord")]
-    pub coord_leases: Vec<crate::coord::types::Lease>,
+    pub coord_leases: Vec<claudectl_core::runtime::LeaseSummary>,
     #[cfg(feature = "coord")]
-    pub coord_handoffs: Vec<crate::coord::types::Handoff>,
+    pub coord_handoffs: Vec<claudectl_core::runtime::HandoffSummary>,
     #[cfg(feature = "coord")]
     pub coord_lease_sessions: HashSet<String>,
     #[cfg(feature = "coord")]
@@ -329,7 +329,7 @@ pub struct App {
     #[cfg(feature = "coord")]
     pub coord_interrupt_targets: HashSet<String>,
     #[cfg(feature = "coord")]
-    pub coord_pending_interrupts: Vec<crate::coord::types::Interrupt>,
+    pub coord_pending_interrupts: Vec<claudectl_core::runtime::InterruptSummary>,
     #[cfg(feature = "coord")]
     pub coord_tick: u32,
     // Relay peers panel (feature-gated)
@@ -1379,18 +1379,24 @@ impl App {
         }
     }
 
-    /// Refresh cached coordination state from SQLite.
+    /// Refresh cached coordination state from the runtime.
+    ///
+    /// The `expire_stale_*` calls remain direct because they're side-effects
+    /// on the SQLite store (bookkeeping), not part of the read-only
+    /// `CoordView` surface. The actual list queries go through the runtime
+    /// trait so the binary-coord coupling stays one layer thick.
     #[cfg(feature = "coord")]
     pub fn coord_refresh(&mut self) {
-        let conn = match crate::coord::store::open() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let _ = crate::coord::store::expire_stale_leases(&conn);
-        self.coord_leases =
-            crate::coord::store::list_leases(&conn, Some(crate::coord::types::LeaseStatus::Active))
-                .unwrap_or_default();
-        self.coord_handoffs = crate::coord::store::list_pending_handoffs(&conn).unwrap_or_default();
+        // Bookkeeping (expire stale rows). Best-effort; failures are logged
+        // by the store itself.
+        if let Ok(conn) = crate::coord::store::open() {
+            let _ = crate::coord::store::expire_stale_leases(&conn);
+            let _ = crate::coord::store::expire_stale_interrupts(&conn);
+        }
+
+        self.coord_leases = self.runtime.coord.active_leases();
+        self.coord_handoffs = self.runtime.coord.pending_handoffs();
+        self.coord_pending_interrupts = self.runtime.coord.pending_interrupts();
 
         self.coord_lease_sessions = self
             .coord_leases
@@ -1408,13 +1414,6 @@ impl App {
                 ids
             })
             .collect();
-
-        let _ = crate::coord::store::expire_stale_interrupts(&conn);
-        self.coord_pending_interrupts = crate::coord::store::list_interrupts(
-            &conn,
-            Some(crate::coord::types::InterruptState::Pending),
-        )
-        .unwrap_or_default();
         self.coord_interrupt_targets = self
             .coord_pending_interrupts
             .iter()
