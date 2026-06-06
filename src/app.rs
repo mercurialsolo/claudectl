@@ -308,7 +308,10 @@ pub struct App {
     pub last_rule_action: Option<String>,                     // Last auto-action status for display
     pub health_thresholds: crate::config::HealthThresholds,
     pub brain_config: Option<crate::config::BrainConfig>,
-    pub brain_engine: Option<crate::brain::engine::BrainEngine>,
+    /// Stateful brain driver, swapped in by `main.rs` when the brain is
+    /// configured. Held as `Box<dyn BrainDriver>` (not `Arc`) because every
+    /// method needs `&mut`. `None` when the brain is off.
+    pub brain_driver: Option<Box<dyn claudectl_core::runtime::BrainDriver>>,
     pub idle_config: crate::config::IdleConfig,
     pub last_user_interaction: std::time::Instant,
     pub idle_mode_active: bool,
@@ -479,6 +482,43 @@ impl Default for App {
     }
 }
 
+/// Inverse projection: lift a core `PendingSuggestion` back to the binary's
+/// `BrainSuggestion` for the call sites that still need it (notably
+/// `brain::decisions::log_decision`, which is intentionally not on the
+/// `Actions` trait per the #289 scope decision). Falls back to
+/// `RuleAction::Approve` when the string label doesn't parse — the only
+/// callers today come from the driver, so the action is always a known
+/// label and the fallback is unreachable in practice.
+fn pending_to_brain_suggestion(
+    p: &claudectl_core::runtime::PendingSuggestion,
+) -> crate::brain::client::BrainSuggestion {
+    crate::brain::client::BrainSuggestion {
+        action: claudectl_core::rules::RuleAction::parse(&p.action)
+            .unwrap_or(claudectl_core::rules::RuleAction::Approve),
+        message: p.message.clone(),
+        reasoning: p.reasoning.clone(),
+        confidence: p.confidence,
+        suggested_at: p.suggested_at,
+    }
+}
+
+/// Project a live `ClaudeSession` to the core `SessionSnapshot` DTO the
+/// runtime traits accept. Used by `BrainDriver` call sites that have the
+/// live values in memory already.
+fn snapshot_from(session: &ClaudeSession) -> claudectl_core::runtime::SessionSnapshot {
+    claudectl_core::runtime::SessionSnapshot {
+        session_id: session.session_id.clone(),
+        pid: session.pid,
+        cwd: session.cwd.clone(),
+        project_name: session.project_name.clone(),
+        status: session.status.to_string(),
+        cost_usd: session.cost_usd,
+        context_tokens: session.context_tokens,
+        context_max: session.context_max,
+        last_message_ts: session.last_message_ts,
+    }
+}
+
 /// Build a runtime `ObservationInput` from the live session + an observed-
 /// action label. Centralizes the projection so call sites don't repeat the
 /// field plumbing (cf. the 5 sites that used to call
@@ -559,7 +599,7 @@ impl App {
             last_rule_action: None,
             health_thresholds: crate::config::HealthThresholds::default(),
             brain_config: None,
-            brain_engine: None,
+            brain_driver: None,
             runtime: claudectl_core::runtime::MockRuntime::default().into_runtime(),
             idle_config: crate::config::IdleConfig::default(),
             last_user_interaction: std::time::Instant::now(),
@@ -1205,27 +1245,26 @@ impl App {
             }
         }
 
-        // Inject fake brain pending suggestions so the status bar shows brain activity
-        if let Some(ref mut engine) = self.brain_engine {
-            engine.pending.clear();
-            // At certain phases, show a pending suggestion for a NeedsInput session
+        // Inject fake brain pending suggestions so the status bar shows brain activity.
+        // Demo mode flows through the BrainDriver trait's set_pending escape hatch
+        // rather than mutating an engine field directly — same path the real brain
+        // would take.
+        if let Some(ref mut driver) = self.brain_driver {
+            driver.clear_pending();
             let phase = self.demo_tick % 32;
             if (9..=12).contains(&phase) {
-                // Find a NeedsInput session to attach the suggestion to
                 if let Some(s) = sessions
                     .iter()
                     .find(|s| s.status == SessionStatus::NeedsInput)
                 {
-                    engine.pending.insert(
-                        s.pid,
-                        crate::brain::client::BrainSuggestion {
-                            action: crate::rules::RuleAction::Approve,
-                            message: s.pending_tool_input.clone(),
-                            reasoning: "Safe build command, no side effects".into(),
-                            confidence: 0.92,
-                            suggested_at: 0,
-                        },
-                    );
+                    driver.set_pending(claudectl_core::runtime::PendingSuggestion {
+                        pid: s.pid,
+                        action: "approve".into(),
+                        message: s.pending_tool_input.clone(),
+                        reasoning: "Safe build command, no side effects".into(),
+                        confidence: 0.92,
+                        suggested_at: 0,
+                    });
                 }
             }
             if (14..=16).contains(&phase) {
@@ -1233,16 +1272,14 @@ impl App {
                     .iter()
                     .find(|s| s.status == SessionStatus::NeedsInput)
                 {
-                    engine.pending.insert(
-                        s.pid,
-                        crate::brain::client::BrainSuggestion {
-                            action: crate::rules::RuleAction::Deny,
-                            message: s.pending_tool_input.clone(),
-                            reasoning: "Destructive operation, needs manual review".into(),
-                            confidence: 0.87,
-                            suggested_at: 0,
-                        },
-                    );
+                    driver.set_pending(claudectl_core::runtime::PendingSuggestion {
+                        pid: s.pid,
+                        action: "deny".into(),
+                        message: s.pending_tool_input.clone(),
+                        reasoning: "Destructive operation, needs manual review".into(),
+                        confidence: 0.87,
+                        suggested_at: 0,
+                    });
                 }
             }
         }
@@ -1669,7 +1706,7 @@ impl App {
         } // end if !self.rules.is_empty()
 
         // Brain inference (opt-in, runs after rules)
-        if let Some(ref mut engine) = self.brain_engine {
+        if let Some(ref mut driver) = self.brain_driver {
             // Collect deny-only rules for override checking
             let deny_rules: Vec<_> = self
                 .rules
@@ -1678,13 +1715,14 @@ impl App {
                 .cloned()
                 .collect();
 
-            let actions = engine.tick(&self.sessions, &deny_rules);
+            let snapshots: Vec<_> = self.sessions.iter().map(snapshot_from).collect();
+            let actions = driver.tick(&snapshots, &deny_rules);
             for (_pid, msg) in actions {
                 crate::logger::log("BRAIN", &msg);
                 self.status_msg = msg;
             }
 
-            engine.cleanup(&self.sessions);
+            driver.cleanup(&snapshots);
 
             // Deliver pending mailbox messages to sessions waiting for input
             let deliveries = crate::brain::mailbox::deliver_pending(&self.sessions);
@@ -2683,42 +2721,40 @@ impl App {
             return;
         }
         let pid = session.pid;
-        let Some(ref mut engine) = self.brain_engine else {
+        let Some(ref mut driver) = self.brain_driver else {
             self.status_msg = "Brain is not enabled".into();
             return;
         };
         // Get suggestion before accept (for logging)
-        let suggestion = engine.pending.get(&pid).cloned();
-        if suggestion.is_none() {
+        let suggestion = driver.pending_for(pid);
+        let Some(sg) = suggestion else {
             self.status_msg = "No brain suggestion pending for this session".into();
+            return;
+        };
+
+        // If brain suggested deny and no override reason yet, prompt for one
+        if sg.action == "deny" && override_reason.is_none() {
+            self.pending_override_reason = Some(pid);
+            self.status_msg =
+                "Override reason: [1] Always safe  [2] One-time exception  [3] Brain is wrong  [Esc] Cancel"
+                    .into();
             return;
         }
 
-        // If brain suggested deny and no override reason yet, prompt for one
-        if let Some(ref sg) = suggestion {
-            if sg.action.label() == "deny" && override_reason.is_none() {
-                self.pending_override_reason = Some(pid);
-                self.status_msg =
-                    "Override reason: [1] Always safe  [2] One-time exception  [3] Brain is wrong  [Esc] Cancel"
-                        .into();
-                return;
-            }
-        }
-
-        if let Some(msg) = engine.accept(pid, &session) {
-            if let Some(ref sg) = suggestion {
-                crate::brain::decisions::log_decision(
-                    pid,
-                    session.display_name(),
-                    session.pending_tool_name.as_deref(),
-                    session.pending_tool_input.as_deref(),
-                    sg,
-                    "accept",
-                    Some(&session),
-                    crate::brain::decisions::DecisionType::Session,
-                    override_reason,
-                );
-            }
+        if let Some(msg) = driver.accept(pid) {
+            // log_decision is intentionally NOT on the Actions trait yet
+            // (see #289 scope decision). Stays as a direct call.
+            crate::brain::decisions::log_decision(
+                pid,
+                session.display_name(),
+                session.pending_tool_name.as_deref(),
+                session.pending_tool_input.as_deref(),
+                &pending_to_brain_suggestion(&sg),
+                "accept",
+                Some(&session),
+                crate::brain::decisions::DecisionType::Session,
+                override_reason,
+            );
             crate::logger::log("BRAIN", &format!("Accepted: {msg}"));
             self.status_msg = msg;
         }
@@ -2734,17 +2770,17 @@ impl App {
             return;
         }
         let pid = session.pid;
-        let Some(ref mut engine) = self.brain_engine else {
+        let Some(ref mut driver) = self.brain_driver else {
             self.status_msg = "Brain is not enabled".into();
             return;
         };
-        if let Some(suggestion) = engine.reject(pid) {
+        if let Some(suggestion) = driver.reject(pid) {
             crate::brain::decisions::log_decision(
                 pid,
                 session.display_name(),
                 session.pending_tool_name.as_deref(),
                 session.pending_tool_input.as_deref(),
-                &suggestion,
+                &pending_to_brain_suggestion(&suggestion),
                 "reject",
                 Some(&session),
                 crate::brain::decisions::DecisionType::Session,
@@ -2752,8 +2788,7 @@ impl App {
             );
             let msg = format!(
                 "Rejected brain suggestion: {} ({})",
-                suggestion.action.label(),
-                suggestion.reasoning,
+                suggestion.action, suggestion.reasoning,
             );
             crate::logger::log("BRAIN", &msg);
             self.status_msg = msg;

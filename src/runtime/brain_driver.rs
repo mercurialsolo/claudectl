@@ -88,6 +88,25 @@ impl BrainDriver for LiveBrainDriver {
     fn clear_pending(&mut self) {
         self.engine.pending.clear();
     }
+
+    fn set_pending(&mut self, suggestion: PendingSuggestion) {
+        // The trait carries `action` as a string for flexibility; the engine
+        // needs a real `RuleAction`. Best-effort: drop the suggestion if it
+        // doesn't parse rather than error out (demo callers are permissive).
+        let Some(action) = claudectl_core::rules::RuleAction::parse(&suggestion.action) else {
+            return;
+        };
+        self.engine.pending.insert(
+            suggestion.pid,
+            BrainSuggestion {
+                action,
+                message: suggestion.message,
+                reasoning: suggestion.reasoning,
+                confidence: suggestion.confidence,
+                suggested_at: suggestion.suggested_at,
+            },
+        );
+    }
 }
 
 fn suggestion_from_brain(pid: u32, s: BrainSuggestion) -> PendingSuggestion {

@@ -340,6 +340,12 @@ pub trait BrainDriver: Send {
     /// Drop every pending suggestion. Called when the brain mode flips
     /// off or the operator resets state.
     fn clear_pending(&mut self);
+
+    /// Inject a pending suggestion for `pid`. Used by demo mode to fake
+    /// brain activity for screenshots / recordings. Implementations may
+    /// drop suggestions whose `action` string doesn't map to a known
+    /// engine action (rather than erroring out) — demo is best-effort.
+    fn set_pending(&mut self, suggestion: PendingSuggestion);
 }
 
 // ============================================================================

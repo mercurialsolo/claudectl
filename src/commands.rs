@@ -988,7 +988,9 @@ pub(crate) fn run_headless(
     if let Some(ref brain_cfg) = cfg.brain {
         if brain_cfg.enabled {
             if check_brain_endpoint(&brain_cfg.endpoint, brain_cfg.timeout_ms) {
-                app.brain_engine = Some(crate::brain::engine::BrainEngine::new(brain_cfg.clone()));
+                app.brain_driver = Some(Box::new(crate::runtime::LiveBrainDriver::new(
+                    crate::brain::engine::BrainEngine::new(brain_cfg.clone()),
+                )));
                 emit_headless_event(
                     "startup",
                     serde_json::json!({

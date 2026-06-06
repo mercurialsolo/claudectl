@@ -1005,7 +1005,9 @@ fn run_tui<W: io::Write>(
     if let Some(ref brain_cfg) = cfg.brain {
         if brain_cfg.enabled {
             if commands::check_brain_endpoint(&brain_cfg.endpoint, brain_cfg.timeout_ms) {
-                app.brain_engine = Some(brain::engine::BrainEngine::new(brain_cfg.clone()));
+                app.brain_driver = Some(Box::new(runtime::LiveBrainDriver::new(
+                    brain::engine::BrainEngine::new(brain_cfg.clone()),
+                )));
                 app.status_msg = format!(
                     "Brain: connected to {} ({})",
                     brain_cfg.endpoint, brain_cfg.model
@@ -1026,10 +1028,10 @@ fn run_tui<W: io::Write>(
         app.budget_usd = Some(10.0);
         app.rules = demo::demo_rules();
         // Create a stub brain engine so the status bar can show brain suggestions
-        if app.brain_engine.is_none() {
-            app.brain_engine = Some(brain::engine::BrainEngine::new(
-                config::BrainConfig::default(),
-            ));
+        if app.brain_driver.is_none() {
+            app.brain_driver = Some(Box::new(runtime::LiveBrainDriver::new(
+                brain::engine::BrainEngine::new(config::BrainConfig::default()),
+            )));
         }
         // Re-refresh to replace real sessions discovered during App::new()
         app.refresh();

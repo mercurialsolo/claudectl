@@ -107,9 +107,9 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(t.error).add_modifier(Modifier::BOLD),
         ));
         frame.render_widget(msg, area);
-    } else if let Some(ref engine) = app.brain_engine {
-        if !engine.pending.is_empty() {
-            let count = engine.pending.len();
+    } else if let Some(ref driver) = app.brain_driver {
+        if driver.pending_count() > 0 {
+            let count = driver.pending_count();
             let label = if count == 1 {
                 "1 suggestion".into()
             } else {
