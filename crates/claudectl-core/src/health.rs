@@ -1,7 +1,49 @@
 #![allow(dead_code)]
 
-use crate::config::HealthThresholds;
 use crate::session::ClaudeSession;
+
+/// Tunable thresholds for the health checks below. Lives here (not in
+/// `config`) because health is a foundational `claudectl-core` concern; the
+/// binary's `config::Config` re-exports this type and parses TOML overrides
+/// against it.
+#[derive(Debug, Clone)]
+pub struct HealthThresholds {
+    pub cache_critical_pct: f64,
+    pub cache_warning_pct: f64,
+    pub cache_min_tokens: u64,
+    pub cost_spike_critical: f64,
+    pub cost_spike_warning: f64,
+    pub loop_max_calls: u32,
+    pub stall_min_cost: f64,
+    pub stall_min_minutes: u64,
+    pub context_critical_pct: f64,
+    pub context_warning_pct: f64,
+    pub decay_compaction_pct: f64,
+    pub efficiency_critical_factor: f64,
+    pub error_accel_factor: f64,
+    pub repetition_threshold: u32,
+}
+
+impl Default for HealthThresholds {
+    fn default() -> Self {
+        Self {
+            cache_critical_pct: 10.0,
+            cache_warning_pct: 30.0,
+            cache_min_tokens: 10_000,
+            cost_spike_critical: 5.0,
+            cost_spike_warning: 2.5,
+            loop_max_calls: 10,
+            stall_min_cost: 5.0,
+            stall_min_minutes: 10,
+            context_critical_pct: 90.0,
+            context_warning_pct: 80.0,
+            decay_compaction_pct: 50.0,
+            efficiency_critical_factor: 2.0,
+            error_accel_factor: 2.0,
+            repetition_threshold: 3,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {

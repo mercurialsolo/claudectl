@@ -12,8 +12,8 @@
 // extracts the TUI into its own crate it will depend on claudectl-core
 // directly and these aliases can disappear.
 pub use claudectl_core::{
-    discovery, helpers, history, logger, models, monitor, process, session, terminals, theme,
-    transcript,
+    discovery, health, helpers, history, logger, models, monitor, process, rules, session,
+    terminals, theme, transcript,
 };
 pub mod config;
 
@@ -24,7 +24,6 @@ pub mod bus;
 #[cfg(feature = "coord")]
 pub mod coord;
 pub mod demo;
-pub mod health;
 #[cfg(feature = "hive")]
 pub mod hive;
 pub mod hooks;
@@ -34,7 +33,6 @@ pub mod orchestrator;
 pub mod recorder;
 #[cfg(feature = "relay")]
 pub mod relay;
-pub mod rules;
 pub mod runtime;
 pub mod session_recorder;
 pub mod skills;
