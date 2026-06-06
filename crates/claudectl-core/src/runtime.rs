@@ -707,6 +707,10 @@ mod tests {
                     user_action: None,
                     override_reason: None,
                     brain_decision_ms: None,
+                    canonical: None,
+                    cache_hit: None,
+                    cost_usd: None,
+                    model: None,
                 })
                 .collect(),
             ..Default::default()
