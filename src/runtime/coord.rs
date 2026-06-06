@@ -70,6 +70,7 @@ fn lease_summary_from(l: crate::coord::types::Lease) -> LeaseSummary {
         resource_value: l.resource_value,
         mode: l.mode.to_string(),
         acquired_at: l.acquired_at,
+        expires_at: l.expires_at,
     }
 }
 
