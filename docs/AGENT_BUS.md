@@ -11,7 +11,7 @@
 | 2. In-process bus MCP server, autostarted | **Partial** — runs as a stdio subprocess (`claudectl bus stdio`); the in-process autostart-with-TUI form (Unix-socket singleton) is not built yet. | `src/bus/mcp.rs`, `claude-plugin/.mcp.json` |
 | 3. Provisioning (role binding + plugin install + hook capability probe) | **Folded into [`claudectl init`](https://github.com/mercurialsolo/claudectl/issues/257)** — there is no separate `claudectl setup` verb. Non-interactive equivalent ships today as `claudectl bus role bind <name> <cwd>`. | — |
 | 4. Mailbox + directed `publish` / `read_inbox` | **Shipped** | `src/bus/store.rs`, `src/bus/mcp.rs` |
-| 5. `Stop` hook → `read_inbox` (Trigger A) + `/inbox` fallback (Trigger B) | **Partial** — `/inbox` slash command ships; `Stop` hook + continue-in-turn not yet. | `claude-plugin/commands/inbox.md` |
+| 5. `Stop` hook → `read_inbox` (Trigger A) + `/inbox` fallback (Trigger B) | **Shipped (Trigger A continue-in-turn + Trigger B)** | `src/bus/stop_hook.rs`, `claude-plugin/hooks/scripts/inbox-drain.sh`, `claude-plugin/commands/inbox.md` |
 | 6. Command sanitization + content validation | **Shipped (subset)** — leading-`/` neutralized, body cap, subject grammar, type allowlist. Hop/rate/echo guards not yet. | `src/bus/policy.rs` |
 | 7. Subjects + `subscribe` + claim protocol | **Not started** | — |
 | 8. Flow guards (rate/hop/loop/cost) + ACLs | **Not started** | — |

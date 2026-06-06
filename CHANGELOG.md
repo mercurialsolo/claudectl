@@ -2,6 +2,23 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.52.0] - 2026-06-06
+
+### Added
+- **Agent bus Stop-hook delivery (Trigger A, phase 5 of `docs/AGENT_BUS.md`)** — closes the loop on bus messaging. After every turn finishes, the Claude Code plugin's new `Stop` hook drains the caller's mailbox and, when mail is present, returns `decision: "block"` with the rendered messages as `additionalContext`. The agent picks the work up **in the same turn** without waiting for the user to type `/inbox`. The bus is now self-driving.
+- **`claudectl bus stop-hook` subcommand** — owns the Claude Code Stop-hook output protocol. Silent + exit 0 on every failure mode (no role bound, empty inbox, missing DB, ambiguous cwd) so the hook can never block a session because of a bus problem. All logic lives in Rust (`src/bus/stop_hook.rs`) where it is unit-tested.
+- **`--json` flag on `bus inbox` and `bus whoami`** — machine-readable output for tooling. `inbox --json` soft-fails on unbound/ambiguous cwds (returns `{"role":null,"messages":[],"note":"..."}`) so the Stop hook never errors out on a session that hasn't bound a role yet.
+- **`claude-plugin/hooks/scripts/inbox-drain.sh`** — Stop-hook wrapper installed by the plugin. Intentionally thin: protects against the case where `claudectl` is not on PATH, then delegates to `claudectl bus stop-hook`. Wired into `hooks.json` with a 5 s timeout.
+
+### Internals
+- New `src/bus/stop_hook.rs` module owning the Stop-output schema (`StopHookResponse`, `HookSpecificOutput`) and the markdown rendering of drained messages into context. Decoupled from the CLI so the schema is independently testable.
+- `dispatch_inbox` / `dispatch_whoami` in `src/bus/cli.rs` refactored to separate data-fetch from rendering. Both now share a single `fetch_inbox` helper; human and JSON paths render the same `InboxOutcome` differently.
+- 5 new unit tests covering Stop-hook envelope shape, pluralization, JSON wire format, and the critical "no raw newlines inside the JSON string fields" invariant (caught a real bug in development).
+
+### Compatibility
+- `claudectl bus inbox` without `--json` is unchanged — human-readable output, errors interactively on unbound/ambiguous cwds.
+- No new dependencies. Stop hook ships behind the existing `bus` feature.
+
 ## [0.51.0] - 2026-06-06
 
 ### Added

@@ -16,6 +16,7 @@ pub mod cli;
 pub mod mcp;
 pub mod policy;
 pub mod roles;
+pub mod stop_hook;
 pub mod store;
 
 #[allow(unused_imports)]

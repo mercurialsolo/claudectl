@@ -13,11 +13,13 @@
 use std::path::PathBuf;
 
 use clap::Subcommand;
+use serde::Serialize;
 
 use super::mcp;
 use super::policy::{self, DEFAULT_MAX_BODY_BYTES};
 use super::roles::{self, RoleResolution};
-use super::store;
+use super::stop_hook;
+use super::store::{self, MessageRow};
 
 #[derive(Subcommand)]
 pub enum BusCommand {
@@ -52,12 +54,25 @@ pub enum BusCommand {
         /// Role to drain. Defaults to cwd inference.
         #[arg(long)]
         role: Option<String>,
+        /// Emit a machine-readable JSON payload instead of human text. Used by
+        /// the Stop hook (Trigger A); soft-fails on unbound/ambiguous cwds so
+        /// the hook never blocks a session.
+        #[arg(long)]
+        json: bool,
     },
     /// Report which role the current cwd resolves to.
     Whoami {
         #[arg(long)]
         role: Option<String>,
+        /// Emit a machine-readable JSON payload instead of human text.
+        #[arg(long)]
+        json: bool,
     },
+    /// Stop-hook driver for the Claude Code plugin (Trigger A). Drains the
+    /// caller's mailbox; when there's mail, emits Stop-hook output so the
+    /// agent picks the work up in-turn. Silent + exit 0 in every other case
+    /// so a missing role / empty inbox / unbound cwd never blocks a session.
+    StopHook,
 }
 
 #[derive(Subcommand)]
@@ -92,8 +107,9 @@ pub fn dispatch(cmd: &BusCommand) -> Result<(), String> {
             from,
             priority,
         } => dispatch_send(to, body, subject, msg_type, from.as_deref(), priority),
-        BusCommand::Inbox { role } => dispatch_inbox(role.as_deref()),
-        BusCommand::Whoami { role } => dispatch_whoami(role.as_deref()),
+        BusCommand::Inbox { role, json } => dispatch_inbox(role.as_deref(), *json),
+        BusCommand::Whoami { role, json } => dispatch_whoami(role.as_deref(), *json),
+        BusCommand::StopHook => dispatch_stop_hook(),
     }
 }
 
@@ -156,29 +172,108 @@ fn dispatch_send(
     Ok(())
 }
 
-fn dispatch_inbox(role: Option<&str>) -> Result<(), String> {
+// ---------------- Inbox -----------------------------------------------------
+
+/// Result of a single drain pass — the resolved role (if any), why the role
+/// couldn't be resolved (if applicable), and the drained messages. Built once,
+/// rendered as either human text or JSON.
+struct InboxOutcome {
+    role: Option<String>,
+    note: Option<String>,
+    messages: Vec<MessageRow>,
+}
+
+#[derive(Serialize)]
+struct InboxOutcomeJson {
+    role: Option<String>,
+    note: Option<String>,
+    messages: Vec<InboxMessageJson>,
+}
+
+#[derive(Serialize)]
+struct InboxMessageJson {
+    id: String,
+    subject: String,
+    #[serde(rename = "type")]
+    msg_type: String,
+    sender_role: Option<String>,
+    thread_id: Option<String>,
+    body: String,
+    priority: String,
+    created_at: String,
+}
+
+impl From<MessageRow> for InboxMessageJson {
+    fn from(m: MessageRow) -> Self {
+        Self {
+            id: m.id,
+            subject: m.subject,
+            msg_type: m.msg_type,
+            sender_role: m.sender_role,
+            thread_id: m.thread_id,
+            body: m.body,
+            priority: m.priority,
+            created_at: m.created_at,
+        }
+    }
+}
+
+/// Resolve the caller's role and drain its mailbox. Soft-fails: unbound and
+/// ambiguous cwds produce a `note` rather than an error, so JSON callers (the
+/// Stop hook) can no-op cleanly without aborting a Claude Code session.
+fn fetch_inbox(role: Option<&str>) -> Result<InboxOutcome, String> {
     let mut conn = store::open()?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    let resolved = match roles::resolve(&conn, role, &cwd)? {
-        RoleResolution::Resolved(r) => r.name,
+    let resolution = roles::resolve(&conn, role, &cwd)?;
+    let (role, note) = match resolution {
+        RoleResolution::Resolved(r) => (Some(r.name), None),
         RoleResolution::Ambiguous { candidates } => {
-            return Err(format!(
-                "cwd matches multiple roles: {}. Pass --role explicitly.",
-                candidates.join(", ")
-            ));
+            (None, Some(format!("ambiguous: {}", candidates.join(", "))))
         }
-        RoleResolution::Unbound { cwd } => {
-            return Err(format!(
-                "no role bound for cwd {cwd}. Bind one with `claudectl bus role bind`."
-            ));
-        }
+        RoleResolution::Unbound { cwd } => (None, Some(format!("unbound (cwd={cwd})"))),
     };
-    let drained = store::drain_inbox(&mut conn, &resolved, None)?;
-    if drained.is_empty() {
-        println!("(inbox empty for role {resolved})");
+    let messages = if let Some(name) = role.as_deref() {
+        store::drain_inbox(&mut conn, name, None)?
+    } else {
+        Vec::new()
+    };
+    Ok(InboxOutcome {
+        role,
+        note,
+        messages,
+    })
+}
+
+fn dispatch_inbox(role: Option<&str>, json: bool) -> Result<(), String> {
+    let outcome = fetch_inbox(role)?;
+
+    if json {
+        let payload = InboxOutcomeJson {
+            role: outcome.role,
+            note: outcome.note,
+            messages: outcome
+                .messages
+                .into_iter()
+                .map(InboxMessageJson::from)
+                .collect(),
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&payload).map_err(|e| format!("encode json: {e}"))?
+        );
         return Ok(());
     }
-    for m in drained {
+
+    // Human renderer: ambiguous / unbound are interactive errors, not silent.
+    let Some(name) = outcome.role else {
+        return Err(outcome.note.unwrap_or_else(|| "no role resolved".into()));
+    };
+
+    if outcome.messages.is_empty() {
+        println!("(inbox empty for role {name})");
+        return Ok(());
+    }
+    for m in outcome.messages {
         println!(
             "[{prio}] {subject} from={sender} thread={thread}\n  {body}",
             prio = m.priority,
@@ -191,10 +286,71 @@ fn dispatch_inbox(role: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-fn dispatch_whoami(role: Option<&str>) -> Result<(), String> {
+// ---------------- Whoami ----------------------------------------------------
+
+#[derive(Serialize)]
+struct WhoamiJson {
+    role: Option<String>,
+    cwd_selector: Option<String>,
+    last_session_id: Option<String>,
+    note: Option<String>,
+}
+
+// ---------------- Stop hook -------------------------------------------------
+
+/// Drive the Claude Code Stop-hook protocol. Silent + exit 0 on any failure
+/// (missing DB, unbound role, ambiguous cwd, drain error) so the hook never
+/// blocks a session because of a bus problem.
+fn dispatch_stop_hook() -> Result<(), String> {
+    let outcome = match fetch_inbox(None) {
+        Ok(o) => o,
+        Err(_) => return Ok(()),
+    };
+    let Some(role) = outcome.role else {
+        return Ok(());
+    };
+    if let Some(response) = stop_hook::build_response(&role, &outcome.messages) {
+        let json =
+            serde_json::to_string(&response).map_err(|e| format!("encode stop-hook json: {e}"))?;
+        println!("{json}");
+    }
+    Ok(())
+}
+
+fn dispatch_whoami(role: Option<&str>, json: bool) -> Result<(), String> {
     let conn = store::open()?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    match roles::resolve(&conn, role, &cwd)? {
+    let resolution = roles::resolve(&conn, role, &cwd)?;
+
+    if json {
+        let payload = match resolution {
+            RoleResolution::Resolved(r) => WhoamiJson {
+                role: Some(r.name),
+                cwd_selector: Some(r.cwd_selector),
+                last_session_id: r.last_session_id,
+                note: None,
+            },
+            RoleResolution::Ambiguous { candidates } => WhoamiJson {
+                role: None,
+                cwd_selector: None,
+                last_session_id: None,
+                note: Some(format!("ambiguous: {}", candidates.join(", "))),
+            },
+            RoleResolution::Unbound { cwd } => WhoamiJson {
+                role: None,
+                cwd_selector: None,
+                last_session_id: None,
+                note: Some(format!("unbound (cwd={cwd})")),
+            },
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&payload).map_err(|e| format!("encode json: {e}"))?
+        );
+        return Ok(());
+    }
+
+    match resolution {
         RoleResolution::Resolved(r) => {
             println!(
                 "role={name} cwd_selector={sel} last_session_id={sess}",
