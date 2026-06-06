@@ -303,12 +303,14 @@ mod tests {
         // Drive the wizard in non-interactive mode with all-skip answers and
         // assert the marker captures one record per phase.
         let registry = phases::registry();
-        let mut answers = Answers::default();
-        answers.skip_budget = true;
-        answers.skip_brain = true;
-        answers.install_plugin = Some(false);
-        answers.skip_bus = true;
-        answers.skip_skills = true;
+        let answers = Answers {
+            skip_budget: true,
+            skip_brain: true,
+            install_plugin: Some(false),
+            skip_bus: true,
+            skip_skills: true,
+            ..Answers::default()
+        };
 
         let mut records = std::collections::BTreeMap::new();
         let stamp = "2026-06-06T00:00:00Z";
