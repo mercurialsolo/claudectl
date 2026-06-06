@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn parse_real_fixture_line() {
-        let line = include_str!("../tests/fixtures/real-transcript-line.json");
+        let line = include_str!("../../../tests/fixtures/real-transcript-line.json");
         let Some(TranscriptEvent::Message(msg)) = parse_line(line.trim()) else {
             panic!("expected message event");
         };
@@ -179,7 +179,8 @@ mod tests {
 
     #[test]
     fn parse_legacy_fixture_line() {
-        let line = include_str!("../tests/fixtures/legacy-transcript-line.json");
+        // Fixture lives at the workspace root, not in this crate.
+        let line = include_str!("../../../tests/fixtures/legacy-transcript-line.json");
         let Some(TranscriptEvent::Message(msg)) = parse_line(line.trim()) else {
             panic!("expected message event");
         };

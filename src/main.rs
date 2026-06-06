@@ -32,6 +32,7 @@ mod recorder;
 #[cfg(feature = "relay")]
 mod relay;
 mod rules;
+mod runtime;
 mod session_recorder;
 mod skills;
 mod ui;

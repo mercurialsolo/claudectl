@@ -35,6 +35,7 @@ pub mod recorder;
 #[cfg(feature = "relay")]
 pub mod relay;
 pub mod rules;
+pub mod runtime;
 pub mod session_recorder;
 pub mod skills;
 pub mod ui;

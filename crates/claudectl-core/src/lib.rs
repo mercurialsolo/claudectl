@@ -20,6 +20,7 @@ pub mod logger;
 pub mod models;
 pub mod monitor;
 pub mod process;
+pub mod runtime;
 pub mod session;
 pub mod terminals;
 pub mod theme;
