@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | 1. Roles + `whoami` + `list_agents` | **Shipped** | `src/bus/roles.rs`, `src/bus/mcp.rs` |
 | 2. In-process bus MCP server, autostarted | **Partial** — runs as a stdio subprocess (`claudectl bus stdio`); the in-process autostart-with-TUI form (Unix-socket singleton) is not built yet. | `src/bus/mcp.rs`, `claude-plugin/.mcp.json` |
-| 3. `claudectl setup` provisioning | **Not started** (interactive wizard). Non-interactive equivalent ships as `claudectl bus role bind <name> <cwd>`. | — |
+| 3. Provisioning (role binding + plugin install + hook capability probe) | **Folded into [`claudectl init`](https://github.com/mercurialsolo/claudectl/issues/257)** — there is no separate `claudectl setup` verb. Non-interactive equivalent ships today as `claudectl bus role bind <name> <cwd>`. | — |
 | 4. Mailbox + directed `publish` / `read_inbox` | **Shipped** | `src/bus/store.rs`, `src/bus/mcp.rs` |
 | 5. `Stop` hook → `read_inbox` (Trigger A) + `/inbox` fallback (Trigger B) | **Partial** — `/inbox` slash command ships; `Stop` hook + continue-in-turn not yet. | `claude-plugin/commands/inbox.md` |
 | 6. Command sanitization + content validation | **Shipped (subset)** — leading-`/` neutralized, body cap, subject grammar, type allowlist. Hop/rate/echo guards not yet. | `src/bus/policy.rs` |
@@ -193,7 +193,7 @@ For long-running autonomous agents that keep working across many turns, an opt-i
 
 ## 7. Transport & architecture
 
-The MCP server runs **in-process with claudectl and starts automatically on launch** (§1) — there is no separate start command. claudectl is one process exposing two frontends over a shared core: the TUI and the bus MCP server. The server listens on a local transport (Unix socket / stdio bridge as appropriate); agents connect to it via the MCP registration that `claudectl setup` installs (§8).
+The MCP server runs **in-process with claudectl and starts automatically on launch** (§1) — there is no separate start command. claudectl is one process exposing two frontends over a shared core: the TUI and the bus MCP server. The server listens on a local transport (Unix socket / stdio bridge as appropriate); agents connect to it via the MCP registration that `claudectl init` installs (§8).
 
 Lifecycle:
 
@@ -218,50 +218,59 @@ A single shared in-process server serves all sessions (one shared mailbox store)
 
 For the bus to work, three things must exist in each participating agent's Claude Code config: the **MCP server registration**, the **`Stop` hook** (Trigger A — now the primary path), and the **`/inbox` slash command** (Trigger B fallback + optional `/loop` use). Today claudectl provisions none of this — every user would hand-wire three things per worktree and get them subtly wrong. claudectl MUST own the full lifecycle of these artifacts: install, update, verify, and uninstall.
 
-### Package as a Claude Code plugin (preferred mechanism)
+### Provisioning lives inside `claudectl init`, not a separate command
 
-Claude Code plugins bundle hooks (`hooks/hooks.json`), slash commands, and MCP server config in a single installable unit. claudectl should ship **one "claudectl-bus" plugin** carrying all three artifacts together, rather than editing `.claude/settings.json`, the commands dir, and the MCP config as three separate writes. Benefits: atomic install/uninstall, a single version to migrate, and the plugin's `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}` paths give claudectl a clean home for the hook scripts and any persistent state. `claudectl setup` enables/configures this plugin per role; uninstall removes the plugin cleanly with no residue in user config.
+There is **no `claudectl setup` verb.** The single canonical entry point for getting an environment ready is [**`claudectl init`**](https://github.com/mercurialsolo/claudectl/issues/257) — the same opinionated 60-second onboarding flow that handles the budget cap, brain auto-pilot detection, supervisor plugin install, and curated skill suggestions. Bus-readiness is one of its phases, not a parallel competing wizard. This matters because the worst onboarding bug we could ship is two separate "first-run" wizards a new user has to discover (the [dashingsauce r/ClaudeCode comment](https://github.com/mercurialsolo/claudectl/issues/257) names that pattern explicitly: *"you end up connecting the same thing five times in five places"*).
 
-### Fallback: direct settings write
-
-Where plugins are unavailable or an enterprise `allowManagedHooksOnly` policy blocks user/project/plugin hooks, `setup` falls back to writing fenced entries into `.claude/settings.json` (or detecting that hooks are blocked entirely, in which case it provisions only the MCP server + `/inbox` command and selects **Trigger B** for that role).
-
-### Part of `claudectl setup`, not a separate command
-
-Provisioning is **not** a standalone `bus install` verb. It is folded into a first-class **`claudectl setup`** flow — an interactive wizard that is the front door for getting an environment bus-ready. Running `claudectl setup` (no args) launches the interactive path; flags allow non-interactive/scripted setup for CI or dotfile automation.
-
-Interactive `setup` walks the operator through:
+`claudectl init` (no args) launches the interactive path; `--non-interactive` runs the same flow with prompted defaults for CI / dotfile automation. The bus-specific phases of that flow:
 
 1. **Discover worktrees / sessions** — scan for git worktrees and running sessions, propose roles (defaulting role name from directory/branch).
 2. **Assign roles** — confirm or edit the role for each, resolving the §5 shared-cwd ambiguity by prompting for explicit `--role` where needed.
 3. **Detect hook capability & choose trigger per role** — probe whether `Stop` hooks are installable (not blocked by `allowManagedHooksOnly`); select Trigger A (`Stop` hook → MCP tool, default) where possible, else Trigger B (`Waiting`-edge injection) (§6).
 4. **Install the claudectl-bus plugin (or fallback writes)** — MCP server registration, `Stop` hook, `/inbox` command.
 5. **Subscriptions & policy** — optionally seed subject subscriptions (§3) and confirm the `[bus.policy]` defaults (§10).
-6. **Verify** — confirm each artifact is present, well-formed, and that the agent can reach the MCP server; report drift.
 
-Non-interactive equivalent:
+Non-interactive equivalent for a single role (the path that ships today):
 
 ```
-claudectl setup --role implementer --cwd ~/proj-wt-impl \
-  --trigger stop-hook --subscribe "task.*" --yes
+claudectl bus role bind implementer ~/proj-wt-impl
 ```
+
+Future shape, once `init` lands:
+
+```
+claudectl init --non-interactive \
+  --bus-role implementer --bus-cwd ~/proj-wt-impl \
+  --bus-trigger stop-hook --bus-subscribe "task.*"
+```
+
+### Package as a Claude Code plugin (preferred mechanism)
+
+Claude Code plugins bundle hooks (`hooks/hooks.json`), slash commands, and MCP server config in a single installable unit. claudectl ships **one "claudectl-bus" plugin** carrying all three artifacts together, rather than editing `.claude/settings.json`, the commands dir, and the MCP config as three separate writes. Benefits: atomic install/uninstall, a single version to migrate, and the plugin's `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}` paths give claudectl a clean home for the hook scripts and any persistent state. `claudectl init` enables/configures this plugin; uninstall removes the plugin cleanly with no residue in user config.
+
+### Fallback: direct settings write
+
+Where plugins are unavailable or an enterprise `allowManagedHooksOnly` policy blocks user/project/plugin hooks, `init` falls back to writing fenced entries into `.claude/settings.json` (or detecting that hooks are blocked entirely, in which case it provisions only the MCP server + `/inbox` command and selects **Trigger B** for that role).
 
 ### Managed lifecycle (claudectl owns these, not the user)
 
-claudectl tracks every artifact it installs in its own state (`~/.config/claudectl/`) and manages the full lifecycle:
+claudectl tracks every artifact it installs in its own state (`~/.claudectl/`) and manages the full lifecycle:
 
 - **install** — enable the plugin (or write fenced settings) idempotently; never clobber unmanaged user content (detect & merge, or prompt).
-- **verify / status** — `claudectl setup --check` reports, per role, whether each artifact is present, current-version, drifted, or missing. Drift = artifact edited out-of-band or stale after a claudectl upgrade.
-- **update / migrate** — on claudectl upgrade, re-render artifacts to the new version; `setup` offers to migrate detected stale installs.
-- **uninstall** — `claudectl setup --remove [--role X]` cleanly removes only claudectl-managed artifacts, leaving unmanaged config intact.
+- **verify / status** — `claudectl init --check` reports whether each artifact is present, current-version, drifted, or missing. Drift = artifact edited out-of-band or stale after a claudectl upgrade.
+- **update / migrate** — on claudectl upgrade, re-render artifacts to the new version; `init` offers to migrate detected stale installs.
+- **uninstall** — `claudectl init --remove [--role X]` cleanly removes only claudectl-managed artifacts, leaving unmanaged config intact.
+
+`init --reset` re-runs the full flow from scratch and is the recommended recovery path when an onboarding gets wedged.
 
 ### Ownership & idempotency rules
 
 - Managed artifacts are **tagged/fenced** (e.g. a `# >>> claudectl managed >>>` marker block, or a dedicated managed file the user's config imports) so claudectl can update or remove exactly its own content without touching hand-written config.
-- All operations are **idempotent** — re-running `setup` converges to the desired state, never duplicates.
-- claudectl **never silently overwrites** unmanaged content; conflicts surface in the interactive flow or fail loudly in `--yes` mode.
+- All operations are **idempotent** — re-running `init` converges to the desired state, never duplicates.
+- claudectl **never silently overwrites** unmanaged content; conflicts surface in the interactive flow or fail loudly in `--non-interactive` mode.
+- A marker file `~/.claudectl/onboarding.json` records the last completed init version so the flow doesn't re-prompt unnecessarily.
 
-This makes "is my environment bus-ready and current?" a single `claudectl setup --check`, and makes onboarding a new worktree a single `setup` pass rather than three manual edits.
+This makes "is my environment bus-ready and current?" a single `claudectl init --check`, and makes onboarding a new worktree a single `init` pass rather than three manual edits.
 
 ---
 
@@ -348,7 +357,7 @@ fallback    = "human"           # unclaimed tasks escalate here
 
 1. **Roles + `whoami` + `list_agents`** — durable names and a read-only directory. Lowest risk, immediately useful.
 2. **In-process bus MCP server, autostarted with claudectl** — server skeleton over existing discovery; up by default on launch, `--no-bus` / `--bus-only` flags. No separate start command.
-3. **`claudectl setup` provisioning (§8)** — interactive role assignment + managed install of MCP registration and `/inbox` command, with `--check`/`--remove`. Needed early: every later step assumes agents are wired up, and manual wiring is the main onboarding friction.
+3. **Provisioning via `claudectl init` (§8, tracked in #257)** — bus-readiness phases (role assignment + managed install of MCP registration and `/inbox` command, with `--check`/`--remove`) fold into the umbrella `claudectl init` flow rather than a separate `setup` verb. Needed early: every later step assumes agents are wired up, and manual wiring is the main onboarding friction.
 4. **Mailbox (SQLite) + `publish` / `read_inbox` (directed `addressed_to` only)** — point-to-point messaging working end to end.
 5. **Delivery: `Stop` hook → `read_inbox` MCP tool (Trigger A), `/inbox` injection fallback (Trigger B)** — closes the loop; in-turn delivery, barge-in-safe by construction.
 6. **Command sanitization + content validation** — guardrails before opening up routing.
