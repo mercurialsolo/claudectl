@@ -14,12 +14,14 @@
 )]
 
 pub mod discovery;
+pub mod health;
 pub mod helpers;
 pub mod history;
 pub mod logger;
 pub mod models;
 pub mod monitor;
 pub mod process;
+pub mod rules;
 pub mod runtime;
 pub mod session;
 pub mod terminals;

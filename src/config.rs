@@ -35,45 +35,11 @@ pub struct Config {
 }
 
 /// Configurable thresholds for session health checks.
-/// All thresholds have sensible defaults; users only need to override what they want.
-#[derive(Debug, Clone)]
-pub struct HealthThresholds {
-    pub cache_critical_pct: f64, // Cache hit ratio below this = critical (default 10%)
-    pub cache_warning_pct: f64,  // Cache hit ratio below this = warning (default 30%)
-    pub cache_min_tokens: u64,   // Ignore cache check until this many input tokens (default 10k)
-    pub cost_spike_critical: f64, // Burn rate > Nx average = critical (default 5.0)
-    pub cost_spike_warning: f64, // Burn rate > Nx average = warning (default 2.5)
-    pub loop_max_calls: u32,     // Tool calls with errors to trigger loop warning (default 10)
-    pub stall_min_cost: f64,     // Min cost in USD to trigger stall check (default 5.0)
-    pub stall_min_minutes: u64,  // Min minutes with no edits to trigger stall (default 10)
-    pub context_critical_pct: f64, // Context usage above this = critical (default 90%)
-    pub context_warning_pct: f64, // Context usage above this = warning (default 80%)
-    pub decay_compaction_pct: f64, // Context % to suggest proactive compaction (default 50%)
-    pub efficiency_critical_factor: f64, // Tokens-per-edit ratio vs baseline to trigger (default 2.0)
-    pub error_accel_factor: f64,         // Error rate ratio vs baseline to trigger (default 2.0)
-    pub repetition_threshold: u32,       // File re-read count without edit to trigger (default 3)
-}
-
-impl Default for HealthThresholds {
-    fn default() -> Self {
-        Self {
-            cache_critical_pct: 10.0,
-            cache_warning_pct: 30.0,
-            cache_min_tokens: 10_000,
-            cost_spike_critical: 5.0,
-            cost_spike_warning: 2.5,
-            loop_max_calls: 10,
-            stall_min_cost: 5.0,
-            stall_min_minutes: 10,
-            context_critical_pct: 90.0,
-            context_warning_pct: 80.0,
-            decay_compaction_pct: 50.0,
-            efficiency_critical_factor: 2.0,
-            error_accel_factor: 2.0,
-            repetition_threshold: 3,
-        }
-    }
-}
+/// Re-exported from `claudectl_core::health` so existing `config::HealthThresholds`
+/// callers still resolve. The struct itself lives with the health module that
+/// owns it, so the binary's TOML parsing (`RawHealthThresholds`, below) is the
+/// only piece that needs to know about config-layer concerns.
+pub use claudectl_core::health::HealthThresholds;
 
 /// Raw TOML representation for health thresholds — all fields optional.
 #[derive(Debug, Default)]
