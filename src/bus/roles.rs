@@ -127,9 +127,9 @@ mod tests {
 
     #[test]
     fn cwd_inference_picks_single_match() {
-        let mut conn = open_memory();
-        upsert_role(&mut conn, "planner", "/work/proj-plan", None).unwrap();
-        upsert_role(&mut conn, "impl", "/work/proj-impl", None).unwrap();
+        let conn = open_memory();
+        upsert_role(&conn, "planner", "/work/proj-plan", None).unwrap();
+        upsert_role(&conn, "impl", "/work/proj-impl", None).unwrap();
         let r = resolve(&conn, None, &PathBuf::from("/work/proj-impl/src")).unwrap();
         match r {
             RoleResolution::Resolved(role) => assert_eq!(role.name, "impl"),
@@ -139,9 +139,9 @@ mod tests {
 
     #[test]
     fn shared_cwd_is_ambiguous() {
-        let mut conn = open_memory();
-        upsert_role(&mut conn, "planner", "/shared/repo", None).unwrap();
-        upsert_role(&mut conn, "impl", "/shared/repo", None).unwrap();
+        let conn = open_memory();
+        upsert_role(&conn, "planner", "/shared/repo", None).unwrap();
+        upsert_role(&conn, "impl", "/shared/repo", None).unwrap();
         let r = resolve(&conn, None, &PathBuf::from("/shared/repo")).unwrap();
         match r {
             RoleResolution::Ambiguous { candidates } => assert_eq!(candidates.len(), 2),
@@ -151,9 +151,9 @@ mod tests {
 
     #[test]
     fn explicit_role_overrides_cwd() {
-        let mut conn = open_memory();
-        upsert_role(&mut conn, "planner", "/work/proj", None).unwrap();
-        upsert_role(&mut conn, "impl", "/other/place", None).unwrap();
+        let conn = open_memory();
+        upsert_role(&conn, "planner", "/work/proj", None).unwrap();
+        upsert_role(&conn, "impl", "/other/place", None).unwrap();
         let r = resolve(&conn, Some("impl"), &PathBuf::from("/work/proj")).unwrap();
         assert!(matches!(r, RoleResolution::Resolved(role) if role.name == "impl"));
     }

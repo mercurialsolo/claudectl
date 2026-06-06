@@ -288,9 +288,9 @@ mod tests {
 
     #[test]
     fn upserts_and_lists_roles() {
-        let mut conn = open_memory();
-        upsert_role(&mut conn, "planner", "/work/proj-plan", Some("sess_a")).unwrap();
-        upsert_role(&mut conn, "impl", "/work/proj-impl", Some("sess_b")).unwrap();
+        let conn = open_memory();
+        upsert_role(&conn, "planner", "/work/proj-plan", Some("sess_a")).unwrap();
+        upsert_role(&conn, "impl", "/work/proj-impl", Some("sess_b")).unwrap();
         let rs = list_roles(&conn).unwrap();
         assert_eq!(rs.len(), 2);
         let names: Vec<_> = rs.iter().map(|r| r.role.as_str()).collect();
