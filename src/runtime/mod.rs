@@ -17,6 +17,7 @@ use claudectl_core::runtime::Runtime;
 mod actions;
 mod brain;
 mod brain_driver;
+mod brain_review;
 mod bus;
 mod coord;
 mod sessions;
@@ -27,6 +28,7 @@ pub use brain::LiveBrainView;
 // owner. Re-exported for tests and the future `App::new` wiring (next PR).
 #[allow(unused_imports)]
 pub use brain_driver::LiveBrainDriver;
+pub use brain_review::LiveBrainReviewView;
 pub use bus::LiveBusView;
 pub use coord::LiveCoordView;
 pub use sessions::LiveSessionSource;
@@ -45,5 +47,6 @@ pub fn build_runtime() -> Runtime {
         Arc::new(LiveCoordView),
         Arc::new(LiveBusView),
         Arc::new(LiveActions),
+        Arc::new(LiveBrainReviewView),
     )
 }

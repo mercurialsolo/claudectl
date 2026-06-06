@@ -106,6 +106,11 @@ impl std::fmt::Display for BrainGateMode {
 }
 
 /// A single past brain decision, projected for display.
+///
+/// The first six fields are the common shape used by `BrainView::recent_decisions`.
+/// The remaining fields support the Brain Review surface (`BrainReviewView`); they
+/// are `Option`-wrapped + `#[serde(default)]` so older `BrainView` callers can
+/// keep treating them as opaque.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionSummary {
     pub id: String,
@@ -114,6 +119,57 @@ pub struct DecisionSummary {
     pub confidence: Option<f64>,
     pub project: Option<String>,
     pub tool: Option<String>,
+
+    /// Tool input string when the decision was about a specific command.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Brain's free-form rationale for the suggestion.
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    /// What the user did with the suggestion — `"accept"`, `"reject"`,
+    /// `"deny_rule_override"`, etc.
+    #[serde(default)]
+    pub user_action: Option<String>,
+    /// Why the user overrode the brain (if applicable).
+    #[serde(default)]
+    pub override_reason: Option<String>,
+    /// Wall-clock latency of the brain decision in milliseconds.
+    #[serde(default)]
+    pub brain_decision_ms: Option<u64>,
+    /// Whether the operator has marked this decision as canonical (teaching
+    /// material). `None` for records written before the field existed.
+    #[serde(default)]
+    pub canonical: Option<bool>,
+    /// Cache hit flag — served from the few-shot store without an LLM call.
+    /// `None` before instrumentation.
+    #[serde(default)]
+    pub cache_hit: Option<bool>,
+    /// Cost in USD when this decision was made (context snapshot).
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    /// Model that produced the suggestion.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+impl DecisionSummary {
+    /// Whether the user agreed with the brain (or the call was auto-executed).
+    /// Mirrors `brain::decisions::DecisionRecord::is_positive`.
+    pub fn is_positive(&self) -> bool {
+        matches!(
+            self.user_action.as_deref(),
+            Some("accept" | "auto" | "user_approve" | "rule_approve")
+        )
+    }
+
+    /// Whether the user disagreed with the brain. Mirrors
+    /// `brain::decisions::DecisionRecord::is_negative`.
+    pub fn is_negative(&self) -> bool {
+        matches!(
+            self.user_action.as_deref(),
+            Some("reject" | "deny_rule_override" | "rule_deny" | "conflict_deny")
+        )
+    }
 }
 
 /// Read access to the brain's decision history and current mode.
@@ -126,6 +182,36 @@ pub trait BrainView: Send + Sync {
     /// Total count of brain decisions on disk. Drives the "decisions: N"
     /// status line.
     fn decision_count(&self) -> usize;
+}
+
+/// One entry in the Brain Review queue — a decision worth showing the operator
+/// for canonical-marking review, with a reason and a priority score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewItemSummary {
+    pub decision: DecisionSummary,
+    /// Free-form rationale for why this decision was queued for review.
+    pub reason: String,
+    /// Priority score (higher = more important to review first).
+    pub score: f64,
+}
+
+/// Read access to the Brain Review surface — the full decision log plus the
+/// review-queue projection. Separate trait from `BrainView` because:
+///
+/// - The Brain Review screen is the only TUI consumer; the dashboard's status
+///   bar only needs `BrainView::recent_decisions(n)`.
+/// - `all_decisions()` returns the whole log (can be thousands of records);
+///   it's a heavier surface than the lightweight `BrainView` methods and
+///   worth gating behind its own trait so callers don't accidentally invoke it.
+pub trait BrainReviewView: Send + Sync {
+    /// Every decision on disk, newest first. Used by the Brain Review screen
+    /// to render the full history list.
+    fn all_decisions(&self) -> Vec<DecisionSummary>;
+
+    /// Priority-ordered review queue. Built from `all_decisions()` plus the
+    /// brain's queue-building heuristics (counterfactual hits, Critical-tier
+    /// safety cases, high-confidence misses).
+    fn review_queue(&self) -> Vec<ReviewItemSummary>;
 }
 
 // ============================================================================
@@ -368,6 +454,7 @@ pub struct Runtime {
     pub coord: Arc<dyn CoordView>,
     pub bus: Arc<dyn BusView>,
     pub actions: Arc<dyn Actions>,
+    pub review: Arc<dyn BrainReviewView>,
 }
 
 impl Runtime {
@@ -377,6 +464,7 @@ impl Runtime {
         coord: Arc<dyn CoordView>,
         bus: Arc<dyn BusView>,
         actions: Arc<dyn Actions>,
+        review: Arc<dyn BrainReviewView>,
     ) -> Self {
         Self {
             sessions,
@@ -384,6 +472,7 @@ impl Runtime {
             coord,
             bus,
             actions,
+            review,
         }
     }
 }
@@ -404,6 +493,7 @@ pub struct MockRuntime {
     pub sessions: Vec<SessionSnapshot>,
     pub gate_mode: std::sync::Mutex<Option<BrainGateMode>>,
     pub decisions: Vec<DecisionSummary>,
+    pub review_queue: Vec<ReviewItemSummary>,
     pub leases: Vec<LeaseSummary>,
     pub handoffs: Vec<HandoffSummary>,
     pub interrupts: Vec<InterruptSummary>,
@@ -446,7 +536,14 @@ impl Eq for ObservationInput {}
 impl MockRuntime {
     pub fn into_runtime(self) -> Runtime {
         let arc = Arc::new(self);
-        Runtime::new(arc.clone(), arc.clone(), arc.clone(), arc.clone(), arc)
+        Runtime::new(
+            arc.clone(),
+            arc.clone(),
+            arc.clone(),
+            arc.clone(),
+            arc.clone(),
+            arc,
+        )
     }
 
     pub fn actions(&self) -> Vec<MockAction> {
@@ -496,6 +593,15 @@ impl BusView for MockRuntime {
     }
     fn list_roles(&self) -> Vec<RoleBinding> {
         self.roles.clone()
+    }
+}
+
+impl BrainReviewView for MockRuntime {
+    fn all_decisions(&self) -> Vec<DecisionSummary> {
+        self.decisions.clone()
+    }
+    fn review_queue(&self) -> Vec<ReviewItemSummary> {
+        self.review_queue.clone()
     }
 }
 
@@ -596,6 +702,11 @@ mod tests {
                     confidence: Some(0.9),
                     project: None,
                     tool: None,
+                    command: None,
+                    reasoning: None,
+                    user_action: None,
+                    override_reason: None,
+                    brain_decision_ms: None,
                 })
                 .collect(),
             ..Default::default()
@@ -653,6 +764,7 @@ mod tests {
             arc.clone(),
             arc.clone(),
             arc.clone(),
+            arc.clone(),
         );
         // Initial: default On.
         assert_eq!(rt.brain.gate_mode(), BrainGateMode::On);
@@ -682,6 +794,7 @@ mod tests {
             arc.clone(),
             arc.clone(),
             arc.clone(),
+            arc.clone(),
         );
         let obs = ObservationInput {
             session_pid: 12345,
@@ -700,6 +813,7 @@ mod tests {
         let mock = MockRuntime::default();
         let arc = Arc::new(mock);
         let rt = Runtime::new(
+            arc.clone(),
             arc.clone(),
             arc.clone(),
             arc.clone(),
