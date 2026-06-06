@@ -54,3 +54,42 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-targets
       - run: cargo test --all-targets --features coord
+
+  # Workspace refactor (#279) — verify claudectl-core builds and tests
+  # standalone, without the binary crate. Guards the
+  # claudectl → claudectl-core dependency direction at the workspace level.
+  # The claudectl-tui standalone job lands with #275.
+  core-standalone:
+    name: Core (standalone)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build claudectl-core standalone
+        run: cargo build -p claudectl-core
+      - name: Clippy claudectl-core standalone
+        run: cargo clippy -p claudectl-core --all-targets -- -D warnings
+      - name: Test claudectl-core standalone
+        run: cargo test -p claudectl-core
+
+  # Layering check: nothing inside claudectl-core may reference binary-crate
+  # modules. This is a textual guard on top of the standalone build above —
+  # the build would already fail on a real upward dep, but grep catches
+  # subtler attempts (e.g. cfg-gated paths that don't trip on this matrix).
+  layering:
+    name: Layering
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No `crate::{brain,bus,coord,hive,relay,init,orchestrator,launch,hooks,recorder,session_recorder,app,ui,demo}` inside claudectl-core
+        run: |
+          set -e
+          PATTERN='crate::(brain|bus|coord|hive|relay|init|orchestrator|launch|hooks|recorder|session_recorder|app|ui|demo)\b'
+          if grep -rEn "${PATTERN}" crates/claudectl-core/src/ ; then
+            echo "::error::claudectl-core must not depend on binary-crate modules. See #279 dependency rule."
+            exit 1
+          fi
+          echo "claudectl-core has no upward dependencies on the binary crate."
