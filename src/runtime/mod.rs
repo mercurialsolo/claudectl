@@ -14,11 +14,13 @@ use std::sync::Arc;
 
 use claudectl_core::runtime::Runtime;
 
+mod actions;
 mod brain;
 mod bus;
 mod coord;
 mod sessions;
 
+pub use actions::LiveActions;
 pub use brain::LiveBrainView;
 pub use bus::LiveBusView;
 pub use coord::LiveCoordView;
@@ -37,5 +39,6 @@ pub fn build_runtime() -> Runtime {
         Arc::new(LiveBrainView),
         Arc::new(LiveCoordView),
         Arc::new(LiveBusView),
+        Arc::new(LiveActions),
     )
 }
