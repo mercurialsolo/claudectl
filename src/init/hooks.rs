@@ -49,6 +49,22 @@ fn settings_path(project: bool) -> PathBuf {
     }
 }
 
+/// Convenience for the init wizard's state-detection path. Returns the
+/// global (user-scope) settings file location.
+pub fn user_settings_path() -> PathBuf {
+    settings_path(false)
+}
+
+/// Probe a settings.json on disk for claudectl-managed hooks. Returns
+/// `Some(true)` when present, `Some(false)` when absent, and `None` when the
+/// file doesn't exist or can't be parsed. Used by `init::state` to keep
+/// detection consistent with what `run_init` writes.
+pub fn settings_contain_claudectl_hooks(path: &Path) -> Option<bool> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    Some(has_claudectl_hooks(&value))
+}
+
 fn build_hooks_value() -> serde_json::Value {
     let mut hooks_map = serde_json::Map::new();
 

@@ -2,6 +2,33 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.53.0] - 2026-06-06
+
+### Added
+- **`claudectl init` — opinionated onboarding wizard (closes #257).** Single canonical first-run flow that walks five phases in order: weekly budget cap, local-LLM brain auto-detection (probes ollama / llama.cpp / LM Studio / vLLM), Claude Code hook install, agent-bus role binding, and curated skill suggestions. Replaces the planned `claudectl setup` verb from `docs/AGENT_BUS.md` § 8 — onboarding lives in one place.
+- **`claudectl init --non-interactive`** with per-phase flags (`--budget`, `--brain-url`, `--install-plugin` / `--skip-plugin`, `--bus-role` / `--bus-cwd`, `--skip-*` for every phase). For CI and dotfile automation.
+- **`claudectl init --check`** — drift report. Detects each phase's current state and diffs against the recorded marker; exits non-zero when the live environment no longer matches what was onboarded.
+- **`claudectl init --remove`** — uninstall every claudectl-managed artifact (hooks, marker). Phases that own user state (the bus DB, the config file's `budget` line) deliberately decline to delete it — we don't erase a user's setup, only artifacts claudectl actively manages.
+- **`claudectl init --reset`** — clear the onboarding marker so the next `init` starts fresh. Doesn't touch installed artifacts.
+- **`~/.claudectl/onboarding.json` marker** — durable record of which phases ran, when, and against which claudectl version. Loaded via `serde_json` with `#[serde(default)]` on optional fields so older markers stay forward-compatible.
+
+### Changed
+- **Existing `--init` / `--uninstall` flags** are now deprecated aliases. They still write/remove the hook entries (existing dotfile automation keeps working), but each prints a deprecation note pointing at the new `init` subcommand. Slated for removal one release after consolidation.
+
+### Internals
+- New `src/init/` module replacing the single-file `src/init.rs`:
+  - `hooks.rs` — moved unchanged from the old `init.rs` (the hook writer the plugin phase delegates to).
+  - `marker.rs` — atomic-rename `OnboardingMarker` read/write at `~/.claudectl/onboarding.json`.
+  - `prompt.rs` — minimal stdin/stdout helpers (yes/no, number-or-default, line-or-default).
+  - `state.rs` — environment probes for each phase. Uses `curl --max-time 1` for HTTP probes (matching the existing brain client pattern; no new deps).
+  - `phases.rs` — `Phase` trait + `Budget` / `Brain` / `Plugin` / `Bus` / `Skills` impls + the ordered `registry()`. Single uniform shape so the wizard, `--check`, and `--remove` all walk the same list without per-phase branching.
+  - `mod.rs` — orchestrator (`run_wizard`, `run_non_interactive`, `run_check`, `run_remove`, `run_reset`) plus the drift-comparison logic (`is_drift` treats `not_installed` and `skipped` as equivalent so the report only flags real divergence).
+- 21 new unit tests (marker roundtrip, drift comparison matrix, phase registry order, role-from-cwd derivation, TOML upsert, status-label stability). Plus a 9-scenario end-to-end smoke verifying every CLI verb (non-interactive all-skipped → marker → `--check` green → tamper → `--check` drift → `--remove` cleans up settings.json and marker; legacy `--init` still works and prints the deprecation note).
+
+### Compatibility
+- The Phase trait lets every phase live in its own file with no per-phase branching in the orchestrator — adding a new phase later (e.g., "MCP plugin discovery") is one new impl plus one line in `registry()`.
+- No new dependencies. The wizard's brain probe and the budget-config writer both use the project's existing patterns (`curl` shell-out, tiny TOML upsert that avoids a `toml` crate dep).
+
 ## [0.52.0] - 2026-06-06
 
 ### Added

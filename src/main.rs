@@ -91,6 +91,58 @@ pub(crate) enum Command {
         command: bus::cli::BusCommand,
     },
 
+    /// Onboarding wizard (budget, brain, hooks, bus, skills). See issue #257.
+    Init {
+        /// Drift report comparing recorded onboarding against current state.
+        #[arg(long, conflicts_with_all = ["reset", "remove", "non_interactive"])]
+        check: bool,
+        /// Clear the onboarding marker so the next `init` starts fresh.
+        #[arg(long, conflicts_with_all = ["check", "remove", "non_interactive"])]
+        reset: bool,
+        /// Uninstall every claudectl-managed artifact (hooks, marker).
+        #[arg(long, conflicts_with_all = ["check", "reset", "non_interactive"])]
+        remove: bool,
+        /// Run every phase without prompting. Combine with the per-phase
+        /// flags below (`--budget`, `--brain-url`, `--bus-role`, etc.).
+        #[arg(long)]
+        non_interactive: bool,
+
+        /// Weekly budget cap in USD (used with --non-interactive).
+        #[arg(long)]
+        budget: Option<f64>,
+        /// Skip the budget phase (used with --non-interactive).
+        #[arg(long)]
+        skip_budget: bool,
+
+        /// Local-LLM endpoint URL for the brain phase.
+        #[arg(long)]
+        brain_url: Option<String>,
+        /// Skip the brain phase.
+        #[arg(long)]
+        skip_brain: bool,
+
+        /// Install Claude Code hooks (default in --non-interactive).
+        #[arg(long)]
+        install_plugin: bool,
+        /// Skip the plugin phase.
+        #[arg(long)]
+        skip_plugin: bool,
+
+        /// Bind this role for the bus phase (used with --non-interactive).
+        #[arg(long)]
+        bus_role: Option<String>,
+        /// cwd to bind the bus role to. Defaults to the process cwd.
+        #[arg(long)]
+        bus_cwd: Option<String>,
+        /// Skip the bus phase.
+        #[arg(long)]
+        skip_bus: bool,
+
+        /// Skip the skills phase.
+        #[arg(long)]
+        skip_skills: bool,
+    },
+
     /// Print a shell completion script for the given shell (bash, zsh, fish, …) to stdout
     Completions {
         /// Shell to emit completions for
@@ -572,11 +624,20 @@ fn run_main(cli: Cli) -> io::Result<()> {
     }
 
     if cli.init {
+        eprintln!(
+            "note: `--init` is deprecated and will be removed in a future release. \
+             Use `claudectl init` for the full onboarding wizard, or this flag for \
+             the hook-only install."
+        );
         let project = cli.scope == "project";
         return init::run_init(project, cli.dry_run);
     }
 
     if cli.uninstall {
+        eprintln!(
+            "note: `--uninstall` is deprecated and will be removed in a future release. \
+             Use `claudectl init --remove` instead."
+        );
         let project = cli.scope == "project";
         return init::run_uninit(project);
     }
@@ -650,6 +711,55 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
             #[cfg(feature = "bus")]
             Command::Bus { command } => return bus::cli::dispatch_command(command, cli.json),
+
+            Command::Init {
+                check,
+                reset,
+                remove,
+                non_interactive,
+                budget,
+                skip_budget,
+                brain_url,
+                skip_brain,
+                install_plugin,
+                skip_plugin,
+                bus_role,
+                bus_cwd,
+                skip_bus,
+                skip_skills,
+            } => {
+                if *check {
+                    return init::run_check();
+                }
+                if *reset {
+                    return init::run_reset();
+                }
+                if *remove {
+                    return init::run_remove();
+                }
+                if *non_interactive {
+                    let install_plugin_opt = if *skip_plugin {
+                        Some(false)
+                    } else if *install_plugin {
+                        Some(true)
+                    } else {
+                        None
+                    };
+                    let answers = init::phases::Answers {
+                        budget_weekly_usd: *budget,
+                        skip_budget: *skip_budget,
+                        brain_url: brain_url.clone(),
+                        skip_brain: *skip_brain,
+                        install_plugin: install_plugin_opt,
+                        bus_role: bus_role.clone(),
+                        bus_cwd: bus_cwd.as_ref().map(std::path::PathBuf::from),
+                        skip_bus: *skip_bus,
+                        skip_skills: *skip_skills,
+                    };
+                    return init::run_non_interactive(&answers);
+                }
+                return init::run_wizard();
+            }
 
             Command::Completions { shell } => {
                 let mut cmd = Cli::command();
