@@ -5,6 +5,13 @@
     clippy::io_other_error
 )]
 
+// Foundational modules from claudectl-core (epic #279). Re-aliased so existing
+// `crate::session::*` paths still resolve. See `lib.rs` for the rationale.
+use claudectl_core::{
+    discovery, helpers, history, logger, models, monitor, process, session, terminals, theme,
+    transcript,
+};
+
 mod app;
 mod brain;
 #[cfg(feature = "bus")]
@@ -14,30 +21,19 @@ mod config;
 #[cfg(feature = "coord")]
 mod coord;
 mod demo;
-mod discovery;
 mod health;
-mod helpers;
-mod history;
 #[cfg(feature = "hive")]
 mod hive;
 mod hooks;
 mod init;
 mod launch;
-mod logger;
-mod models;
-mod monitor;
 mod orchestrator;
-mod process;
 mod recorder;
 #[cfg(feature = "relay")]
 mod relay;
 mod rules;
-mod session;
 mod session_recorder;
 mod skills;
-mod terminals;
-mod theme;
-mod transcript;
 mod ui;
 
 use std::io;

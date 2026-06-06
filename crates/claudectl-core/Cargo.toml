@@ -1,0 +1,26 @@
+[package]
+name = "claudectl-core"
+version = "0.51.0"
+edition = "2024"
+description = "Foundational types and IO primitives for claudectl. Shared across the TUI, the binary, and future crates."
+license = "MIT"
+repository = "https://github.com/mercurialsolo/claudectl"
+keywords = ["claude-code", "session-monitoring", "internals"]
+categories = ["command-line-utilities"]
+
+[lib]
+name = "claudectl_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+crossterm = "0.28"
+# theme.rs uses ratatui::style::Color. Pulling the whole ratatui crate is a
+# touch heavier than we'd like — when claudectl-tui is extracted (#275) theme
+# may move with it and we can drop this dep.
+ratatui = "0.29"
+
+[dev-dependencies]
+tempfile = "3"

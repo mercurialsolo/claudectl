@@ -2,7 +2,7 @@ use crate::session::ClaudeSession;
 
 /// Fire a webhook POST with session status change payload.
 /// Runs in a background thread to avoid blocking the TUI loop.
-pub(crate) fn fire_webhook(url: &str, session: &ClaudeSession, old_status: String) {
+pub fn fire_webhook(url: &str, session: &ClaudeSession, old_status: String) {
     let payload = serde_json::json!({
         "event": "status_change",
         "session": {
@@ -43,7 +43,7 @@ pub(crate) fn fire_webhook(url: &str, session: &ClaudeSession, old_status: Strin
 }
 
 /// Simple ISO-8601 timestamp without pulling in the chrono crate.
-pub(crate) fn chrono_now_iso() -> String {
+pub fn chrono_now_iso() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
@@ -100,7 +100,7 @@ pub(crate) fn chrono_now_iso() -> String {
 }
 
 /// Fire a desktop notification (macOS via osascript, Linux via notify-send).
-pub(crate) fn fire_notification(project: &str) {
+pub fn fire_notification(project: &str) {
     let safe = project.replace('"', "'").replace('\\', "");
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("osascript")
@@ -116,14 +116,14 @@ pub(crate) fn fire_notification(project: &str) {
 }
 
 /// Resolve the user's home directory, falling back to /tmp.
-pub(crate) fn dirs_home() -> std::path::PathBuf {
+pub fn dirs_home() -> std::path::PathBuf {
     std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
 }
 
 /// Kill a process by PID. Tries SIGTERM first, then SIGKILL on failure.
-pub(crate) fn kill_process(pid: u32) -> Result<(), String> {
+pub fn kill_process(pid: u32) -> Result<(), String> {
     let output = std::process::Command::new("kill")
         .arg(pid.to_string())
         .output()
@@ -147,7 +147,7 @@ pub(crate) fn kill_process(pid: u32) -> Result<(), String> {
 
 /// Create a synthetic session for aggregate budget hook firing.
 /// Uses {project} = "daily"/"weekly", {cost} = total spend.
-pub(crate) fn create_aggregate_session(total_cost: f64, limit: f64, period: &str) -> ClaudeSession {
+pub fn create_aggregate_session(total_cost: f64, limit: f64, period: &str) -> ClaudeSession {
     use crate::session::RawSession;
     let raw = RawSession {
         pid: 0,

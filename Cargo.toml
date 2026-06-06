@@ -1,3 +1,8 @@
+[workspace]
+members = ["crates/claudectl-core"]
+# The root package is also a workspace member (the binary crate). Future epics
+# (extract claudectl-tui, claudectl-brain, etc. — see #279) will add more.
+
 [package]
 name = "claudectl"
 version = "0.53.0"
@@ -29,6 +34,7 @@ name = "claudectl"
 path = "src/lib.rs"
 
 [dependencies]
+claudectl-core = { path = "crates/claudectl-core" }
 ratatui = "0.29"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
