@@ -7,6 +7,8 @@
 
 pub mod app;
 pub mod brain;
+#[cfg(feature = "bus")]
+pub mod bus;
 pub mod config;
 #[cfg(feature = "coord")]
 pub mod coord;

@@ -69,6 +69,14 @@ cargo fmt --check            # Check formatting
 - `lan.rs` — UDP broadcast LAN discovery: announcer and scanner threads
 - `cli.rs` — CLI dispatch for all relay subcommands (serve, invite, join, discover, delegate, etc.)
 
+**Bus** (`src/bus/`): Agent-bus MCP server, durable role directory, and mailbox (feature-gated behind `bus`; see `docs/AGENT_BUS.md`).
+- `mod.rs` — module surface
+- `store.rs` — SQLite (WAL) at `~/.claudectl/bus/bus.db`: roles + messages tables, drain-on-read semantics
+- `roles.rs` — Role addressing, cwd-inference, ambiguity/unbound resolution. Caller may override with `CLAUDECTL_BUS_ROLE` or `--role`
+- `policy.rs` — Phase-4 guardrails: subject grammar, type allowlist, body cap, leading-`/` neutralization (§9)
+- `mcp.rs` — rmcp stdio server exposing `whoami`, `list_agents`, `publish`, `read_inbox`
+- `cli.rs` — `claudectl bus` subcommand (stdio, role bind/list, send, inbox, whoami)
+
 **Hive** (`src/hive/`): Gossip-based knowledge sharing across connected brains (feature-gated behind `relay`).
 - `mod.rs` — KnowledgeUnit, KnowledgeScope, KnowledgeContent types, semantic key, broadcast channel
 - `store.rs` — JSONL-backed knowledge store with semantic index, atomic save
@@ -85,11 +93,11 @@ cargo fmt --check            # Check formatting
 
 ## Key Design Decisions
 
-- **Minimal dependencies** — 7 runtime crates. Binary must stay under 1MB, startup under 50ms.
+- **Minimal dependencies** — 7 runtime crates. Binary must stay under 1MB, startup under 50ms. **Exception:** the `bus` feature deliberately relaxes this (pulls rmcp + Tokio + schemars) because every available MCP SDK is async; the default build still honors the invariant.
 - **Native `ps`** over `sysinfo` crate to keep binary small.
 - **Multi-signal status inference** — combines CPU usage, JSONL events, and timestamps (not just one signal).
 - **Incremental JSONL parsing** — tracks file offsets, never rereads full files.
-- **No async runtime** — synchronous with polling. Keeps complexity low.
+- **No async runtime** — synchronous with polling. Keeps complexity low. **Exception:** the `bus` MCP server (`src/bus/mcp.rs`) runs inside a current-thread Tokio runtime when invoked as `claudectl bus stdio`. The TUI and every other code path remain sync.
 - **Deny-first rule evaluation** — deny rules always override approve/brain suggestions, regardless of config order.
 - **Brain decisions are local-only** — all decision logs and few-shot examples stay on the user's machine.
 - **Brain gate mode** — `~/.claudectl/brain/gate-mode` controls on/off/auto. File absent = on (default). The plugin hook and `--brain-query` both check this before querying the LLM.
