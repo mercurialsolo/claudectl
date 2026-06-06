@@ -119,6 +119,13 @@ Connect claudectl instances across machines. Share brain learnings, delegate tas
 </div>
 <div class="feature-item" markdown>
 
+### Agent Bus (preview)
+
+Durable role directory + persistent mailbox exposed as an MCP server. Running Claude Code instances discover each other, look up their own role, send directed messages, and drain their inbox at turn boundaries. Phases 1-4 of the [design spec](AGENT_BUS.md) are shipped behind `--features bus`.
+
+</div>
+<div class="feature-item" markdown>
+
 ### Headless Daemon
 
 Run without the TUI via `--headless`. Brain, coordination, and context rot prevention stay active while you work. Attach a dashboard from another terminal anytime.

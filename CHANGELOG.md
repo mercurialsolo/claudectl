@@ -2,6 +2,23 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.51.0] - 2026-06-06
+
+### Added
+- **Agent bus (phases 1–4 of `docs/AGENT_BUS.md`)** — a durable role directory + persistent mailbox exposed as an MCP server. Running Claude Code sessions discover each other (`list_agents`), look up their own role (`whoami`), send directed messages (`publish`), and drain their inbox (`read_inbox`) at turn boundaries. Gated behind the new opt-in `bus` Cargo feature.
+- **`claudectl bus` CLI** with five verbs: `stdio` (run the MCP server, what the plugin invokes), `role bind/list` (durable role addresses), `send` (directed messaging), `inbox` (drain queued messages), `whoami` (resolve the caller's role from cwd or `CLAUDECTL_BUS_ROLE`).
+- **Mailbox persistence** at `~/.claudectl/bus/bus.db` (SQLite WAL). Survives restarts; the role address outlives the session it was last bound to.
+- **Content sanitization at the injection boundary.** A leading `/` in a message body is neutralized before delivery so a queued message cannot smuggle a slash command into the recipient. Subject grammar, type allowlist, and an 8 KiB body cap also enforced.
+- **Claude Code plugin updates.** `claude-plugin/.mcp.json` registers the bus as an MCP server; `claude-plugin/commands/inbox.md` is the new `/inbox` slash command that drains the caller's mailbox through the `read_inbox` tool.
+
+### Changed
+- **Architecture invariants in `CLAUDE.md` carve out an exception for the `bus` feature.** The bus pulls rmcp + a current-thread Tokio runtime, deliberately relaxing the no-async-runtime rule for that feature path only. Default build is unchanged at ~3.5 MB / <50 ms startup; `--features bus` is ~6.4 MB.
+- **Plugin manifest version** (`claude-plugin/.claude-plugin/plugin.json`) synced from a drifted `0.48.0` back to the crate version.
+
+### Internals
+- New `src/bus/` module: `store.rs` (SQLite schema, drain-on-read), `roles.rs` (cwd inference with macOS symlink canonicalization), `policy.rs` (sanitization + validation), `mcp.rs` (rmcp stdio server), `cli.rs` (subcommand dispatch).
+- 16 new unit tests covering role resolution, ambiguity, env override, priority-ordered drain, drain-once idempotency, leading-`/` neutralization, subject grammar, and type allowlist. End-to-end MCP handshake + CLI roundtrip exercised before merge.
+
 ## [0.50.0] - 2026-05-29
 
 ### Added

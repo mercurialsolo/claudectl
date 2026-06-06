@@ -7,6 +7,8 @@
 
 mod app;
 mod brain;
+#[cfg(feature = "bus")]
+mod bus;
 mod commands;
 mod config;
 #[cfg(feature = "coord")]
@@ -80,6 +82,13 @@ pub(crate) enum Command {
     Coord {
         #[command(subcommand)]
         command: coord::cli::CoordCommand,
+    },
+
+    #[cfg(feature = "bus")]
+    /// Agent bus: MCP server, roles, mailboxes (docs/AGENT_BUS.md)
+    Bus {
+        #[command(subcommand)]
+        command: bus::cli::BusCommand,
     },
 
     /// Print a shell completion script for the given shell (bash, zsh, fish, …) to stdout
@@ -638,6 +647,9 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
             #[cfg(feature = "coord")]
             Command::Coord { command } => return coord::cli::dispatch_command(command, cli.json),
+
+            #[cfg(feature = "bus")]
+            Command::Bus { command } => return bus::cli::dispatch_command(command, cli.json),
 
             Command::Completions { shell } => {
                 let mut cmd = Cli::command();

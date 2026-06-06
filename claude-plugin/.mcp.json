@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "claudectl-bus": {
+      "command": "claudectl",
+      "args": ["bus", "stdio"],
+      "env": {
+        "CLAUDECTL_BUS_ROLE": "${CLAUDECTL_BUS_ROLE}"
+      }
+    }
+  }
+}

@@ -192,6 +192,35 @@ claudectl coord adapters                           # Registered agent adapters
 
 The coordination layer stores state in a local SQLite database (`~/.claudectl/coord/coord.db`) and injects compact context into the brain's prompt before every decision.
 
+## Agent Bus (preview)
+
+A durable directory + mailbox that exposes the running swarm as an MCP server. Agents discover each other (`list_agents`), look up their own role (`whoami`), publish directed messages, and drain their inbox at turn boundaries. Phases 1–4 of the [design spec](docs/AGENT_BUS.md) are shipped.
+
+Build with `cargo build --features bus` to enable. Pulls in `rmcp` + a current-thread Tokio runtime, so the bus-enabled binary is larger (~6.4 MB vs. ~3.5 MB default) and the no-async-runtime invariant is deliberately relaxed for this feature path only.
+
+```bash
+# Bind durable role addresses to working directories
+claudectl bus role bind planner ~/work/proj-plan
+claudectl bus role bind impl    ~/work/proj-impl
+claudectl bus role list
+
+# Directed send + drain
+claudectl bus send impl "review the auth diff" --from planner --priority high
+( cd ~/work/proj-impl && claudectl bus inbox )
+
+# Resolve which role this cwd is
+claudectl bus whoami
+
+# Run the MCP server on stdio (this is what the Claude Code plugin invokes)
+claudectl bus stdio
+```
+
+The Claude Code plugin registers the bus as an MCP server (`claude-plugin/.mcp.json`) and ships an `/inbox` slash command that drains the caller's mailbox through the `read_inbox` tool. Roles are inferred from each session's cwd; override per-session with `CLAUDECTL_BUS_ROLE`.
+
+Mailboxes live in `~/.claudectl/bus/bus.db` (SQLite WAL). Message bodies are sanitized at the boundary — a leading `/` is neutralized so a queued message cannot smuggle a slash command into the recipient.
+
+Not yet built: `Stop`-hook auto-delivery (continue-in-turn), pub/sub subscribe + claim protocol, flow guards, and the supervisor for long-horizon role persistence. See [AGENT_BUS.md](docs/AGENT_BUS.md#implementation-status) for the per-phase status table.
+
 ## Hive Mind & Relay
 
 The brain distills your decisions into shareable knowledge. Connect instances across machines to build a convergent hive mind.
