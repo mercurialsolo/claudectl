@@ -30,16 +30,12 @@ If you only ever run one Claude session at a time, the bus is overhead. The win 
 
 Three steps: build with the feature, register the MCP server with Claude Code, bind roles.
 
-### 1. Build with the `bus` feature
-
-The bus stack (rmcp + Tokio runtime) is opt-in to keep the default binary small. Pick the install path you want:
+### 1. Install with the `bus` feature
 
 ```bash
-cargo install claudectl --features bus
+brew install mercurialsolo/tap/claudectl   # Homebrew — bus is included (since 0.57.0)
 # or
-brew install mercurialsolo/tap/claudectl  # Homebrew bottle ships with default features —
-                                          # bus support requires building from source until
-                                          # the bottled build flips on
+cargo install claudectl --features bus,coord,relay,hive    # Cargo — opt in to all features
 ```
 
 Verify:

@@ -4,6 +4,13 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Changed — Homebrew bottle now ships with all features (closes #321)
+- **`brew install mercurialsolo/tap/claudectl`** now produces a binary with `bus`, `coord`, `relay`, and `hive` all compiled in. `claudectl bus`, `claudectl coord`, `claudectl relay`, `claudectl hive` work end-to-end with no source rebuild. Binary grows from ~1.7 MB → ~6.3 MB; the async runtime exception for the `bus` feature is already documented in CLAUDE.md.
+- **`cargo install claudectl`** still defaults to the minimal build (`hive` only). Users who want the full feature set use `cargo install claudectl --features bus,coord,relay,hive`.
+- README and quickstart docs updated to surface both choices and call out the size trade-off.
+
+Part of the DX overhaul epic #320.
+
 ### Added — Plugin embedded in binary (closes #325)
 - **Plugin files now ship inside the `claudectl` binary** via `include_str!` — 17 files, ~29 KB total. `claudectl init` writes them to `~/.claude/plugins/claudectl/` automatically. No repo clone, no manual `.mcp.json` copy. The biggest single Homebrew-user UX win.
 - **`claudectl init --plugin-only`** — install (or re-install) just the plugin without re-running the rest of the wizard. Useful after `brew upgrade claudectl`.
