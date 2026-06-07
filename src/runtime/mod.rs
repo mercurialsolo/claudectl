@@ -20,6 +20,7 @@ mod brain_driver;
 mod brain_review;
 mod bus;
 mod coord;
+mod hive;
 mod orchestrator;
 mod sessions;
 
@@ -32,6 +33,7 @@ pub use brain_driver::LiveBrainDriver;
 pub use brain_review::LiveBrainReviewView;
 pub use bus::LiveBusView;
 pub use coord::LiveCoordView;
+pub use hive::LiveHiveActions;
 pub use orchestrator::LiveOrchestrator;
 pub use sessions::LiveSessionSource;
 
@@ -51,5 +53,6 @@ pub fn build_runtime() -> Runtime {
         Arc::new(LiveActions),
         Arc::new(LiveBrainReviewView),
         Arc::new(LiveOrchestrator),
+        Arc::new(LiveHiveActions),
     )
 }

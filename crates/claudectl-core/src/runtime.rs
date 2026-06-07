@@ -433,6 +433,43 @@ pub trait Actions: Send + Sync {
 }
 
 // ============================================================================
+// Hive actions — knowledge-store (`hive`) + transport (`relay`) reads/writes
+// ============================================================================
+
+/// Snapshot of local hive state the overlay reads to render the Hive tab.
+///
+/// Mirrors the binary's same-named struct, lifted here so the TUI can hold
+/// it without depending on the binary's app module.
+#[derive(Debug, Clone, Default)]
+pub struct HiveViewSnapshot {
+    /// Local relay identity (peer ID string). `None` when the `relay`
+    /// feature is compiled out.
+    pub identity: Option<String>,
+    /// Known peers, paired with last-seen address when available.
+    pub peers: Vec<(String, Option<String>)>,
+}
+
+/// Hive + relay surface the TUI needs to render the Skills and Hive panels.
+///
+/// Separate trait from `Actions` because the underlying subsystems are
+/// feature-gated (`hive`, `relay`) — when those features are off the
+/// implementation returns empty/no-op values rather than failing.
+pub trait HiveActions: Send + Sync {
+    /// Semantic keys (`skill:<lowered-name>`) of skills already shared into
+    /// the local hive store. Used by the Skills overlay to mark "already
+    /// shared" rows.
+    fn shared_skill_keys(&self) -> std::collections::HashSet<String>;
+
+    /// Share a discovered skill into the local hive store. Returns the new
+    /// unit ID on success.
+    fn share_skill(&self, skill: &crate::skills::DiscoveredSkill) -> Result<String, String>;
+
+    /// Current view of the local relay identity + known peers for the Hive
+    /// tab.
+    fn hive_view_snapshot(&self) -> HiveViewSnapshot;
+}
+
+// ============================================================================
 // Brain driver (stateful)
 // ============================================================================
 
@@ -568,9 +605,14 @@ pub struct Runtime {
     pub actions: Arc<dyn Actions>,
     pub review: Arc<dyn BrainReviewView>,
     pub orchestrator: Arc<dyn Orchestrator>,
+    pub hive: Arc<dyn HiveActions>,
 }
 
 impl Runtime {
+    // 8-trait composition root; each view is its own arc. Splitting this into
+    // sub-records would just trade one wide ctor for several narrow ones with
+    // the same total fan-out.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sessions: Arc<dyn SessionSource>,
         brain: Arc<dyn BrainView>,
@@ -579,6 +621,7 @@ impl Runtime {
         actions: Arc<dyn Actions>,
         review: Arc<dyn BrainReviewView>,
         orchestrator: Arc<dyn Orchestrator>,
+        hive: Arc<dyn HiveActions>,
     ) -> Self {
         Self {
             sessions,
@@ -588,6 +631,7 @@ impl Runtime {
             actions,
             review,
             orchestrator,
+            hive,
         }
     }
 }
@@ -678,6 +722,7 @@ impl MockRuntime {
             arc.clone(),
             arc.clone(),
             arc.clone(),
+            arc.clone(),
             arc,
         )
     }
@@ -749,6 +794,18 @@ impl Orchestrator for MockRuntime {
         Vec::new()
     }
     fn expire_stale(&self) {}
+}
+
+impl HiveActions for MockRuntime {
+    fn shared_skill_keys(&self) -> std::collections::HashSet<String> {
+        std::collections::HashSet::new()
+    }
+    fn share_skill(&self, _skill: &crate::skills::DiscoveredSkill) -> Result<String, String> {
+        Err("MockRuntime does not implement skill sharing".into())
+    }
+    fn hive_view_snapshot(&self) -> HiveViewSnapshot {
+        HiveViewSnapshot::default()
+    }
 }
 
 impl Actions for MockRuntime {
@@ -928,6 +985,7 @@ mod tests {
             arc.clone(),
             arc.clone(),
             arc.clone(),
+            arc.clone(),
         );
         // Initial: default On.
         assert_eq!(rt.brain.gate_mode(), BrainGateMode::On);
@@ -959,6 +1017,7 @@ mod tests {
             arc.clone(),
             arc.clone(),
             arc.clone(),
+            arc.clone(),
         );
         let obs = ObservationInput {
             session_pid: 12345,
@@ -977,6 +1036,7 @@ mod tests {
         let mock = MockRuntime::default();
         let arc = Arc::new(mock);
         let rt = Runtime::new(
+            arc.clone(),
             arc.clone(),
             arc.clone(),
             arc.clone(),

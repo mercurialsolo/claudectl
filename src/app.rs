@@ -1983,14 +1983,14 @@ impl App {
     pub fn refresh_skills(&mut self) {
         let cwd = std::env::current_dir().ok();
         self.skills = crate::skills::discover(cwd.as_deref());
-        self.shared_skill_keys = load_shared_skill_keys();
+        self.shared_skill_keys = self.runtime.hive.shared_skill_keys();
         if self.skills_selected >= self.skills.len() {
             self.skills_selected = self.skills.len().saturating_sub(1);
         }
     }
 
     pub fn refresh_hive_view(&mut self) {
-        let snapshot = load_hive_view_snapshot();
+        let snapshot = self.runtime.hive.hive_view_snapshot();
         self.hive_identity = snapshot.identity;
         self.hive_known_peers = snapshot.peers;
     }
@@ -2276,7 +2276,7 @@ impl App {
             self.skills_status_msg = Some("Already shared".into());
             return;
         }
-        match share_skill_to_hive(&skill) {
+        match self.runtime.hive.share_skill(&skill) {
             Ok(unit_id) => {
                 self.shared_skill_keys.insert(skill.semantic_key());
                 self.skills_status_msg = Some(format!(
@@ -2963,46 +2963,11 @@ impl App {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Skills overlay helpers — kept at module scope so the App methods stay short.
+// Hive/relay shell-out helpers — kept at module scope so the App methods stay
+// short. The read-side helpers (skill-key collection, hive snapshot) and the
+// write-side helper (share skill) moved into `runtime::hive::LiveHiveActions`
+// so the future TUI crate (#275) can hold them through the trait surface.
 // ────────────────────────────────────────────────────────────────────────────
-
-/// Collect semantic keys for skills already in the local hive store.
-///
-/// The hive `semantic_key` is `<scope>/skill:<lowered-name>`; we strip the
-/// scope prefix here because `DiscoveredSkill::semantic_key()` is scope-less.
-fn load_shared_skill_keys() -> std::collections::HashSet<String> {
-    #[cfg(feature = "hive")]
-    {
-        let store = crate::hive::store::HiveStore::load();
-        let mut out = std::collections::HashSet::new();
-        for unit in store.all_units() {
-            if let crate::hive::KnowledgeContent::Skill { name, .. } = &unit.content {
-                out.insert(format!("skill:{}", name.to_lowercase().replace(' ', "-")));
-            }
-        }
-        out
-    }
-    #[cfg(not(feature = "hive"))]
-    {
-        std::collections::HashSet::new()
-    }
-}
-
-/// Share a discovered skill into the local hive store. Returns the new unit ID.
-fn share_skill_to_hive(skill: &crate::skills::DiscoveredSkill) -> Result<String, String> {
-    #[cfg(feature = "hive")]
-    {
-        let path_str = skill.path.to_string_lossy().to_string();
-        crate::hive::cli::share_artifact_from_path("skill", &path_str, "universal")
-            .map(|(unit_id, _summary)| unit_id)
-            .map_err(|e| e.to_string())
-    }
-    #[cfg(not(feature = "hive"))]
-    {
-        let _ = skill;
-        Err("hive feature disabled".into())
-    }
-}
 
 /// Detach a `claudectl relay serve` child so the TUI keeps running.
 #[cfg(feature = "relay")]
@@ -3040,38 +3005,6 @@ fn spawn_relay_join(code: &str) -> Result<(), String> {
 #[cfg(not(feature = "relay"))]
 fn spawn_relay_join(_code: &str) -> Result<(), String> {
     Err("relay feature not built".into())
-}
-
-/// Snapshot of local hive state the overlay reads to render the Hive tab.
-pub struct HiveViewSnapshot {
-    pub identity: Option<String>,
-    /// (peer_id, optional last-known address)
-    pub peers: Vec<(String, Option<String>)>,
-}
-
-#[cfg(feature = "relay")]
-fn load_hive_view_snapshot() -> HiveViewSnapshot {
-    let identity = Some(crate::relay::load_or_create_identity().as_str().to_string());
-    let peers = crate::relay::list_known_peers()
-        .into_iter()
-        .map(|id| {
-            let addr = crate::relay::load_peer_meta(&id).and_then(|v| {
-                v.get("addr")
-                    .and_then(|a| a.as_str())
-                    .map(|s| s.to_string())
-            });
-            (id, addr)
-        })
-        .collect();
-    HiveViewSnapshot { identity, peers }
-}
-
-#[cfg(not(feature = "relay"))]
-fn load_hive_view_snapshot() -> HiveViewSnapshot {
-    HiveViewSnapshot {
-        identity: None,
-        peers: Vec::new(),
-    }
 }
 
 /// Shell out to `claudectl relay invite --json` and parse the result. We use
