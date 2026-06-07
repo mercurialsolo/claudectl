@@ -2,6 +2,14 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Added — `claudectl init --purge` for full uninstall
+- **`claudectl init --purge`** — hard uninstall. Does everything `--remove` does (strips Claude Code hooks + clears the onboarding marker) **plus** wipes `~/.claudectl/` entirely (bus DB, brain decisions, hive knowledge, relay identity, coord state) and removes `~/.config/claudectl/config.toml`. Idempotent — re-running after a successful purge is a no-op.
+- **`--yes`** flag pairs with `--purge` to skip the confirmation prompt for automation. Without it, you see a list of paths and confirm before anything is deleted.
+- `--remove` is unchanged: it remains the safe form that preserves user data. The CLI help text now spells out the data-preservation contract.
+- 3 new unit tests for the `remove_*_if_present` helpers (idempotency, recursive tree wipe, sibling preservation). Tested live end-to-end against a fake `$HOME`: plant fake artifacts → `--purge --yes` removes them → `init --non-interactive --skip-*` reinits cleanly.
+
 ## [0.55.0] - 2026-06-07
 
 ### Added — agent-bus role binding (closes #307, #310)
