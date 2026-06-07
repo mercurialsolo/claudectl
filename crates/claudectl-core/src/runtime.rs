@@ -305,6 +305,8 @@ pub struct RoleBinding {
     pub cwd_selector: String,
     pub last_session_id: Option<String>,
     pub last_seen: String,
+    /// PID this role is bound to (#307). `None` for cwd-only bindings.
+    pub pid: Option<u32>,
 }
 
 /// Read access to the agent-bus roster + role table. Disabled implementations
@@ -430,6 +432,13 @@ pub trait Actions: Send + Sync {
     /// Mark a past brain decision as canonical for teaching. Optional `note`
     /// is the operator's annotation. Used by the Brain Review surface.
     fn mark_canonical(&self, decision_id: &str, note: Option<String>) -> Result<(), String>;
+
+    /// Bind an agent-bus role to a `(cwd, pid)` pair. The TUI calls this from
+    /// the new role-bind key (Ctrl+R) so the operator can attach a role to a
+    /// specific running Claude session without dropping to another terminal.
+    /// Returns `Err` when the bus feature is compiled out or the DB write
+    /// fails. See issue #307.
+    fn bind_bus_role(&self, name: &str, cwd: &str, pid: u32) -> Result<(), String>;
 }
 
 // ============================================================================
@@ -679,6 +688,11 @@ pub enum MockAction {
         decision_id: String,
         note: Option<String>,
     },
+    BindBusRole {
+        name: String,
+        cwd: String,
+        pid: u32,
+    },
 }
 
 impl PartialEq for ObservationInput {
@@ -855,6 +869,17 @@ impl Actions for MockRuntime {
             .push(MockAction::MarkCanonical {
                 decision_id: decision_id.into(),
                 note,
+            });
+        Ok(())
+    }
+    fn bind_bus_role(&self, name: &str, cwd: &str, pid: u32) -> Result<(), String> {
+        self.actions_log
+            .lock()
+            .expect("actions_log poisoned")
+            .push(MockAction::BindBusRole {
+                name: name.into(),
+                cwd: cwd.into(),
+                pid,
             });
         Ok(())
     }

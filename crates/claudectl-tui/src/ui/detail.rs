@@ -64,6 +64,34 @@ pub fn render_detail_panel(frame: &mut Frame, area: Rect, session: &ClaudeSessio
         session.telemetry_label().to_string()
     };
 
+    // Bus role binding (#307). Look up by pid first — TUI-bound roles attach
+    // by pid so this catches the bind without an extra cwd-prefix lookup. We
+    // fall back to cwd_selector matching for cwd-only bindings made via
+    // `claudectl bus role bind <name> <cwd>` outside the TUI.
+    let bus_role_line = {
+        let roles = app.runtime.bus.list_roles();
+        let by_pid = roles.iter().find(|r| r.pid == Some(session.pid));
+        let by_cwd = roles
+            .iter()
+            .find(|r| !r.cwd_selector.is_empty() && session.cwd.starts_with(&r.cwd_selector));
+        match by_pid.or(by_cwd) {
+            Some(r) => detail_line(
+                "Bus role",
+                &format!(
+                    "{} (bound by {})",
+                    r.name,
+                    if r.pid == Some(session.pid) {
+                        "pid"
+                    } else {
+                        "cwd"
+                    }
+                ),
+                t,
+            ),
+            None => detail_line("Bus role", "— (Ctrl+R to bind)", t),
+        }
+    };
+
     let mut lines = vec![
         detail_line("PID", &pid, t),
         detail_line("Session ID", &session.session_id, t),
@@ -71,6 +99,7 @@ pub fn render_detail_panel(frame: &mut Frame, area: Rect, session: &ClaudeSessio
         detail_line("Project", &session.project_name, t),
         detail_line("Model", &model, t),
         detail_line("Status", &status, t),
+        bus_role_line,
         detail_line("Telemetry", &telemetry, t),
         detail_line("TTY", &tty, t),
         detail_line("Elapsed", &elapsed, t),
