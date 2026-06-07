@@ -8,8 +8,8 @@
 // Foundational modules from claudectl-core (epic #279). Re-aliased so existing
 // `crate::session::*` paths still resolve. See `lib.rs` for the rationale.
 use claudectl_core::{
-    discovery, health, helpers, history, logger, models, monitor, process, rules, session,
-    terminals, theme, transcript,
+    discovery, health, helpers, history, hooks, launch, logger, models, monitor, process, rules,
+    session, skills, terminals, theme, transcript,
 };
 
 mod app;
@@ -23,16 +23,13 @@ mod coord;
 mod demo;
 #[cfg(feature = "hive")]
 mod hive;
-mod hooks;
 mod init;
-mod launch;
 mod orchestrator;
 mod recorder;
 #[cfg(feature = "relay")]
 mod relay;
 mod runtime;
 mod session_recorder;
-mod skills;
 mod ui;
 
 use std::io;
