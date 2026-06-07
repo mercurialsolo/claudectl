@@ -142,17 +142,29 @@ messages(id, subject, type, sender_role, addressed_to,
          thread_id, body, priority, status,
          claimed_by, created_at, delivered_at, acked_at)
 subscriptions(role, subject_pattern)
-roles(role, cwd_selector, last_session_id, last_seen)
+roles(role, cwd_selector, last_session_id, last_seen, pid)
 ```
+
+`roles.pid` is nullable (#307 migration). When set, the resolver prefers it over cwd-inference for any caller whose ancestor pid chain contains that pid — see §5.
 
 ---
 
 ## 5. Self-registration / addressing
 
-An agent needs to know its own address. Two mechanisms, first preferred:
+An agent needs to know its own address. Resolution order, first match wins:
 
-1. **cwd/PID inference (zero agent cooperation):** the MCP call arrives from a known session; claudectl maps the calling session's cwd to a role via config selectors. Works without the agent doing anything.
-2. **Explicit `--role` at launch:** `claudectl --new --role planner ...`; the agent reads it back via `whoami()`. Required as a fallback when multiple sessions share one cwd (e.g. two agents in the same worktree), where cwd inference is ambiguous.
+1. **Explicit `--role`** (CLI) / `CLAUDECTL_BUS_ROLE` env at launch — used by `claudectl --new --role planner ...` and ambient scripting. Always wins when set.
+2. **PID-binding** (#307) — any role bound to a pid in the caller's parent process chain. The resolver walks ancestor pids (depth 8 via `getppid` + native `ps`) and picks the first match. This is the disambiguator for "two sessions in one worktree" — they have different pids even when their cwd matches.
+3. **cwd inference** — literal-prefix match against bound `cwd_selector`s. Zero agent cooperation; the fallback for cwd-only bindings.
+
+Four ways to create a binding:
+
+| How | When | Mnemonic |
+|---|---|---|
+| `claudectl bus role bind <name> <cwd>` | provisioning a worktree, CI scripts | cwd-keyed (original) |
+| `claudectl bus role bind <name> <cwd> --pid <pid>` | known pid (orchestrator path) | cwd + pid pinned |
+| TUI **`Ctrl+R`** on the selected session | dashboard operator | binds selected session's pid + cwd |
+| `/bind <name>` (Claude Code slash command) | inside a running session | `--self` walks ancestry to find Claude's pid + uses current cwd |
 
 Roles are the stable names everything else references. Session IDs are ephemeral and never used as durable addresses.
 

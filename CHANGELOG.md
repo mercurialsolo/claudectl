@@ -2,6 +2,22 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Added — agent-bus role binding (closes #307, #310)
+- **PID-keyed role bindings.** The bus `roles` table gained a nullable `pid` column. When set, the resolver walks the caller's parent process chain (depth 8 via `getppid` + native `ps`) and picks the first role bound to any ancestor pid before falling back to cwd-inference. Disambiguates "two sessions in one worktree" — different pids, same cwd, distinct roles.
+- **`claudectl bus role bind <NAME> <CWD> --pid <PID>`** — explicit pid binding for orchestrator scripts.
+- **`claudectl bus role bind <NAME> --self`** — auto-detects Claude's pid by walking the ancestor chain looking for a process whose `ps -o command=` contains `claude`. Captures the current cwd. Used by the new `/bind` slash command.
+- **TUI `Ctrl+R`** on the selected session opens a `role>` prompt and binds the selected session's pid + cwd through the new `Actions::bind_bus_role` trait method. Detail panel now shows `Bus role: <name> (bound by pid|cwd)` so the current binding is visible at a glance.
+- **`/bind <role>` plugin slash command** (`claude-plugin/commands/bind.md`) — operator types `/bind frontend` from inside a Claude session; the plugin runs `claudectl bus role bind --self frontend`.
+- **`bus role list`** prints the new pid column; **`bus whoami --json`** payload gains a `pid` field.
+
+### Internals
+- Schema migration is idempotent — guarded by a `PRAGMA table_info` check before `ADD COLUMN` (SQLite has no `IF NOT EXISTS` for column adds). Existing cwd-only bindings keep working unchanged.
+- `upsert_role` uses `COALESCE` on the pid update, so a re-bind that only refreshes `session_id` doesn't clobber an existing pid.
+- New runtime trait method `Actions::bind_bus_role(name, cwd, pid)`; LiveActions writes through `bus::store::upsert_role`; off-bus builds return a clear error.
+- 3 new bus tests covering pid precedence, fall-through, and pid-preservation on re-bind. All 24 bus tests pass.
+
 ## [0.54.0] - 2026-06-06
 
 ### Internals (workspace refactor — closes epic #279)

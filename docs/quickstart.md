@@ -121,6 +121,8 @@ The `claude-plugin/` directory in the claudectl repo is a Claude Code plugin tha
 - `/spend` — cost breakdown
 - `/brain on|off|auto` — toggle brain mid-session
 - `/auto-insights` — view or configure auto-generated workflow insights
+- `/inbox` — drain pending agent-bus messages addressed to this session's role
+- `/bind <role>` — attach this session to an agent-bus role (auto-detects Claude's pid)
 - **Automatic brain gate** — the plugin hook queries the brain before every Bash/Write/Edit call
 
 The plugin and `--init` hooks are complementary. Use `--init` for dashboard observability, the plugin for inline brain decisions.
