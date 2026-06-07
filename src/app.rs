@@ -380,9 +380,9 @@ pub struct App {
     /// Currently selected index into `brain_queue`.
     pub brain_review_selected: usize,
     /// Prioritized review candidates (refreshed when the overlay opens or `r` is pressed).
-    pub brain_queue: Vec<crate::brain::review::ReviewItem>,
+    pub brain_queue: Vec<claudectl_core::runtime::ReviewItemSummary>,
     /// All decision records loaded for the scorecard view.
-    pub brain_decisions_cache: Vec<crate::brain::decisions::DecisionRecord>,
+    pub brain_decisions_cache: Vec<claudectl_core::runtime::DecisionSummary>,
     /// Transient status message shown in the overlay footer.
     pub brain_status_msg: Option<String>,
     /// When true, the overlay captures text input for a canonical-note.
@@ -2009,8 +2009,8 @@ impl App {
     }
 
     pub fn refresh_brain(&mut self) {
-        self.brain_decisions_cache = crate::brain::decisions::read_all_decisions();
-        self.brain_queue = crate::brain::review::build_queue(&self.brain_decisions_cache);
+        self.brain_decisions_cache = self.runtime.review.all_decisions();
+        self.brain_queue = self.runtime.review.review_queue();
         if self.brain_review_selected >= self.brain_queue.len() {
             self.brain_review_selected = self.brain_queue.len().saturating_sub(1);
         }
@@ -2084,10 +2084,12 @@ impl App {
         let Some(item) = self.brain_queue.get(self.brain_review_selected) else {
             return;
         };
-        let Some(id) = item.record.decision_id.clone() else {
+        // DecisionSummary stores the id as a String; empty == "no decision_id".
+        let id = item.decision.id.clone();
+        if id.is_empty() {
             self.brain_status_msg = Some("No decision_id — older record, can't mark.".into());
             return;
-        };
+        }
         match self
             .runtime
             .actions

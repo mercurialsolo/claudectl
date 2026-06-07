@@ -15,8 +15,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
+use claudectl_core::runtime::DecisionSummary;
+
 use crate::app::{App, BrainTab};
-use crate::brain::decisions::DecisionRecord;
 use crate::brain::metrics::{
     CacheSummary, LatencySummary, TierStats, compute_cache, compute_counterfactuals,
     compute_latency, compute_tier_stats,
@@ -105,7 +106,7 @@ fn render_counts_header(frame: &mut Frame, area: Rect, app: &App) {
     let with_brain = app
         .brain_decisions_cache
         .iter()
-        .filter(|d| !d.brain_action.is_empty())
+        .filter(|d| !d.action.is_empty())
         .count();
     let line = Line::from(vec![
         Span::styled(
@@ -129,19 +130,10 @@ fn render_counts_header(frame: &mut Frame, area: Rect, app: &App) {
 fn render_scorecard(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.theme;
     let decisions = &app.brain_decisions_cache;
-    // Project once for every compute_* call below — the metrics surface
-    // operates on the core `DecisionSummary` DTO so it can be shared with
-    // future callers outside the binary.
-    let summaries: Vec<claudectl_core::runtime::DecisionSummary> =
-        decisions.iter().map(Into::into).collect();
-
-    let total_with_brain = decisions
-        .iter()
-        .filter(|d| !d.brain_action.is_empty())
-        .count();
+    let total_with_brain = decisions.iter().filter(|d| !d.action.is_empty()).count();
     let correct = decisions
         .iter()
-        .filter(|d| !d.brain_action.is_empty() && d.is_positive())
+        .filter(|d| !d.action.is_empty() && d.is_positive())
         .count();
     let north_star = if total_with_brain > 0 {
         (correct as f64 / total_with_brain as f64) * 100.0
@@ -149,10 +141,10 @@ fn render_scorecard(frame: &mut Frame, area: Rect, app: &App) {
         0.0
     };
 
-    let tier_stats = compute_tier_stats(&summaries);
-    let latency = compute_latency(&summaries);
-    let cache = compute_cache(&summaries);
-    let cfs = compute_counterfactuals(&summaries);
+    let tier_stats = compute_tier_stats(decisions);
+    let latency = compute_latency(decisions);
+    let cache = compute_cache(decisions);
+    let cfs = compute_counterfactuals(decisions);
     let brain_right = cfs.iter().filter(|c| c.brain_was_right).count();
     let user_right = cfs.len() - brain_right;
     let canonical_count = decisions
@@ -160,10 +152,10 @@ fn render_scorecard(frame: &mut Frame, area: Rect, app: &App) {
         .filter(|d| d.canonical == Some(true))
         .count();
 
-    let override_window: Vec<&DecisionRecord> = decisions
+    let override_window: Vec<&DecisionSummary> = decisions
         .iter()
         .rev()
-        .filter(|d| !d.brain_action.is_empty())
+        .filter(|d| !d.action.is_empty())
         .take(50)
         .collect();
     let override_rate = if override_window.is_empty() {
@@ -381,11 +373,14 @@ fn render_review_list(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, item)| {
-            let tier = classify_risk(item.record.tool.as_deref(), item.record.command.as_deref());
+            let tier = classify_risk(
+                item.decision.tool.as_deref(),
+                item.decision.command.as_deref(),
+            );
             let header = format!(
                 "[{score:>3}] {tool:<8} {tier:<8}",
                 score = item.score,
-                tool = item.record.tool.as_deref().unwrap_or("?"),
+                tool = item.decision.tool.as_deref().unwrap_or("?"),
                 tier = tier.label(),
             );
             let reason = truncate(&item.reason, 60);
@@ -422,7 +417,7 @@ fn render_review_detail(frame: &mut Frame, area: Rect, app: &App) {
     let Some(item) = app.brain_queue.get(app.brain_review_selected) else {
         return;
     };
-    let d = &item.record;
+    let d = &item.decision;
     let tier = classify_risk(d.tool.as_deref(), d.command.as_deref());
 
     let muted = Style::default().fg(t.text_muted);
@@ -441,7 +436,7 @@ fn render_review_detail(frame: &mut Frame, area: Rect, app: &App) {
     ]));
     lines.push(Line::from(vec![
         Span::styled("  project:     ", muted),
-        Span::styled(&d.project, primary),
+        Span::styled(d.project.as_deref().unwrap_or("(none)"), primary),
     ]));
     lines.push(Line::from(vec![
         Span::styled("  tool:        ", muted),
@@ -459,21 +454,22 @@ fn render_review_detail(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(
             format!(
                 "{} ({:.0}% confidence)",
-                d.brain_action,
-                d.brain_confidence * 100.0
+                d.action,
+                d.confidence.unwrap_or(0.0) * 100.0
             ),
             primary,
         ),
     ]));
-    if !d.brain_reasoning.is_empty() {
+    let reasoning = d.reasoning.as_deref().unwrap_or("");
+    if !reasoning.is_empty() {
         lines.push(Line::from(Span::styled("  reasoning:", muted)));
-        for chunk in wrap_lines(&d.brain_reasoning, 70) {
+        for chunk in wrap_lines(reasoning, 70) {
             lines.push(Line::from(Span::styled(format!("    {}", chunk), primary)));
         }
     }
     lines.push(Line::from(vec![
         Span::styled("  user:        ", muted),
-        Span::styled(&d.user_action, primary),
+        Span::styled(d.user_action.as_deref().unwrap_or("(none)"), primary),
     ]));
     if let Some(reason) = &d.override_reason {
         lines.push(Line::from(vec![
@@ -493,14 +489,18 @@ fn render_review_detail(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(format!("{hit}"), primary),
         ]));
     }
-    if let Some(ctx) = &d.context {
+    // DecisionSummary flattens `DecisionRecord.context` into two top-level
+    // fields. Render whichever pieces are present.
+    if let Some(cost) = d.cost_usd {
         lines.push(Line::from(vec![
             Span::styled("  cost:        ", muted),
-            Span::styled(format!("${:.4}", ctx.cost_usd), primary),
+            Span::styled(format!("${cost:.4}"), primary),
         ]));
+    }
+    if let Some(ref model) = d.model {
         lines.push(Line::from(vec![
             Span::styled("  model:       ", muted),
-            Span::styled(&ctx.model, primary),
+            Span::styled(model.as_str(), primary),
         ]));
     }
 
