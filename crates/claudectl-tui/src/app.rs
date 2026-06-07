@@ -2976,14 +2976,13 @@ impl App {
             KeyCode::Backspace => {
                 self.role_bind_buffer.pop();
             }
-            KeyCode::Char(c) => {
-                // Role names are short, alpha-numeric with - and _. Cap at
-                // 64 so a runaway paste doesn't take the prompt hostage.
+            // Role names are short, alpha-numeric with - and _. Cap at 64
+            // so a runaway paste can't take the prompt hostage.
+            KeyCode::Char(c)
                 if self.role_bind_buffer.len() < 64
-                    && (c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                {
-                    self.role_bind_buffer.push(c);
-                }
+                    && (c.is_ascii_alphanumeric() || c == '-' || c == '_') =>
+            {
+                self.role_bind_buffer.push(c);
             }
             _ => {}
         }
