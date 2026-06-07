@@ -1,6 +1,6 @@
 {
   "name": "claudectl",
-  "version": "0.53.0",
+  "version": "0.56.0",
   "description": "Mission control for Claude Code — local LLM brain, session monitoring, spend control, and hive mind skill sharing",
   "author": {
     "name": "mercurialsolo",

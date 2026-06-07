@@ -348,11 +348,14 @@ claudectl includes a Claude Code plugin in `claude-plugin/` that integrates the 
 |-----------|------|-------------|
 | `brain-gate.sh` | PreToolUse hook | Queries the brain before Bash/Write/Edit/NotebookEdit calls |
 | `budget-check.sh` | PreToolUse hook | Denies tool calls when session exceeds budget |
+| `inbox-drain.sh` | Stop hook | Drains the agent-bus mailbox at turn boundary so messages arrive in-turn |
 | `/brain` | Command | Toggle brain mode: `/brain on`, `/brain off`, `/brain auto` |
 | `/sessions` | Command | Show all active sessions with status, cost, and health |
 | `/spend` | Command | Cost breakdown by project and time window |
 | `/brain-stats` | Command | Brain learning metrics and accuracy |
 | `/auto-insights` | Command | Show or configure auto-generated workflow insights |
+| `/inbox` | Command | Drain pending agent-bus messages addressed to this session |
+| `/role <name>` | Command | Set this session's agent-bus role (e.g. `/role frontend`, `/role tester`) — auto-detects Claude's pid via ancestor walk |
 | Supervisor | Agent | Proactive session health triage |
 | Session Monitoring | Skill | Auto-activated awareness of claudectl capabilities |
 
@@ -401,7 +404,7 @@ claudectl was the first tool to combine local LLM supervision with multi-session
 | Auto-rule engine | No | Match by tool/command/project/cost |
 | Approve prompts without switching | No | Press `y` |
 | Record session highlight reels | No | Press `R` |
-| Claude Code plugin | No | `/brain`, `/sessions`, `/spend`, `/auto-insights` |
+| Claude Code plugin | No | `/brain`, `/sessions`, `/spend`, `/brain-stats`, `/auto-insights`, `/inbox`, `/role <name>` |
 
 | Cross-machine knowledge sharing | No | Peer-to-peer hive mind |
 | Remote task delegation | No | Delegate to connected peers |
