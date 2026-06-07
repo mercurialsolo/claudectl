@@ -6,12 +6,25 @@ This page covers how to turn it on, bind roles, send and receive messages, and u
 
 ## When to use it
 
-- **Multiple specialist sessions on one project** — `frontend`, `backend`, `infra` Claude sessions in separate worktrees; each picks up work in its lane.
-- **Plan / impl / review** — a planner session decomposes a task and addresses sub-work to implementer + reviewer roles.
-- **Long-running supervisor** — a `supervisor` role drains an inbox of incidents reported by other sessions and triages.
-- **Cross-machine handoff** — pair the bus with the [relay feature](relay.md) to push messages across hosts.
+The bus pays off the moment you have two or more Claude sessions that should hand work to each other instead of you copy-pasting between terminals. A few common role shapes:
 
-If you only ever run one Claude session at a time, the bus is overhead. It pays off the moment you have two cooperating sessions.
+| Role | Owns | Talks to |
+|---|---|---|
+| `spec` | Writes the design / acceptance criteria. Doesn't touch implementation. | `frontend`, `backend`, `data-analyst`, `infra` (sends spec, receives questions) |
+| `frontend` | Implements UI in `apps/frontend`, `src/components`, etc. | `spec` (clarifications), `backend` (API contracts), `tester` (failing UI tests) |
+| `backend` | Implements API + business logic in `services/`, `src/api`, etc. | `spec`, `frontend` (contracts), `data-analyst` (query shapes), `tester` |
+| `data-analyst` | Runs queries, builds reports, maintains pipelines. | `backend` (schema), `spec` (requirements) |
+| `tester` | Runs the suite, writes new tests, reports failing scenarios. | `frontend`, `backend`, `infra` (failures land in their inbox) |
+| `infra` | Terraform, deployment configs, CI tweaks. | `backend` (env vars), `tester` (CI failures) |
+
+Concrete patterns these unlock:
+
+- **Spec hands off implementation work.** A `spec` session decomposes a feature into per-area tasks and sends them to `frontend` / `backend` / `data-analyst`. Each picks up its share at the next turn boundary via the Stop hook — no nudging.
+- **Tester closes the loop.** A `tester` session running the suite sends `cargo nextest failure: <test_name>: <output>` to the role that owns that file. The next implementer turn sees it as `additionalContext` and fixes the regression in-thread.
+- **Infra fans out env changes.** When `infra` flips a flag, it publishes `env.changed` so `backend` and `tester` know to reload configs.
+- **Cross-machine handoff.** Pair the bus with the [relay feature](relay.md) so a `spec` session on your laptop can address an `infra` role running on a CI box.
+
+If you only ever run one Claude session at a time, the bus is overhead. The win scales with the number of cooperating sessions and the number of times per day work crosses between them.
 
 ## Quick start
 
@@ -63,7 +76,7 @@ A role is a stable name other sessions address you by. Four ways to create the b
 | Outside any session (CI, scripts) | `claudectl bus role bind <name> <cwd>` | cwd-keyed |
 | Outside any session, known pid | `claudectl bus role bind <name> <cwd> --pid <pid>` | cwd + pid pinned |
 | TUI dashboard, session selected | `Ctrl+R` → type role name → `Enter` | selected session's pid + cwd |
-| Inside a running Claude session | `/bind <role>` slash command | walks ancestor chain to find Claude's pid + uses current cwd |
+| Inside a running Claude session | `/role <name>` slash command (e.g. `/role frontend`) | walks ancestor chain to find Claude's pid + uses current cwd |
 
 PID-keyed bindings beat cwd-keyed ones during resolution — the disambiguator for "two sessions in the same worktree, different roles."
 
@@ -99,7 +112,7 @@ The recipient picks up mail in two ways:
 
 **Automatic (recommended).** The Stop hook installed by `claudectl init` drains the mailbox at the end of every Claude turn. When mail is present, the hook returns `decision: "block"` with the rendered messages as `additionalContext` so the agent picks the work up in the same turn — no user interaction, no polling. This is **Trigger A** in the [design spec](AGENT_BUS.md#trigger-a-claude-code-stop-hook-claudectl-mcp-tool-primary).
 
-**Manual.** Use the `/inbox` slash command (provided by the bundled plugin) any time, or:
+**Manual.** Use the `/inbox` slash command (provided by the bundled plugin — pairs with `/role`) any time, or:
 
 ```bash
 claudectl bus inbox                        # drains the cwd-inferred role
@@ -127,36 +140,48 @@ sqlite3 ~/.claudectl/bus/bus.db "SELECT role, pid, last_seen FROM roles"
 sqlite3 ~/.claudectl/bus/bus.db "SELECT subject, addressed_to, status FROM messages ORDER BY created_at DESC LIMIT 20"
 ```
 
-## Worked example: planner → implementer handoff
+## Worked example: spec → frontend + backend handoff
 
-Goal: a `planner` session decomposes a task, then addresses the implementation work to an `impl` session.
+Goal: a `spec` session decomposes a feature into a frontend slice and a backend slice, and addresses each to the right session.
 
 ```bash
-# Terminal 1 (cwd: /work/proj-plan)
+# Terminal 1 (cwd: /work/proj/spec)
 claude                                     # start a Claude session
 # inside the session, once at a prompt:
-/bind planner                              # binds this session as `planner`
+/role spec                                 # binds this session as `spec`
 
-# Terminal 2 (cwd: /work/proj-impl)
+# Terminal 2 (cwd: /work/proj/apps/frontend)
 claude
-/bind impl
+/role frontend
 
-# Now from the planner session, send work to impl:
-# inside the planner session:
-> Use the claudectl-bus MCP tool to send `impl` a task that says
-> "implement the date parsing for the report tool".
+# Terminal 3 (cwd: /work/proj/services/backend)
+claude
+/role backend
 
-# At the impl session's next Stop boundary, the Stop hook drains the
-# mailbox and the impl agent sees the task as additionalContext in the
-# same turn — no user intervention needed.
+# From the spec session, send work to each implementer:
+# inside the spec session:
+> Use the claudectl-bus MCP tool to send `frontend` a task with subject
+> "task.created" and body "Render the date filter on the report page; use
+> the shared <DateRangePicker /> from packages/ui."
+>
+> Then send `backend` a task with subject "task.created" and body
+> "Add /api/reports/date-range that returns ISO dates for the given period.
+> Frontend depends on this — they'll call it from <DateRangePicker />."
 
-# Verify from a third terminal:
+# At each implementer's next Stop boundary, the Stop hook drains its
+# mailbox and the task lands as additionalContext in the same turn —
+# no user intervention needed.
+
+# Verify from a fourth terminal:
 claudectl bus role list
-# planner   /work/proj-plan   pid=12345
-# impl      /work/proj-impl   pid=23456
+# spec        /work/proj/spec                  pid=11111
+# frontend    /work/proj/apps/frontend         pid=22222
+# backend     /work/proj/services/backend      pid=33333
 
-claudectl bus inbox --role impl --json     # peek without re-draining
+claudectl bus inbox --role frontend --json # peek without re-draining
 ```
+
+Scale this up: add `tester` running the suite who sends failures back to whoever owns the file, or `infra` who flips a deploy flag and notifies `backend`. The bus is the fabric — what each role does is up to you.
 
 ## Uninstall
 
@@ -180,7 +205,7 @@ See [Quick Start § Uninstall](quickstart.md#uninstall) for the full lifecycle c
 | `Stop` hook continue-in-turn delivery | Shipped |
 | Content sanitization (`/` neutralized, body cap, subject grammar, type allowlist) | Shipped |
 | PID-keyed role bindings + ancestor-walk resolution | Shipped (0.55.0) |
-| TUI Ctrl+R + `/bind` slash command + `bus role suggest` | Shipped (0.55.0) |
+| TUI Ctrl+R + `/role` slash command + `bus role suggest` | Shipped (0.55.0, renamed from `/bind` in 0.57.0) |
 | Subjects + `subscribe` + claim protocol | Not started |
 | Flow guards (rate/hop/loop/cost) + ACLs | Not started |
 | Long-horizon supervisor | Not started |

@@ -136,7 +136,7 @@ Integrates the brain directly into Claude Code sessions — no TUI required.
 | `/brain-stats` | Brain learning metrics and accuracy |
 | `/auto-insights` | Auto-generated workflow insights |
 | `/inbox` | Drain pending agent-bus messages addressed to this session's role |
-| `/bind <role>` | Attach this session to an agent-bus role (auto-detects pid) |
+| `/role <name>` | Set this session's agent-bus role, e.g. `/role frontend` or `/role tester` (auto-detects pid) |
 
 ## Headless Mode
 
@@ -219,7 +219,7 @@ claudectl bus whoami
 claudectl bus stdio
 ```
 
-The Claude Code plugin registers the bus as an MCP server (`claude-plugin/.mcp.json`) and ships two slash commands: `/inbox` (drain mailbox) and `/bind <role>` (attach this session to a role). Bindings are PID-keyed when made through the TUI's `Ctrl+R` or `/bind --self`; cwd-keyed for the legacy `claudectl bus role bind <name> <cwd>` flow. The resolver prefers a PID match over cwd-inference, which disambiguates "two sessions in one worktree".
+The Claude Code plugin registers the bus as an MCP server (`claude-plugin/.mcp.json`) and ships two slash commands: `/inbox` (drain mailbox) and `/role <name>` (e.g. `/role frontend`, `/role tester` — set this session's role). Bindings are PID-keyed when made through the TUI's `Ctrl+R` or `/role`; cwd-keyed for the legacy `claudectl bus role bind <name> <cwd>` flow. The resolver prefers a PID match over cwd-inference, which disambiguates "two sessions in one worktree".
 
 Mailboxes live in `~/.claudectl/bus/bus.db` (SQLite WAL). Message bodies are sanitized at the boundary — a leading `/` is neutralized so a queued message cannot smuggle a slash command into the recipient.
 

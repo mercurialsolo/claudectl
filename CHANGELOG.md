@@ -2,6 +2,13 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Changed — bus role slash command renamed `/bind` → `/role`
+- The plugin slash command shipped in 0.55.0 as `/bind <name>` is renamed to `/role <name>` (e.g. `/role frontend`, `/role tester`). Reads better — it matches the CLI noun (`claudectl bus role …`) and reflects what the operator is actually doing (setting a role, not binding to one).
+- `claude-plugin/commands/bind.md` is removed in favour of `claude-plugin/commands/role.md`. The command instructions and `--self` ancestor-walk behaviour are unchanged; only the user-facing name changed.
+- 0.55.0 / 0.56.0 install bases who typed `/bind` will need to retype `/role` after upgrading the plugin.
+
 ## [0.56.0] - 2026-06-07
 
 ### Added — `claudectl init --purge` for full uninstall
