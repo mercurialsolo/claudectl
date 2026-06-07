@@ -36,8 +36,12 @@ name = "claudectl"
 path = "src/lib.rs"
 
 [dependencies]
-claudectl-core = { path = "crates/claudectl-core" }
-claudectl-tui = { path = "crates/claudectl-tui" }
+# Workspace crates carry a `version` alongside `path` so the binary can be
+# published to crates.io. Local builds always use the path; crates.io strips
+# the path and resolves the published version. Bump both when the workspace
+# crates change.
+claudectl-core = { path = "crates/claudectl-core", version = "0.51.0" }
+claudectl-tui = { path = "crates/claudectl-tui", version = "0.51.0" }
 ratatui = "0.29"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
