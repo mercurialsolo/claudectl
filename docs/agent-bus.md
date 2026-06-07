@@ -109,6 +109,18 @@ claudectl bus inbox --json                 # machine-readable form
 
 Messages are drained on read — once delivered, they're marked acked and won't appear again.
 
+## Retention
+
+Delivered messages don't disappear on their own — they stay in `bus.db` so the audit trail survives a restart. To keep the table from growing forever:
+
+```bash
+claudectl bus prune                 # delete delivered messages older than 30 days
+claudectl bus prune --days 7        # tighter window
+claudectl bus prune --dry-run       # count what would go without writing
+```
+
+Pending and acked rows are always preserved — `prune` only touches the `delivered` tail. `claudectl doctor` flags the table once it crosses 5000 rows, with a pointer at this command.
+
 ## Where state lives
 
 | Path | What |

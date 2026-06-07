@@ -334,6 +334,67 @@ pub fn drain_inbox(
     Ok(rows)
 }
 
+// ---------------- Retention ------------------------------------------------
+
+/// Default retention: 30 days of delivered messages. Matches the coord
+/// store's `DEFAULT_RETENTION_DAYS` so operators only need to learn one
+/// number.
+pub const DEFAULT_RETENTION_DAYS: u64 = 30;
+
+/// Delete delivered messages older than `retention_days`. Pending and
+/// acked rows are untouched — we never lose in-flight work or the
+/// audit trail of explicit acks. Returns the count deleted (#337).
+///
+/// Cutoff math mirrors `coord::store::prune` so the two prune paths
+/// agree on what "30 days ago" means.
+pub fn prune(conn: &Connection, retention_days: Option<u64>) -> Result<u64, String> {
+    let days = retention_days.unwrap_or(DEFAULT_RETENTION_DAYS);
+    let cutoff = prune_cutoff(days);
+    let n = conn
+        .execute(
+            "DELETE FROM messages WHERE status = 'delivered' AND delivered_at IS NOT NULL AND delivered_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| format!("prune messages: {e}"))?;
+    Ok(n as u64)
+}
+
+/// How many rows `prune` would delete without writing. Used by
+/// `bus prune --dry-run` and by `claudectl doctor` when it wants to
+/// surface "X stale messages waiting to be pruned" advisories.
+pub fn prune_dry_run(conn: &Connection, retention_days: Option<u64>) -> Result<u64, String> {
+    let days = retention_days.unwrap_or(DEFAULT_RETENTION_DAYS);
+    let cutoff = prune_cutoff(days);
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages WHERE status = 'delivered' AND delivered_at IS NOT NULL AND delivered_at < ?1",
+            params![cutoff],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("prune dry-run count: {e}"))?;
+    Ok(n as u64)
+}
+
+/// Total messages currently in the table. Used by `claudectl doctor`
+/// to flag a growing mailbox before it becomes a problem.
+pub fn message_count(conn: &Connection) -> Result<u64, String> {
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+        .map_err(|e| format!("count messages: {e}"))?;
+    Ok(n as u64)
+}
+
+fn prune_cutoff(days: u64) -> String {
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_sub(days * 86400);
+    let d = epoch / 86400;
+    let (year, month, day) = crate::logger::days_to_date(d);
+    format!("{year:04}-{month:02}-{day:02}T00:00:00Z")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,5 +457,96 @@ mod tests {
         // Second drain returns nothing — rows are now 'delivered'.
         let drained2 = drain_inbox(&mut conn, "impl", None).unwrap();
         assert!(drained2.is_empty());
+    }
+
+    /// Helper: insert a message with an explicit `delivered_at` so tests can
+    /// fabricate "this was delivered N days ago" rows without sleeping.
+    fn insert_delivered_at(conn: &Connection, id: &str, delivered_at: &str) {
+        conn.execute(
+            "INSERT INTO messages(id, subject, msg_type, sender_role, addressed_to,
+                                  body, priority, status, created_at, delivered_at)
+             VALUES (?1, 'task.created', 'task', 'spec', 'impl',
+                     'body', 'normal', 'delivered', ?2, ?2)",
+            params![id, delivered_at],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn prune_deletes_old_delivered_messages_only() {
+        let conn = open_memory();
+        // 60 days ago — should go.
+        insert_delivered_at(&conn, "old", "2026-04-08T00:00:00Z");
+        // 5 days ago — should stay.
+        insert_delivered_at(&conn, "fresh", "2026-06-02T00:00:00Z");
+        // Pending row from any era — should always stay.
+        insert_message(
+            &conn,
+            "task.created",
+            "task",
+            Some("spec"),
+            Some("impl"),
+            None,
+            "pending body",
+            "normal",
+        )
+        .unwrap();
+        assert_eq!(message_count(&conn).unwrap(), 3);
+        let deleted = prune(&conn, Some(30)).unwrap();
+        assert_eq!(deleted, 1, "only the 60-day-old delivered row should go");
+        assert_eq!(message_count(&conn).unwrap(), 2);
+    }
+
+    #[test]
+    fn prune_dry_run_counts_without_deleting() {
+        let conn = open_memory();
+        insert_delivered_at(&conn, "a", "2026-01-01T00:00:00Z");
+        insert_delivered_at(&conn, "b", "2026-01-02T00:00:00Z");
+        assert_eq!(prune_dry_run(&conn, Some(30)).unwrap(), 2);
+        assert_eq!(
+            message_count(&conn).unwrap(),
+            2,
+            "dry-run must not delete rows"
+        );
+    }
+
+    #[test]
+    fn prune_with_zero_days_drops_yesterday_and_older() {
+        // 0-day retention means the cutoff is today at 00:00:00. Rows
+        // with `delivered_at` strictly before that cutoff drop; rows
+        // dated exactly today (or in the future) survive. This matches
+        // the `<` in the DELETE WHERE clause.
+        let conn = open_memory();
+        insert_delivered_at(&conn, "yday", "2026-06-06T00:00:00Z"); // strictly before today → drops
+        insert_delivered_at(&conn, "older", "2025-12-31T00:00:00Z"); // way before → drops
+        let deleted = prune(&conn, Some(0)).unwrap();
+        assert_eq!(deleted, 2);
+    }
+
+    #[test]
+    fn prune_on_empty_table_is_a_noop() {
+        let conn = open_memory();
+        let deleted = prune(&conn, Some(30)).unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(message_count(&conn).unwrap(), 0);
+        assert_eq!(prune_dry_run(&conn, Some(30)).unwrap(), 0);
+    }
+
+    #[test]
+    fn message_count_reflects_total_rows() {
+        let conn = open_memory();
+        assert_eq!(message_count(&conn).unwrap(), 0);
+        insert_message(
+            &conn,
+            "task.created",
+            "task",
+            Some("a"),
+            Some("b"),
+            None,
+            "body",
+            "normal",
+        )
+        .unwrap();
+        assert_eq!(message_count(&conn).unwrap(), 1);
     }
 }

@@ -2,6 +2,19 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Added — bus retention + `prune` (closes #337)
+- **`bus::store::prune(retention_days)`** — deletes `delivered` messages older than the cutoff (default 30 days, matches `coord::store::prune`). Pending and acked rows untouched. Returns the count deleted.
+- **`claudectl bus prune [--days N] [--dry-run]`** — manual prune verb. Without `--days`, uses the 30-day default.
+- **`claudectl doctor`** gains a `bus retention` row: Pass while the table is under 5000 messages; Advisory above, with a `claudectl bus prune` fix hint.
+- New helpers `bus::store::message_count` and `bus::store::prune_dry_run` for the doctor advisory + dry-run.
+- 5 new bus store tests cover prune semantics, dry-run, the zero-day edge case, the empty-table noop, and total-count accounting.
+
+`docs/agent-bus.md` picks up a "Retention" section explaining the prune cadence and what stays vs goes.
+
+Closes the "no retention path — `bus.db` grows forever" gap surfaced after the 0.57.0 release.
+
 ## [0.57.0] - 2026-06-07
 
 The **DX overhaul release**. Closes #322, #324, #328, #325, #321, #326 — six issues from epic #320. A fresh Homebrew install now activates in three commands:

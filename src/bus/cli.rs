@@ -74,6 +74,16 @@ pub enum BusCommand {
     /// agent picks the work up in-turn. Silent + exit 0 in every other case
     /// so a missing role / empty inbox / unbound cwd never blocks a session.
     StopHook,
+    /// Prune delivered messages older than the retention window (#337).
+    /// Defaults to 30 days. Pending and acked rows are untouched.
+    Prune {
+        /// Retention window in days. Older delivered messages get deleted.
+        #[arg(long, default_value_t = 30)]
+        days: u64,
+        /// Count what would be deleted without writing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -137,6 +147,7 @@ pub fn dispatch(cmd: &BusCommand) -> Result<(), String> {
         BusCommand::Inbox { role, json } => dispatch_inbox(role.as_deref(), *json),
         BusCommand::Whoami { role, json } => dispatch_whoami(role.as_deref(), *json),
         BusCommand::StopHook => dispatch_stop_hook(),
+        BusCommand::Prune { days, dry_run } => dispatch_prune(*days, *dry_run),
     }
 }
 
@@ -409,6 +420,29 @@ struct WhoamiJson {
     /// PID this role is bound to (#307). `None` for cwd-only bindings.
     pid: Option<u32>,
     note: Option<String>,
+}
+
+// ---------------- Prune -----------------------------------------------------
+
+/// Delete delivered messages older than `days`. Dry-run shows what
+/// would go without writing. Mirrors `coord prune`'s shape (#337).
+fn dispatch_prune(days: u64, dry_run: bool) -> Result<(), String> {
+    let conn = store::open()?;
+    let total = store::message_count(&conn)?;
+    if dry_run {
+        let would_delete = store::prune_dry_run(&conn, Some(days))?;
+        println!(
+            "dry-run: {would_delete} delivered message(s) older than {days} day(s) would be \
+             deleted; {total} total in table"
+        );
+        return Ok(());
+    }
+    let deleted = store::prune(&conn, Some(days))?;
+    let remaining = total.saturating_sub(deleted);
+    println!(
+        "pruned {deleted} delivered message(s) older than {days} day(s); {remaining} remain in table"
+    );
+    Ok(())
 }
 
 // ---------------- Stop hook -------------------------------------------------

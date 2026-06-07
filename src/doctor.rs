@@ -65,6 +65,7 @@ pub fn run_all_checks() -> Vec<Check> {
         check_brain_endpoint(),
         check_bus_feature(),
         check_bus_db(),
+        check_bus_retention(),
         check_session_discovery(),
         check_terminal_integration(),
     ]
@@ -360,6 +361,55 @@ fn check_bus_db() -> Check {
                     "Check that ~/.claudectl/bus/ is writable. `claudectl init --purge --yes` resets everything.".into(),
                 ),
             },
+        }
+    }
+}
+
+/// Surface a growing mailbox before it becomes a problem (#337). Pass
+/// while total rows are reasonable; Advisory once the table is in the
+/// thousands AND a meaningful chunk is older than the default 30-day
+/// retention window. The fix hint always points at `bus prune`.
+fn check_bus_retention() -> Check {
+    #[cfg(not(feature = "bus"))]
+    {
+        Check {
+            name: "bus retention".into(),
+            status: CheckStatus::Skipped,
+            message: "bus feature not compiled in".into(),
+            fix_hint: None,
+        }
+    }
+    #[cfg(feature = "bus")]
+    {
+        let Ok(conn) = crate::bus::store::open() else {
+            // bus DB check already reports the open error; don't duplicate.
+            return Check {
+                name: "bus retention".into(),
+                status: CheckStatus::Skipped,
+                message: "bus DB not open".into(),
+                fix_hint: None,
+            };
+        };
+        let total = crate::bus::store::message_count(&conn).unwrap_or(0);
+        let stale = crate::bus::store::prune_dry_run(&conn, None).unwrap_or(0);
+        // Threshold matches the issue spec: < 5000 rows total is fine.
+        if total < 5_000 {
+            return Check {
+                name: "bus retention".into(),
+                status: CheckStatus::Pass,
+                message: format!("{total} messages in table"),
+                fix_hint: None,
+            };
+        }
+        Check {
+            name: "bus retention".into(),
+            status: CheckStatus::Advisory,
+            message: format!(
+                "{total} messages in table ({stale} older than 30 days, prunable)"
+            ),
+            fix_hint: Some(
+                "Run `claudectl bus prune` to delete delivered messages older than 30 days. Add `--days N` to override.".into(),
+            ),
         }
     }
 }
