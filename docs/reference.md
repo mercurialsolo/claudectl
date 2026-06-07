@@ -232,8 +232,30 @@ Share knowledge, distill learnings. Requires relay for transport.
 | `--config` | Show resolved configuration and exit |
 | `--config-template` | Print annotated default config template to stdout |
 | `--hooks` | List configured event hooks and exit |
-| `--doctor` | Diagnose terminal integration and setup |
+| `--doctor` | **Deprecated.** Use `claudectl doctor` instead. Legacy report (terminal compat only) follows after the deprecation note |
 | `--log <path>` | Write diagnostic logs to a file |
+
+### Doctor — install + runtime health check
+
+`claudectl doctor` runs eight checks top-down and reports Pass / Advisory / Fail / Skipped with a one-line message and a fix hint for anything broken.
+
+| Check | What it verifies |
+|---|---|
+| binary on PATH | `which claudectl` matches the running binary |
+| Claude Code hooks | `~/.claude/settings.json` contains claudectl entries |
+| plugin files | `~/.claude/plugins/claudectl/` is populated |
+| brain endpoint | `localhost:11434` (ollama) is reachable |
+| bus feature | compiled into the binary |
+| bus DB | `~/.claudectl/bus/bus.db` opens and is writable |
+| session discovery | at least one Claude session detected |
+| terminal integration | tab switching / input automation supported |
+
+```bash
+claudectl doctor               # human-readable checklist
+claudectl doctor --json        # machine-readable for scripting
+```
+
+Exit code 0 when every check is Pass / Advisory / Skipped; non-zero on any Fail. Failure messages include the exact command to run (e.g. `claudectl init --plugin-only` when plugin files are missing).
 
 ### Setup
 

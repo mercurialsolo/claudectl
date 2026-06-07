@@ -66,12 +66,13 @@ git clone https://github.com/mercurialsolo/claudectl.git && cd claudectl && carg
 ## Get started
 
 ```bash
-claudectl                     # Live dashboard — see all sessions at a glance
 claudectl init                # Onboarding wizard (budget, brain, hooks, bus, skills)
+claudectl doctor              # Verify install + runtime health (✓ checklist)
+claudectl                     # Live dashboard — see all sessions at a glance
 claudectl --brain             # Enable local LLM auto-pilot
 ```
 
-The `init` wizard walks five phases — weekly budget, local-LLM brain detection, Claude Code hook install, agent-bus role, and curated skill suggestions. Run `claudectl init --check` later to see drift, or `claudectl init --non-interactive` to script it.
+The `init` wizard walks five phases — weekly budget, local-LLM brain detection, Claude Code hook install, agent-bus role, and curated skill suggestions. Plugin files (slash commands, supervisor agent, bus MCP server registration) are embedded in the binary and written to `~/.claude/plugins/claudectl/` automatically — no repo clone. Run `claudectl doctor` to verify every piece is wired up, or `claudectl init --check` for the drift report against the onboarding marker.
 
 ## Why claudectl
 

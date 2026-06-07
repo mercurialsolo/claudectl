@@ -45,7 +45,15 @@ Your existing Claude Code settings are preserved; the hook install only adds cla
 
 The hooks call `claudectl --json 2>/dev/null || true` — if claudectl isn't running, Claude Code continues normally.
 
-## 3. Start the dashboard
+## 3. Verify the install
+
+```bash
+claudectl doctor
+```
+
+This runs a top-down checklist: PATH, hooks, plugin files, brain endpoint, bus feature, bus DB, session discovery, terminal integration. Green means you're ready. If anything fails, the doctor names the exact command to fix it.
+
+## 4. Start the dashboard
 
 Open one or more Claude Code sessions in separate terminals, then:
 
@@ -53,9 +61,9 @@ Open one or more Claude Code sessions in separate terminals, then:
 claudectl
 ```
 
-You'll see every session in a live table with status, cost, context usage, burn rate, and more.
+You'll see every session in a live table with status, cost, context usage, burn rate, and more. (Forgot step 2 + 3? On first run you'll see a banner pointing you back to `claudectl init`.)
 
-## 4. Try demo mode (no Claude Code needed)
+## 5. Try demo mode (no Claude Code needed)
 
 ```bash
 claudectl --demo

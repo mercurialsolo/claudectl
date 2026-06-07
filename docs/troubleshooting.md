@@ -9,7 +9,7 @@
 
 ## Tab switching doesn't work
 
-Run `claudectl --doctor` first to see the detected terminal, missing prerequisites, and supported actions.
+Run `claudectl doctor` first — it checks everything (PATH, hooks, plugin install, brain endpoint, bus, session discovery, terminal) and tells you the exact command to fix anything broken. For terminal-specific diagnostics, the legacy `claudectl --doctor` flag still works.
 
 - **GNOME Terminal**: Launch support is available; use tmux or Kitty if you need remote switching or input automation
 - **Windows Terminal on WSL**: Launch support is available when `cmd.exe /c wt.exe` works; use tmux or Kitty inside WSL for switching and input automation
@@ -31,7 +31,7 @@ Increase the poll interval: `claudectl --interval 3000` (default is 2000ms).
 - Check the brain endpoint is running: `curl http://localhost:11434/api/tags`
 - Check brain gate mode: `claudectl --mode status` (if `off`, the brain is disabled)
 - Check the brain model is loaded: `ollama list`
-- Run `claudectl --doctor` for a full diagnostic
+- Run `claudectl doctor` for the full install + runtime checklist
 
 ## Plugin hook not firing
 

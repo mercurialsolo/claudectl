@@ -176,7 +176,7 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 | WezTerm | Yes | Yes | - | - |
 | GNOME Terminal | Yes | - | - | - |
 
-Run `claudectl --doctor` to verify support in your terminal. See [Terminal Support](terminal-support.md) for setup notes.
+Run `claudectl doctor` to verify your install + terminal support in one command. See [Terminal Support](terminal-support.md) for setup notes.
 
 ## How It Works
 

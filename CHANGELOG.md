@@ -2,7 +2,17 @@
 
 All notable changes to claudectl are documented here.
 
-## [Unreleased]
+## [0.57.0] - 2026-06-07
+
+The **DX overhaul release**. Closes #322, #324, #328, #325, #321, #326 — six issues from epic #320. A fresh Homebrew install now activates in three commands:
+
+```bash
+brew install mercurialsolo/tap/claudectl   # full feature set, bus included
+claudectl init                              # writes plugin + hooks (slash commands, MCP, agent)
+claudectl doctor                            # ✓ confirms everything is wired up
+```
+
+No repo clone. No manual MCP server registration. No "but how do I get the bus subcommand?"
 
 ### Added — `claudectl doctor` for unified install + runtime health (closes #326)
 - **`claudectl doctor`** — top-down checklist answering "is everything wired up?" in one command. Replaces what was scattered across `--doctor` (terminal compat only), `init --check` (onboarding marker only), and ad-hoc probes.
