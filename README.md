@@ -223,6 +223,8 @@ The Claude Code plugin registers the bus as an MCP server (`claude-plugin/.mcp.j
 
 Mailboxes live in `~/.claudectl/bus/bus.db` (SQLite WAL). Message bodies are sanitized at the boundary — a leading `/` is neutralized so a queued message cannot smuggle a slash command into the recipient.
 
+**Full guide:** [Agent Bus](docs/agent-bus.md) — wire-up, role binding, sending and receiving messages, worked planner→implementer example, where state lives, uninstall.
+
 Not yet built: pub/sub subscribe + claim protocol, flow guards, and the supervisor for long-horizon role persistence. See [AGENT_BUS.md](docs/AGENT_BUS.md#implementation-status) for the per-phase status table.
 
 ## Hive Mind & Relay
