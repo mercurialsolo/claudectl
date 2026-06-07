@@ -2,7 +2,7 @@
 
 All notable changes to claudectl are documented here.
 
-## [Unreleased]
+## [0.56.0] - 2026-06-07
 
 ### Added — `claudectl init --purge` for full uninstall
 - **`claudectl init --purge`** — hard uninstall. Does everything `--remove` does (strips Claude Code hooks + clears the onboarding marker) **plus** wipes `~/.claudectl/` entirely (bus DB, brain decisions, hive knowledge, relay identity, coord state) and removes `~/.config/claudectl/config.toml`. Idempotent — re-running after a successful purge is a no-op.

@@ -5,7 +5,7 @@ members = ["crates/claudectl-core", "crates/claudectl-tui"]
 
 [package]
 name = "claudectl"
-version = "0.55.0"
+version = "0.56.0"
 edition = "2024"
 description = "Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you."
 license = "MIT"
