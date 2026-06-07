@@ -4,6 +4,17 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — `claudectl doctor` for unified install + runtime health (closes #326)
+- **`claudectl doctor`** — top-down checklist answering "is everything wired up?" in one command. Replaces what was scattered across `--doctor` (terminal compat only), `init --check` (onboarding marker only), and ad-hoc probes.
+- Checks: binary on PATH, Claude Code hooks installed, plugin files installed, brain endpoint reachable, bus feature compiled in, bus DB writable, session discovery working, terminal integration.
+- Each check returns Pass / Advisory / Fail / Skipped with a one-line message and a fix hint. Failures advise the exact command to run (e.g. `claudectl init --plugin-only` when plugin files are missing).
+- Exit code 0 when all Pass / Advisory / Skipped; non-zero on any Fail — pipeline-friendly.
+- `--json` flag for scripting. Schema is stable: `[{name, status, message, fix_hint}]`.
+- Legacy `--doctor` flag still works but prints a deprecation note pointing at the new subcommand. Will be removed one release after consolidation.
+- 7 unit tests cover rendering, exit-code semantics, count math, and JSON round-trip.
+
+Part of the DX overhaul epic #320.
+
 ### Changed — Homebrew bottle now ships with all features (closes #321)
 - **`brew install mercurialsolo/tap/claudectl`** now produces a binary with `bus`, `coord`, `relay`, and `hive` all compiled in. `claudectl bus`, `claudectl coord`, `claudectl relay`, `claudectl hive` work end-to-end with no source rebuild. Binary grows from ~1.7 MB → ~6.3 MB; the async runtime exception for the `bus` feature is already documented in CLAUDE.md.
 - **`cargo install claudectl`** still defaults to the minimal build (`hive` only). Users who want the full feature set use `cargo install claudectl --features bus,coord,relay,hive`.

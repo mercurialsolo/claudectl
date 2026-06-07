@@ -34,6 +34,7 @@ pub mod brain_screen;
 pub mod bus;
 #[cfg(feature = "coord")]
 pub mod coord;
+pub mod doctor;
 #[cfg(feature = "hive")]
 pub mod hive;
 pub mod init;
