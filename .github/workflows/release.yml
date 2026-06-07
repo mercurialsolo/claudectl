@@ -59,6 +59,15 @@ jobs:
             echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
             echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           fi
+          # When `coord` / `bus` features are on, rusqlite's bundled
+          # SQLite is compiled with FORTIFY_SOURCE wrappers
+          # (__memcpy_chk, __memset_chk, open64, stat64) that live in
+          # glibc but not musl. Disable FORTIFY across the board for the
+          # musl builds so libsqlite3_sys links cleanly. This is the
+          # same workaround other Rust-on-musl projects use (alacritty,
+          # zellij, etc.).
+          echo "CFLAGS_${{ matrix.target }}=-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0" >> $GITHUB_ENV
+          echo "CFLAGS=-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0" >> $GITHUB_ENV
 
       - uses: Swatinem/rust-cache@v2
         with:
