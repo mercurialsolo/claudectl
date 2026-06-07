@@ -6,7 +6,8 @@ Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns fro
 
 ```bash
 cargo build                  # Debug build
-cargo build --release        # Release build (optimized, <1MB binary)
+cargo build --release        # Release build, default features (hive only) — ~3.5 MB
+cargo build --release --features "bus,coord,relay,hive"   # Full feature set — ~6.3 MB; what the Homebrew bottle ships
 cargo test                   # Run all tests
 cargo clippy -- -D warnings  # Lint (warnings are errors in CI)
 cargo fmt --check            # Check formatting
@@ -74,12 +75,13 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 
 ### Binary modules — `claudectl` (`src/`)
 
-- `main.rs` — CLI entry point, mode dispatch (TUI, watch, JSON, list, history, stats, orchestrator, clean, doctor, brain-eval, brain-query, mode, insights, init).
+- `main.rs` — CLI entry point, mode dispatch (TUI, watch, JSON, list, history, stats, orchestrator, clean, brain-eval, brain-query, mode, insights, init, doctor).
 - `brain_screen.rs` — Full-screen Brain Review surface (scorecard + interactive review). Stays in the binary because it depends on `brain::metrics` and `brain::risk`; `main.rs` calls `brain_screen::render_brain_screen` for the brain panel. Every other ui render goes through `claudectl_tui::ui::*`.
+- `doctor.rs` — `claudectl doctor` (#326). Unified install + runtime health checklist (PATH, hooks, plugin files, brain endpoint, bus feature, bus DB, session discovery, terminal integration). Returns `Check` rows with Pass/Advisory/Fail/Skipped + fix hints; `--json` form for scripting. Replaces the scattered `--doctor` flag and `init --check` paths.
 - `config.rs` — Layered TOML config: CLI flags > `.claudectl.toml` > `~/.config/claudectl/config.toml` > defaults. Re-exports `BrainConfig`, `IdleConfig`, `HealthThresholds` from `claudectl-core`.
 - `orchestrator.rs` — Multi-session task runner with dependency ordering.
 - `commands.rs` — CLI command dispatch shared between modes.
-- `init/` — `claudectl init` opinionated onboarding wizard (5 phases: budget, brain, plugin, bus, skills); see `docs/AGENT_BUS.md` §8 and issue #257.
+- `init/` — `claudectl init` opinionated onboarding wizard (5 phases: budget, brain, plugin, bus, skills); see `docs/AGENT_BUS.md` §8 and issue #257. `init/plugin_assets.rs` (#325) embeds every `claude-plugin/` file via `include_str!` so the Plugin phase writes a working install to `~/.claude/plugins/claudectl/` without a repo clone.
 - `runtime/` — `Live*` adapters that implement the `claudectl-core::runtime` traits against the real subsystems (sessions, brain, coord SQLite, bus SQLite, orchestrator, hive). See `runtime/{sessions,brain,brain_driver,brain_review,coord,bus,actions,orchestrator,hive}.rs`.
 
 **Claude Code Plugin** (`claude-plugin/`): Integrates the brain directly into Claude Code sessions.

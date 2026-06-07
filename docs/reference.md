@@ -436,6 +436,6 @@ claudectl was the first tool to combine local LLM supervision with multi-session
 | File conflict detection across sessions | Yes | No | No |
 | Per-tool adaptive confidence thresholds | Yes | No | No |
 | Task decomposition into parallel DAGs | Yes | No | No |
-| Binary size | <1 MB | Varies | N/A |
+| Binary size | ~3.5 MB default / ~6 MB with all features | Varies | N/A |
 | Startup time | <50 ms | Varies | N/A |
 | Data stays on your machine | 100% | Usually | No |

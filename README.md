@@ -10,7 +10,7 @@
 [![Downloads](https://img.shields.io/crates/d/claudectl)](https://crates.io/crates/claudectl)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)]()
 
-<sub>~1 MB binary. Sub-50ms startup. Zero config required.</sub>
+<sub>~6 MB binary (full features, Homebrew bottle). Sub-50ms startup. Zero config required.</sub>
 
 [Website](https://mercurialsolo.github.io/claudectl/) | [Demo](https://asciinema.org/a/AJP33vbmHGFVW6zL) | [Blog: Why a local brain?](blog/local-brain-architecture.md) | [Releases](https://github.com/mercurialsolo/claudectl/releases)
 

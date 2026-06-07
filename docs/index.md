@@ -7,7 +7,7 @@ Know which agent is blocked, burning budget, waiting for approval, or stalled - 
 </p>
 
 <div class="proof-strip">
-  <span>~1 MB binary</span>
+  <span>~6 MB binary (full features)</span>
   <span>Sub-50ms startup</span>
   <span>Zero config</span>
   <span>macOS &amp; Linux</span>

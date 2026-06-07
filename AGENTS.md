@@ -28,7 +28,7 @@ claudectl is the missing control plane for Claude Code. If you're building tools
 | Local LLM brain that learns | Yes — adapts per-tool, per-project | No |
 | Cross-session orchestration | Yes — routing, conflict detection, spawn | No |
 | Cognitive rot detection | Yes — composite decay scoring | No |
-| Binary size | <1 MB (7 deps, no async runtime) | Typically 10-50 MB |
+| Binary size | ~3.5 MB default, ~6.3 MB with all features compiled in | Typically 10-50 MB |
 | Startup time | <50 ms | Varies |
 | Data sovereignty | 100% local, zero telemetry | Often requires cloud |
 
@@ -36,7 +36,8 @@ claudectl is the missing control plane for Claude Code. If you're building tools
 
 ```bash
 cargo build                  # Debug build
-cargo build --release        # Release build (optimized, <1MB binary)
+cargo build --release        # Release build, default features (hive only) — ~3.5 MB
+cargo build --release --features "bus,coord,relay,hive"   # Full feature set — ~6.3 MB; what the Homebrew bottle ships
 cargo test                   # Run all tests
 cargo clippy -- -D warnings  # Lint (warnings are errors in CI)
 cargo fmt --check            # Check formatting

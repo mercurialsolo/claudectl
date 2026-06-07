@@ -26,7 +26,7 @@ The coordination layer (see `coordination-layer.md`) solves multi-agent coordina
 - bootstrapping a new machine's brain with the team's accumulated wisdom
 - global cost tracking across distributed sessions
 
-These problems require a network layer. But claudectl's constraints (zero async runtime, 7 runtime crates, <1MB binary, local-first) mean we cannot bolt on a web framework or message broker. The relay is built entirely on `std::net`.
+These problems require a network layer. But claudectl's constraints (no async runtime in the relay path, lean runtime crate count, ~3.5 MB default binary, local-first) mean we cannot bolt on a web framework or message broker. The relay is built entirely on `std::net`. (The async-runtime exception lives only in the `bus` feature — see CLAUDE.md.)
 
 ## Design Principles
 
