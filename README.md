@@ -45,9 +45,12 @@ Run `claudectl --brain-stats impact` to see your numbers:
 ## Install
 
 ```bash
-brew install mercurialsolo/tap/claudectl     # Homebrew (macOS / Linux)
-cargo install claudectl                       # Cargo (any platform)
+brew install mercurialsolo/tap/claudectl     # Homebrew (macOS / Linux) — ships with bus/coord/relay/hive
+cargo install claudectl                       # Cargo (any platform) — default features (hive only)
+cargo install claudectl --features bus,coord,relay,hive    # Cargo with all features
 ```
+
+Homebrew ships the full-feature binary so `claudectl bus`, `coord`, `relay`, and `hive` work out of the box (~6 MB). `cargo install` defaults to the minimal build (`hive` only, ~3.5 MB) — opt in to the rest with `--features` as shown.
 
 <details>
 <summary>Other methods</summary>

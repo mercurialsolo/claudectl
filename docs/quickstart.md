@@ -5,9 +5,10 @@ Get claudectl running in under two minutes.
 ## 1. Install
 
 ```bash
-brew install mercurialsolo/tap/claudectl     # Homebrew (macOS / Linux)
+brew install mercurialsolo/tap/claudectl     # Homebrew — ships with bus/coord/relay/hive built in
 # or
-cargo install claudectl                       # Cargo (any platform)
+cargo install claudectl                                          # Cargo — default features only (hive)
+cargo install claudectl --features bus,coord,relay,hive          # Cargo with all features
 ```
 
 Verify it works:
