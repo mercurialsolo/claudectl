@@ -12,8 +12,19 @@ categories = ["command-line-utilities"]
 name = "claudectl_tui"
 path = "src/lib.rs"
 
+[features]
+# Feature flags propagated from the binary's same-named features. Used to
+# gate optional UI state (coord widget panels, relay peers panel, hive
+# overlay tabs). The binary turns these on via `claudectl-tui/coord`,
+# `claudectl-tui/relay`, `claudectl-tui/hive` in its own [features] block.
+coord = []
+relay = []
+hive = []
+
 [dependencies]
 claudectl-core = { path = "../claudectl-core", version = "0.51.0" }
+ratatui = "0.29"
+crossterm = "0.28"
 serde_json = "1"
 
 [dev-dependencies]

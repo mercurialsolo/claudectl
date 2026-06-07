@@ -17,9 +17,11 @@ exclude = ["*.gif", "*.cast", "claude-demo.*", "CLAUDE.md", ".github/"]
 
 [features]
 default = ["hive"]
-coord = ["rusqlite"]
-relay = []
-hive = []
+# Propagated to claudectl-tui so its `App` struct can cfg-gate the matching
+# UI panels (coord widgets, relay peers panel, hive overlay tabs).
+coord = ["rusqlite", "claudectl-tui/coord"]
+relay = ["claudectl-tui/relay"]
+hive = ["claudectl-tui/hive"]
 # The agent bus (docs/AGENT_BUS.md). Lives on top of coord's SQLite layer and
 # pulls in an async MCP server stack (rmcp + tokio). Opt-in: the default build
 # stays small and sync.

@@ -188,7 +188,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(t.header).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(format!("  {}", crate::terminals::help_capability_summary())),
+        Line::from(format!(
+            "  {}",
+            claudectl_core::terminals::help_capability_summary()
+        )),
         Line::from(vec![
             Span::raw("  Run "),
             Span::styled("claudectl --doctor", Style::default().fg(t.highlight_key)),

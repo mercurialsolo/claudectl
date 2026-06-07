@@ -3,15 +3,17 @@ use std::collections::{HashMap, HashSet};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
-use crate::discovery;
-use crate::helpers::{create_aggregate_session, dirs_home, fire_notification, fire_webhook};
-use crate::hooks::{HookEvent, HookRegistry};
-use crate::launch::{self, LaunchRequest};
-use crate::monitor;
-use crate::process;
-use crate::session::{ClaudeSession, SessionStatus};
-use crate::terminals;
-use crate::theme::Theme;
+use claudectl_core::discovery;
+use claudectl_core::helpers::{
+    create_aggregate_session, dirs_home, fire_notification, fire_webhook,
+};
+use claudectl_core::hooks::{HookEvent, HookRegistry};
+use claudectl_core::launch::{self, LaunchRequest};
+use claudectl_core::monitor;
+use claudectl_core::process;
+use claudectl_core::session::{ClaudeSession, SessionStatus};
+use claudectl_core::terminals;
+use claudectl_core::theme::Theme;
 
 pub const SORT_COLUMNS: &[&str] = &["Status", "Context", "Cost", "$/hr", "Elapsed"];
 
@@ -282,7 +284,7 @@ pub struct App {
     pub budget_warned: HashSet<u32>, // PIDs that have been warned at 80%
     pub budget_killed: HashSet<u32>, // PIDs that have been killed
     pub theme: Theme,
-    pub weekly_summary: crate::history::WeeklySummary,
+    pub weekly_summary: claudectl_core::history::WeeklySummary,
     pub weekly_summary_tick: u32, // Refresh every N ticks
     pub hooks: HookRegistry,
     pub daily_limit: Option<f64>,
@@ -303,16 +305,16 @@ pub struct App {
     pub demo_tick: u32,
     pub demo_highlight: Option<crate::demo::DemoHighlightState>,
     pub session_recordings: HashMap<u32, String>, // pid -> output_path for active recordings
-    pub rules: Vec<crate::rules::AutoRule>,
+    pub rules: Vec<claudectl_core::rules::AutoRule>,
     pub auto_actions_fired: HashMap<u32, std::time::Instant>, // Debounce: pid -> last action time
     pub last_rule_action: Option<String>,                     // Last auto-action status for display
-    pub health_thresholds: crate::config::HealthThresholds,
-    pub brain_config: Option<crate::config::BrainConfig>,
+    pub health_thresholds: claudectl_core::health::HealthThresholds,
+    pub brain_config: Option<claudectl_core::config::BrainConfig>,
     /// Stateful brain driver, swapped in by `main.rs` when the brain is
     /// configured. Held as `Box<dyn BrainDriver>` (not `Arc`) because every
     /// method needs `&mut`. `None` when the brain is off.
     pub brain_driver: Option<Box<dyn claudectl_core::runtime::BrainDriver>>,
-    pub idle_config: crate::config::IdleConfig,
+    pub idle_config: claudectl_core::config::IdleConfig,
     pub last_user_interaction: std::time::Instant,
     pub idle_mode_active: bool,
     pub idle_tasks_launched: Vec<String>,
@@ -344,7 +346,7 @@ pub struct App {
     pub relay_peers: Vec<crate::ui::peers::PeerDisplayInfo>,
     /// Remote sessions received from connected worker peers (relay heartbeats).
     #[cfg(feature = "relay")]
-    pub remote_sessions: Vec<crate::session::ClaudeSession>,
+    pub remote_sessions: Vec<claudectl_core::session::ClaudeSession>,
 
     // ── Skills & Hive overlay state ────────────────────────────────────────
     /// Whether the skills/hive overlay is open.
@@ -354,7 +356,7 @@ pub struct App {
     /// Currently selected index into `skills`.
     pub skills_selected: usize,
     /// Discovered skills (refreshed when the overlay opens or `r` is pressed).
-    pub skills: Vec<crate::skills::DiscoveredSkill>,
+    pub skills: Vec<claudectl_core::skills::DiscoveredSkill>,
     /// Semantic keys (`skill:<name>`) for skills already present in the hive store.
     pub shared_skill_keys: std::collections::HashSet<String>,
     /// Transient status message shown in the overlay footer.
@@ -552,8 +554,8 @@ impl App {
             kill_on_budget: false,
             budget_warned: HashSet::new(),
             budget_killed: HashSet::new(),
-            theme: Theme::from_mode(crate::theme::ThemeMode::Dark),
-            weekly_summary: crate::history::weekly_summary(),
+            theme: Theme::from_mode(claudectl_core::theme::ThemeMode::Dark),
+            weekly_summary: claudectl_core::history::weekly_summary(),
             weekly_summary_tick: 0,
             hooks: HookRegistry::new(),
             daily_limit: None,
@@ -577,11 +579,11 @@ impl App {
             rules: Vec::new(),
             auto_actions_fired: HashMap::new(),
             last_rule_action: None,
-            health_thresholds: crate::config::HealthThresholds::default(),
+            health_thresholds: claudectl_core::health::HealthThresholds::default(),
             brain_config: None,
             brain_driver: None,
             runtime: claudectl_core::runtime::MockRuntime::default().into_runtime(),
-            idle_config: crate::config::IdleConfig::default(),
+            idle_config: claudectl_core::config::IdleConfig::default(),
             last_user_interaction: std::time::Instant::now(),
             idle_mode_active: false,
             idle_tasks_launched: Vec::new(),
@@ -797,7 +799,7 @@ impl App {
         for session in &mut sessions {
             session.record_activity();
             session.decay_score =
-                crate::health::compute_decay_score(session, &self.health_thresholds);
+                claudectl_core::health::compute_decay_score(session, &self.health_thresholds);
         }
 
         // Track when sessions first appear as Finished, remove after 30s
@@ -808,7 +810,7 @@ impl App {
             {
                 self.finished_at.insert(session.pid, now);
                 // Record to history on first Finished detection
-                crate::history::record_session(session);
+                claudectl_core::history::record_session(session);
             }
         }
         sessions.retain(|s| {
@@ -847,7 +849,7 @@ impl App {
                 continue;
             }
 
-            crate::logger::log(
+            claudectl_core::logger::log(
                 "DEBUG",
                 &format!(
                     "session {}: status {} -> {}",
@@ -870,7 +872,7 @@ impl App {
                     None => true,
                 };
                 if should_fire {
-                    crate::logger::log(
+                    claudectl_core::logger::log(
                         "DEBUG",
                         &format!(
                             "webhook fired for {} -> {}",
@@ -1196,7 +1198,7 @@ impl App {
         // Update demo peers panel and remote sessions
         #[cfg(feature = "relay")]
         {
-            self.relay_peers = crate::demo_peers::demo_peers(self.demo_tick);
+            self.relay_peers = crate::demo::demo_peers(self.demo_tick);
             // Auto-show peers panel on first hive sync event
             if self.demo_tick % 32 == 14 && !self.show_peers_panel {
                 self.show_peers_panel = true;
@@ -1296,7 +1298,7 @@ impl App {
         // Compute decay scores for demo sessions (same as real refresh path)
         for session in &mut sessions {
             session.decay_score =
-                crate::health::compute_decay_score(session, &self.health_thresholds);
+                claudectl_core::health::compute_decay_score(session, &self.health_thresholds);
         }
 
         self.sessions = sessions;
@@ -1326,7 +1328,7 @@ impl App {
         self.weekly_summary_tick += 1;
         if self.weekly_summary_tick >= 15 {
             self.weekly_summary_tick = 0;
-            self.weekly_summary = crate::history::weekly_summary();
+            self.weekly_summary = claudectl_core::history::weekly_summary();
             self.check_aggregate_budgets();
         }
 
@@ -1526,7 +1528,7 @@ impl App {
         self.idle_mode_active = self.last_user_interaction.elapsed() > idle_threshold;
 
         if self.idle_mode_active && !was_idle {
-            crate::logger::log("IDLE", "Entering idle mode");
+            claudectl_core::logger::log("IDLE", "Entering idle mode");
         }
     }
 
@@ -1611,7 +1613,7 @@ impl App {
                                 "File conflict: denied {} edit to {short}",
                                 session.display_name()
                             );
-                            crate::logger::log("CONFLICT", &status);
+                            claudectl_core::logger::log("CONFLICT", &status);
                             self.status_msg = status;
                         }
                         Err(e) => {
@@ -1652,7 +1654,7 @@ impl App {
                     None => continue,
                 };
 
-                let result = crate::rules::evaluate(&self.rules, session);
+                let result = claudectl_core::rules::evaluate(&self.rules, session);
                 let Some(rule_match) = result else {
                     continue;
                 };
@@ -1664,10 +1666,10 @@ impl App {
                     .actions
                     .log_observation(observation_from(session, &obs_action));
 
-                let msg = crate::rules::execute(&rule_match, session);
+                let msg = claudectl_core::rules::execute(&rule_match, session);
                 match msg {
                     Ok(status) => {
-                        crate::logger::log("AUTO", &status);
+                        claudectl_core::logger::log("AUTO", &status);
                         self.last_rule_action = Some(status.clone());
                         self.status_msg = status;
                     }
@@ -1687,14 +1689,14 @@ impl App {
             let deny_rules: Vec<_> = self
                 .rules
                 .iter()
-                .filter(|r| r.action == crate::rules::RuleAction::Deny)
+                .filter(|r| r.action == claudectl_core::rules::RuleAction::Deny)
                 .cloned()
                 .collect();
 
             let snapshots: Vec<_> = self.sessions.iter().map(snapshot_from).collect();
             let actions = driver.tick(&snapshots, &deny_rules);
             for (_pid, msg) in actions {
-                crate::logger::log("BRAIN", &msg);
+                claudectl_core::logger::log("BRAIN", &msg);
                 self.status_msg = msg;
             }
 
@@ -1706,7 +1708,7 @@ impl App {
             let snapshots: Vec<_> = self.sessions.iter().map(snapshot_from).collect();
             let deliveries = self.runtime.orchestrator.deliver_mailbox(&snapshots);
             for (_pid, msg) in deliveries {
-                crate::logger::log("MAILBOX", &msg);
+                claudectl_core::logger::log("MAILBOX", &msg);
                 self.status_msg = msg;
             }
         }
@@ -1718,7 +1720,7 @@ impl App {
             let snapshots: Vec<_> = self.sessions.iter().map(snapshot_from).collect();
             let deliveries = self.runtime.orchestrator.deliver_interrupts(&snapshots);
             for (_intr_id, msg) in deliveries {
-                crate::logger::log("INTERRUPT", &msg);
+                claudectl_core::logger::log("INTERRUPT", &msg);
                 self.status_msg = msg;
             }
         }
@@ -1982,7 +1984,7 @@ impl App {
 
     pub fn refresh_skills(&mut self) {
         let cwd = std::env::current_dir().ok();
-        self.skills = crate::skills::discover(cwd.as_deref());
+        self.skills = claudectl_core::skills::discover(cwd.as_deref());
         self.shared_skill_keys = self.runtime.hive.shared_skill_keys();
         if self.skills_selected >= self.skills.len() {
             self.skills_selected = self.skills.len().saturating_sub(1);
@@ -2735,7 +2737,7 @@ impl App {
                     decision_type: claudectl_core::runtime::DecisionScope::Session,
                     override_reason: override_reason.map(String::from),
                 });
-            crate::logger::log("BRAIN", &format!("Accepted: {msg}"));
+            claudectl_core::logger::log("BRAIN", &format!("Accepted: {msg}"));
             self.status_msg = msg;
         }
         self.pending_override_reason = None;
@@ -2770,7 +2772,7 @@ impl App {
                 "Rejected brain suggestion: {} ({})",
                 suggestion.action, suggestion.reasoning,
             );
-            crate::logger::log("BRAIN", &msg);
+            claudectl_core::logger::log("BRAIN", &msg);
             self.status_msg = msg;
         } else {
             self.status_msg = "No brain suggestion pending for this session".into();
@@ -2799,7 +2801,7 @@ impl App {
             BrainGateMode::Auto => "auto — automatic decisions",
         };
         self.status_msg = format!("Brain: {description}");
-        crate::logger::log("BRAIN", &format!("Gate mode toggled: {current} → {next}"));
+        claudectl_core::logger::log("BRAIN", &format!("Gate mode toggled: {current} → {next}"));
     }
 
     fn toggle_session_recording(&mut self) {
@@ -3065,7 +3067,7 @@ fn short_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{RawSession, TelemetryStatus};
+    use claudectl_core::session::{RawSession, TelemetryStatus};
 
     fn make_session(
         pid: u32,

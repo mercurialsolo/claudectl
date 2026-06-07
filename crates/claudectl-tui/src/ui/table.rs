@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, SORT_COLUMNS};
-use crate::session::{ClaudeSession, SessionStatus, SubagentBreakdown, SubagentState};
+use claudectl_core::session::{ClaudeSession, SessionStatus, SubagentBreakdown, SubagentState};
 
 use super::detail::render_detail_panel;
 use super::help::render_help_overlay;
@@ -42,7 +42,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     // Empty state: show onboarding message when no sessions found
     if app.sessions.is_empty() {
-        let launch_hint = if crate::terminals::can_launch_session() {
+        let launch_hint = if claudectl_core::terminals::can_launch_session() {
             "  Press n for the launch wizard, or start claude in another terminal."
         } else {
             "  Start claude in GNOME Terminal, tmux, Kitty, WezTerm, Windows Terminal on WSL, or another terminal."
@@ -509,7 +509,7 @@ fn session_row(s: &ClaudeSession, app: &App) -> Row<'static> {
         }
         p
     };
-    let health_icon = crate::health::status_icon(s, &app.health_thresholds);
+    let health_icon = claudectl_core::health::status_icon(s, &app.health_thresholds);
     let health_suffix = if health_icon.is_empty() {
         String::new()
     } else {

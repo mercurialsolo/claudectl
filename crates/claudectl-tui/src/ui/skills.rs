@@ -12,8 +12,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::app::{App, SkillsTab};
-use crate::skills::DiscoveredSkill;
-use crate::theme::Theme;
+use claudectl_core::skills::DiscoveredSkill;
+use claudectl_core::theme::Theme;
 
 pub fn render_skills_screen(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.theme;
@@ -179,7 +179,7 @@ fn render_skills_body(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
     let detail = if let Some(s) = app.skills.get(app.skills_selected) {
-        let shared = crate::skills::is_shared(s, &app.shared_skill_keys);
+        let shared = claudectl_core::skills::is_shared(s, &app.shared_skill_keys);
         let status = if shared {
             "✓ already shared with hive"
         } else if !s.within_share_limit() {
@@ -286,7 +286,7 @@ fn kv_line<'a>(t: &'a Theme, key: &'a str, value: &'a str) -> Line<'a> {
 }
 
 fn skill_line<'a>(skill: &'a DiscoveredSkill, app: &'a App, t: &'a Theme) -> Line<'a> {
-    let shared = crate::skills::is_shared(skill, &app.shared_skill_keys);
+    let shared = claudectl_core::skills::is_shared(skill, &app.shared_skill_keys);
     let marker = if shared { "✓" } else { "·" };
     let marker_color = if shared { t.success } else { t.text_muted };
 
@@ -408,7 +408,7 @@ mod tests {
             name: "X".into(),
             description: "d".into(),
             path: PathBuf::from("/tmp/x.md"),
-            source: crate::skills::SkillSource::User,
+            source: claudectl_core::skills::SkillSource::User,
             plugin: None,
             size_bytes: 100,
         };

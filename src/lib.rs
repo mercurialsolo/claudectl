@@ -20,16 +20,20 @@ pub use claudectl_core::{
 // Re-exported under their original names so existing `crate::recorder::*` /
 // `crate::demo::*` / `crate::session_recorder::*` paths in main.rs and app.rs
 // keep resolving without rewriting each call site.
-pub use claudectl_tui::{demo, recorder, session_recorder};
+// `app` and `ui` now live in `claudectl-tui` (issue #275). Re-exported so
+// existing `crate::app::*` / `crate::ui::*` paths in main.rs and elsewhere
+// resolve unchanged. The only ui module still in the binary is the
+// brain-screen renderer (depends on binary-only `brain::metrics` +
+// `brain::risk`), surfaced separately as `crate::brain_screen`.
+pub use claudectl_tui::{app, demo, recorder, session_recorder, ui};
 pub mod config;
 
-pub mod app;
 pub mod brain;
+pub mod brain_screen;
 #[cfg(feature = "bus")]
 pub mod bus;
 #[cfg(feature = "coord")]
 pub mod coord;
-pub mod demo_peers;
 #[cfg(feature = "hive")]
 pub mod hive;
 pub mod init;
@@ -37,4 +41,3 @@ pub mod orchestrator;
 #[cfg(feature = "relay")]
 pub mod relay;
 pub mod runtime;
-pub mod ui;
