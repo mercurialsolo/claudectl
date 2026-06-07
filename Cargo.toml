@@ -5,7 +5,7 @@ members = ["crates/claudectl-core", "crates/claudectl-tui"]
 
 [package]
 name = "claudectl"
-version = "0.54.0"
+version = "0.55.0"
 edition = "2024"
 description = "Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you."
 license = "MIT"
@@ -40,8 +40,8 @@ path = "src/lib.rs"
 # published to crates.io. Local builds always use the path; crates.io strips
 # the path and resolves the published version. Bump both when the workspace
 # crates change.
-claudectl-core = { path = "crates/claudectl-core", version = "0.51.0" }
-claudectl-tui = { path = "crates/claudectl-tui", version = "0.51.0" }
+claudectl-core = { path = "crates/claudectl-core", version = "0.52.0" }
+claudectl-tui = { path = "crates/claudectl-tui", version = "0.52.0" }
 ratatui = "0.29"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }

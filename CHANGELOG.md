@@ -2,7 +2,7 @@
 
 All notable changes to claudectl are documented here.
 
-## [Unreleased]
+## [0.55.0] - 2026-06-07
 
 ### Added — agent-bus role binding (closes #307, #310)
 - **PID-keyed role bindings.** The bus `roles` table gained a nullable `pid` column. When set, the resolver walks the caller's parent process chain (depth 8 via `getppid` + native `ps`) and picks the first role bound to any ancestor pid before falling back to cwd-inference. Disambiguates "two sessions in one worktree" — different pids, same cwd, distinct roles.
@@ -12,11 +12,17 @@ All notable changes to claudectl are documented here.
 - **`/bind <role>` plugin slash command** (`claude-plugin/commands/bind.md`) — operator types `/bind frontend` from inside a Claude session; the plugin runs `claudectl bus role bind --self frontend`.
 - **`bus role list`** prints the new pid column; **`bus whoami --json`** payload gains a `pid` field.
 
+### Added — role-name suggester (closes #309)
+- **`claudectl bus role suggest [--pid <PID>] [--top N] [--json]`** — scans a session's transcript and cwd for signals and emits ranked role-name candidates. Pure analysis: never writes a binding, never queries the LLM.
+- Four heuristic analyzers in `src/bus/suggest.rs`: cwd basename (with noise-suffix stripping), explicit role mentions in early user messages (`you are the X`, `acting as X`, `role: X`), tool fan-out shape (writes-heavy → `impl`, reads-heavy → `reviewer`, frequent test runs → `tester`), and path patterns in tool inputs (`frontend`, `backend`, `infra`, `tests`, `docs`).
+- Transcript scan capped at 2 MiB and seeks to the file *tail* so recent activity drives suggestions and a runaway scan can't freeze the dashboard.
+- 6 new unit tests; smoke-verified against a live Claude session.
+
 ### Internals
 - Schema migration is idempotent — guarded by a `PRAGMA table_info` check before `ADD COLUMN` (SQLite has no `IF NOT EXISTS` for column adds). Existing cwd-only bindings keep working unchanged.
 - `upsert_role` uses `COALESCE` on the pid update, so a re-bind that only refreshes `session_id` doesn't clobber an existing pid.
 - New runtime trait method `Actions::bind_bus_role(name, cwd, pid)`; LiveActions writes through `bus::store::upsert_role`; off-bus builds return a clear error.
-- 3 new bus tests covering pid precedence, fall-through, and pid-preservation on re-bind. All 24 bus tests pass.
+- 3 new bus tests covering pid precedence, fall-through, and pid-preservation on re-bind. All 30 bus tests pass (24 existing + 3 from #307 + 3 from #309's analyzers' shape; 6 new from #309 total in the suggest module).
 
 ## [0.54.0] - 2026-06-06
 

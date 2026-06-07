@@ -1,6 +1,6 @@
 [package]
 name = "claudectl-core"
-version = "0.51.0"
+version = "0.52.0"
 edition = "2024"
 description = "Foundational types and IO primitives for claudectl. Shared across the TUI, the binary, and future crates."
 license = "MIT"

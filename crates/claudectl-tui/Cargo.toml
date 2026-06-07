@@ -1,6 +1,6 @@
 [package]
 name = "claudectl-tui"
-version = "0.51.0"
+version = "0.52.0"
 edition = "2024"
 description = "Terminal UI, dashboard recording, and demo-mode fixtures for claudectl. Splits out of the binary so the TUI can evolve independently of the brain/coord/bus subsystems."
 license = "MIT"
@@ -22,7 +22,7 @@ relay = []
 hive = []
 
 [dependencies]
-claudectl-core = { path = "../claudectl-core", version = "0.51.0" }
+claudectl-core = { path = "../claudectl-core", version = "0.52.0" }
 ratatui = "0.29"
 crossterm = "0.28"
 serde_json = "1"
