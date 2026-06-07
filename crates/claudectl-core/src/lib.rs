@@ -13,6 +13,7 @@
     clippy::io_other_error
 )]
 
+pub mod config;
 pub mod discovery;
 pub mod health;
 pub mod helpers;
