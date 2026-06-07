@@ -8,23 +8,23 @@
 // Foundational modules from claudectl-core (epic #279). Re-aliased so existing
 // `crate::session::*` paths still resolve. See `lib.rs` for the rationale.
 use claudectl_core::{
-    discovery, health, helpers, history, hooks, launch, logger, models, monitor, process, rules,
-    session, skills, terminals, theme, transcript,
+    discovery, history, hooks, launch, logger, models, process, rules, session, terminals, theme,
+    transcript,
 };
-// TUI peripherals carved out into `claudectl-tui` (issue #275). Imported as
-// modules at this scope so existing `demo::*`, `recorder::*`, and
-// `session_recorder::*` paths in main.rs resolve unchanged.
-use claudectl_tui::{demo, recorder, session_recorder};
+// TUI now lives in `claudectl-tui` (issue #275). The `app` + `ui` + TUI
+// peripheral modules are imported here so existing `app::App`, `ui::table`,
+// `demo::*`, `recorder::*`, `session_recorder::*` paths in main.rs resolve
+// unchanged.
+use claudectl_tui::{app, demo, recorder, session_recorder, ui};
 
-mod app;
 mod brain;
+mod brain_screen;
 #[cfg(feature = "bus")]
 mod bus;
 mod commands;
 mod config;
 #[cfg(feature = "coord")]
 mod coord;
-mod demo_peers;
 #[cfg(feature = "hive")]
 mod hive;
 mod init;
@@ -32,7 +32,6 @@ mod orchestrator;
 #[cfg(feature = "relay")]
 mod relay;
 mod runtime;
-mod ui;
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -1084,7 +1083,7 @@ fn run_tui<W: io::Write>(
 
             // Full-screen mode: Brain Review (scorecard + review queue).
             if app.show_brain {
-                ui::brain::render_brain_screen(frame, area, &app);
+                brain_screen::render_brain_screen(frame, area, &app);
                 return;
             }
 

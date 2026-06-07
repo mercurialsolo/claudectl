@@ -122,11 +122,11 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             ));
             frame.render_widget(msg, area);
         } else {
-            let gate = crate::brain::read_gate_mode();
-            let (label, color) = match gate.as_str() {
-                "off" => ("Brain: off", t.text_muted),
-                "auto" => ("Brain: auto", t.header),
-                _ => ("Brain: on", t.success),
+            use claudectl_core::runtime::BrainGateMode;
+            let (label, color) = match app.runtime.brain.gate_mode() {
+                BrainGateMode::Off => ("Brain: off", t.text_muted),
+                BrainGateMode::Auto => ("Brain: auto", t.header),
+                BrainGateMode::On => ("Brain: on", t.success),
             };
             let msg = Paragraph::new(Span::styled(
                 format!(" {label}  (Ctrl+b toggle)"),

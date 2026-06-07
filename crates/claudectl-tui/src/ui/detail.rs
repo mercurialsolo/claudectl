@@ -7,8 +7,8 @@ use ratatui::{
 };
 
 use crate::app::App;
-use crate::session::ClaudeSession;
-use crate::theme::Theme;
+use claudectl_core::session::ClaudeSession;
+use claudectl_core::theme::Theme;
 
 pub fn render_detail_panel(frame: &mut Frame, area: Rect, session: &ClaudeSession, app: &App) {
     let t = &app.theme;
