@@ -322,12 +322,12 @@ fn check_bus_feature() -> Check {
 fn check_bus_db() -> Check {
     #[cfg(not(feature = "bus"))]
     {
-        return Check {
+        Check {
             name: "bus DB".into(),
             status: CheckStatus::Skipped,
             message: "bus feature not compiled in".into(),
             fix_hint: None,
-        };
+        }
     }
     #[cfg(feature = "bus")]
     {
