@@ -18,6 +18,7 @@ pub mod policy;
 pub mod roles;
 pub mod stop_hook;
 pub mod store;
+pub mod suggest;
 
 #[allow(unused_imports)]
 pub use roles::{Role, RoleResolution};

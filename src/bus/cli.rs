@@ -20,6 +20,7 @@ use super::policy::{self, DEFAULT_MAX_BODY_BYTES};
 use super::roles::{self, RoleResolution};
 use super::stop_hook;
 use super::store::{self, MessageRow};
+use super::suggest;
 
 #[derive(Subcommand)]
 pub enum BusCommand {
@@ -100,6 +101,21 @@ pub enum RoleCommand {
     },
     /// List registered roles.
     List,
+    /// Suggest role names by analyzing a session's transcript (#309).
+    /// Pure analysis — never writes a binding, never queries the LLM.
+    Suggest {
+        /// PID of the session to analyze. When omitted, walks the caller's
+        /// ancestor chain to find a Claude process (same logic as `--self`).
+        #[arg(long)]
+        pid: Option<u32>,
+        /// Maximum suggestions to return, ranked by score descending.
+        #[arg(long, default_value_t = 3)]
+        top: usize,
+        /// Emit JSON instead of human text. Used by the TUI / plugin to
+        /// prefill the bind prompt.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub fn dispatch_command(cmd: &BusCommand, _json_mode: bool) -> std::io::Result<()> {
@@ -185,7 +201,61 @@ fn dispatch_role(cmd: &RoleCommand) -> Result<(), String> {
             }
             Ok(())
         }
+        RoleCommand::Suggest { pid, top, json } => dispatch_suggest(*pid, *top, *json),
     }
+}
+
+/// Resolve the target session by pid (or ancestor walk), read its
+/// transcript and cwd, and emit ranked role-name candidates. The TUI's
+/// Ctrl+R prompt and the plugin's `/bind` command will call this with
+/// `--json` to prefill the bind input.
+fn dispatch_suggest(pid: Option<u32>, top: usize, json: bool) -> Result<(), String> {
+    use claudectl_core::discovery;
+
+    let target_pid = match pid {
+        Some(p) => p,
+        None => roles::find_claude_ancestor_pid().ok_or_else(|| {
+            "no --pid given and no Claude process found in ancestor chain".to_string()
+        })?,
+    };
+
+    let mut sessions = discovery::scan_sessions();
+    discovery::resolve_jsonl_paths(&mut sessions);
+    let session = sessions
+        .iter()
+        .find(|s| s.pid == target_pid)
+        .ok_or_else(|| format!("no running Claude session with pid {target_pid}"))?;
+
+    let suggestions = suggest::suggest_for_session(
+        session.jsonl_path.as_deref(),
+        std::path::Path::new(&session.cwd),
+        top,
+    );
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&suggestions).map_err(|e| format!("encode json: {e}"))?
+        );
+        return Ok(());
+    }
+
+    if suggestions.is_empty() {
+        println!("(no role candidates inferred — session is too new or transcript empty)");
+        return Ok(());
+    }
+    for (i, s) in suggestions.iter().enumerate() {
+        println!(
+            "{idx}. {name}  (score={score})",
+            idx = i + 1,
+            name = s.name,
+            score = s.score
+        );
+        for reason in &s.reasons {
+            println!("     · {reason}");
+        }
+    }
+    Ok(())
 }
 
 fn dispatch_send(

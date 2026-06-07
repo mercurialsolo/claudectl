@@ -166,6 +166,8 @@ Four ways to create a binding:
 | TUI **`Ctrl+R`** on the selected session | dashboard operator | binds selected session's pid + cwd |
 | `/bind <name>` (Claude Code slash command) | inside a running session | `--self` walks ancestry to find Claude's pid + uses current cwd |
 
+**Don't have a role name in mind?** `claudectl bus role suggest --pid <pid>` (or `--self`-style auto-detection from a Claude session, or no `--pid` to walk the caller's ancestor chain) scans the session's transcript and cwd for signals — explicit "you are the X" mentions, tool fan-out shape (writes-heavy → `impl`, reads-heavy → `reviewer`, test-runs → `tester`), path patterns the session touches, and the cwd basename — and returns ranked candidates with reasons. Pure analysis: never writes a binding, never queries the LLM. Used by the TUI's Ctrl+R prompt and the `/bind` slash command to pre-fill a sensible default (#309).
+
 Roles are the stable names everything else references. Session IDs are ephemeral and never used as durable addresses.
 
 ---
