@@ -2,7 +2,7 @@
 
 All notable changes to claudectl are documented here.
 
-## [Unreleased]
+## [0.57.1] - 2026-06-07
 
 ### Added — bus retention + `prune` (closes #337)
 - **`bus::store::prune(retention_days)`** — deletes `delivered` messages older than the cutoff (default 30 days, matches `coord::store::prune`). Pending and acked rows untouched. Returns the count deleted.
