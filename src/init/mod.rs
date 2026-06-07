@@ -205,6 +205,156 @@ pub fn run_reset() -> io::Result<()> {
     Ok(())
 }
 
+/// Re-sync everything the previous `init` wrote so it tracks the current
+/// binary (#327). Used after `brew upgrade claudectl` / `cargo install
+/// claudectl --force` — the new binary embeds newer plugin assets, may
+/// expect a different schema, and might have a fresher marker version,
+/// but the on-disk artifacts were written by the old binary.
+///
+/// Four refresh paths, in order — failures don't abort the rest so a
+/// half-broken install can still partially recover:
+///
+/// 1. Hook entries in `~/.claude/settings.json` — re-runs `init::hooks::run_init`
+///    which is idempotent.
+/// 2. Plugin files in `~/.claude/plugins/claudectl/` — re-writes from
+///    embedded `include_str!` contents. We checksum each file before
+///    writing so the report distinguishes "updated" from "no change".
+/// 3. DB migrations — opening the bus and coord stores runs any pending
+///    `ADD COLUMN` migrations as a side effect of `migrate(&conn)`.
+/// 4. Onboarding marker version bump — if the recorded version differs
+///    from the running binary's `CARGO_PKG_VERSION`, rewrite the version
+///    field (other phase records preserved).
+pub fn run_upgrade() -> io::Result<()> {
+    println!("claudectl init upgrade");
+    println!("=======================");
+    println!();
+
+    let mut had_error = false;
+
+    // 1. Hook entries. `hooks::run_init` prints its own report; we follow
+    // it with our progress line so the operator sees both the file path
+    // touched and the per-step ✓ summary.
+    println!("  [1/4] Claude Code hook entries");
+    match hooks::run_init(false, false) {
+        Ok(()) => println!("        \u{2713} refreshed"),
+        Err(e) => {
+            println!("        \u{2717} {e}");
+            had_error = true;
+        }
+    }
+
+    // 2. Plugin files (embedded → disk)
+    print!("  [2/4] Embedded plugin files ..................... ");
+    match upgrade_plugin_assets() {
+        Ok(Some((updated, unchanged))) => {
+            println!("\u{2713} {updated} updated, {unchanged} unchanged");
+        }
+        Ok(None) => println!("\u{2014} HOME not set, skipped"),
+        Err(e) => {
+            println!("\u{2717} {e}");
+            had_error = true;
+        }
+    }
+
+    // 3. DB migrations (opening the stores triggers `migrate()`)
+    print!("  [3/4] DB schema migrations ...................... ");
+    match upgrade_db_migrations() {
+        Ok(()) => println!("\u{2713} schema current"),
+        Err(e) => {
+            println!("\u{2717} {e}");
+            had_error = true;
+        }
+    }
+
+    // 4. Onboarding marker version stamp
+    print!("  [4/4] Onboarding marker version ................. ");
+    match upgrade_marker_version() {
+        Ok(Some((from, to))) => println!("\u{2713} {from} \u{2192} {to}"),
+        Ok(None) => println!("\u{2014} already current"),
+        Err(e) => {
+            println!("\u{2717} {e}");
+            had_error = true;
+        }
+    }
+
+    println!();
+    if had_error {
+        return Err(io::Error::other(
+            "one or more upgrade steps failed — run `claudectl doctor` for details",
+        ));
+    }
+    println!("Upgrade complete. Run `claudectl doctor` to verify.");
+    Ok(())
+}
+
+/// Re-write embedded plugin assets, returning `(updated, unchanged)` row
+/// counts. We compare against the on-disk contents before writing so the
+/// upgrade report can be honest about what actually changed.
+fn upgrade_plugin_assets() -> io::Result<Option<(usize, usize)>> {
+    let Some(dest) = plugin_assets::default_install_dir() else {
+        return Ok(None);
+    };
+    let mut updated = 0;
+    let mut unchanged = 0;
+    for asset in plugin_assets::ASSETS {
+        let target = dest.join(asset.rel_path);
+        let same = std::fs::read_to_string(&target)
+            .map(|on_disk| on_disk == asset.contents)
+            .unwrap_or(false);
+        if same {
+            unchanged += 1;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target, asset.contents)?;
+        #[cfg(unix)]
+        if asset.rel_path.ends_with(".sh") {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&target)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&target, perms)?;
+        }
+        updated += 1;
+    }
+    Ok(Some((updated, unchanged)))
+}
+
+/// Touch the bus + coord stores so their `migrate(&conn)` calls run any
+/// pending schema changes. Each open is independent — a failure to open
+/// one (feature flag off, or file missing) is not an error for the
+/// other.
+fn upgrade_db_migrations() -> io::Result<()> {
+    #[cfg(feature = "bus")]
+    {
+        let _ = crate::bus::store::open().map_err(io::Error::other)?;
+    }
+    #[cfg(feature = "coord")]
+    {
+        let _ = crate::coord::store::open().map_err(io::Error::other)?;
+    }
+    Ok(())
+}
+
+/// Bump the marker's `version` field to the running binary's
+/// `CARGO_PKG_VERSION` when they differ. Returns `Some((from, to))` on
+/// bump, `None` when already current or when no marker exists yet (a
+/// fresh install isn't an upgrade case).
+fn upgrade_marker_version() -> io::Result<Option<(String, String)>> {
+    let path = marker::default_path();
+    let Some(mut m) = marker::load(&path)? else {
+        return Ok(None);
+    };
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    if m.version == current {
+        return Ok(None);
+    }
+    let from = std::mem::replace(&mut m.version, current.clone());
+    marker::save(&path, &m)?;
+    Ok(Some((from, current)))
+}
+
 /// Hard uninstall: `--remove` plus delete `~/.claudectl/` and
 /// `~/.config/claudectl/config.toml`. Used to start from a truly clean
 /// slate (e.g. for reinstall testing or recovering from corrupted state).
@@ -413,6 +563,87 @@ mod drift_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mirror of `upgrade_plugin_assets` but writing to an explicit dest
+    /// instead of `default_install_dir()`. Used by the upgrade tests so
+    /// we can drive them with a tempdir.
+    fn upgrade_plugin_assets_at(dest: &std::path::Path) -> io::Result<(usize, usize)> {
+        let mut updated = 0;
+        let mut unchanged = 0;
+        for asset in plugin_assets::ASSETS {
+            let target = dest.join(asset.rel_path);
+            let same = std::fs::read_to_string(&target)
+                .map(|on_disk| on_disk == asset.contents)
+                .unwrap_or(false);
+            if same {
+                unchanged += 1;
+                continue;
+            }
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&target, asset.contents)?;
+            updated += 1;
+        }
+        Ok((updated, unchanged))
+    }
+
+    #[test]
+    fn upgrade_first_pass_writes_every_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (updated, unchanged) = upgrade_plugin_assets_at(tmp.path()).unwrap();
+        assert_eq!(
+            unchanged, 0,
+            "tempdir was empty — nothing should be 'unchanged'"
+        );
+        assert_eq!(updated, plugin_assets::ASSETS.len());
+    }
+
+    #[test]
+    fn upgrade_second_pass_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        upgrade_plugin_assets_at(tmp.path()).unwrap();
+        let (updated, unchanged) = upgrade_plugin_assets_at(tmp.path()).unwrap();
+        assert_eq!(updated, 0, "second pass should be a no-op");
+        assert_eq!(unchanged, plugin_assets::ASSETS.len());
+    }
+
+    #[test]
+    fn upgrade_rewrites_a_locally_modified_file() {
+        // The realistic case for `init upgrade` after `brew upgrade`:
+        // some files match the embedded contents, others don't.
+        let tmp = tempfile::tempdir().unwrap();
+        upgrade_plugin_assets_at(tmp.path()).unwrap();
+        // Tamper with one file. role.md is a stable target — it always
+        // ships and isn't going to be renamed without intent.
+        let role_md = tmp.path().join("commands/role.md");
+        std::fs::write(&role_md, "wrong contents\n").unwrap();
+        let (updated, unchanged) = upgrade_plugin_assets_at(tmp.path()).unwrap();
+        assert_eq!(updated, 1);
+        assert_eq!(unchanged, plugin_assets::ASSETS.len() - 1);
+        // And the file should now match the embedded version.
+        let restored = std::fs::read_to_string(&role_md).unwrap();
+        assert!(restored.contains("name: role"));
+    }
+
+    #[test]
+    fn upgrade_marker_helper_bumps_a_stale_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("onboarding.json");
+        let m = marker::OnboardingMarker {
+            version: "0.0.1".into(),
+            completed_at: "2026-01-01T00:00:00Z".into(),
+            phases: Default::default(),
+        };
+        marker::save(&path, &m).unwrap();
+        // Re-read + bump
+        let mut loaded = marker::load(&path).unwrap().unwrap();
+        let from = std::mem::replace(&mut loaded.version, "0.99.0".into());
+        marker::save(&path, &loaded).unwrap();
+        let after = marker::load(&path).unwrap().unwrap();
+        assert_eq!(from, "0.0.1");
+        assert_eq!(after.version, "0.99.0");
+    }
 
     #[test]
     fn remove_helpers_treat_missing_paths_as_success() {

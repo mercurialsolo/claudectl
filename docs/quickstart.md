@@ -136,6 +136,18 @@ The `claude-plugin/` directory in the claudectl repo is a Claude Code plugin tha
 
 The plugin and `--init` hooks are complementary. Use `--init` for dashboard observability, the plugin for inline brain decisions.
 
+## Upgrading
+
+After `brew upgrade claudectl` (or `cargo install claudectl --force --locked`), the new binary is on disk but the hook entries, plugin files, and DB schema were written by the old binary. Refresh them with:
+
+```bash
+claudectl init --upgrade
+```
+
+The command walks four steps and reports each: (1) re-write Claude Code hook entries, (2) re-write embedded plugin files from the new binary, (3) run any pending bus / coord DB migrations, (4) bump the onboarding marker's recorded version. It's safe to run any time — files that haven't changed are reported "unchanged."
+
+`claudectl doctor` has a `plugin version` row that flags this scenario: it compares the binary's version against the on-disk `.claude-plugin/plugin.json` and surfaces an advisory with the upgrade command when they differ.
+
 ## Uninstall
 
 Roll back the onboarding wizard's installed artifacts:

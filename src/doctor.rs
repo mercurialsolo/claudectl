@@ -62,6 +62,7 @@ pub fn run_all_checks() -> Vec<Check> {
         check_binary_on_path(),
         check_claude_code_hooks(),
         check_plugin_installed(),
+        check_plugin_version(),
         check_brain_endpoint(),
         check_bus_feature(),
         check_bus_db(),
@@ -267,6 +268,71 @@ fn walk_count(root: &std::path::Path) -> usize {
         }
     }
     count
+}
+
+/// Compare the on-disk plugin manifest version against the running
+/// binary's `CARGO_PKG_VERSION` (#327). When they differ the user is
+/// almost certainly running `brew upgrade` without `claudectl init
+/// upgrade` afterwards, so they're missing whatever new slash commands
+/// / hook scripts the latest binary ships.
+fn check_plugin_version() -> Check {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Check {
+            name: "plugin version".into(),
+            status: CheckStatus::Skipped,
+            message: "HOME not set".into(),
+            fix_hint: None,
+        };
+    };
+    let manifest = home
+        .join(".claude")
+        .join("plugins")
+        .join("claudectl")
+        .join(".claude-plugin")
+        .join("plugin.json");
+    let raw = match std::fs::read_to_string(&manifest) {
+        Ok(s) => s,
+        Err(_) => {
+            return Check {
+                name: "plugin version".into(),
+                status: CheckStatus::Skipped,
+                message: "plugin not installed yet".into(),
+                fix_hint: None,
+            };
+        }
+    };
+    let binary = env!("CARGO_PKG_VERSION");
+    // Cheap parse — the manifest is small + stable, no point pulling
+    // serde_json::Value just for one field.
+    let on_disk = raw
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            let prefix = "\"version\":";
+            let idx = trimmed.find(prefix)?;
+            let after = &trimmed[idx + prefix.len()..];
+            let v = after.trim().trim_start_matches('"');
+            let end = v.find('"')?;
+            Some(&v[..end])
+        })
+        .unwrap_or("unknown");
+    if on_disk == binary {
+        Check {
+            name: "plugin version".into(),
+            status: CheckStatus::Pass,
+            message: format!("{on_disk} matches binary"),
+            fix_hint: None,
+        }
+    } else {
+        Check {
+            name: "plugin version".into(),
+            status: CheckStatus::Advisory,
+            message: format!("plugin {on_disk}, binary {binary}"),
+            fix_hint: Some(
+                "Run `claudectl init upgrade` to re-sync hooks + plugin files + DB migrations to the current binary.".into(),
+            ),
+        }
+    }
 }
 
 fn check_brain_endpoint() -> Check {
