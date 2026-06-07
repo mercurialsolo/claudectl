@@ -82,15 +82,21 @@ pub enum RoleCommand {
         /// Role name.
         name: String,
         /// cwd selector (literal path prefix or trailing `*` wildcard).
-        cwd: String,
+        /// Optional when `--self` is set; otherwise required.
+        cwd: Option<String>,
         /// Optional session_id to bind initially.
         #[arg(long)]
         session_id: Option<String>,
         /// Process ID to bind this role to (#307). When set, the resolver
         /// prefers this binding over cwd-inference for any caller whose
         /// ancestor chain contains this pid.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "self_bind")]
         pid: Option<u32>,
+        /// Bind from inside a Claude Code session: auto-detect Claude's pid
+        /// by walking the caller's ancestor chain, and capture the current
+        /// cwd. Used by the plugin `/bind` slash command (#310).
+        #[arg(long = "self", conflicts_with = "cwd")]
+        self_bind: bool,
     },
     /// List registered roles.
     List,
@@ -126,11 +132,38 @@ fn dispatch_role(cmd: &RoleCommand) -> Result<(), String> {
             cwd,
             session_id,
             pid,
+            self_bind,
         } => {
-            store::upsert_role(&conn, name, cwd, session_id.as_deref(), *pid)?;
-            match pid {
-                Some(p) => println!("bound role {name} -> {cwd} (pid={p})"),
-                None => println!("bound role {name} -> {cwd}"),
+            // Resolve (cwd, pid) up front. --self auto-detects both from the
+            // caller's process tree; the explicit form takes the positional
+            // CWD and any --pid override.
+            let (cwd_resolved, pid_resolved) = if *self_bind {
+                let detected = roles::find_claude_ancestor_pid().ok_or_else(|| {
+                    "--self: could not find a Claude Code process in the ancestor chain. \
+                     Run this from inside a Claude session, or pass --pid explicitly."
+                        .to_string()
+                })?;
+                let cwd = std::env::current_dir()
+                    .map_err(|e| format!("--self: read current dir: {e}"))?
+                    .to_string_lossy()
+                    .into_owned();
+                (cwd, Some(detected))
+            } else {
+                let cwd = cwd
+                    .clone()
+                    .ok_or_else(|| "cwd argument required (or pass --self)".to_string())?;
+                (cwd, *pid)
+            };
+            store::upsert_role(
+                &conn,
+                name,
+                &cwd_resolved,
+                session_id.as_deref(),
+                pid_resolved,
+            )?;
+            match pid_resolved {
+                Some(p) => println!("bound role {name} -> {cwd_resolved} (pid={p})"),
+                None => println!("bound role {name} -> {cwd_resolved}"),
             }
             Ok(())
         }

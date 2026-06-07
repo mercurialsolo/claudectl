@@ -109,6 +109,29 @@ fn ancestor_pids() -> Vec<u32> {
     out
 }
 
+/// Walk the caller's ancestor pid chain and return the first one whose
+/// `ps`-reported command line contains `claude` (case-insensitive). Used
+/// by `bus role bind --self` to attach a role to the right session
+/// without making the operator look up Claude's pid (#310).
+pub fn find_claude_ancestor_pid() -> Option<u32> {
+    ancestor_pids()
+        .into_iter()
+        .find(|pid| process_command_for(*pid).is_some_and(|c| c.to_lowercase().contains("claude")))
+}
+
+/// Fetch `ps -o command=` for a pid. Returns `None` when the pid is gone.
+fn process_command_for(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .env_clear()
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8(output.stdout).ok()?.trim().to_string())
+}
+
 /// Look up `ppid` for `pid` via `ps`. Returns `None` when the pid is gone
 /// or `ps` fails. Native `ps` keeps us off the sysinfo crate.
 fn parent_pid_of(pid: u32) -> Option<u32> {
