@@ -16,25 +16,30 @@ cargo fmt --check            # Check formatting
 
 ### Workspace layout
 
-This is a Cargo workspace. Crates depend in one direction only — `claudectl → claudectl-core` — and the rule is non-negotiable; CI enforces it (see #277). Adding upward arrows is what the workspace exists to prevent.
+This is a Cargo workspace with three crates. Dependencies flow strictly downward — `claudectl → claudectl-tui → claudectl-core` — and CI enforces it (Layering grep on core, plus standalone build jobs for each crate). Adding upward arrows is what the workspace exists to prevent.
 
 ```
 crates/
 ├── claudectl-core/    # foundational types, IO, the UI↔runtime trait contract
 │                      #   session, discovery, monitor, process, transcript,
 │                      #   models, theme, logger, helpers, history, terminals/,
-│                      #   health, rules, runtime
-└── (future: claudectl-tui — extracts the TUI per #275)
+│                      #   health, rules, config, hooks, launch, skills, runtime
+└── claudectl-tui/     # terminal UI + recording + demo fixtures
+                       #   app.rs, ui/*, recorder.rs, session_recorder.rs, demo.rs
+                       #   Depends on claudectl-core. Never on the binary.
 src/                   # the binary crate `claudectl`
-                       #   main.rs + brain/ + bus/ + coord/ + orchestrator +
-                       #   hive + relay + app + ui + recorder + init + config.
+                       #   main.rs + brain/ + bus/ + coord/ + hive/ + relay/ +
+                       #   orchestrator + init + commands + config.rs +
+                       #   brain_screen.rs.
                        #   Implements the runtime traits over the real
                        #   subsystems via `src/runtime/`.
 ```
 
-**UI ↔ runtime contract** lives at `crates/claudectl-core/src/runtime.rs`. Five read-only view traits (`SessionSource`, `BrainView`, `CoordView`, `BusView`) plus the `Runtime` aggregate; core-owned DTOs so the contract doesn't drag brain / coord / bus types upward. The binary's `src/runtime/` adapts each subsystem onto the traits.
+**UI ↔ runtime contract** lives at `crates/claudectl-core/src/runtime.rs`. Eight traits — `SessionSource`, `BrainView`, `CoordView`, `BusView`, `Actions`, `BrainReviewView`, `Orchestrator`, `HiveActions`, plus the stateful `BrainDriver` — wrapped in a `Runtime` aggregate. Core-owned DTOs (`SessionSnapshot`, `DecisionSummary`, `LeaseSummary`, `HiveViewSnapshot`, etc.) so the contract doesn't drag brain / coord / bus types upward. The binary's `src/runtime/` provides `Live*` adapters that implement each trait over the real subsystem.
 
-**Re-export trick** (transitional): `src/lib.rs` does `pub use claudectl_core::{session, discovery, …, health, rules};` so existing `crate::session::*` paths in the binary keep resolving without rewriting every import. These aliases collapse once #275 extracts `claudectl-tui` and the binary depends on `claudectl-core` directly.
+**Re-export bridge:** `src/lib.rs` and `src/main.rs` both do `pub use claudectl_core::{session, discovery, …};` and `pub use claudectl_tui::{app, demo, recorder, session_recorder, ui};` so existing `crate::session::*` / `crate::app::*` paths in the binary keep resolving without rewriting every import.
+
+**Feature propagation:** the binary's `coord`, `relay`, `hive` features propagate to `claudectl-tui` via `claudectl-tui/coord` etc. in `[features]`, so a single `#[cfg(feature = "...")]` gate resolves consistently across both crates.
 
 ### Core modules — `claudectl-core` (`crates/claudectl-core/src/`)
 
@@ -51,45 +56,31 @@ src/                   # the binary crate `claudectl`
 - `theme.rs` — Color theming (dark/light/monochrome, respects NO_COLOR)
 - `logger.rs` — Structured diagnostic logging
 - `helpers.rs` — Shared utilities (webhook, notification, kill_process, aggregate session)
+- `hooks.rs` — Event hook system (shell commands fired on session events)
+- `launch.rs` — Launch and resume Claude Code sessions from the TUI or CLI
+- `skills.rs` — Skill registry + claude-plugin metadata
+- `config.rs` — `BrainConfig` / `IdleConfig` data structs (the binary still owns TOML parsing in `src/config.rs`; only the value types live here)
 - `terminals/` — Terminal backends; see below.
+
+### TUI modules — `claudectl-tui` (`crates/claudectl-tui/src/`)
+
+- `app.rs` — `App` state struct, refresh loop, keyboard event handling. Holds a `claudectl_core::runtime::Runtime` for all brain/coord/bus reads and writes; never touches binary-only modules directly.
+- `ui/` — Render functions: `table.rs` (session list), `detail.rs` (expanded panel), `help.rs` (overlay), `status_bar.rs` (footer), `peers.rs` (relay peers panel, feature `relay`), `skills.rs` (skills overlay).
+- `recorder.rs` — Dashboard recording (asciicast/GIF capture of full TUI).
+- `session_recorder.rs` — Per-session highlight reel recording (extracts edits, commands, errors; strips idle time).
+- `demo.rs` — Deterministic fake sessions for screenshots, recordings, demos. Includes `DemoHighlightState` and `demo_peers` (feature `relay`).
+
+Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features and gate `App` fields and ui panels.
 
 ### Binary modules — `claudectl` (`src/`)
 
-- `main.rs` — CLI entry point, mode dispatch (TUI, watch, JSON, list, history, stats, orchestrator, clean, doctor, brain-eval, brain-query, mode, insights, init)
-- `app.rs` — TUI app state, refresh loop, keyboard event handling
-- `config.rs` — Layered TOML config: CLI flags > `.claudectl.toml` > `~/.config/claudectl/config.toml` > defaults. Re-exports `HealthThresholds` from core.
-- `hooks.rs` — Event hook system (shell commands fired on session events)
-- `orchestrator.rs` — Multi-session task runner with dependency ordering
-- `launch.rs` — Launch and resume Claude Code sessions from the TUI or CLI
-- `recorder.rs` — Dashboard recording (asciicast/GIF capture of full TUI)
-- `session_recorder.rs` — Per-session highlight reel recording (extracts edits, commands, errors; strips idle time)
-- `demo.rs` — Deterministic fake sessions for screenshots, recordings, and demos. Includes `DemoHighlightState` which drip-feeds scripted JSONL events so session recording works in demo mode.
-- `init/` — `claudectl init` opinionated onboarding wizard (5 phases: budget, brain, plugin, bus, skills); see `docs/AGENT_BUS.md` §8 and issue #257.
-- `runtime/` — `Live*` adapters that implement the `claudectl-core::runtime` traits against the real subsystems (brain decisions, coord SQLite, bus SQLite, discovery+monitor).
+- `main.rs` — CLI entry point, mode dispatch (TUI, watch, JSON, list, history, stats, orchestrator, clean, doctor, brain-eval, brain-query, mode, insights, init).
+- `brain_screen.rs` — Full-screen Brain Review surface (scorecard + interactive review). Stays in the binary because it depends on `brain::metrics` and `brain::risk`; `main.rs` calls `brain_screen::render_brain_screen` for the brain panel. Every other ui render goes through `claudectl_tui::ui::*`.
+- `config.rs` — Layered TOML config: CLI flags > `.claudectl.toml` > `~/.config/claudectl/config.toml` > defaults. Re-exports `BrainConfig`, `IdleConfig`, `HealthThresholds` from `claudectl-core`.
+- `orchestrator.rs` — Multi-session task runner with dependency ordering.
 - `commands.rs` — CLI command dispatch shared between modes.
-- `skills.rs` — Skill registry + claude-plugin metadata.
-- `main.rs` — CLI entry point, mode dispatch (TUI, watch, JSON, list, history, stats, orchestrator, clean, doctor, brain-eval, brain-query, mode, insights, init)
-- `app.rs` — TUI app state, refresh loop, keyboard event handling
-- `session.rs` — Session data structures and formatting
-- `discovery.rs` — Scans `~/.claude/sessions/*.json` and resolves JSONL paths
-- `monitor.rs` — Parses JSONL conversation logs for tokens, cost, status events
-- `process.rs` — Process introspection via native `ps` (not sysinfo crate)
-- `config.rs` — Layered TOML config: CLI flags > `.claudectl.toml` > `~/.config/claudectl/config.toml` > defaults
-- `history.rs` — Session history persistence and cost analytics
-- `hooks.rs` — Event hook system (shell commands fired on session events)
-- `orchestrator.rs` — Multi-session task runner with dependency ordering
-- `health.rs` — Session health monitoring (cache ratio, cost spikes, loop detection, stalls, context saturation)
-- `rules.rs` — Auto-rule engine: match sessions by status/tool/command/project/cost, then approve/deny/send/terminate/route/spawn/delegate
-- `launch.rs` — Launch and resume Claude Code sessions from the TUI or CLI
-- `models.rs` — Model pricing profiles (built-in + user overrides) for cost tracking
-- `recorder.rs` — Dashboard recording (asciicast/GIF capture of full TUI)
-- `session_recorder.rs` — Per-session highlight reel recording (extracts edits, commands, errors; strips idle time)
-- `transcript.rs` — JSONL transcript parser (messages, tool use, tool results, usage data)
-- `metrics.rs` — Brain effectiveness metrics: learning curve, accuracy breakdown, rules baseline comparison, false-approve rate
-- `demo.rs` — Deterministic fake sessions for screenshots, recordings, and demos. Includes `DemoHighlightState` which drip-feeds scripted JSONL events so session recording works in demo mode.
-- `theme.rs` — Color theming (dark/light/monochrome, respects NO_COLOR)
-- `logger.rs` — Structured diagnostic logging
-- `init.rs` — `--init` / `--uninstall`: writes/removes Claude Code hooks in `.claude/settings.json`
+- `init/` — `claudectl init` opinionated onboarding wizard (5 phases: budget, brain, plugin, bus, skills); see `docs/AGENT_BUS.md` §8 and issue #257.
+- `runtime/` — `Live*` adapters that implement the `claudectl-core::runtime` traits against the real subsystems (sessions, brain, coord SQLite, bus SQLite, orchestrator, hive). See `runtime/{sessions,brain,brain_driver,brain_review,coord,bus,actions,orchestrator,hive}.rs`.
 
 **Claude Code Plugin** (`claude-plugin/`): Integrates the brain directly into Claude Code sessions.
 - `hooks/scripts/brain-gate.sh` — PreToolUse hook: queries brain for approve/deny on Bash/Write/Edit calls
@@ -140,8 +131,6 @@ src/                   # the binary crate `claudectl`
 - `injection.rs` — Brain prompt integration with trust labels, concordance checking for drift
 - `cli.rs` — CLI dispatch for hive subcommands (status, knowledge, export, import, trust)
 
-**TUI** (`src/ui/`): `table.rs` (session list), `detail.rs` (expanded panel), `help.rs` (overlay), `status_bar.rs` (footer), `peers.rs` (relay peers panel). Will move to `crates/claudectl-tui/` in #275; today still depends on the binary crate directly.
-
 **Terminal backends** (`crates/claudectl-core/src/terminals/`): Ghostty, Kitty, tmux, WezTerm, Warp, iTerm2, Terminal.app, Gnome Terminal, Windows Terminal — auto-detected, used for tab switching and input sending.
 
 ## Key Design Decisions
@@ -164,8 +153,8 @@ src/                   # the binary crate `claudectl`
 - Health checks in `crates/claudectl-core/src/health.rs` have full unit test coverage — add tests for new checks.
 - Terminal backends implement the pattern in `crates/claudectl-core/src/terminals/mod.rs` — add new terminals there.
 - Config fields must be added to all three layers (CLI args in `main.rs`, TOML struct in `config.rs`, merge logic in `config.rs`).
-- **Dependency direction:** `claudectl` (binary) may depend on `claudectl-core`. `claudectl-core` may NOT depend on anything claudectl-specific — no `crate::brain`, `crate::bus`, `crate::coord`, etc. references from inside core. CI rejects this.
-- Foundational modules in core never have `pub(crate)` on items the binary needs to call — promote to `pub` instead. The binary is now a downstream consumer.
+- **Dependency direction:** `claudectl` (binary) depends on `claudectl-tui` and `claudectl-core`. `claudectl-tui` depends on `claudectl-core` only. `claudectl-core` depends on nothing claudectl-specific — no `crate::brain`, `crate::bus`, `crate::coord`, `crate::hive`, etc. references from inside core. CI rejects upward references via a grep guard plus standalone build jobs (`Core (standalone)`, `TUI (standalone)`).
+- Foundational modules in core (and now TUI) never have `pub(crate)` on items downstream needs to call — promote to `pub` instead. The binary is a downstream consumer of both other crates.
 - Brain prompt templates can be overridden by placing files in `~/.claudectl/brain/prompts/` — run `--brain-prompts` to list sources.
 - Plugin hook scripts must check for `claudectl` availability and exit 0 on failure — never block Claude Code.
 - Plugin commands call `claudectl` CLI modes and format output — they don't implement logic directly.
