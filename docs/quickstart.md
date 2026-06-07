@@ -132,8 +132,13 @@ The plugin and `--init` hooks are complementary. Use `--init` for dashboard obse
 Roll back the onboarding wizard's installed artifacts:
 
 ```bash
-claudectl init --remove                      # Removes hooks + onboarding marker
+claudectl init --remove                      # Soft uninstall: hooks + onboarding marker
+claudectl init --purge --yes                 # Hard uninstall: --remove + nuke ~/.claudectl/ + config
 ```
+
+`--remove` is the safe form — strips Claude Code hooks and the onboarding marker, but preserves user data (bus DB roles, brain decision logs, hive knowledge, relay identity, your budget config line). Use this when you want to stop the integration without losing what claudectl has learned.
+
+`--purge` is the hard reset — `--remove` plus `~/.claudectl/` (all subdirs) plus `~/.config/claudectl/config.toml`. Use this when reinstalling fresh, recovering from corrupted state, or fully uninstalling. Pair with `--yes` to skip the confirmation prompt; without it you'll see a list of paths and have to confirm.
 
 Or remove just the hooks (legacy flag, still supported):
 
@@ -142,7 +147,7 @@ claudectl --uninstall                        # Remove from user settings
 claudectl --uninstall -s project             # Remove from project settings
 ```
 
-Both surgically remove only claudectl entries. All other settings and hooks are preserved. Phases that own user state (e.g. the bus database, your budget config line) deliberately decline to delete it.
+Both `--remove` and `--uninstall` surgically remove only claudectl entries. All other settings and hooks are preserved.
 
 To uninstall the binary:
 

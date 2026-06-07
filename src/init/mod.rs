@@ -204,6 +204,121 @@ pub fn run_reset() -> io::Result<()> {
     Ok(())
 }
 
+/// Hard uninstall: `--remove` plus delete `~/.claudectl/` and
+/// `~/.config/claudectl/config.toml`. Used to start from a truly clean
+/// slate (e.g. for reinstall testing or recovering from corrupted state).
+///
+/// User confirms before any deletion unless `assume_yes` is set. Each
+/// path that's missing is silently skipped so re-running `--purge` after
+/// a successful one is a no-op rather than an error.
+pub fn run_purge(assume_yes: bool) -> io::Result<()> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let claudectl_dir = home.as_ref().map(|h| h.join(".claudectl"));
+    let config_path = crate::config::Config::global_path();
+
+    println!("This will delete:");
+    println!("  • Claude Code hooks claudectl installed (`~/.claude/settings.json` entries)");
+    if let Some(dir) = claudectl_dir.as_ref() {
+        println!(
+            "  • {} (bus DB, brain decisions, hive, relay, coord)",
+            dir.display()
+        );
+    }
+    if let Some(cfg) = config_path.as_ref() {
+        println!("  • {} (claudectl config file)", cfg.display());
+    }
+    println!();
+    println!("User-edited files outside these paths are preserved. To remove only");
+    println!("the hooks and onboarding marker (keep user data), use `init --remove`.");
+    println!();
+
+    if !assume_yes && !prompt::yes_no("Proceed with purge?", false)? {
+        println!("Aborted.");
+        return Ok(());
+    }
+
+    // First, the soft uninstall — strips hook entries and clears the marker.
+    // We run this with `?` only after the destructive deletions so a failure
+    // here (e.g. settings.json edit conflict) doesn't abort the directory
+    // wipes that follow.
+    let remove_errors = match run_remove_silent() {
+        Ok(()) => Vec::new(),
+        Err(e) => vec![format!("hook/marker removal: {e}")],
+    };
+
+    let mut errors = remove_errors;
+    if let Some(dir) = claudectl_dir.as_ref() {
+        if let Err(e) = remove_dir_if_present(dir) {
+            errors.push(format!("{}: {e}", dir.display()));
+        } else {
+            println!("  removed: {}", dir.display());
+        }
+    }
+    if let Some(cfg) = config_path.as_ref() {
+        if let Err(e) = remove_file_if_present(cfg) {
+            errors.push(format!("{}: {e}", cfg.display()));
+        } else {
+            println!("  removed: {}", cfg.display());
+        }
+        // Also try the parent ~/.config/claudectl/ dir — only succeeds if
+        // it's now empty (we don't recursively delete the parent because
+        // it could contain user-authored files we don't know about).
+        if let Some(parent) = cfg.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+
+    if errors.is_empty() {
+        println!();
+        println!("Purge complete. `claudectl init` will start fresh.");
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "purge errors: {}",
+            errors.join("; ")
+        )))
+    }
+}
+
+/// `run_remove` without printing the per-phase progress lines — used by
+/// `run_purge` so its UI doesn't have duplicated "removed: X" rows.
+fn run_remove_silent() -> io::Result<()> {
+    let registry = phases::registry();
+    let mut errors = Vec::new();
+    for phase in &registry {
+        if let Err(e) = phase.remove() {
+            errors.push(format!("{}: {e}", phase.id()));
+        }
+    }
+    marker::clear(&marker::default_path())?;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "remove errors: {}",
+            errors.join("; ")
+        )))
+    }
+}
+
+/// `remove_dir_all` that treats a missing directory as success — same
+/// semantics as `rm -rf` without erroring on non-existence.
+fn remove_dir_if_present(path: &std::path::Path) -> io::Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn remove_file_if_present(path: &std::path::Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 // ---------------- internal helpers ------------------------------------------
 
 fn print_banner(registry: &[Box<dyn Phase>]) {
@@ -297,6 +412,49 @@ mod drift_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_helpers_treat_missing_paths_as_success() {
+        // `remove_dir_if_present` / `remove_file_if_present` are the
+        // building blocks of --purge. Idempotency matters: re-running
+        // --purge after a successful one must not error.
+        let tmp = tempfile::tempdir().unwrap();
+        let missing_dir = tmp.path().join("nope");
+        let missing_file = tmp.path().join("nope.txt");
+        assert!(remove_dir_if_present(&missing_dir).is_ok());
+        assert!(remove_file_if_present(&missing_file).is_ok());
+    }
+
+    #[test]
+    fn remove_dir_if_present_wipes_existing_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("claudectl");
+        std::fs::create_dir_all(target.join("brain")).unwrap();
+        std::fs::create_dir_all(target.join("bus")).unwrap();
+        std::fs::write(target.join("brain").join("d.jsonl"), "{}").unwrap();
+        std::fs::write(target.join("bus").join("bus.db"), "x").unwrap();
+
+        assert!(target.exists());
+        remove_dir_if_present(&target).unwrap();
+        assert!(
+            !target.exists(),
+            "expected tree to be gone, but {} still exists",
+            target.display()
+        );
+    }
+
+    #[test]
+    fn remove_file_if_present_removes_just_that_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("config.toml");
+        let sibling = tmp.path().join("other.toml");
+        std::fs::write(&cfg, "budget = 25").unwrap();
+        std::fs::write(&sibling, "keep me").unwrap();
+
+        remove_file_if_present(&cfg).unwrap();
+        assert!(!cfg.exists(), "config.toml should be gone");
+        assert!(sibling.exists(), "sibling untouched");
+    }
 
     #[test]
     fn non_interactive_records_marker_for_every_phase() {

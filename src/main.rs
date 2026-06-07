@@ -93,8 +93,20 @@ pub(crate) enum Command {
         #[arg(long, conflicts_with_all = ["check", "remove", "non_interactive"])]
         reset: bool,
         /// Uninstall every claudectl-managed artifact (hooks, marker).
-        #[arg(long, conflicts_with_all = ["check", "reset", "non_interactive"])]
+        /// Preserves user data: bus DB roles, brain decision logs, hive
+        /// knowledge, relay identity, config file. Pair with `--purge` to
+        /// wipe everything.
+        #[arg(long, conflicts_with_all = ["check", "reset", "non_interactive", "purge"])]
         remove: bool,
+        /// Hard uninstall: `--remove` PLUS delete `~/.claudectl/` entirely
+        /// (bus DB, brain decisions, hive knowledge, relay identity, coord
+        /// state) and `~/.config/claudectl/config.toml`. Use to start over
+        /// from a clean slate. Requires `--yes` to proceed without prompt.
+        #[arg(long, conflicts_with_all = ["check", "reset", "non_interactive", "remove"])]
+        purge: bool,
+        /// Skip the confirmation prompt for `--purge`.
+        #[arg(long)]
+        yes: bool,
         /// Run every phase without prompting. Combine with the per-phase
         /// flags below (`--budget`, `--brain-url`, `--bus-role`, etc.).
         #[arg(long)]
@@ -709,6 +721,8 @@ fn run_main(cli: Cli) -> io::Result<()> {
                 check,
                 reset,
                 remove,
+                purge,
+                yes,
                 non_interactive,
                 budget,
                 skip_budget,
@@ -729,6 +743,9 @@ fn run_main(cli: Cli) -> io::Result<()> {
                 }
                 if *remove {
                     return init::run_remove();
+                }
+                if *purge {
+                    return init::run_purge(*yes);
                 }
                 if *non_interactive {
                     let install_plugin_opt = if *skip_plugin {
