@@ -5,7 +5,9 @@ use std::fs;
 
 use claudectl_core::discovery;
 use claudectl_core::helpers;
-use claudectl_core::runtime::{Actions, BrainGateMode, ObservationInput};
+use claudectl_core::runtime::{
+    Actions, BrainGateMode, DecisionScope, LogDecisionInput, ObservationInput,
+};
 use claudectl_core::terminals;
 
 use crate::brain;
@@ -49,6 +51,47 @@ impl Actions for LiveActions {
             observation.command.as_deref(),
             &observation.observed_action,
             session_ref,
+        );
+        Ok(())
+    }
+
+    fn log_decision(&self, input: LogDecisionInput) -> Result<(), String> {
+        // Resolve the live session for richer context (cost, model, etc.) —
+        // brain::decisions::log_decision tolerates None when the PID is gone.
+        let mut sessions = discovery::scan_sessions();
+        discovery::resolve_jsonl_paths(&mut sessions);
+        let session_ref = sessions.iter().find(|s| s.pid == input.session_pid);
+
+        // The trait's PendingSuggestion uses `action: String`; the brain
+        // log_decision needs a `BrainSuggestion` with a real `RuleAction`.
+        // Drop silently on unknown labels (caller validates upstream).
+        let Some(rule_action) = claudectl_core::rules::RuleAction::parse(&input.suggestion.action)
+        else {
+            return Err(format!("unknown action label: {}", input.suggestion.action));
+        };
+        let suggestion = brain::client::BrainSuggestion {
+            action: rule_action,
+            message: input.suggestion.message,
+            reasoning: input.suggestion.reasoning,
+            confidence: input.suggestion.confidence,
+            suggested_at: input.suggestion.suggested_at,
+        };
+
+        let decision_type = match input.decision_type {
+            DecisionScope::Session => brain::decisions::DecisionType::Session,
+            DecisionScope::Orchestration => brain::decisions::DecisionType::Orchestration,
+        };
+
+        brain::decisions::log_decision(
+            input.session_pid,
+            &input.project,
+            input.tool.as_deref(),
+            input.command.as_deref(),
+            &suggestion,
+            &input.user_action,
+            session_ref,
+            decision_type,
+            input.override_reason.as_deref(),
         );
         Ok(())
     }

@@ -482,26 +482,6 @@ impl Default for App {
     }
 }
 
-/// Inverse projection: lift a core `PendingSuggestion` back to the binary's
-/// `BrainSuggestion` for the call sites that still need it (notably
-/// `brain::decisions::log_decision`, which is intentionally not on the
-/// `Actions` trait per the #289 scope decision). Falls back to
-/// `RuleAction::Approve` when the string label doesn't parse — the only
-/// callers today come from the driver, so the action is always a known
-/// label and the fallback is unreachable in practice.
-fn pending_to_brain_suggestion(
-    p: &claudectl_core::runtime::PendingSuggestion,
-) -> crate::brain::client::BrainSuggestion {
-    crate::brain::client::BrainSuggestion {
-        action: claudectl_core::rules::RuleAction::parse(&p.action)
-            .unwrap_or(claudectl_core::rules::RuleAction::Approve),
-        message: p.message.clone(),
-        reasoning: p.reasoning.clone(),
-        confidence: p.confidence,
-        suggested_at: p.suggested_at,
-    }
-}
-
 /// Project a live `ClaudeSession` to the core `SessionSnapshot` DTO the
 /// runtime traits accept. Used by `BrainDriver` call sites that have the
 /// live values in memory already.
@@ -2741,19 +2721,19 @@ impl App {
         }
 
         if let Some(msg) = driver.accept(pid) {
-            // log_decision is intentionally NOT on the Actions trait yet
-            // (see #289 scope decision). Stays as a direct call.
-            crate::brain::decisions::log_decision(
-                pid,
-                session.display_name(),
-                session.pending_tool_name.as_deref(),
-                session.pending_tool_input.as_deref(),
-                &pending_to_brain_suggestion(&sg),
-                "accept",
-                Some(&session),
-                crate::brain::decisions::DecisionType::Session,
-                override_reason,
-            );
+            let _ = self
+                .runtime
+                .actions
+                .log_decision(claudectl_core::runtime::LogDecisionInput {
+                    session_pid: pid,
+                    project: session.display_name().to_string(),
+                    tool: session.pending_tool_name.clone(),
+                    command: session.pending_tool_input.clone(),
+                    suggestion: sg,
+                    user_action: "accept".into(),
+                    decision_type: claudectl_core::runtime::DecisionScope::Session,
+                    override_reason: override_reason.map(String::from),
+                });
             crate::logger::log("BRAIN", &format!("Accepted: {msg}"));
             self.status_msg = msg;
         }
@@ -2774,17 +2754,17 @@ impl App {
             return;
         };
         if let Some(suggestion) = driver.reject(pid) {
-            crate::brain::decisions::log_decision(
-                pid,
-                session.display_name(),
-                session.pending_tool_name.as_deref(),
-                session.pending_tool_input.as_deref(),
-                &pending_to_brain_suggestion(&suggestion),
-                "reject",
-                Some(&session),
-                crate::brain::decisions::DecisionType::Session,
-                None,
-            );
+            let log_input = claudectl_core::runtime::LogDecisionInput {
+                session_pid: pid,
+                project: session.display_name().to_string(),
+                tool: session.pending_tool_name.clone(),
+                command: session.pending_tool_input.clone(),
+                suggestion: suggestion.clone(),
+                user_action: "reject".into(),
+                decision_type: claudectl_core::runtime::DecisionScope::Session,
+                override_reason: None,
+            };
+            let _ = self.runtime.actions.log_decision(log_input);
             let msg = format!(
                 "Rejected brain suggestion: {} ({})",
                 suggestion.action, suggestion.reasoning,

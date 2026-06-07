@@ -314,6 +314,49 @@ pub struct ObservationInput {
     pub observed_action: String,
 }
 
+/// Whether a decision was about a session or about an orchestration task.
+/// Mirrors `brain::decisions::DecisionType` without depending on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionScope {
+    Session,
+    Orchestration,
+}
+
+impl DecisionScope {
+    /// Wire label. Matches what `brain::decisions::DecisionType::as_label`
+    /// writes to disk so the round-trip is stable.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Orchestration => "orchestration",
+        }
+    }
+}
+
+/// What the TUI needs to record when the user resolves a brain suggestion.
+/// Carries the suggestion that was on screen at the time, plus what the user
+/// did and (optionally) why they overrode the brain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogDecisionInput {
+    /// PID of the session the decision applies to.
+    pub session_pid: u32,
+    /// Project label.
+    pub project: String,
+    /// Tool name the suggestion targeted.
+    pub tool: Option<String>,
+    /// Command / input string the suggestion targeted.
+    pub command: Option<String>,
+    /// The brain's suggestion the user is resolving.
+    pub suggestion: PendingSuggestion,
+    /// What the user did — `"accept"`, `"reject"`, `"deny_rule_override"`, etc.
+    pub user_action: String,
+    /// Whether this was a session decision or an orchestration decision.
+    pub decision_type: DecisionScope,
+    /// Why the user overrode a brain denial (if applicable).
+    pub override_reason: Option<String>,
+}
+
 /// Side-effecting paths the TUI invokes when the user takes an action
 /// (terminating a session, sending a prompt, flipping the brain mode,
 /// recording an observation, marking a decision canonical for teaching).
@@ -352,6 +395,13 @@ pub trait Actions: Send + Sync {
     /// Record an observation about a user action — non-LLM "the user did X."
     /// Drives the brain's outcome telemetry and preference distillation.
     fn log_observation(&self, observation: ObservationInput) -> Result<(), String>;
+
+    /// Record a user's accept/reject decision on a brain suggestion. The
+    /// distinction from `log_observation` is that `log_decision` carries
+    /// the actual suggestion that was on screen — the brain pairs it with
+    /// the user's response for outcome telemetry, counterfactual analysis,
+    /// and few-shot retrieval.
+    fn log_decision(&self, input: LogDecisionInput) -> Result<(), String>;
 
     /// Mark a past brain decision as canonical for teaching. Optional `note`
     /// is the operator's annotation. Used by the Brain Review surface.
@@ -515,6 +565,7 @@ pub enum MockAction {
     },
     SetGateMode(BrainGateMode),
     LogObservation(ObservationInput),
+    LogDecision(LogDecisionInput),
     MarkCanonical {
         decision_id: String,
         note: Option<String>,
@@ -532,6 +583,25 @@ impl PartialEq for ObservationInput {
 }
 
 impl Eq for ObservationInput {}
+
+impl PartialEq for LogDecisionInput {
+    fn eq(&self, other: &Self) -> bool {
+        self.session_pid == other.session_pid
+            && self.project == other.project
+            && self.tool == other.tool
+            && self.command == other.command
+            && self.user_action == other.user_action
+            && self.decision_type == other.decision_type
+            && self.override_reason == other.override_reason
+            // PendingSuggestion's field-by-field equality
+            && self.suggestion.pid == other.suggestion.pid
+            && self.suggestion.action == other.suggestion.action
+            && self.suggestion.message == other.suggestion.message
+            && self.suggestion.reasoning == other.suggestion.reasoning
+    }
+}
+
+impl Eq for LogDecisionInput {}
 
 impl MockRuntime {
     pub fn into_runtime(self) -> Runtime {
@@ -636,6 +706,13 @@ impl Actions for MockRuntime {
             .lock()
             .expect("actions_log poisoned")
             .push(MockAction::LogObservation(observation));
+        Ok(())
+    }
+    fn log_decision(&self, input: LogDecisionInput) -> Result<(), String> {
+        self.actions_log
+            .lock()
+            .expect("actions_log poisoned")
+            .push(MockAction::LogDecision(input));
         Ok(())
     }
     fn mark_canonical(&self, decision_id: &str, note: Option<String>) -> Result<(), String> {
