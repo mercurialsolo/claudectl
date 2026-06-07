@@ -7,6 +7,10 @@ members = ["crates/claudectl-core", "crates/claudectl-tui"]
 name = "claudectl"
 version = "0.56.0"
 edition = "2024"
+# MSRV — bumped to 1.88 in #328 so cargo-install on older toolchains
+# emits a clean "rustc too old" error instead of opaque transitive-dep
+# errors from `darling` and `instability`.
+rust-version = "1.88"
 description = "Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you."
 license = "MIT"
 repository = "https://github.com/mercurialsolo/claudectl"

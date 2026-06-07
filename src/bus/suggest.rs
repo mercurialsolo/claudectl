@@ -396,7 +396,7 @@ mod tests {
             "You are the planner. Coordinate the other agents.",
         )];
         let mut mentions = from_explicit_mentions(&messages);
-        mentions.sort_by(|a, b| b.1.cmp(&a.1));
+        mentions.sort_by_key(|m| std::cmp::Reverse(m.1));
         assert_eq!(mentions[0].0, "planner");
         // Score should be the configured 10 for an explicit mention; the
         // cwd basename only scores 3, so a merge would rank planner first.

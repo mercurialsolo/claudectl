@@ -2,6 +2,7 @@
 name = "claudectl-core"
 version = "0.52.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Foundational types and IO primitives for claudectl. Shared across the TUI, the binary, and future crates."
 license = "MIT"
 repository = "https://github.com/mercurialsolo/claudectl"

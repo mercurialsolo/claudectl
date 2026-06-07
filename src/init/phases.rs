@@ -211,7 +211,10 @@ impl Phase for BrainPhase {
                 return Ok(detected);
             }
         } else {
-            println!("  No local-LLM endpoint detected on the common ports.");
+            // #324 — print a concrete install hint when no endpoint is
+            // reachable, instead of silently moving on. Most users hitting
+            // this won't know ollama exists.
+            print_ollama_install_hint();
         }
 
         if !prompt::yes_no("Configure a custom endpoint?", false)? {
@@ -233,7 +236,15 @@ impl Phase for BrainPhase {
                 details: format!("endpoint at {url}"),
             });
         }
-        Ok(state::detect_brain())
+        let status = state::detect_brain();
+        // #324 — even non-interactive mode should surface the install hint
+        // (printed once, doesn't change the recorded status). CI / dotfile
+        // users skim the output; they shouldn't have to guess why brain
+        // recorded `not_installed`.
+        if !matches!(status, PhaseStatus::Installed { .. }) {
+            print_ollama_install_hint();
+        }
+        Ok(status)
     }
 
     fn remove(&self) -> io::Result<()> {
@@ -241,6 +252,17 @@ impl Phase for BrainPhase {
         // handled by the orchestrator.
         Ok(())
     }
+}
+
+/// Three-line install hint shown when the Brain phase can't reach any
+/// local-LLM endpoint. Mirrors `docs/quickstart.md` "Optional: add the
+/// local LLM brain" so the wizard and the docs say the same thing.
+fn print_ollama_install_hint() {
+    println!("  No local-LLM endpoint detected on the common ports.");
+    println!("  To enable the brain, install ollama and a small model:");
+    println!("    brew install ollama && ollama serve &");
+    println!("    ollama pull gemma4:e4b");
+    println!("  Then re-run `claudectl init` to wire it up.");
 }
 
 // ===================== Plugin (Claude Code hooks) =======================

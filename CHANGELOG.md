@@ -4,6 +4,13 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — DX activation quick wins (closes #322, #324, #328)
+- **First-run banner (#322)** — running `claudectl` for the first time (no `~/.claudectl/onboarding.json` and no `claudectl` entries in `~/.claude/settings.json`) now prints a one-screen banner above the TUI explaining how to onboard. Skipped in `--demo`, in non-TUI output modes (`--json`, `--list`, `--watch`, `--summary`, `--headless`), and when `CLAUDECTL_SKIP_FIRST_RUN=1`.
+- **Brain phase ollama install hint (#324)** — when the Brain phase of `claudectl init` can't reach a local-LLM endpoint, it now prints concrete install steps (`brew install ollama && ollama serve &` + `ollama pull gemma4:e4b`) instead of silently recording `not_installed`. Non-interactive mode shows the hint too.
+- **MSRV declared in `Cargo.toml`** (#328) — all three crates set `rust-version = "1.88"`. Users on older toolchains get a clean MSRV error from cargo before the resolver tries to compile transitive deps (which would otherwise produce opaque `darling@0.23.0 requires rustc 1.88.0` errors).
+
+Part of the DX overhaul epic #320.
+
 ### Changed — bus role slash command renamed `/bind` → `/role`
 - The plugin slash command shipped in 0.55.0 as `/bind <name>` is renamed to `/role <name>` (e.g. `/role frontend`, `/role tester`). Reads better — it matches the CLI noun (`claudectl bus role …`) and reflects what the operator is actually doing (setting a role, not binding to one).
 - `claude-plugin/commands/bind.md` is removed in favour of `claude-plugin/commands/role.md`. The command instructions and `--self` ancestor-walk behaviour are unchanged; only the user-facing name changed.

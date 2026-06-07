@@ -538,6 +538,46 @@ fn maybe_print_star_prompt(is_demo: bool) {
     }
 }
 
+/// First-run detection for the activation nudge (#322). Returns true when
+/// the user has neither onboarded (`~/.claudectl/onboarding.json` absent)
+/// nor installed Claude Code hooks (`~/.claude/settings.json` lacks any
+/// `claudectl` entries). When either is present, we assume the operator
+/// knows what they're doing and stay quiet.
+fn is_first_run() -> bool {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return false;
+    };
+    let marker = home.join(".claudectl").join("onboarding.json");
+    let settings = home.join(".claude").join("settings.json");
+    let onboarded = marker.exists();
+    let hooked = std::fs::read_to_string(&settings)
+        .map(|s| s.contains("claudectl"))
+        .unwrap_or(false);
+    !onboarded && !hooked
+}
+
+/// One-screen banner shown above the empty TUI when the user hasn't
+/// onboarded yet (#322). Goes to stderr so it doesn't pollute stdout
+/// piping; appears before the alt-screen swap.
+fn print_first_run_banner() {
+    eprintln!();
+    eprintln!("┌─────────────────────────────────────────────────────────────────┐");
+    eprintln!("│  Welcome to claudectl.                                          │");
+    eprintln!("│                                                                 │");
+    eprintln!("│  You haven't onboarded yet — the dashboard will be empty until  │");
+    eprintln!("│  Claude Code hooks are installed. Quit and run one of:          │");
+    eprintln!("│                                                                 │");
+    eprintln!("│    claudectl init        Interactive 5-phase wizard (preferred) │");
+    eprintln!("│    claudectl --demo      Explore with fake sessions             │");
+    eprintln!("│                                                                 │");
+    eprintln!("│  Silence this with CLAUDECTL_SKIP_FIRST_RUN=1.                  │");
+    eprintln!("└─────────────────────────────────────────────────────────────────┘");
+    eprintln!();
+    // Tiny delay so the user actually reads the banner before the TUI
+    // grabs the alt-screen and hides it.
+    std::thread::sleep(std::time::Duration::from_millis(800));
+}
+
 fn run_main(cli: Cli) -> io::Result<()> {
     // Initialize diagnostic logger if --log is set
     if let Some(ref log_path) = cli.log {
@@ -912,6 +952,15 @@ fn run_main(cli: Cli) -> io::Result<()> {
     let theme_mode = theme::ThemeMode::detect(cli.theme.as_deref());
     let app_theme = theme::Theme::from_mode(theme_mode);
 
+    // #322 — first-run nudge. If the user has neither onboarded nor
+    // installed hooks, drop a hint above the TUI before launching so
+    // they understand why the dashboard is going to be empty. Skipped in
+    // --demo (the wizard's whole point is moot there) and when the
+    // operator opts out via env.
+    if !cli.demo && std::env::var("CLAUDECTL_SKIP_FIRST_RUN").is_err() && is_first_run() {
+        print_first_run_banner();
+    }
+
     if let Some(ref record_path) = cli.record {
         // Recording mode: use TeeWriter to capture exact ANSI output
         let term_size = crossterm::terminal::size().unwrap_or((120, 40));
@@ -1198,5 +1247,75 @@ fn run_tui<W: io::Write>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod first_run_tests {
+    use super::*;
+    use std::fs;
+    use std::sync::Mutex;
+
+    // is_first_run reads HOME and the filesystem; serialize so concurrent
+    // tests don't clobber each other when they set HOME.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn set_home(p: &std::path::Path) {
+        // Cargo's test harness shares a process; reset HOME after each test
+        // by calling this with the original value (we just leak temp dirs
+        // since they're under /tmp anyway).
+        // SAFETY: tests are serialized via ENV_LOCK above; nothing else
+        // here races on env reads inside the lock window.
+        unsafe { std::env::set_var("HOME", p) };
+    }
+
+    #[test]
+    fn first_run_when_neither_marker_nor_hooks_present() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        set_home(tmp.path());
+        assert!(is_first_run(), "fresh home should be first-run");
+    }
+
+    #[test]
+    fn not_first_run_when_onboarding_marker_present() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".claudectl")).unwrap();
+        fs::write(tmp.path().join(".claudectl").join("onboarding.json"), "{}").unwrap();
+        set_home(tmp.path());
+        assert!(
+            !is_first_run(),
+            "onboarding marker present should suppress first-run"
+        );
+    }
+
+    #[test]
+    fn not_first_run_when_settings_mentions_claudectl() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".claude")).unwrap();
+        fs::write(
+            tmp.path().join(".claude").join("settings.json"),
+            r#"{"hooks":{"PostToolUse":[{"hooks":[{"command":"claudectl --json"}]}]}}"#,
+        )
+        .unwrap();
+        set_home(tmp.path());
+        assert!(
+            !is_first_run(),
+            "hook install should suppress first-run even without onboarding marker"
+        );
+    }
+
+    #[test]
+    fn not_first_run_when_home_missing() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // SAFETY: serialized via ENV_LOCK; nothing else reads HOME inside
+        // this critical section.
+        unsafe { std::env::remove_var("HOME") };
+        assert!(
+            !is_first_run(),
+            "no HOME should be treated as not-first-run (no nudge possible)"
+        );
     }
 }
