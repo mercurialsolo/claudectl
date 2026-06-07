@@ -119,6 +119,11 @@ pub struct DecisionSummary {
     pub confidence: Option<f64>,
     pub project: Option<String>,
     pub tool: Option<String>,
+    /// PID of the session this decision belongs to. Used by counterfactual
+    /// analysis to pair decisions with their subsequent outcome from the
+    /// same session.
+    #[serde(default)]
+    pub pid: u32,
 
     /// Tool input string when the decision was about a specific command.
     #[serde(default)]
@@ -150,6 +155,16 @@ pub struct DecisionSummary {
     /// Model that produced the suggestion.
     #[serde(default)]
     pub model: Option<String>,
+    /// Resolved outcome category, when known. `"success" | "error" |
+    /// "test_failed" | "skipped"` etc. Mirrors the variants of the binary's
+    /// `brain::decisions::DecisionOutcome` enum, flattened to a string so
+    /// the contract doesn't pull the enum upward.
+    #[serde(default)]
+    pub outcome_kind: Option<String>,
+    /// Free-form detail for failure outcomes (the failing command for
+    /// `test_failed`, the error message for `error`).
+    #[serde(default)]
+    pub outcome_detail: Option<String>,
 }
 
 impl DecisionSummary {
@@ -779,6 +794,7 @@ mod tests {
                     confidence: Some(0.9),
                     project: None,
                     tool: None,
+                    pid: 0,
                     command: None,
                     reasoning: None,
                     user_action: None,
@@ -788,6 +804,8 @@ mod tests {
                     cache_hit: None,
                     cost_usd: None,
                     model: None,
+                    outcome_kind: None,
+                    outcome_detail: None,
                 })
                 .collect(),
             ..Default::default()

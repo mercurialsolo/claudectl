@@ -29,23 +29,7 @@ impl BrainReviewView for LiveBrainReviewView {
 }
 
 fn summary_from(r: brain::decisions::DecisionRecord) -> DecisionSummary {
-    DecisionSummary {
-        id: r.decision_id.unwrap_or_default(),
-        timestamp: r.timestamp,
-        action: r.brain_action,
-        confidence: Some(r.brain_confidence),
-        project: Some(r.project),
-        tool: r.tool,
-        command: r.command,
-        reasoning: Some(r.brain_reasoning).filter(|s| !s.is_empty()),
-        user_action: Some(r.user_action),
-        override_reason: r.override_reason,
-        brain_decision_ms: r.brain_decision_ms,
-        canonical: r.canonical,
-        cache_hit: r.cache_hit,
-        cost_usd: r.context.as_ref().map(|c| c.cost_usd),
-        model: r.context.as_ref().map(|c| c.model.clone()),
-    }
+    DecisionSummary::from(&r)
 }
 
 fn item_summary_from(item: brain::review::ReviewItem) -> ReviewItemSummary {

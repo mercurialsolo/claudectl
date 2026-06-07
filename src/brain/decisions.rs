@@ -158,6 +158,44 @@ pub struct DecisionContext {
     pub hour: Option<u8>,
 }
 
+/// Project a `DecisionRecord` into the core `DecisionSummary` DTO. Used by
+/// every runtime adapter (`BrainView`, `BrainReviewView`) plus the metrics
+/// pipeline once it migrates to operate on summaries. Conversion lives here
+/// because `DecisionRecord` is local to the binary crate, satisfying the
+/// orphan rules for the foreign `DecisionSummary` impl.
+impl From<&DecisionRecord> for claudectl_core::runtime::DecisionSummary {
+    fn from(r: &DecisionRecord) -> Self {
+        Self {
+            id: r.decision_id.clone().unwrap_or_default(),
+            timestamp: r.timestamp.clone(),
+            action: r.brain_action.clone(),
+            confidence: Some(r.brain_confidence),
+            project: Some(r.project.clone()),
+            tool: r.tool.clone(),
+            pid: r.pid,
+            command: r.command.clone(),
+            reasoning: Some(r.brain_reasoning.clone()).filter(|s| !s.is_empty()),
+            user_action: Some(r.user_action.clone()),
+            override_reason: r.override_reason.clone(),
+            brain_decision_ms: r.brain_decision_ms,
+            canonical: r.canonical,
+            cache_hit: r.cache_hit,
+            cost_usd: r.context.as_ref().map(|c| c.cost_usd),
+            model: r.context.as_ref().map(|c| c.model.clone()),
+            outcome_kind: r.outcome.as_ref().map(|o| match o {
+                DecisionOutcome::Success => "success".to_string(),
+                DecisionOutcome::Error(_) => "error".to_string(),
+                DecisionOutcome::TestFailed(_) => "test_failed".to_string(),
+            }),
+            outcome_detail: r.outcome.as_ref().and_then(|o| match o {
+                DecisionOutcome::Error(msg) => Some(msg.clone()),
+                DecisionOutcome::TestFailed(cmd) => Some(cmd.clone()),
+                _ => None,
+            }),
+        }
+    }
+}
+
 impl DecisionRecord {
     /// Whether this decision represents a positive outcome (user agreed or auto-executed).
     pub fn is_positive(&self) -> bool {
