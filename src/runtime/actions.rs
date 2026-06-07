@@ -99,6 +99,19 @@ impl Actions for LiveActions {
     fn mark_canonical(&self, decision_id: &str, note: Option<String>) -> Result<(), String> {
         brain::review::mark_by_id(decision_id, note.as_deref())
     }
+
+    fn bind_bus_role(&self, name: &str, cwd: &str, pid: u32) -> Result<(), String> {
+        #[cfg(feature = "bus")]
+        {
+            let conn = crate::bus::store::open()?;
+            crate::bus::store::upsert_role(&conn, name, cwd, None, Some(pid))
+        }
+        #[cfg(not(feature = "bus"))]
+        {
+            let _ = (name, cwd, pid);
+            Err("bus feature not compiled in this build".into())
+        }
+    }
 }
 
 /// Inverse of `crate::runtime::brain::parse_gate_mode` — writes the canonical

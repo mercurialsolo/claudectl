@@ -371,7 +371,7 @@ impl Phase for BusPhase {
 #[cfg(feature = "bus")]
 fn bind_bus_role(role: &str, cwd: &Path) -> io::Result<()> {
     let conn = crate::bus::store::open().map_err(io::Error::other)?;
-    crate::bus::store::upsert_role(&conn, role, &cwd.to_string_lossy(), None)
+    crate::bus::store::upsert_role(&conn, role, &cwd.to_string_lossy(), None, None)
         .map_err(io::Error::other)?;
     Ok(())
 }

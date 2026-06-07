@@ -26,6 +26,8 @@ pub struct Role {
     pub last_session_id: Option<String>,
     pub last_seen: String,
     pub subscriptions: Vec<String>,
+    /// PID this role is bound to, if any (#307).
+    pub pid: Option<u32>,
 }
 
 impl From<RoleRow> for Role {
@@ -36,6 +38,7 @@ impl From<RoleRow> for Role {
             last_session_id: r.last_session_id,
             last_seen: r.last_seen,
             subscriptions: r.subscriptions,
+            pid: r.pid,
         }
     }
 }
@@ -50,8 +53,13 @@ pub enum RoleResolution {
 
 pub const ROLE_ENV: &str = "CLAUDECTL_BUS_ROLE";
 
-/// Resolve the caller's role. `explicit` wins if set; otherwise we look in
-/// `CLAUDECTL_BUS_ROLE` and then fall back to cwd-inference.
+/// Resolve the caller's role. Order:
+/// 1. `explicit` (CLI `--role`)
+/// 2. `CLAUDECTL_BUS_ROLE` env
+/// 3. **PID-binding** (#307) — any role bound to a pid in the caller's
+///    ancestor chain (starting at the caller's parent — for the bus stdio
+///    server, that's the Claude Code process).
+/// 4. cwd-inference (literal-prefix match against bound `cwd_selector`s)
 pub fn resolve(
     conn: &Connection,
     explicit: Option<&str>,
@@ -65,7 +73,58 @@ pub fn resolve(
             return resolve_by_name(conn, name.trim(), cwd);
         }
     }
+    if let Some(role) = resolve_by_pid_chain(conn, &ancestor_pids())? {
+        return Ok(RoleResolution::Resolved(role));
+    }
     resolve_by_cwd(conn, cwd)
+}
+
+/// Pick the first role bound to any pid in `chain`. Split out from
+/// `ancestor_pids()` so tests can drive it with a synthetic chain.
+fn resolve_by_pid_chain(conn: &Connection, chain: &[u32]) -> Result<Option<Role>, String> {
+    for pid in chain {
+        if let Some(row) = store::get_role_by_pid(conn, *pid)? {
+            return Ok(Some(row.into()));
+        }
+    }
+    Ok(None)
+}
+
+/// Caller's parent pid chain, capped at depth 8 so we don't walk to init.
+/// Depth 8 comfortably covers `claude → bash → mcp-stdio-server` plus
+/// nested shells, tmux, etc.
+fn ancestor_pids() -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut pid = unsafe { libc::getppid() } as u32;
+    for _ in 0..8 {
+        if pid <= 1 {
+            break;
+        }
+        out.push(pid);
+        pid = match parent_pid_of(pid) {
+            Some(p) if p > 1 => p,
+            _ => break,
+        };
+    }
+    out
+}
+
+/// Look up `ppid` for `pid` via `ps`. Returns `None` when the pid is gone
+/// or `ps` fails. Native `ps` keeps us off the sysinfo crate.
+fn parent_pid_of(pid: u32) -> Option<u32> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .env_clear()
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()
 }
 
 fn resolve_by_name(conn: &Connection, name: &str, _cwd: &Path) -> Result<RoleResolution, String> {
@@ -128,8 +187,8 @@ mod tests {
     #[test]
     fn cwd_inference_picks_single_match() {
         let conn = open_memory();
-        upsert_role(&conn, "planner", "/work/proj-plan", None).unwrap();
-        upsert_role(&conn, "impl", "/work/proj-impl", None).unwrap();
+        upsert_role(&conn, "planner", "/work/proj-plan", None, None).unwrap();
+        upsert_role(&conn, "impl", "/work/proj-impl", None, None).unwrap();
         let r = resolve(&conn, None, &PathBuf::from("/work/proj-impl/src")).unwrap();
         match r {
             RoleResolution::Resolved(role) => assert_eq!(role.name, "impl"),
@@ -140,8 +199,8 @@ mod tests {
     #[test]
     fn shared_cwd_is_ambiguous() {
         let conn = open_memory();
-        upsert_role(&conn, "planner", "/shared/repo", None).unwrap();
-        upsert_role(&conn, "impl", "/shared/repo", None).unwrap();
+        upsert_role(&conn, "planner", "/shared/repo", None, None).unwrap();
+        upsert_role(&conn, "impl", "/shared/repo", None, None).unwrap();
         let r = resolve(&conn, None, &PathBuf::from("/shared/repo")).unwrap();
         match r {
             RoleResolution::Ambiguous { candidates } => assert_eq!(candidates.len(), 2),
@@ -152,8 +211,8 @@ mod tests {
     #[test]
     fn explicit_role_overrides_cwd() {
         let conn = open_memory();
-        upsert_role(&conn, "planner", "/work/proj", None).unwrap();
-        upsert_role(&conn, "impl", "/other/place", None).unwrap();
+        upsert_role(&conn, "planner", "/work/proj", None, None).unwrap();
+        upsert_role(&conn, "impl", "/other/place", None, None).unwrap();
         let r = resolve(&conn, Some("impl"), &PathBuf::from("/work/proj")).unwrap();
         assert!(matches!(r, RoleResolution::Resolved(role) if role.name == "impl"));
     }
@@ -163,5 +222,46 @@ mod tests {
         let conn = open_memory();
         let r = resolve(&conn, None, &PathBuf::from("/nowhere")).unwrap();
         assert!(matches!(r, RoleResolution::Unbound { .. }));
+    }
+
+    #[test]
+    fn pid_binding_takes_precedence_over_cwd_match() {
+        // #307: a role bound to pid 12345 should win over a role whose
+        // cwd_selector matches the caller's cwd, when 12345 is in the
+        // caller's ancestor chain.
+        let conn = open_memory();
+        upsert_role(&conn, "cwd-role", "/work/proj", None, None).unwrap();
+        upsert_role(&conn, "pid-role", "/work/proj", None, Some(12345)).unwrap();
+        let role = resolve_by_pid_chain(&conn, &[99999, 12345, 1])
+            .unwrap()
+            .expect("expected pid match");
+        assert_eq!(role.name, "pid-role");
+        assert_eq!(role.pid, Some(12345));
+    }
+
+    #[test]
+    fn pid_chain_with_no_match_falls_through() {
+        // Resolver returns None so the caller falls back to cwd inference.
+        let conn = open_memory();
+        upsert_role(&conn, "cwd-role", "/work/proj", None, Some(11111)).unwrap();
+        assert!(
+            resolve_by_pid_chain(&conn, &[22222, 33333])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn upsert_keeps_existing_pid_when_rebinding_without_one() {
+        // Re-binding a role for a new session_id shouldn't clobber the pid
+        // — otherwise the TUI's resume flow would silently lose the binding.
+        let conn = open_memory();
+        upsert_role(&conn, "frontend", "/work/proj", None, Some(7777)).unwrap();
+        upsert_role(&conn, "frontend", "/work/proj", Some("sess_42"), None).unwrap();
+        let row = crate::bus::store::get_role(&conn, "frontend")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.pid, Some(7777));
+        assert_eq!(row.last_session_id.as_deref(), Some("sess_42"));
     }
 }

@@ -76,6 +76,18 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         );
         CREATE INDEX IF NOT EXISTS idx_roles_cwd ON roles(cwd_selector);
 
+        -- Migration #2: pid binding (issue #307). Stored as a nullable
+        -- INTEGER so older bindings (cwd-only) keep working. The resolver
+        -- prefers pid match when the caller's ancestor chain contains a
+        -- bound pid. `ADD COLUMN` is idempotent if guarded by a check on
+        -- table_info — SQLite has no `ADD COLUMN IF NOT EXISTS`.
+        ",
+    )?;
+    add_column_if_missing(conn, "roles", "pid", "INTEGER")?;
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_roles_pid ON roles(pid) WHERE pid IS NOT NULL;
+
         CREATE TABLE IF NOT EXISTS messages (
             id              TEXT PRIMARY KEY,
             subject         TEXT NOT NULL,
@@ -107,23 +119,34 @@ pub struct RoleRow {
     pub last_session_id: Option<String>,
     pub last_seen: String,
     pub subscriptions: Vec<String>,
+    /// Process ID this role is bound to (#307). When the caller's parent
+    /// chain contains this pid, the resolver picks this role over any
+    /// cwd-inferred match. `None` for cwd-only bindings.
+    pub pid: Option<u32>,
 }
 
+/// Insert or update a role binding. `pid` is optional: when supplied, the
+/// resolver matches the caller's ancestor pids against it; without it the
+/// role behaves exactly like the pre-#307 cwd-only binding. Passing `None`
+/// on an update keeps the existing pid (so a re-bind that only refreshes
+/// `session_id` doesn't clobber a pid set elsewhere).
 pub fn upsert_role(
     conn: &Connection,
     role: &str,
     cwd_selector: &str,
     session_id: Option<&str>,
+    pid: Option<u32>,
 ) -> Result<(), String> {
     let now = now_iso();
     conn.execute(
-        "INSERT INTO roles(role, cwd_selector, last_session_id, last_seen, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?4)
+        "INSERT INTO roles(role, cwd_selector, last_session_id, last_seen, created_at, pid)
+         VALUES (?1, ?2, ?3, ?4, ?4, ?5)
          ON CONFLICT(role) DO UPDATE SET
              cwd_selector = excluded.cwd_selector,
              last_session_id = COALESCE(excluded.last_session_id, roles.last_session_id),
-             last_seen = excluded.last_seen",
-        params![role, cwd_selector, session_id, now],
+             last_seen = excluded.last_seen,
+             pid = COALESCE(excluded.pid, roles.pid)",
+        params![role, cwd_selector, session_id, now, pid],
     )
     .map_err(|e| format!("upsert role: {e}"))?;
     Ok(())
@@ -132,21 +155,12 @@ pub fn upsert_role(
 pub fn list_roles(conn: &Connection) -> Result<Vec<RoleRow>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions
+            "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions, pid
              FROM roles ORDER BY role",
         )
         .map_err(|e| format!("prepare: {e}"))?;
     let rows = stmt
-        .query_map([], |row| {
-            let subs: String = row.get(4)?;
-            Ok(RoleRow {
-                role: row.get(0)?,
-                cwd_selector: row.get(1)?,
-                last_session_id: row.get(2)?,
-                last_seen: row.get(3)?,
-                subscriptions: serde_json::from_str(&subs).unwrap_or_default(),
-            })
-        })
+        .query_map([], row_to_role)
         .map_err(|e| format!("query roles: {e}"))?;
     let mut out = Vec::new();
     for r in rows {
@@ -157,22 +171,60 @@ pub fn list_roles(conn: &Connection) -> Result<Vec<RoleRow>, String> {
 
 pub fn get_role(conn: &Connection, role: &str) -> Result<Option<RoleRow>, String> {
     conn.query_row(
-        "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions
+        "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions, pid
          FROM roles WHERE role = ?1",
         params![role],
-        |row| {
-            let subs: String = row.get(4)?;
-            Ok(RoleRow {
-                role: row.get(0)?,
-                cwd_selector: row.get(1)?,
-                last_session_id: row.get(2)?,
-                last_seen: row.get(3)?,
-                subscriptions: serde_json::from_str(&subs).unwrap_or_default(),
-            })
-        },
+        row_to_role,
     )
     .optional()
     .map_err(|e| format!("get role: {e}"))
+}
+
+/// Lookup the role bound to `pid`, if any. Used by the resolver to pick a
+/// pid-match over a cwd-match (#307).
+pub fn get_role_by_pid(conn: &Connection, pid: u32) -> Result<Option<RoleRow>, String> {
+    conn.query_row(
+        "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions, pid
+         FROM roles WHERE pid = ?1 LIMIT 1",
+        params![pid],
+        row_to_role,
+    )
+    .optional()
+    .map_err(|e| format!("get role by pid: {e}"))
+}
+
+fn row_to_role(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoleRow> {
+    let subs: String = row.get(4)?;
+    Ok(RoleRow {
+        role: row.get(0)?,
+        cwd_selector: row.get(1)?,
+        last_session_id: row.get(2)?,
+        last_seen: row.get(3)?,
+        subscriptions: serde_json::from_str(&subs).unwrap_or_default(),
+        pid: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
+    })
+}
+
+/// Idempotent `ALTER TABLE ... ADD COLUMN` — SQLite has no native
+/// `IF NOT EXISTS` form here, so we check `pragma_table_info` first.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    type_decl: &str,
+) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(());
+        }
+    }
+    conn.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {type_decl}"
+    ))?;
+    Ok(())
 }
 
 // ---------------- Messages ---------------------------------------------------
@@ -289,8 +341,8 @@ mod tests {
     #[test]
     fn upserts_and_lists_roles() {
         let conn = open_memory();
-        upsert_role(&conn, "planner", "/work/proj-plan", Some("sess_a")).unwrap();
-        upsert_role(&conn, "impl", "/work/proj-impl", Some("sess_b")).unwrap();
+        upsert_role(&conn, "planner", "/work/proj-plan", Some("sess_a"), None).unwrap();
+        upsert_role(&conn, "impl", "/work/proj-impl", Some("sess_b"), None).unwrap();
         let rs = list_roles(&conn).unwrap();
         assert_eq!(rs.len(), 2);
         let names: Vec<_> = rs.iter().map(|r| r.role.as_str()).collect();

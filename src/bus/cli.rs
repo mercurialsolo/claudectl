@@ -77,7 +77,7 @@ pub enum BusCommand {
 
 #[derive(Subcommand)]
 pub enum RoleCommand {
-    /// Bind (create or update) a role to a cwd selector.
+    /// Bind (create or update) a role to a cwd selector and/or process id.
     Bind {
         /// Role name.
         name: String,
@@ -86,6 +86,11 @@ pub enum RoleCommand {
         /// Optional session_id to bind initially.
         #[arg(long)]
         session_id: Option<String>,
+        /// Process ID to bind this role to (#307). When set, the resolver
+        /// prefers this binding over cwd-inference for any caller whose
+        /// ancestor chain contains this pid.
+        #[arg(long)]
+        pid: Option<u32>,
     },
     /// List registered roles.
     List,
@@ -120,9 +125,13 @@ fn dispatch_role(cmd: &RoleCommand) -> Result<(), String> {
             name,
             cwd,
             session_id,
+            pid,
         } => {
-            store::upsert_role(&conn, name, cwd, session_id.as_deref())?;
-            println!("bound role {name} -> {cwd}");
+            store::upsert_role(&conn, name, cwd, session_id.as_deref(), *pid)?;
+            match pid {
+                Some(p) => println!("bound role {name} -> {cwd} (pid={p})"),
+                None => println!("bound role {name} -> {cwd}"),
+            }
             Ok(())
         }
         RoleCommand::List => {
@@ -133,9 +142,10 @@ fn dispatch_role(cmd: &RoleCommand) -> Result<(), String> {
             }
             for r in rows {
                 println!(
-                    "{name:<20} {sel:<40} last_seen={ts} session={sess}",
+                    "{name:<20} {sel:<40} pid={pid} last_seen={ts} session={sess}",
                     name = r.role,
                     sel = r.cwd_selector,
+                    pid = r.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
                     ts = r.last_seen,
                     sess = r.last_session_id.unwrap_or_else(|| "-".into()),
                 );
@@ -293,6 +303,8 @@ struct WhoamiJson {
     role: Option<String>,
     cwd_selector: Option<String>,
     last_session_id: Option<String>,
+    /// PID this role is bound to (#307). `None` for cwd-only bindings.
+    pid: Option<u32>,
     note: Option<String>,
 }
 
@@ -328,18 +340,21 @@ fn dispatch_whoami(role: Option<&str>, json: bool) -> Result<(), String> {
                 role: Some(r.name),
                 cwd_selector: Some(r.cwd_selector),
                 last_session_id: r.last_session_id,
+                pid: r.pid,
                 note: None,
             },
             RoleResolution::Ambiguous { candidates } => WhoamiJson {
                 role: None,
                 cwd_selector: None,
                 last_session_id: None,
+                pid: None,
                 note: Some(format!("ambiguous: {}", candidates.join(", "))),
             },
             RoleResolution::Unbound { cwd } => WhoamiJson {
                 role: None,
                 cwd_selector: None,
                 last_session_id: None,
+                pid: None,
                 note: Some(format!("unbound (cwd={cwd})")),
             },
         };

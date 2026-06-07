@@ -257,6 +257,14 @@ pub struct App {
     pub input_mode: bool,
     pub input_buffer: String,
     pub input_target_pid: Option<u32>,
+    // ── Role-bind input mode (#307) ──────────────────────────────────────
+    /// When true, keystrokes accumulate in `role_bind_buffer` instead of
+    /// triggering normal-mode handlers. Entered via Ctrl+R on the
+    /// dashboard; Esc cancels, Enter commits via `Actions::bind_bus_role`.
+    pub role_bind_mode: bool,
+    pub role_bind_buffer: String,
+    pub role_bind_target_pid: Option<u32>,
+    pub role_bind_target_cwd: Option<String>,
     pub notify: bool,
     pub prev_statuses: HashMap<u32, SessionStatus>,
     pub show_help: bool,
@@ -527,6 +535,10 @@ impl App {
             status_msg: String::new(),
             pending_kill: None,
             input_mode: false,
+            role_bind_mode: false,
+            role_bind_buffer: String::new(),
+            role_bind_target_pid: None,
+            role_bind_target_cwd: None,
             input_buffer: String::new(),
             input_target_pid: None,
             notify: false,
@@ -1868,6 +1880,12 @@ impl App {
             return true;
         }
 
+        // Role-bind mode: capture role name for the selected session (#307)
+        if self.role_bind_mode {
+            self.handle_role_bind_key(key);
+            return true;
+        }
+
         // Skills overlay: dedicated keymap (j/k navigate, s share, h serve, r rescan, Esc/K close)
         if self.show_skills {
             self.handle_skills_key(key);
@@ -2332,6 +2350,14 @@ impl App {
                 self.cancel_pending_kill();
                 self.cancel_pending_auto_approve();
                 self.previous();
+            }
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                // Bus role bind (#307). Ctrl+R because plain `r` is refresh.
+                // Match before the unconditional `r` arm below, otherwise
+                // the wildcard modifier swallows the Control modifier.
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.enter_role_bind_mode();
             }
             (KeyCode::Char('r'), _) => {
                 self.cancel_pending_kill();
@@ -2887,6 +2913,79 @@ impl App {
             self.input_buffer.clear();
             self.input_target_pid = Some(pid);
             self.status_msg = format!("Input to {name} (Enter to send, Esc to cancel): ");
+        }
+    }
+
+    /// Open the role-bind prompt for the selected session (#307). Captures
+    /// the session's pid and cwd at entry time so a refresh tick or row
+    /// move during typing can't change the target.
+    fn enter_role_bind_mode(&mut self) {
+        let Some(session) = self.selected_session() else {
+            self.status_msg = "No session selected".into();
+            return;
+        };
+        if session.is_remote() {
+            self.status_msg = "Remote session \u{2014} bind locally instead".into();
+            return;
+        }
+        let pid = session.pid;
+        let cwd = session.cwd.clone();
+        let name = session.display_name().to_string();
+        self.role_bind_mode = true;
+        self.role_bind_buffer.clear();
+        self.role_bind_target_pid = Some(pid);
+        self.role_bind_target_cwd = Some(cwd);
+        self.status_msg =
+            format!("Bind role for {name} (pid={pid}, Enter to bind, Esc to cancel): ");
+    }
+
+    fn handle_role_bind_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                let role = self.role_bind_buffer.trim().to_string();
+                let pid = self.role_bind_target_pid;
+                let cwd = self.role_bind_target_cwd.clone();
+                self.role_bind_mode = false;
+                self.role_bind_buffer.clear();
+                self.role_bind_target_pid = None;
+                self.role_bind_target_cwd = None;
+                if role.is_empty() {
+                    self.status_msg = "Role name required".into();
+                    return;
+                }
+                let (Some(pid), Some(cwd)) = (pid, cwd) else {
+                    self.status_msg = "Lost bind target — re-select the session".into();
+                    return;
+                };
+                match self.runtime.actions.bind_bus_role(&role, &cwd, pid) {
+                    Ok(()) => {
+                        self.status_msg = format!("Bound role {role} -> pid={pid} cwd={cwd}");
+                    }
+                    Err(e) => {
+                        self.status_msg = format!("Bind failed: {e}");
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                self.role_bind_mode = false;
+                self.role_bind_buffer.clear();
+                self.role_bind_target_pid = None;
+                self.role_bind_target_cwd = None;
+                self.status_msg = "Role bind cancelled".into();
+            }
+            KeyCode::Backspace => {
+                self.role_bind_buffer.pop();
+            }
+            KeyCode::Char(c) => {
+                // Role names are short, alpha-numeric with - and _. Cap at
+                // 64 so a runaway paste doesn't take the prompt hostage.
+                if self.role_bind_buffer.len() < 64
+                    && (c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                {
+                    self.role_bind_buffer.push(c);
+                }
+            }
+            _ => {}
         }
     }
 

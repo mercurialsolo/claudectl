@@ -53,6 +53,7 @@ impl BusView for LiveBusView {
                 cwd_selector: r.cwd_selector,
                 last_session_id: r.last_session_id,
                 last_seen: r.last_seen,
+                pid: r.pid,
             })
             .collect()
     }

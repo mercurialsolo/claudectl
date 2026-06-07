@@ -99,6 +99,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw("  Toggle brain on/off"),
         ]),
         Line::from(vec![
+            Span::styled("  Ctrl+r         ", Style::default().fg(t.highlight_key)),
+            Span::raw("  Bind agent-bus role to selected session"),
+        ]),
+        Line::from(vec![
             Span::styled("  g              ", Style::default().fg(t.highlight_key)),
             Span::raw("  Toggle grouped view by project"),
         ]),
