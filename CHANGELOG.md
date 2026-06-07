@@ -2,6 +2,20 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.54.0] - 2026-06-06
+
+### Internals (workspace refactor — closes epic #279)
+- **`claudectl-tui` extracted into its own crate (closes #275).** The `App` state struct (3300 LoC), every `ui/*` render module (table, detail, help, status_bar, peers, skills), the recorder pair, and the demo fixtures now live in `crates/claudectl-tui/`. Depends on `claudectl-core` only. The binary keeps `brain_screen.rs` (the full-screen Brain Review surface) because it imports `brain::metrics` and `brain::risk`.
+- **Dependency direction enforced at three levels.** `claudectl → claudectl-tui → claudectl-core` is checked by (a) a grep guard against `crate::{brain,bus,coord,hive,relay,…}` inside `claudectl-core/src/`, and (b) two standalone build jobs (`Core (standalone)`, `TUI (standalone)`) that catch creeping cross-deps even when the workspace happens to compile.
+- **Eight runtime traits + DTOs in `claudectl-core::runtime`** are the only surface between the TUI and the binary's brain/bus/coord subsystems: `SessionSource`, `BrainView`, `BrainReviewView`, `CoordView`, `BusView`, `Actions`, `HiveActions`, `Orchestrator`, plus the stateful `BrainDriver`. The binary's `src/runtime/` provides `Live*` adapters; `MockRuntime` drives in-crate tests.
+- **`hooks.rs`, `launch.rs`, `skills.rs` moved into core** (#300), as did the `BrainConfig` and `IdleConfig` data structs (#301). The binary still owns TOML parsing and CLI flag layering; only the value types are downstreamed.
+- **Feature propagation:** the binary's `coord`, `relay`, `hive` features now cascade into `claudectl-tui` via the `claudectl-tui/coord` notation in `[features]`, so the same `#[cfg(feature = "…")]` gates resolve consistently across both crates.
+- **CLAUDE.md updated** to describe the post-refactor layout and the no-upward-deps rule (closes #278).
+
+### Compatibility
+- No user-facing CLI changes. Existing `crate::*` paths inside the binary continue to resolve unchanged thanks to a thin re-export bridge in `src/lib.rs` (`pub use claudectl_tui::{app, demo, recorder, session_recorder, ui};`).
+- No new dependencies. `claudectl-tui` pulls only what the TUI already used (`ratatui`, `crossterm`, `serde_json`).
+
 ## [0.53.0] - 2026-06-06
 
 ### Added
