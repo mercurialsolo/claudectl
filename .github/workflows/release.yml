@@ -82,18 +82,89 @@ jobs:
             claudectl-*.tar.gz
             claudectl-*.tar.gz.sha256
 
-  publish-crate:
-    name: Publish crate
+  # crates.io publish order: claudectl-core → claudectl-tui → claudectl.
+  # Each downstream publish needs the previous one to be visible on the
+  # crates.io index, which can lag the upload by 30s–2min. We poll
+  # `cargo search` between steps with a hard cap so a hung index never
+  # blocks the whole pipeline forever.
+  publish-crate-core:
+    name: Publish claudectl-core
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
+      - name: Publish claudectl-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -e
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/claudectl-core/Cargo.toml | head -n 1)
+          # Idempotent: skip if this version is already on the index.
+          if cargo search claudectl-core 2>/dev/null | grep -qE "^claudectl-core = \"${VERSION}\""; then
+            echo "claudectl-core ${VERSION} already on crates.io, skipping"
+          else
+            cargo publish -p claudectl-core --locked --token "$CARGO_REGISTRY_TOKEN"
+          fi
 
-      - name: Publish to crates.io
+  publish-crate-tui:
+    name: Publish claudectl-tui
+    needs: publish-crate-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Wait for claudectl-core on index
+        run: |
+          set -e
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/claudectl-core/Cargo.toml | head -n 1)
+          for i in $(seq 1 30); do
+            if cargo search claudectl-core 2>/dev/null | grep -qE "^claudectl-core = \"${VERSION}\""; then
+              echo "claudectl-core ${VERSION} visible on index"
+              exit 0
+            fi
+            echo "waiting for claudectl-core ${VERSION} (attempt ${i}/30)..."
+            sleep 10
+          done
+          echo "::error::claudectl-core ${VERSION} never appeared on crates.io after 5 minutes"
+          exit 1
+      - name: Publish claudectl-tui
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -e
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/claudectl-tui/Cargo.toml | head -n 1)
+          if cargo search claudectl-tui 2>/dev/null | grep -qE "^claudectl-tui = \"${VERSION}\""; then
+            echo "claudectl-tui ${VERSION} already on crates.io, skipping"
+          else
+            cargo publish -p claudectl-tui --locked --token "$CARGO_REGISTRY_TOKEN"
+          fi
+
+  publish-crate:
+    name: Publish claudectl (binary)
+    needs: publish-crate-tui
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Wait for claudectl-tui on index
+        run: |
+          set -e
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/claudectl-tui/Cargo.toml | head -n 1)
+          for i in $(seq 1 30); do
+            if cargo search claudectl-tui 2>/dev/null | grep -qE "^claudectl-tui = \"${VERSION}\""; then
+              echo "claudectl-tui ${VERSION} visible on index"
+              exit 0
+            fi
+            echo "waiting for claudectl-tui ${VERSION} (attempt ${i}/30)..."
+            sleep 10
+          done
+          echo "::error::claudectl-tui ${VERSION} never appeared on crates.io after 5 minutes"
+          exit 1
+      - name: Publish claudectl binary
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked --token "$CARGO_REGISTRY_TOKEN"
