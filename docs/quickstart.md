@@ -16,15 +16,23 @@ Verify it works:
 claudectl --version
 ```
 
-## 2. Wire up Claude Code hooks
+## 2. Onboard with `claudectl init`
 
 ```bash
-claudectl --init
+claudectl init
 ```
 
-This writes three hooks into `~/.claude/settings.json` so Claude Code notifies claudectl on every tool use. Your existing settings are preserved.
+The wizard walks five phases — weekly budget cap, local-LLM brain auto-detection (probes ollama / llama.cpp / LM Studio / vLLM), Claude Code hook install, agent-bus role binding, and curated skill suggestions. Each phase is skippable (`s` at the prompt) and the result is recorded at `~/.claudectl/onboarding.json` so later runs of `claudectl init --check` can show drift.
 
-You only need to run this once. The hooks persist across sessions and Claude Code restarts.
+For dotfile automation:
+
+```bash
+claudectl init --non-interactive --budget 25 --skip-brain --skip-bus --skip-skills
+```
+
+If you only want the hook install (the previous `--init` flag), that's the **Plugin** phase — accept it and skip the others.
+
+Your existing Claude Code settings are preserved; the hook install only adds claudectl entries.
 
 **What gets added:**
 
@@ -68,13 +76,13 @@ Runs with fake sessions so you can explore the dashboard, keybindings, and featu
 
 ## Optional: project-scoped hooks
 
-If you only want claudectl hooks in specific projects (not globally):
+If you only want claudectl hooks in specific projects (not globally), the `--init` legacy flag still works for hook-only installs:
 
 ```bash
 claudectl --init -s project
 ```
 
-This writes to `.claude/settings.local.json` (gitignored) instead of the global file. The `-s project` flag matches Claude Code's own `--scope` convention.
+This writes to `.claude/settings.local.json` (gitignored) instead of the global file. The `-s project` flag matches Claude Code's own `--scope` convention. `--init` is otherwise deprecated — prefer `claudectl init` for new setups.
 
 ## Optional: add the local LLM brain
 
@@ -119,14 +127,20 @@ The plugin and `--init` hooks are complementary. Use `--init` for dashboard obse
 
 ## Uninstall
 
-Remove claudectl hooks from Claude Code:
+Roll back the onboarding wizard's installed artifacts:
+
+```bash
+claudectl init --remove                      # Removes hooks + onboarding marker
+```
+
+Or remove just the hooks (legacy flag, still supported):
 
 ```bash
 claudectl --uninstall                        # Remove from user settings
 claudectl --uninstall -s project             # Remove from project settings
 ```
 
-This surgically removes only claudectl entries. All other settings and hooks are preserved.
+Both surgically remove only claudectl entries. All other settings and hooks are preserved. Phases that own user state (e.g. the bus database, your budget config line) deliberately decline to delete it.
 
 To uninstall the binary:
 

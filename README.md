@@ -64,9 +64,11 @@ git clone https://github.com/mercurialsolo/claudectl.git && cd claudectl && carg
 
 ```bash
 claudectl                     # Live dashboard — see all sessions at a glance
-claudectl --init              # Wire up Claude Code hooks (one-time)
+claudectl init                # Onboarding wizard (budget, brain, hooks, bus, skills)
 claudectl --brain             # Enable local LLM auto-pilot
 ```
+
+The `init` wizard walks five phases — weekly budget, local-LLM brain detection, Claude Code hook install, agent-bus role, and curated skill suggestions. Run `claudectl init --check` later to see drift, or `claudectl init --non-interactive` to script it.
 
 ## Why claudectl
 
