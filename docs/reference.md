@@ -237,6 +237,23 @@ Share knowledge, distill learnings. Requires relay for transport.
 
 ### Setup
 
+Two layers. The **`init` subcommand** is the canonical onboarding wizard (five phases — budget, brain, hooks, bus, skills). The **legacy `--init`/`--uninstall` flags** install/remove only the Claude Code hook entries and remain supported as the hook-only escape hatch.
+
+#### `claudectl init` — onboarding wizard (preferred)
+
+| Form | Description |
+|------|-------------|
+| `claudectl init` | Interactive five-phase wizard |
+| `claudectl init --non-interactive [--budget N] [--brain-url URL] [--bus-role NAME] [--skip-*]` | Same flow, no prompts. For CI / dotfiles |
+| `claudectl init --check` | Drift report — compares the recorded marker against current state, exits non-zero on drift |
+| `claudectl init --reset` | Clear the onboarding marker so the next run prompts fresh. Does not touch installed artifacts |
+| `claudectl init --remove` | **Soft uninstall.** Strips Claude Code hooks + clears the marker. Preserves user data (bus DB roles, brain decision logs, hive knowledge, relay identity, config file) |
+| `claudectl init --purge [--yes]` | **Hard uninstall.** `--remove` PLUS wipe `~/.claudectl/` (bus DB, brain decisions, hive, relay, coord) and `~/.config/claudectl/config.toml`. Confirms by default; `--yes` skips the prompt. Idempotent |
+
+The wizard records what ran where at `~/.claudectl/onboarding.json` so `--check` can detect drift in later runs.
+
+#### `--init` / `--uninstall` — hook-only (legacy)
+
 | Flag | Description |
 |------|-------------|
 | `--init` | Wire up Claude Code hooks in settings and exit |

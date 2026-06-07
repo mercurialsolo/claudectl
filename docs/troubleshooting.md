@@ -2,7 +2,7 @@
 
 ## No sessions found
 
-- Run `claudectl --init` if you haven't already -- this wires up the Claude Code hooks
+- Run `claudectl init` (or `claudectl --init` for hook-only install) if you haven't already — this wires up the Claude Code hooks
 - Ensure Claude Code is running (`claude` in another terminal)
 - Check that `~/.claude/sessions/` contains `.json` files
 - Run `claudectl --log /tmp/claudectl.log` and check the log
@@ -43,7 +43,7 @@ Increase the poll interval: `claudectl --interval 3000` (default is 2000ms).
 ## FAQ
 
 **Does claudectl modify Claude Code or its files?**
-Only `--init` and `--uninstall` write to `.claude/settings.json` (to add/remove hooks). Everything else is read-only. The only other writes are to claudectl's own history and log files.
+Only `claudectl init` (the Plugin phase), the legacy `--init`/`--uninstall` flags, and `init --remove`/`init --purge` write to `.claude/settings.json` (to add/remove hooks). Everything else is read-only. The only other writes are to claudectl's own state under `~/.claudectl/` (bus DB, brain decisions, hive knowledge, etc. — wipe with `claudectl init --purge`).
 
 **Does it need an API key?**
 No. It reads local files on disk. No network access required (unless you configure webhooks).

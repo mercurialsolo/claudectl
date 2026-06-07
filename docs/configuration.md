@@ -97,7 +97,16 @@ We maintain a curated set at [mercurialsolo/claudectl-hooks](https://github.com/
 
 ## Claude Code Integration
 
-claudectl can install hooks directly into Claude Code's settings so sessions automatically notify claudectl on tool use:
+Easiest path is the **onboarding wizard** — it covers hooks alongside budget, brain, bus, and skills in one go:
+
+```bash
+claudectl init                          # Interactive five-phase wizard
+claudectl init --non-interactive        # Same flow, no prompts (for CI / dotfiles)
+```
+
+The Plugin phase writes hooks into Claude Code's settings (`~/.claude/settings.json` by default). See `claudectl init --help` for `--budget`, `--brain-url`, `--bus-role`, and the `--skip-*` overrides.
+
+For just the hook install (no other phases), the **legacy flags** still work:
 
 ```bash
 claudectl --init                    # Write hooks to ~/.claude/settings.json (user scope)
@@ -109,8 +118,10 @@ This adds `PreToolUse`, `PostToolUse`, and `Stop` hooks that call `claudectl --j
 To remove:
 
 ```bash
-claudectl --uninstall               # Remove claudectl hooks from user settings
-claudectl --uninstall -s project    # Remove from project-local settings
+claudectl init --remove             # Soft uninstall: hooks + onboarding marker (keeps user data)
+claudectl init --purge --yes        # Hard uninstall: --remove + wipe ~/.claudectl/ + config file
+claudectl --uninstall               # Legacy hook-only removal from user settings
+claudectl --uninstall -s project    # Legacy hook-only removal from project-local settings
 ```
 
 ### How it works
