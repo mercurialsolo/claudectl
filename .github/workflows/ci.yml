@@ -58,7 +58,6 @@ jobs:
   # Workspace refactor (#279) — verify claudectl-core builds and tests
   # standalone, without the binary crate. Guards the
   # claudectl → claudectl-core dependency direction at the workspace level.
-  # The claudectl-tui standalone job lands with #275.
   core-standalone:
     name: Core (standalone)
     runs-on: ubuntu-latest
@@ -74,6 +73,25 @@ jobs:
         run: cargo clippy -p claudectl-core --all-targets -- -D warnings
       - name: Test claudectl-core standalone
         run: cargo test -p claudectl-core
+
+  # Same guarantee for claudectl-tui (#275): builds and tests without the
+  # binary crate. Catches accidental `crate::brain::*` or other binary refs
+  # that would only break under workspace builds.
+  tui-standalone:
+    name: TUI (standalone)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build claudectl-tui standalone
+        run: cargo build -p claudectl-tui
+      - name: Clippy claudectl-tui standalone
+        run: cargo clippy -p claudectl-tui --all-targets -- -D warnings
+      - name: Test claudectl-tui standalone
+        run: cargo test -p claudectl-tui
 
   # Layering check: nothing inside claudectl-core may reference binary-crate
   # modules. This is a textual guard on top of the standalone build above —

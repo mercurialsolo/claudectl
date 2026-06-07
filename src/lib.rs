@@ -16,6 +16,11 @@ pub use claudectl_core::{
     discovery, health, helpers, history, hooks, launch, logger, models, monitor, process, rules,
     session, skills, terminals, theme, transcript,
 };
+// TUI peripherals (recording + demo fixtures) now live in `claudectl-tui`.
+// Re-exported under their original names so existing `crate::recorder::*` /
+// `crate::demo::*` / `crate::session_recorder::*` paths in main.rs and app.rs
+// keep resolving without rewriting each call site.
+pub use claudectl_tui::{demo, recorder, session_recorder};
 pub mod config;
 
 pub mod app;
@@ -24,14 +29,12 @@ pub mod brain;
 pub mod bus;
 #[cfg(feature = "coord")]
 pub mod coord;
-pub mod demo;
+pub mod demo_peers;
 #[cfg(feature = "hive")]
 pub mod hive;
 pub mod init;
 pub mod orchestrator;
-pub mod recorder;
 #[cfg(feature = "relay")]
 pub mod relay;
 pub mod runtime;
-pub mod session_recorder;
 pub mod ui;

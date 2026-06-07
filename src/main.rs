@@ -11,6 +11,10 @@ use claudectl_core::{
     discovery, health, helpers, history, hooks, launch, logger, models, monitor, process, rules,
     session, skills, terminals, theme, transcript,
 };
+// TUI peripherals carved out into `claudectl-tui` (issue #275). Imported as
+// modules at this scope so existing `demo::*`, `recorder::*`, and
+// `session_recorder::*` paths in main.rs resolve unchanged.
+use claudectl_tui::{demo, recorder, session_recorder};
 
 mod app;
 mod brain;
@@ -20,16 +24,14 @@ mod commands;
 mod config;
 #[cfg(feature = "coord")]
 mod coord;
-mod demo;
+mod demo_peers;
 #[cfg(feature = "hive")]
 mod hive;
 mod init;
 mod orchestrator;
-mod recorder;
 #[cfg(feature = "relay")]
 mod relay;
 mod runtime;
-mod session_recorder;
 mod ui;
 
 use std::io;

@@ -1196,7 +1196,7 @@ impl App {
         // Update demo peers panel and remote sessions
         #[cfg(feature = "relay")]
         {
-            self.relay_peers = crate::demo::demo_peers(self.demo_tick);
+            self.relay_peers = crate::demo_peers::demo_peers(self.demo_tick);
             // Auto-show peers panel on first hive sync event
             if self.demo_tick % 32 == 14 && !self.show_peers_panel {
                 self.show_peers_panel = true;

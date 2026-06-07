@@ -3,7 +3,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::session::{ClaudeSession, RawSession, SessionStatus, TelemetryStatus, ToolStats};
+use claudectl_core::session::{
+    ClaudeSession, RawSession, SessionStatus, TelemetryStatus, ToolStats,
+};
 
 /// Fake project definitions for demo mode.
 const PROJECTS: &[(&str, &str, &str)] = &[
@@ -161,7 +163,7 @@ pub fn generate_sessions(tick: u32) -> Vec<ClaudeSession> {
             // Context grows over time, different rates per session
             let ctx_rate = 0.3 + (i as f64 * 0.08);
             let ctx_pct = ((tick as f64 * ctx_rate) % 95.0) + 5.0;
-            s.context_max = crate::monitor::model_context_max(model);
+            s.context_max = claudectl_core::monitor::model_context_max(model);
             s.context_tokens = (s.context_max as f64 * ctx_pct / 100.0) as u64;
 
             // Cost grows over time
@@ -459,44 +461,13 @@ pub enum EventKind {
     HiveInfluence,
 }
 
-/// Generate demo peer display info for the TUI peers panel.
-#[cfg(feature = "relay")]
-pub fn demo_peers(tick: u32) -> Vec<crate::ui::peers::PeerDisplayInfo> {
-    let mut peers = vec![
-        crate::ui::peers::PeerDisplayInfo {
-            peer_id: "ci-runner-9d1e".into(),
-            state: "connected".into(),
-            trust: 0.82,
-            units_sent: 42,
-            units_received: 18,
-            session_count: 3,
-        },
-        crate::ui::peers::PeerDisplayInfo {
-            peer_id: "alice-mbp-f3a1".into(),
-            state: if tick % 32 < 28 {
-                "connecting".into()
-            } else {
-                "connected".into()
-            },
-            trust: 0.53,
-            units_sent: 0,
-            units_received: if tick % 32 >= 28 { 12 } else { 0 },
-            session_count: if tick % 32 >= 28 { 2 } else { 0 },
-        },
-    ];
-
-    // After tick 28, alice is connected and has received knowledge
-    if tick % 32 >= 28 {
-        peers[1].state = "connected".into();
-        peers[1].trust = 0.53 + (tick % 32 - 28) as f64 * 0.01;
-    }
-
-    peers
-}
+// `demo_peers` stays in the binary crate (`src/demo_peers.rs`) because it
+// references `ui::peers::PeerDisplayInfo`, which still lives in the binary's
+// `ui/` directory until that module migrates here in a follow-up PR.
 
 /// Generate demo rules for display.
-pub fn demo_rules() -> Vec<crate::rules::AutoRule> {
-    use crate::rules::{AutoRule, RuleAction};
+pub fn demo_rules() -> Vec<claudectl_core::rules::AutoRule> {
+    use claudectl_core::rules::{AutoRule, RuleAction};
 
     vec![
         {
@@ -790,7 +761,7 @@ impl DemoHighlightState {
 #[cfg(test)]
 mod highlight_tests {
     use super::*;
-    use crate::transcript::{TranscriptEvent, parse_line};
+    use claudectl_core::transcript::{TranscriptEvent, parse_line};
 
     #[test]
     fn demo_highlight_generates_valid_jsonl() {
@@ -812,11 +783,12 @@ mod highlight_tests {
 
             if let TranscriptEvent::Message(msg) = event {
                 match msg.role {
-                    crate::transcript::TranscriptRole::Assistant => assistant_count += 1,
-                    crate::transcript::TranscriptRole::User => {
+                    claudectl_core::transcript::TranscriptRole::Assistant => assistant_count += 1,
+                    claudectl_core::transcript::TranscriptRole::User => {
                         for block in &msg.content {
-                            if let crate::transcript::TranscriptBlock::ToolResult {
-                                is_error, ..
+                            if let claudectl_core::transcript::TranscriptBlock::ToolResult {
+                                is_error,
+                                ..
                             } = block
                             {
                                 tool_result_count += 1;

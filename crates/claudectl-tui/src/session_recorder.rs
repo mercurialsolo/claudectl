@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use crate::transcript::{TranscriptBlock, TranscriptEvent, TranscriptRole, parse_line};
+use claudectl_core::transcript::{TranscriptBlock, TranscriptEvent, TranscriptRole, parse_line};
 
 /// Default lookback buffer: capture recent events before record start (~30s of activity).
 const DEFAULT_LOOKBACK_BYTES: u64 = 50_000;

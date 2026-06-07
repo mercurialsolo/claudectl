@@ -1,0 +1,20 @@
+[package]
+name = "claudectl-tui"
+version = "0.51.0"
+edition = "2024"
+description = "Terminal UI, dashboard recording, and demo-mode fixtures for claudectl. Splits out of the binary so the TUI can evolve independently of the brain/coord/bus subsystems."
+license = "MIT"
+repository = "https://github.com/mercurialsolo/claudectl"
+keywords = ["claude-code", "tui", "ratatui"]
+categories = ["command-line-utilities"]
+
+[lib]
+name = "claudectl_tui"
+path = "src/lib.rs"
+
+[dependencies]
+claudectl-core = { path = "../claudectl-core", version = "0.51.0" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
