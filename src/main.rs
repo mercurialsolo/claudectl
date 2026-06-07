@@ -117,6 +117,15 @@ pub(crate) enum Command {
             conflicts_with_all = ["check", "reset", "remove", "purge", "non_interactive"]
         )]
         plugin_only: bool,
+        /// Re-sync everything the previous `init` wrote to match the
+        /// running binary (#327): hook entries, embedded plugin files,
+        /// DB schema migrations, and the onboarding marker version. Use
+        /// after `brew upgrade claudectl` / `cargo install ... --force`.
+        #[arg(
+            long,
+            conflicts_with_all = ["check", "reset", "remove", "purge", "plugin_only", "non_interactive"]
+        )]
+        upgrade: bool,
         /// Run every phase without prompting. Combine with the per-phase
         /// flags below (`--budget`, `--brain-url`, `--bus-role`, etc.).
         #[arg(long)]
@@ -789,6 +798,7 @@ fn run_main(cli: Cli) -> io::Result<()> {
                 purge,
                 yes,
                 plugin_only,
+                upgrade,
                 non_interactive,
                 budget,
                 skip_budget,
@@ -812,6 +822,12 @@ fn run_main(cli: Cli) -> io::Result<()> {
                 }
                 if *purge {
                     return init::run_purge(*yes);
+                }
+                if *upgrade {
+                    // #327 — re-sync after `brew upgrade`. Hooks +
+                    // plugin + DB migrations + marker version, with a
+                    // per-step report.
+                    return init::run_upgrade();
                 }
                 if *plugin_only {
                     // #325 — install just the embedded plugin + hook
