@@ -282,9 +282,10 @@ impl Phase for PluginPhase {
     }
 
     fn run_interactive(&self) -> io::Result<PhaseStatus> {
-        println!("Install claudectl's hooks into ~/.claude/settings.json so Claude Code");
-        println!("notifies claudectl on tool use and session end. Existing hooks are preserved.");
-        if !prompt::yes_no("Install hooks?", true)? {
+        println!("Install claudectl's plugin into ~/.claude/plugins/claudectl/ (slash");
+        println!("commands, the supervisor agent, and the bus MCP server registration) and");
+        println!("wire hooks into ~/.claude/settings.json. Existing hooks are preserved.");
+        if !prompt::yes_no("Install plugin + hooks?", true)? {
             return Ok(PhaseStatus::Skipped);
         }
         install_plugin_hooks()?;
@@ -307,13 +308,43 @@ impl Phase for PluginPhase {
     }
 
     fn remove(&self) -> io::Result<()> {
-        // Run the existing uninit against the global settings.
-        hooks::run_uninit(false)
+        // Strip hook entries from settings.json AND remove the plugin
+        // install dir. `--purge` also walks ~/.claudectl/; this just
+        // handles claudectl-managed paths under ~/.claude/.
+        let _ = hooks::run_uninit(false);
+        if let Some(dir) = crate::init::plugin_assets::default_install_dir() {
+            crate::init::plugin_assets::remove_assets(&dir)?;
+        }
+        Ok(())
     }
 }
 
+/// Install both the embedded plugin (#325) and the legacy hook entries
+/// in ~/.claude/settings.json. The plugin install gives users the slash
+/// commands (`/role`, `/inbox`, `/brain`, …) and the bus MCP server
+/// registration without cloning the repo; the legacy hook entries are
+/// the dashboard-observability path (PostToolUse / Stop fire claudectl
+/// --json so the TUI sees activity).
 fn install_plugin_hooks() -> io::Result<()> {
+    // Write embedded plugin assets first. When HOME is unset (CI
+    // sandboxes), skip the plugin install silently rather than fail —
+    // the hook entries below still work.
+    if let Some(dir) = crate::init::plugin_assets::default_install_dir() {
+        let written = crate::init::plugin_assets::write_assets(&dir)?;
+        println!(
+            "  installed {} plugin files at {}",
+            written.len(),
+            dir.display()
+        );
+    }
     hooks::run_init(false, false)
+}
+
+/// Public entry for the `init plugin-only` shortcut (#325): write the
+/// embedded assets + hook entries without running the rest of the
+/// wizard. Used by main.rs when `--plugin-only` is set.
+pub fn install_plugin_now() -> io::Result<()> {
+    install_plugin_hooks()
 }
 
 // ===================== Bus (agent-bus role binding) =====================

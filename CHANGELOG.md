@@ -4,6 +4,15 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — Plugin embedded in binary (closes #325)
+- **Plugin files now ship inside the `claudectl` binary** via `include_str!` — 17 files, ~29 KB total. `claudectl init` writes them to `~/.claude/plugins/claudectl/` automatically. No repo clone, no manual `.mcp.json` copy. The biggest single Homebrew-user UX win.
+- **`claudectl init --plugin-only`** — install (or re-install) just the plugin without re-running the rest of the wizard. Useful after `brew upgrade claudectl`.
+- Shell hook scripts (`brain-gate.sh`, `budget-check.sh`, `inbox-drain.sh`, `outcome-record.sh`, `session-briefing.sh`) are written with mode 0755 on POSIX.
+- `init --remove` (soft uninstall) now also removes `~/.claude/plugins/claudectl/`. The on-disk plugin tree was claudectl-managed; the soft uninstall should treat it the same way as it does the hook entries in `settings.json`.
+- 6 new tests in `init::plugin_assets` cover round-trip writes, idempotency, the executable-bit, removal, and missing-dir tolerance.
+
+Part of the DX overhaul epic #320.
+
 ### Added — DX activation quick wins (closes #322, #324, #328)
 - **First-run banner (#322)** — running `claudectl` for the first time (no `~/.claudectl/onboarding.json` and no `claudectl` entries in `~/.claude/settings.json`) now prints a one-screen banner above the TUI explaining how to onboard. Skipped in `--demo`, in non-TUI output modes (`--json`, `--list`, `--watch`, `--summary`, `--headless`), and when `CLAUDECTL_SKIP_FIRST_RUN=1`.
 - **Brain phase ollama install hint (#324)** — when the Brain phase of `claudectl init` can't reach a local-LLM endpoint, it now prints concrete install steps (`brew install ollama && ollama serve &` + `ollama pull gemma4:e4b`) instead of silently recording `not_installed`. Non-interactive mode shows the hint too.

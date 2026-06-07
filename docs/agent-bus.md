@@ -48,24 +48,15 @@ Verify:
 claudectl bus --help                       # should show subcommands: stdio, role, send, inbox, whoami, stop-hook
 ```
 
-### 2. Register the bus as an MCP server
+### 2. Install the plugin
 
-The Claude Code plugin in `claude-plugin/` already includes the wiring:
+The plugin (slash commands, supervisor agent, hook scripts, and the bus MCP server registration) is embedded in the `claudectl` binary. Running `claudectl init` writes it to `~/.claude/plugins/claudectl/` automatically. If you already onboarded and just want to refresh the plugin after `brew upgrade claudectl`:
 
-```json
-// claude-plugin/.mcp.json
-{
-  "mcpServers": {
-    "claudectl-bus": {
-      "command": "claudectl",
-      "args": ["bus", "stdio"],
-      "env": { "CLAUDECTL_BUS_ROLE": "${CLAUDECTL_BUS_ROLE}" }
-    }
-  }
-}
+```bash
+claudectl init --plugin-only
 ```
 
-If you're using the bundled plugin (recommended), running `claudectl init` will install it. Otherwise, point Claude Code at any `.mcp.json` containing the block above. The MCP server runs on stdio — Claude Code spawns one per session it talks to.
+That's it — no repo clone, no manual `.mcp.json` copy. Claude Code picks the plugin up on its next launch.
 
 ### 3. Bind a role
 

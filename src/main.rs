@@ -107,6 +107,15 @@ pub(crate) enum Command {
         /// Skip the confirmation prompt for `--purge`.
         #[arg(long)]
         yes: bool,
+        /// Install (or re-install) just the embedded plugin + hooks (#325).
+        /// Skip every other phase. Useful for users who already configured
+        /// budget / brain / bus and just want to refresh the plugin files
+        /// after `brew upgrade claudectl`.
+        #[arg(
+            long,
+            conflicts_with_all = ["check", "reset", "remove", "purge", "non_interactive"]
+        )]
+        plugin_only: bool,
         /// Run every phase without prompting. Combine with the per-phase
         /// flags below (`--budget`, `--brain-url`, `--bus-role`, etc.).
         #[arg(long)]
@@ -763,6 +772,7 @@ fn run_main(cli: Cli) -> io::Result<()> {
                 remove,
                 purge,
                 yes,
+                plugin_only,
                 non_interactive,
                 budget,
                 skip_budget,
@@ -786,6 +796,12 @@ fn run_main(cli: Cli) -> io::Result<()> {
                 }
                 if *purge {
                     return init::run_purge(*yes);
+                }
+                if *plugin_only {
+                    // #325 — install just the embedded plugin + hook
+                    // entries. The other four wizard phases stay where
+                    // the previous run left them (no marker rewrite).
+                    return init::phases::install_plugin_now();
                 }
                 if *non_interactive {
                     let install_plugin_opt = if *skip_plugin {
