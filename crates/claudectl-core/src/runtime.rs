@@ -513,6 +513,44 @@ pub trait BrainDriver: Send {
 }
 
 // ============================================================================
+// Orchestrator
+// ============================================================================
+
+/// Tick the orchestration layer once per refresh: deliver pending mailbox
+/// messages, deliver pending coordination interrupts, and bookkeep stale
+/// rows in the underlying stores.
+///
+/// Each `deliver_*` method returns `(id, status_message)` tuples the TUI
+/// surfaces in the status bar. `id` is a `u32` for mailbox (matching the
+/// brain's per-PID queue) and a `String` for interrupts (matching the
+/// coord interrupt_id). They differ deliberately — keeping the trait honest
+/// to the underlying surfaces rather than papering over the distinction.
+///
+/// Unlike `CoordView` / `BrainView` which are read-only, this trait is
+/// stateful: each call writes to the brain/coord SQLite stores. It still
+/// boxes as `Arc<dyn>` because no method needs `&mut self` — implementations
+/// open a connection per call.
+///
+/// Implementations may be no-ops when the relevant feature is off (e.g. the
+/// `coord` feature is disabled at compile time), so call sites don't need
+/// `#[cfg(feature = "...")]` guards.
+pub trait Orchestrator: Send + Sync {
+    /// Drain pending mailbox messages addressed to running sessions and
+    /// deliver them to the live terminals. Used by `App::tick` to surface
+    /// `"Brain → sess_X: 'go ahead'"` style messages.
+    fn deliver_mailbox(&self, sessions: &[SessionSnapshot]) -> Vec<(u32, String)>;
+
+    /// Deliver pending coordination interrupts (cross-agent signals) to
+    /// running sessions. Returns `(interrupt_id, status_message)` tuples.
+    fn deliver_interrupts(&self, sessions: &[SessionSnapshot]) -> Vec<(String, String)>;
+
+    /// Expire stale leases and interrupts that have passed their deadline.
+    /// Bookkeeping side-effect; best-effort, no return. Implementations
+    /// log failures rather than propagating them.
+    fn expire_stale(&self);
+}
+
+// ============================================================================
 // Runtime aggregate
 // ============================================================================
 
@@ -529,6 +567,7 @@ pub struct Runtime {
     pub bus: Arc<dyn BusView>,
     pub actions: Arc<dyn Actions>,
     pub review: Arc<dyn BrainReviewView>,
+    pub orchestrator: Arc<dyn Orchestrator>,
 }
 
 impl Runtime {
@@ -539,6 +578,7 @@ impl Runtime {
         bus: Arc<dyn BusView>,
         actions: Arc<dyn Actions>,
         review: Arc<dyn BrainReviewView>,
+        orchestrator: Arc<dyn Orchestrator>,
     ) -> Self {
         Self {
             sessions,
@@ -547,6 +587,7 @@ impl Runtime {
             bus,
             actions,
             review,
+            orchestrator,
         }
     }
 }
@@ -636,6 +677,7 @@ impl MockRuntime {
             arc.clone(),
             arc.clone(),
             arc.clone(),
+            arc.clone(),
             arc,
         )
     }
@@ -697,6 +739,16 @@ impl BrainReviewView for MockRuntime {
     fn review_queue(&self) -> Vec<ReviewItemSummary> {
         self.review_queue.clone()
     }
+}
+
+impl Orchestrator for MockRuntime {
+    fn deliver_mailbox(&self, _sessions: &[SessionSnapshot]) -> Vec<(u32, String)> {
+        Vec::new()
+    }
+    fn deliver_interrupts(&self, _sessions: &[SessionSnapshot]) -> Vec<(String, String)> {
+        Vec::new()
+    }
+    fn expire_stale(&self) {}
 }
 
 impl Actions for MockRuntime {
@@ -875,6 +927,7 @@ mod tests {
             arc.clone(),
             arc.clone(),
             arc.clone(),
+            arc.clone(),
         );
         // Initial: default On.
         assert_eq!(rt.brain.gate_mode(), BrainGateMode::On);
@@ -905,6 +958,7 @@ mod tests {
             arc.clone(),
             arc.clone(),
             arc.clone(),
+            arc.clone(),
         );
         let obs = ObservationInput {
             session_pid: 12345,
@@ -923,6 +977,7 @@ mod tests {
         let mock = MockRuntime::default();
         let arc = Arc::new(mock);
         let rt = Runtime::new(
+            arc.clone(),
             arc.clone(),
             arc.clone(),
             arc.clone(),

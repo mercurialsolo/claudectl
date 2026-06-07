@@ -1367,12 +1367,9 @@ impl App {
     /// trait so the binary-coord coupling stays one layer thick.
     #[cfg(feature = "coord")]
     pub fn coord_refresh(&mut self) {
-        // Bookkeeping (expire stale rows). Best-effort; failures are logged
-        // by the store itself.
-        if let Ok(conn) = crate::coord::store::open() {
-            let _ = crate::coord::store::expire_stale_leases(&conn);
-            let _ = crate::coord::store::expire_stale_interrupts(&conn);
-        }
+        // Bookkeeping (expire stale leases + interrupts). Best-effort; the
+        // orchestrator logs failures internally and never propagates them.
+        self.runtime.orchestrator.expire_stale();
 
         self.coord_leases = self.runtime.coord.active_leases();
         self.coord_handoffs = self.runtime.coord.pending_handoffs();
@@ -1703,24 +1700,26 @@ impl App {
 
             driver.cleanup(&snapshots);
 
-            // Deliver pending mailbox messages to sessions waiting for input
-            let deliveries = crate::brain::mailbox::deliver_pending(&self.sessions);
+            // Deliver pending mailbox messages to sessions waiting for input.
+            // The orchestrator resolves SessionSnapshot back to live sessions
+            // internally; we project once here.
+            let snapshots: Vec<_> = self.sessions.iter().map(snapshot_from).collect();
+            let deliveries = self.runtime.orchestrator.deliver_mailbox(&snapshots);
             for (_pid, msg) in deliveries {
                 crate::logger::log("MAILBOX", &msg);
                 self.status_msg = msg;
             }
         }
 
-        // Deliver pending typed interrupts from the coordination bus
+        // Deliver pending typed interrupts from the coordination bus. The
+        // orchestrator handles the SQLite connection internally.
         #[cfg(feature = "coord")]
         {
-            if let Ok(conn) = crate::coord::store::open() {
-                let deliveries =
-                    crate::coord::interrupt_bus::deliver_pending(&conn, &self.sessions);
-                for (_intr_id, msg) in deliveries {
-                    crate::logger::log("INTERRUPT", &msg);
-                    self.status_msg = msg;
-                }
+            let snapshots: Vec<_> = self.sessions.iter().map(snapshot_from).collect();
+            let deliveries = self.runtime.orchestrator.deliver_interrupts(&snapshots);
+            for (_intr_id, msg) in deliveries {
+                crate::logger::log("INTERRUPT", &msg);
+                self.status_msg = msg;
             }
         }
     }
