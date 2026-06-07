@@ -2,6 +2,20 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.57.2] - 2026-06-07
+
+### Added — `claudectl init --upgrade` + plugin-version doctor row (closes #327)
+- **`claudectl init --upgrade`** — re-sync everything the previous `init` wrote to match the running binary. Used after `brew upgrade claudectl` (or `cargo install ... --force`). Four steps, each with a ✓ / — / ✗ report:
+  1. Claude Code hook entries (`~/.claude/settings.json`)
+  2. Embedded plugin files (`~/.claude/plugins/claudectl/`) — checksums on-disk vs embedded before writing, so the report distinguishes "updated" from "unchanged"
+  3. DB schema migrations (touching the bus + coord stores triggers `migrate(&conn)` as a side effect of `open()`)
+  4. Onboarding marker version bump — when the recorded version differs from the binary's
+- **`claudectl doctor` gains a `plugin version` row** — compares the on-disk `.claude-plugin/plugin.json` version against the binary's `CARGO_PKG_VERSION`. Pass when they match; Advisory when they differ, with `claudectl init upgrade` as the fix hint. This is how operators discover they need to upgrade in the first place.
+- README "Get started" section and `docs/quickstart.md` gain a new "Upgrading" callout pointing at the new verb.
+- 4 new init tests cover the upgrade helpers: first pass writes everything, second pass writes nothing, modified file gets rewritten, marker version bump round-trips.
+
+Closes the last open issue of DX epic #320. With this shipped, all 8 sub-issues of the DX overhaul are done — `brew install` → `claudectl init` → `claudectl doctor` is a complete activation, and `brew upgrade` → `claudectl init --upgrade` is the complete refresh.
+
 ## [0.57.1] - 2026-06-07
 
 ### Added — bus retention + `prune` (closes #337)
