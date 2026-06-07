@@ -25,6 +25,7 @@ mod commands;
 mod config;
 #[cfg(feature = "coord")]
 mod coord;
+mod doctor;
 #[cfg(feature = "hive")]
 mod hive;
 mod init;
@@ -166,6 +167,16 @@ pub(crate) enum Command {
 
     /// Print a roff-formatted man page to stdout
     Man,
+
+    /// Install + runtime health check. Answers "is everything wired up?"
+    /// in one command — PATH, hooks, plugin files, brain endpoint, bus
+    /// feature, bus DB, session discovery, terminal integration.
+    /// Exits non-zero on any failure; advisories don't affect exit code.
+    Doctor {
+        /// Emit JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -674,6 +685,11 @@ fn run_main(cli: Cli) -> io::Result<()> {
     }
 
     if cli.doctor {
+        eprintln!(
+            "note: `--doctor` is deprecated. Use `claudectl doctor` for the new \
+             structured checklist (PATH + hooks + plugin + brain + bus + sessions + \
+             terminal). The legacy report follows below."
+        );
         return commands::print_doctor();
     }
 
@@ -839,6 +855,23 @@ fn run_main(cli: Cli) -> io::Result<()> {
                 clap_mangen::Man::new(cmd)
                     .render(&mut io::stdout())
                     .map_err(io::Error::other)?;
+                return Ok(());
+            }
+
+            Command::Doctor { json } => {
+                let checks = doctor::run_all_checks();
+                if *json {
+                    println!("{}", doctor::render_checks_json(&checks)?);
+                } else {
+                    print!("{}", doctor::render_checks(&checks));
+                }
+                let code = doctor::exit_code(&checks);
+                if code != 0 {
+                    // Use a clean process exit so the caller (CI script,
+                    // shell pipeline) sees a non-zero status without us
+                    // printing a backtrace.
+                    std::process::exit(code);
+                }
                 return Ok(());
             }
         }
