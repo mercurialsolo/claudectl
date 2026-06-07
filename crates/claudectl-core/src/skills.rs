@@ -61,7 +61,7 @@ impl DiscoveredSkill {
 
     /// True if the skill body is small enough to fit in a hive `Skill` unit.
     pub fn within_share_limit(&self) -> bool {
-        // Mirrors crate::hive::MAX_SKILL_BYTES (32 KiB) but we keep this module
+        // Mirrors `hive::MAX_SKILL_BYTES` (32 KiB) but we keep this module
         // free of the hive feature gate so the TUI can list skills even when
         // hive is disabled.
         self.size_bytes <= 32 * 1024
