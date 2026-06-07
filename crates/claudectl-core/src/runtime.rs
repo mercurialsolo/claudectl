@@ -165,6 +165,15 @@ pub struct DecisionSummary {
     /// `test_failed`, the error message for `error`).
     #[serde(default)]
     pub outcome_detail: Option<String>,
+    /// Epoch seconds when the brain suggestion was first surfaced. Used by
+    /// time-to-correct analysis. `None` for records pre-instrumentation or
+    /// passive observations.
+    #[serde(default)]
+    pub suggested_at: Option<u64>,
+    /// Epoch seconds when the user acted on the suggestion. `None` for
+    /// passive observations or records still in flight.
+    #[serde(default)]
+    pub resolved_at: Option<u64>,
 }
 
 impl DecisionSummary {
@@ -806,6 +815,8 @@ mod tests {
                     model: None,
                     outcome_kind: None,
                     outcome_detail: None,
+                    suggested_at: None,
+                    resolved_at: None,
                 })
                 .collect(),
             ..Default::default()

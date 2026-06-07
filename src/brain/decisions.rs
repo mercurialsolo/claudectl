@@ -192,6 +192,8 @@ impl From<&DecisionRecord> for claudectl_core::runtime::DecisionSummary {
                 DecisionOutcome::TestFailed(cmd) => Some(cmd.clone()),
                 _ => None,
             }),
+            suggested_at: r.suggested_at,
+            resolved_at: r.resolved_at,
         }
     }
 }

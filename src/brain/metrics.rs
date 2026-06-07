@@ -2,7 +2,21 @@
 
 use std::collections::{HashMap, HashSet};
 
+use claudectl_core::runtime::DecisionSummary;
+
 use super::decisions::{DecisionRecord, read_all_decisions};
+
+/// Read every decision on disk and project to the core `DecisionSummary`
+/// DTO in one pass. Used by every `print_*` and `compute_*` helper below —
+/// the on-disk shape stays `DecisionRecord`, but the metrics pipeline
+/// operates on the summary form so the surface can be shared with the TUI
+/// (`ui/brain.rs`) without depending on brain-private types.
+fn read_all_summaries() -> Vec<DecisionSummary> {
+    read_all_decisions()
+        .iter()
+        .map(DecisionSummary::from)
+        .collect()
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Re-exports from sub-modules so that existing `brain::metrics::*` paths
@@ -1823,7 +1837,7 @@ impl TierStats {
 
 /// Compute per-tier stats over every decision record where the brain was involved.
 /// Observations (brain_action == "") are excluded — we can't score what the brain didn't predict.
-pub fn compute_tier_stats(decisions: &[DecisionRecord]) -> Vec<TierStats> {
+pub fn compute_tier_stats(decisions: &[DecisionSummary]) -> Vec<TierStats> {
     let tiers = [
         RiskTier::Low,
         RiskTier::Medium,
@@ -1833,20 +1847,20 @@ pub fn compute_tier_stats(decisions: &[DecisionRecord]) -> Vec<TierStats> {
     tiers
         .into_iter()
         .map(|tier| {
-            let matching: Vec<&DecisionRecord> = decisions
+            let matching: Vec<&DecisionSummary> = decisions
                 .iter()
-                .filter(|d| !d.brain_action.is_empty())
+                .filter(|d| !d.action.is_empty())
                 .filter(|d| classify_risk(d.tool.as_deref(), d.command.as_deref()) == tier)
                 .collect();
             let n = matching.len();
             let correct = matching.iter().filter(|d| d.is_positive()).count();
             let false_approves = matching
                 .iter()
-                .filter(|d| d.brain_action == "approve" && d.is_negative())
+                .filter(|d| d.action == "approve" && d.is_negative())
                 .count();
             let false_denies = matching
                 .iter()
-                .filter(|d| d.brain_action == "deny" && d.is_negative())
+                .filter(|d| d.action == "deny" && d.is_negative())
                 .count();
             let overrides = matching.iter().filter(|d| d.is_negative()).count();
             let override_rate = if n > 0 {
@@ -1868,7 +1882,7 @@ pub fn compute_tier_stats(decisions: &[DecisionRecord]) -> Vec<TierStats> {
 
 /// Print the per-tier breakdown.
 pub fn print_tier_breakdown() {
-    let decisions = read_all_decisions();
+    let decisions = read_all_summaries();
     let stats = compute_tier_stats(&decisions);
 
     println!("Per-Risk-Tier Accuracy");
@@ -1927,7 +1941,7 @@ pub struct LatencySummary {
 }
 
 /// Compute latency percentiles from decisions that have `brain_decision_ms` set.
-pub fn compute_latency(decisions: &[DecisionRecord]) -> LatencySummary {
+pub fn compute_latency(decisions: &[DecisionSummary]) -> LatencySummary {
     let mut samples: Vec<u64> = decisions
         .iter()
         .filter_map(|d| d.brain_decision_ms)
@@ -1955,7 +1969,7 @@ pub fn compute_latency(decisions: &[DecisionRecord]) -> LatencySummary {
 /// Print a latency report with histogram. Skips gracefully when no
 /// instrumented records exist yet.
 pub fn print_latency() {
-    let decisions = read_all_decisions();
+    let decisions = read_all_summaries();
     let summary = compute_latency(&decisions);
 
     println!("Brain Decision Latency");
@@ -2047,7 +2061,7 @@ impl CacheSummary {
     }
 }
 
-pub fn compute_cache(decisions: &[DecisionRecord]) -> CacheSummary {
+pub fn compute_cache(decisions: &[DecisionSummary]) -> CacheSummary {
     let hits = decisions
         .iter()
         .filter(|d| d.cache_hit == Some(true))
@@ -2064,7 +2078,7 @@ pub fn compute_cache(decisions: &[DecisionRecord]) -> CacheSummary {
 }
 
 pub fn print_cache_hits() {
-    let decisions = read_all_decisions();
+    let decisions = read_all_summaries();
     let summary = compute_cache(&decisions);
 
     println!("Few-Shot Cache Hit Rate");
@@ -2119,12 +2133,12 @@ pub struct Counterfactual {
 /// Find counterfactual cases: where brain and user disagreed, and the
 /// subsequent outcome went badly. Heuristic: a `TestFailed` or `Error`
 /// outcome on a same-PID decision within `WINDOW` records after this one.
-pub fn compute_counterfactuals(decisions: &[DecisionRecord]) -> Vec<Counterfactual> {
+pub fn compute_counterfactuals(decisions: &[DecisionSummary]) -> Vec<Counterfactual> {
     const WINDOW: usize = 5;
     let mut out = Vec::new();
     for (i, d) in decisions.iter().enumerate() {
         // We only care about cases where brain was involved AND user disagreed.
-        if d.brain_action.is_empty() {
+        if d.action.is_empty() {
             continue;
         }
         if !d.is_negative() {
@@ -2137,12 +2151,14 @@ pub fn compute_counterfactuals(decisions: &[DecisionRecord]) -> Vec<Counterfactu
             if next.pid != d.pid {
                 continue;
             }
-            match &next.outcome {
-                Some(super::decisions::DecisionOutcome::TestFailed(cmd)) => {
+            match next.outcome_kind.as_deref() {
+                Some("test_failed") => {
+                    let cmd = next.outcome_detail.as_deref().unwrap_or("");
                     failing = Some(format!("TestFailed: {}", truncate(cmd, 60)));
                     break;
                 }
-                Some(super::decisions::DecisionOutcome::Error(msg)) => {
+                Some("error") => {
+                    let msg = next.outcome_detail.as_deref().unwrap_or("");
                     failing = Some(format!("Error: {}", truncate(msg, 60)));
                     break;
                 }
@@ -2150,17 +2166,21 @@ pub fn compute_counterfactuals(decisions: &[DecisionRecord]) -> Vec<Counterfactu
             }
         }
         if let Some(summary) = failing {
-            // brain_action == "deny" and user accepted → user-accepted thing
+            // action == "deny" and user accepted → user-accepted thing
             // led to failure → brain was right.
-            let brain_was_right = d.brain_action == "deny" || d.brain_action == "ask";
+            let brain_was_right = d.action == "deny" || d.action == "ask";
             out.push(Counterfactual {
-                decision_id: d.decision_id.clone(),
-                project: d.project.clone(),
+                decision_id: if d.id.is_empty() {
+                    None
+                } else {
+                    Some(d.id.clone())
+                },
+                project: d.project.clone().unwrap_or_default(),
                 tool: d.tool.clone(),
                 command: d.command.clone(),
-                brain_action: d.brain_action.clone(),
-                user_action: d.user_action.clone(),
-                brain_confidence: d.brain_confidence,
+                brain_action: d.action.clone(),
+                user_action: d.user_action.clone().unwrap_or_default(),
+                brain_confidence: d.confidence.unwrap_or(0.0),
                 brain_was_right,
                 outcome_summary: summary,
             });
@@ -2178,7 +2198,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 pub fn print_counterfactuals() {
-    let decisions = read_all_decisions();
+    let decisions = read_all_summaries();
     let cfs = compute_counterfactuals(&decisions);
 
     println!("Counterfactual Analysis");
@@ -2252,20 +2272,17 @@ pub fn print_counterfactuals() {
 
 /// Render every key metric in one screen — the periodic-review surface.
 pub fn print_scorecard() {
-    let decisions = read_all_decisions();
+    let decisions = read_all_summaries();
 
     println!("Brain Scorecard");
     println!("===============");
     println!();
 
     // North-star: auto-handled accuracy.
-    let total_with_brain = decisions
-        .iter()
-        .filter(|d| !d.brain_action.is_empty())
-        .count();
+    let total_with_brain = decisions.iter().filter(|d| !d.action.is_empty()).count();
     let correct = decisions
         .iter()
-        .filter(|d| !d.brain_action.is_empty() && d.is_positive())
+        .filter(|d| !d.action.is_empty() && d.is_positive())
         .count();
     let north_star = if total_with_brain > 0 {
         (correct as f64 / total_with_brain as f64) * 100.0
@@ -2307,10 +2324,10 @@ pub fn print_scorecard() {
         }
     }
 
-    let override_window: Vec<&DecisionRecord> = decisions
+    let override_window: Vec<&DecisionSummary> = decisions
         .iter()
         .rev()
-        .filter(|d| !d.brain_action.is_empty())
+        .filter(|d| !d.action.is_empty())
         .take(50)
         .collect();
     if !override_window.is_empty() {

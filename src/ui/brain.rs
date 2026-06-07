@@ -129,6 +129,11 @@ fn render_counts_header(frame: &mut Frame, area: Rect, app: &App) {
 fn render_scorecard(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.theme;
     let decisions = &app.brain_decisions_cache;
+    // Project once for every compute_* call below — the metrics surface
+    // operates on the core `DecisionSummary` DTO so it can be shared with
+    // future callers outside the binary.
+    let summaries: Vec<claudectl_core::runtime::DecisionSummary> =
+        decisions.iter().map(Into::into).collect();
 
     let total_with_brain = decisions
         .iter()
@@ -144,10 +149,10 @@ fn render_scorecard(frame: &mut Frame, area: Rect, app: &App) {
         0.0
     };
 
-    let tier_stats = compute_tier_stats(decisions);
-    let latency = compute_latency(decisions);
-    let cache = compute_cache(decisions);
-    let cfs = compute_counterfactuals(decisions);
+    let tier_stats = compute_tier_stats(&summaries);
+    let latency = compute_latency(&summaries);
+    let cache = compute_cache(&summaries);
+    let cfs = compute_counterfactuals(&summaries);
     let brain_right = cfs.iter().filter(|c| c.brain_was_right).count();
     let user_right = cfs.len() - brain_right;
     let canonical_count = decisions
