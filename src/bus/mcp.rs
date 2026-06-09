@@ -143,6 +143,101 @@ pub struct InboxEntry {
     pub hop_count: u32,
 }
 
+// -------------------- Supervisor MCP tool types (#345) -----------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmitTaskArgs {
+    pub name: String,
+    pub cwd: String,
+    pub prompt: String,
+    /// Target role mailbox. When unset, the supervisor spawns a fresh
+    /// session in `cwd` rather than routing via mailbox.
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub budget_usd: Option<f64>,
+    #[serde(default)]
+    pub max_retries: Option<u32>,
+    #[serde(default)]
+    pub timeout_min: Option<u32>,
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
+    /// Per-task policy JSON (force_manual overrides, model routing, …).
+    /// Whatever lands here flows through to the brain-gate hook via the
+    /// session-policy file the supervisor writes at assignment time.
+    #[serde(default)]
+    pub policy: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SubmitTaskResult {
+    pub task_id: String,
+    pub state: String,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ListTasksArgs {
+    /// Filter by task state. One of PENDING/READY/ASSIGNED/RUNNING/
+    /// VERIFYING/DONE/RETRYING/RESUMING/NEEDS_HUMAN/CANCELLED.
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ListTasksResult {
+    pub tasks: Vec<TaskSummary>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskSummary {
+    pub id: String,
+    pub name: String,
+    pub state: String,
+    pub role: Option<String>,
+    pub cwd: String,
+    pub model: Option<String>,
+    pub budget_usd: Option<f64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<crate::coord::tasks::TaskRow> for TaskSummary {
+    fn from(t: crate::coord::tasks::TaskRow) -> Self {
+        Self {
+            id: t.id,
+            name: t.name,
+            state: t.state.as_str().to_string(),
+            role: t.role,
+            cwd: t.cwd,
+            model: t.model,
+            budget_usd: t.budget_usd,
+            created_at: t.created_at,
+            updated_at: t.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TaskStatusArgs {
+    pub task_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskStatusResult {
+    pub task: TaskSummary,
+    pub transitions: Vec<TransitionEntry>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TransitionEntry {
+    pub from_state: String,
+    pub to_state: String,
+    pub cause: String,
+    pub at: String,
+}
+
 impl From<MessageRow> for InboxEntry {
     fn from(m: MessageRow) -> Self {
         Self {
@@ -292,6 +387,82 @@ impl BusServer {
             message_id: id,
             sanitized,
             hop_count: outgoing_hop,
+        }))
+    }
+
+    #[tool(
+        description = "File a task for the supervisor to schedule. Lands as a coord `tasks` row; the supervisor's reconciler picks it up on its next tick. Equivalent to publishing a `task.created` message — agents can use either path."
+    )]
+    async fn submit_task(
+        &self,
+        Parameters(args): Parameters<SubmitTaskArgs>,
+    ) -> Result<Json<SubmitTaskResult>, McpError> {
+        let coord = crate::coord::store::open().map_err(|e| McpError::internal_error(e, None))?;
+        let new_task = crate::coord::tasks::NewTask {
+            name: args.name,
+            role: args.role,
+            cwd: args.cwd,
+            prompt: args.prompt,
+            model: args.model,
+            budget_usd: args.budget_usd,
+            max_retries: args.max_retries,
+            timeout_min: args.timeout_min,
+            depends_on: args.depends_on.unwrap_or_default(),
+            policy: args.policy,
+        };
+        let task_id = crate::coord::tasks::insert_task(&coord, &new_task)
+            .map_err(|e| McpError::internal_error(e, None))?;
+        Ok(Json(SubmitTaskResult {
+            task_id,
+            state: "PENDING".into(),
+        }))
+    }
+
+    #[tool(
+        description = "List supervisor tasks. Filter by state with `state=\"RUNNING\"` etc; omit for all."
+    )]
+    async fn list_tasks(
+        &self,
+        Parameters(args): Parameters<ListTasksArgs>,
+    ) -> Result<Json<ListTasksResult>, McpError> {
+        let coord = crate::coord::store::open().map_err(|e| McpError::internal_error(e, None))?;
+        let state_filter = args
+            .state
+            .as_deref()
+            .and_then(crate::coord::tasks::TaskState::parse);
+        let rows = crate::coord::tasks::list_tasks(&coord, state_filter)
+            .map_err(|e| McpError::internal_error(e, None))?;
+        Ok(Json(ListTasksResult {
+            tasks: rows.into_iter().map(TaskSummary::from).collect(),
+        }))
+    }
+
+    #[tool(
+        description = "Detailed status of one task: current state, attempt history, verifier verdicts, transition log."
+    )]
+    async fn task_status(
+        &self,
+        Parameters(args): Parameters<TaskStatusArgs>,
+    ) -> Result<Json<TaskStatusResult>, McpError> {
+        let coord = crate::coord::store::open().map_err(|e| McpError::internal_error(e, None))?;
+        let task = crate::coord::tasks::get_task(&coord, &args.task_id)
+            .map_err(|e| McpError::internal_error(e, None))?
+            .ok_or_else(|| {
+                McpError::invalid_params(format!("task {} not found", args.task_id), None)
+            })?;
+        let transitions = crate::coord::tasks::list_transitions(&coord, &args.task_id)
+            .map_err(|e| McpError::internal_error(e, None))?;
+        Ok(Json(TaskStatusResult {
+            task: TaskSummary::from(task),
+            transitions: transitions
+                .into_iter()
+                .map(|(from, to, cause, at)| TransitionEntry {
+                    from_state: from,
+                    to_state: to,
+                    cause,
+                    at,
+                })
+                .collect(),
         }))
     }
 

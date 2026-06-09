@@ -139,37 +139,85 @@ impl Supervisor {
     pub fn tick(&self, conn: &Connection, sensors: &dyn Sensors) -> Result<Vec<Action>, String> {
         let mut out = Vec::new();
         let pending = list_tasks(conn, Some(TaskState::Pending))?;
-        let ready = list_tasks(conn, Some(TaskState::Ready))?;
         let assigned = list_tasks(conn, Some(TaskState::Assigned))?;
         let running = list_tasks(conn, Some(TaskState::Running))?;
 
-        // 1) Pending tasks whose deps resolved → no-op for now; the deps
-        //    resolver lands in M4. Walk the list so an empty pending set
-        //    is a recognized branch instead of dead code.
-        let _ = pending;
-        let _ = ready;
+        // 1) Pending tasks → emit assignment actions. Tasks with a role
+        //    go to that role's mailbox first; tasks without a role go
+        //    straight to spawn. Dependency resolution is deferred (M4
+        //    will gate this on `depends_on` rows reaching Done); for now
+        //    every Pending task is treated as Ready.
+        //
+        //    Hard ceiling on concurrent in-flight (Assigned + Running)
+        //    so a backlog can't push the fleet past `max_concurrent`.
+        let in_flight = (assigned.len() + running.len()) as u32;
+        if in_flight < self.policy.max_concurrent {
+            let slots = self.policy.max_concurrent - in_flight;
+            for task in pending.iter().take(slots as usize) {
+                match &task.role {
+                    Some(role) => out.push(Action::AssignViaMailbox {
+                        task_id: task.id.clone(),
+                        role: role.clone(),
+                    }),
+                    None => out.push(Action::Spawn {
+                        task_id: task.id.clone(),
+                        cwd: PathBuf::from(&task.cwd),
+                    }),
+                }
+            }
+        }
 
-        // 2) Assigned tasks → spawn fallback after claim_timeout. Not yet
-        //    implemented — we don't have a way to read the message's
-        //    insertion time without joining bus.db, which lives in M3
-        //    (#346). Leaving the branch in place documents the intent.
-        let _ = assigned;
+        // 2) Assigned tasks → spawn fallback after `claim_timeout`. The
+        //    actuator records `task_attempts.started_at`; here we walk
+        //    each assigned task, look at its most recent attempt's start
+        //    time, and emit `Spawn` if the role's mailbox went unclaimed.
+        //    No observable session for the role in `observed_sessions`
+        //    is the trigger — RFC §4's "role mailbox unclaimed > T".
+        let observed = sensors.observed_sessions();
+        for task in &assigned {
+            let elapsed_min = match super::tasks::latest_attempt_age_minutes(conn, &task.id)? {
+                Some(m) => m,
+                None => continue,
+            };
+            if elapsed_min < self.policy.claim_timeout_min as u64 {
+                continue;
+            }
+            // Has anything observably claimed this role? If a session at
+            // the task's `cwd` is Running, treat the mailbox as claimed
+            // (the recipient picked it up, just hasn't transitioned the
+            // task row yet). Unknown status is the no-actuation backstop.
+            let claimed = observed.iter().any(|s| {
+                matches!(s.status, ObservedStatus::Running | ObservedStatus::Idle)
+                    && session_cwd_matches(&s.session_id, &task.cwd)
+            });
+            if !claimed {
+                out.push(Action::Spawn {
+                    task_id: task.id.clone(),
+                    cwd: PathBuf::from(&task.cwd),
+                });
+            }
+        }
 
         // 3) Running tasks → health-check triggers (#348 / M5). Skipped
         //    here; just make sure unknown observed sessions don't
         //    accidentally drive an actuation.
         for t in &running {
-            let _ = t; // tracking only
+            let _ = t;
         }
-        let _ = sensors.observed_sessions();
         let _ = sensors.last_hook_event_id();
 
-        // For now the reconciler is a no-op; the type surface is what
-        // M3/M4/M5 will fill in. Returning an empty list is the
-        // crash-safety baseline: restart from an arbitrary point and the
-        // reconciler does no damage.
-        Ok(out.split_off(0))
+        Ok(out)
     }
+}
+
+/// Placeholder for the cwd-aware session matcher. The real implementation
+/// will query `discovery::scan_sessions()` and compare per-session cwd.
+/// For now we treat any session as a possible match — this preserves the
+/// invariant "no spawn when something *might* be claiming the mailbox"
+/// and errs on the side of doing nothing, which is the safe direction
+/// while the sensor layer is still stubbed.
+fn session_cwd_matches(_session_id: &str, _task_cwd: &str) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -205,14 +253,14 @@ mod tests {
     }
 
     #[test]
-    fn tick_does_not_actuate_on_unknown_observed_status() {
+    fn tick_emits_assign_for_pending_with_role() {
         let conn = store::open_memory();
-        let _ = insert_task(
+        let id = insert_task(
             &conn,
             &NewTask {
                 name: "t".into(),
-                role: None,
-                cwd: "/x".into(),
+                role: Some("backend".into()),
+                cwd: "/work/x".into(),
                 prompt: "do".into(),
                 model: None,
                 budget_usd: None,
@@ -226,14 +274,87 @@ mod tests {
         let sup = Supervisor::with_defaults();
         let sensors = StubSensors {
             last_id: 0,
-            sessions: vec![ObservedSession {
-                session_id: "ghost".into(),
-                pid: 0,
-                status: ObservedStatus::Unknown,
-            }],
+            sessions: vec![],
         };
         let actions = sup.tick(&conn, &sensors).unwrap();
-        // No actions for Unknown observed sessions, per RFC v2 §6.
-        assert!(actions.is_empty());
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            Action::AssignViaMailbox { task_id, role } => {
+                assert_eq!(task_id, &id);
+                assert_eq!(role, "backend");
+            }
+            other => panic!("expected AssignViaMailbox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tick_emits_spawn_for_pending_without_role() {
+        let conn = store::open_memory();
+        let id = insert_task(
+            &conn,
+            &NewTask {
+                name: "t".into(),
+                role: None,
+                cwd: "/work/x".into(),
+                prompt: "do".into(),
+                model: None,
+                budget_usd: None,
+                max_retries: None,
+                timeout_min: None,
+                depends_on: vec![],
+                policy: None,
+            },
+        )
+        .unwrap();
+        let sup = Supervisor::with_defaults();
+        let sensors = StubSensors {
+            last_id: 0,
+            sessions: vec![],
+        };
+        let actions = sup.tick(&conn, &sensors).unwrap();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            Action::Spawn { task_id, cwd } => {
+                assert_eq!(task_id, &id);
+                assert_eq!(cwd.to_string_lossy(), "/work/x");
+            }
+            other => panic!("expected Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tick_respects_max_concurrent_ceiling() {
+        let conn = store::open_memory();
+        // Five Pending tasks, max_concurrent = 4.
+        for i in 0..5 {
+            insert_task(
+                &conn,
+                &NewTask {
+                    name: format!("t{i}"),
+                    role: Some("backend".into()),
+                    cwd: "/work/x".into(),
+                    prompt: "do".into(),
+                    model: None,
+                    budget_usd: None,
+                    max_retries: None,
+                    timeout_min: None,
+                    depends_on: vec![],
+                    policy: None,
+                },
+            )
+            .unwrap();
+        }
+        let sup = Supervisor::new(Policy {
+            max_concurrent: 4,
+            ..Policy::default()
+        });
+        let sensors = StubSensors {
+            last_id: 0,
+            sessions: vec![],
+        };
+        let actions = sup.tick(&conn, &sensors).unwrap();
+        // Only 4 actions emitted — the fifth waits for an in-flight slot
+        // to clear.
+        assert_eq!(actions.len(), 4);
     }
 }

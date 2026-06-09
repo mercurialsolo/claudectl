@@ -1088,19 +1088,37 @@ pub(crate) fn run_headless(
         #[cfg(feature = "coord")]
         check_context_rot(&app, json_mode);
 
-        // Supervisor reconciler tick (#345). Opening the coord DB on every
-        // tick is cheap (SQLite WAL keeps the connection lightweight) and
-        // sidesteps any lifetime tangle with the App's borrows. PR4 will
-        // hold the conn as state once the actuator needs to write
-        // transitions in the same pass.
+        // Supervisor reconciler + actuator tick (#345). Read desired state,
+        // emit actions, carry them out. Opening the coord DB on every tick
+        // is cheap (SQLite WAL keeps the connection lightweight) and
+        // sidesteps any lifetime tangle with the App's borrows.
         #[cfg(feature = "coord")]
-        if let Ok(conn) = crate::coord::store::open() {
+        if let Ok(mut conn) = crate::coord::store::open() {
             let sensors = NoopSensors;
             match supervisor.tick(&conn, &sensors) {
                 Ok(actions) if !actions.is_empty() => {
+                    let mut actuated = 0u32;
+                    let mut errors = 0u32;
+                    #[cfg(feature = "bus")]
+                    let fx = LiveSideEffects;
+                    #[cfg(not(feature = "bus"))]
+                    let fx = NoopSideEffects;
+                    for action in &actions {
+                        match crate::coord::actuator::apply(&mut conn, &fx, action) {
+                            Ok(()) => actuated += 1,
+                            Err(e) => {
+                                errors += 1;
+                                emit_headless_event(
+                                    "supervisor_action_failed",
+                                    serde_json::json!({"error": e}),
+                                    json_mode,
+                                );
+                            }
+                        }
+                    }
                     emit_headless_event(
-                        "supervisor_actions",
-                        serde_json::json!({"count": actions.len()}),
+                        "supervisor_tick",
+                        serde_json::json!({"emitted": actions.len(), "actuated": actuated, "errors": errors}),
                         json_mode,
                     );
                 }
@@ -1191,6 +1209,68 @@ impl crate::coord::supervisor::Sensors for NoopSensors {
     }
     fn observed_sessions(&self) -> Vec<crate::coord::supervisor::ObservedSession> {
         Vec::new()
+    }
+}
+
+/// Real side effects for the supervisor's actuator (#345). Routes
+/// `AssignViaMailbox` through the bus's publish path (sanitized body,
+/// hop guard from PR2). `spawn_session` is stubbed for this PR — the
+/// `launch::launch` path requires an attached terminal and is wired in
+/// PR5 alongside the verifier runner. Until then, the spawn fallback
+/// path returns a synthetic error and the reconciler will retry on
+/// the next tick.
+#[cfg(all(feature = "coord", feature = "bus"))]
+struct LiveSideEffects;
+#[cfg(all(feature = "coord", feature = "bus"))]
+impl crate::coord::actuator::SideEffects for LiveSideEffects {
+    fn publish_assignment(
+        &self,
+        role: &str,
+        task_id: &str,
+        prompt: &str,
+        hop_count: u32,
+    ) -> Result<String, String> {
+        let conn = crate::bus::store::open()?;
+        let subject = format!("task.assigned.{task_id}");
+        let body = crate::bus::policy::sanitize_body(prompt);
+        crate::bus::store::insert_message(
+            &conn,
+            &subject,
+            "task",
+            Some("supervisor"),
+            Some(role),
+            None,
+            &body,
+            "normal",
+            hop_count,
+        )
+    }
+    fn spawn_session(&self, _cwd: &std::path::Path, _prompt: &str) -> Result<String, String> {
+        // Spawn path lands in PR5 once `launch::launch` has a non-tty
+        // adapter; for now report a structured error so the reconciler
+        // can log + retry without taking the session-died code path.
+        Err("spawn fallback not implemented in PR4 — pending PR5 launch adapter".into())
+    }
+}
+
+/// Bus-less fallback so the supervisor can run in a `--no-default-
+/// features --features hive` build. Mailbox assignment is unavailable;
+/// the actuator surfaces a clean error instead of panicking.
+#[cfg(all(feature = "coord", not(feature = "bus")))]
+struct NoopSideEffects;
+#[cfg(all(feature = "coord", not(feature = "bus")))]
+impl crate::coord::actuator::SideEffects for NoopSideEffects {
+    fn publish_assignment(
+        &self,
+        _role: &str,
+        _task_id: &str,
+        _prompt: &str,
+        _hop_count: u32,
+    ) -> Result<String, String> {
+        Err("bus feature not compiled in; AssignViaMailbox is unavailable".into())
+    }
+    fn spawn_session(&self, _cwd: &std::path::Path, _prompt: &str) -> Result<String, String> {
+        Err("spawn fallback not implemented in PR4".into())
     }
 }
 

@@ -239,6 +239,113 @@ fn log_transition(
     Ok(())
 }
 
+/// Insert a fresh attempt row for `task_id`. Used by the actuator when it
+/// emits an `AssignViaMailbox` or `Spawn`. `bus_message_id` is set on
+/// mailbox-assigned attempts and `None` on direct spawns; `started_at`
+/// anchors the claim_timeout clock.
+pub fn insert_attempt(
+    conn: &Connection,
+    task_id: &str,
+    attempt_num: u32,
+    session_id: Option<&str>,
+    bus_message_id: Option<&str>,
+    cwd_hash: Option<&str>,
+) -> Result<String, String> {
+    let id = gen_id("attempt");
+    let now = now();
+    conn.execute(
+        "INSERT INTO task_attempts
+            (id, task_id, attempt_num, session_id, bus_message_id, cwd_hash, started_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            id,
+            task_id,
+            attempt_num,
+            session_id,
+            bus_message_id,
+            cwd_hash,
+            now,
+        ],
+    )
+    .map_err(|e| format!("insert attempt: {e}"))?;
+    Ok(id)
+}
+
+/// Count attempts so the actuator can pick the next `attempt_num` without
+/// a race against itself. Cheap — indexed on `task_id`.
+pub fn attempt_count(conn: &Connection, task_id: &str) -> Result<u32, String> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_attempts WHERE task_id = ?1",
+            params![task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("count attempts: {e}"))?;
+    Ok(n as u32)
+}
+
+/// Minutes elapsed since the most recent attempt's `started_at`. The
+/// reconciler reads this to decide whether a mailbox-assigned task has
+/// blown the claim timeout. Returns `None` when the task has no attempts
+/// (a task in ASSIGNED with no attempt means the actuator crashed mid-
+/// commit; the reconciler's invariant is "every ASSIGNED task has an
+/// attempt", so this case maps to "wait one more tick").
+pub fn latest_attempt_age_minutes(conn: &Connection, task_id: &str) -> Result<Option<u64>, String> {
+    let started_at: Option<String> = conn
+        .query_row(
+            "SELECT started_at FROM task_attempts
+             WHERE task_id = ?1
+             ORDER BY attempt_num DESC LIMIT 1",
+            params![task_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("query latest attempt: {e}"))?;
+    let Some(s) = started_at else {
+        return Ok(None);
+    };
+    // Best-effort ISO-8601 parse: the rest of the codebase uses
+    // `crate::logger::timestamp_now()` which is RFC3339-ish. Anything
+    // we can't parse returns `Some(0)` rather than `None` so the
+    // reconciler doesn't mistake "unparseable" for "no attempt yet".
+    let parsed = parse_iso_to_epoch(&s).unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let delta_sec = now.saturating_sub(parsed);
+    Ok(Some(delta_sec / 60))
+}
+
+/// Tiny ISO-8601 parser limited to what `logger::timestamp_now()` emits
+/// (UTC, second precision, `Z` suffix). Avoids pulling chrono just to
+/// read one timestamp.
+fn parse_iso_to_epoch(s: &str) -> Option<u64> {
+    // Expected form: 2026-06-09T12:34:56Z
+    if s.len() < 20 || !s.ends_with('Z') {
+        return None;
+    }
+    let year: i64 = s.get(0..4)?.parse().ok()?;
+    let month: u32 = s.get(5..7)?.parse().ok()?;
+    let day: u32 = s.get(8..10)?.parse().ok()?;
+    let hour: u32 = s.get(11..13)?.parse().ok()?;
+    let minute: u32 = s.get(14..16)?.parse().ok()?;
+    let second: u32 = s.get(17..19)?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Days-from-epoch via Howard Hinnant's algorithm.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = (y - era * 400) as u32;
+    let m = month as i64;
+    let doy: u32 = (153 * (if m > 2 { m - 3 } else { m + 9 }) as u32 + 2) / 5 + (day - 1);
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days_from_epoch = era * 146097 + doe as i64 - 719468;
+    let total = days_from_epoch * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64;
+    if total < 0 { None } else { Some(total as u64) }
+}
+
 pub fn list_transitions(
     conn: &Connection,
     task_id: &str,

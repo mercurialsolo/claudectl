@@ -1,3 +1,4 @@
+pub mod actuator;
 pub mod adapter;
 pub mod adapter_claude;
 pub mod adapter_codex;
