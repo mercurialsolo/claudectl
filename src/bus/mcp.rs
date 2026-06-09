@@ -169,6 +169,11 @@ pub struct SubmitTaskArgs {
     /// session-policy file the supervisor writes at assignment time.
     #[serde(default)]
     pub policy: Option<serde_json::Value>,
+    /// Verifier list (#347). Expects an array of `{kind: "run"|"brain"|
+    /// "agent", ...}` objects; serde flattens to `Vec<Verifier>` inside
+    /// the handler. Empty / missing ⇒ the task graduates without gates.
+    #[serde(default)]
+    pub verifiers: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -398,6 +403,20 @@ impl BusServer {
         Parameters(args): Parameters<SubmitTaskArgs>,
     ) -> Result<Json<SubmitTaskResult>, McpError> {
         let coord = crate::coord::store::open().map_err(|e| McpError::internal_error(e, None))?;
+        let verifiers =
+            args.verifiers
+                .as_ref()
+                .map(|raw| {
+                    serde_json::from_value::<Vec<crate::coord::verify::Verifier>>(raw.clone())
+                        .map_err(|e| {
+                            McpError::invalid_params(
+                                format!("verifiers must be a Verifier array: {e}"),
+                                None,
+                            )
+                        })
+                })
+                .transpose()?
+                .unwrap_or_default();
         let new_task = crate::coord::tasks::NewTask {
             name: args.name,
             role: args.role,
@@ -409,6 +428,7 @@ impl BusServer {
             timeout_min: args.timeout_min,
             depends_on: args.depends_on.unwrap_or_default(),
             policy: args.policy,
+            verifiers,
         };
         let task_id = crate::coord::tasks::insert_task(&coord, &new_task)
             .map_err(|e| McpError::internal_error(e, None))?;

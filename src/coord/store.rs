@@ -65,7 +65,8 @@ pub fn gen_id(prefix: &str) -> String {
 /// v1 = baseline (lease/blocker/handoff/interrupt/memory tables).
 /// v2 = supervisor tables (#345): tasks, task_attempts,
 ///       task_verifications, task_transitions, hook_events.
-pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 2;
+/// v3 = supervisor verifier list on `tasks.verifiers` (#347).
+pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 3;
 
 /// Open (or create) the coordination database and run migrations.
 pub fn open() -> Result<Connection, String> {
@@ -351,6 +352,13 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         CREATE INDEX IF NOT EXISTS idx_hook_events_ingested ON hook_events(ingested_at);
         ",
     )?;
+
+    // Schema v3 — supervisor verifier gates (#345 PR5). Additive only:
+    // `tasks.verifiers` is a nullable JSON column carrying the task's
+    // gate list. Adding it doesn't break older binaries (they ignore
+    // unknown columns), so the version bump is for capability
+    // discovery rather than safety.
+    ensure_column(conn, "tasks", "verifiers", "verifiers TEXT")?;
 
     // Bump `user_version` last — table creation runs first so a partially
     // migrated DB never gets the version stamp; the gate then refuses to

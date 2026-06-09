@@ -1222,6 +1222,72 @@ impl crate::coord::supervisor::Sensors for NoopSensors {
 #[cfg(all(feature = "coord", feature = "bus"))]
 struct LiveSideEffects;
 #[cfg(all(feature = "coord", feature = "bus"))]
+impl crate::coord::verify::VerifierBackend for LiveSideEffects {
+    fn run_shell(
+        &self,
+        cwd: &std::path::Path,
+        command: &str,
+        timeout: std::time::Duration,
+    ) -> Result<crate::coord::verify::ShellResult, String> {
+        // /bin/sh -c so users can pipe / chain / quote naturally.
+        // Inheriting env mirrors what the user would see running by hand.
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn verifier shell: {e}"))?;
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    use std::io::Read;
+                    let mut combined = String::new();
+                    if let Some(mut stdout) = child.stdout.take() {
+                        let _ = stdout.read_to_string(&mut combined);
+                    }
+                    if let Some(mut stderr) = child.stderr.take() {
+                        let _ = stderr.read_to_string(&mut combined);
+                    }
+                    return Ok(crate::coord::verify::ShellResult {
+                        exit_code: status.code().unwrap_or(-1),
+                        combined_output: combined,
+                    });
+                }
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        return Err(format!("shell verifier timed out after {timeout:?}"));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(format!("wait verifier shell: {e}")),
+            }
+        }
+    }
+    fn query_brain(&self, _prompt: &str) -> Result<String, String> {
+        // The brain client surface needs more plumbing than fits in
+        // this PR (it currently runs as an inflight task inside the
+        // engine, not a sync request/response). Return a structured
+        // error so the actuator marks the verifier as FAIL with a
+        // clear message — gates fail closed, not open.
+        Err(
+            "live brain verifier not yet wired; declare a `run` verifier or stub the brain backend"
+                .into(),
+        )
+    }
+    fn run_agent(
+        &self,
+        _prompt: &str,
+        _model: Option<&str>,
+        _budget_usd: Option<f64>,
+    ) -> Result<crate::coord::verify::AgentResult, String> {
+        Err("live agent verifier not yet wired; headless `claude -p` adapter is a follow-up".into())
+    }
+}
+#[cfg(all(feature = "coord", feature = "bus"))]
 impl crate::coord::actuator::SideEffects for LiveSideEffects {
     fn publish_assignment(
         &self,
@@ -1258,6 +1324,28 @@ impl crate::coord::actuator::SideEffects for LiveSideEffects {
 /// the actuator surfaces a clean error instead of panicking.
 #[cfg(all(feature = "coord", not(feature = "bus")))]
 struct NoopSideEffects;
+#[cfg(all(feature = "coord", not(feature = "bus")))]
+impl crate::coord::verify::VerifierBackend for NoopSideEffects {
+    fn run_shell(
+        &self,
+        _cwd: &std::path::Path,
+        _command: &str,
+        _timeout: std::time::Duration,
+    ) -> Result<crate::coord::verify::ShellResult, String> {
+        Err("verifier shell unavailable in this build".into())
+    }
+    fn query_brain(&self, _prompt: &str) -> Result<String, String> {
+        Err("verifier brain unavailable in this build".into())
+    }
+    fn run_agent(
+        &self,
+        _prompt: &str,
+        _model: Option<&str>,
+        _budget_usd: Option<f64>,
+    ) -> Result<crate::coord::verify::AgentResult, String> {
+        Err("verifier agent unavailable in this build".into())
+    }
+}
 #[cfg(all(feature = "coord", not(feature = "bus")))]
 impl crate::coord::actuator::SideEffects for NoopSideEffects {
     fn publish_assignment(

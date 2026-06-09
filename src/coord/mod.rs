@@ -14,3 +14,4 @@ pub mod store;
 pub mod supervisor;
 pub mod tasks;
 pub mod types;
+pub mod verify;

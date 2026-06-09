@@ -89,6 +89,10 @@ pub struct TaskRow {
     /// time is what the brain-gate hook reads from
     /// `~/.claudectl/coord/session-policy/<session>.json`.
     pub policy: Option<serde_json::Value>,
+    /// Declared verifier list (#347). Run in order on `VERIFYING`,
+    /// short-circuit on first FAIL. Empty list ⇒ the task graduates to
+    /// DONE as soon as the session ends — gates are opt-in.
+    pub verifiers: Vec<super::verify::Verifier>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -107,6 +111,7 @@ pub struct NewTask {
     pub timeout_min: Option<u32>,
     pub depends_on: Vec<String>,
     pub policy: Option<serde_json::Value>,
+    pub verifiers: Vec<super::verify::Verifier>,
 }
 
 pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
@@ -118,11 +123,16 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
         .as_ref()
         .map(|v| serde_json::to_string(v).map_err(|e| format!("policy json: {e}")))
         .transpose()?;
+    let verifiers = if t.verifiers.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&t.verifiers).map_err(|e| format!("verifiers json: {e}"))?)
+    };
     conn.execute(
         "INSERT INTO tasks (id, name, state, role, cwd, prompt, model, budget_usd,
-                            max_retries, timeout_min, depends_on, policy,
+                            max_retries, timeout_min, depends_on, policy, verifiers,
                             created_at, updated_at)
-         VALUES (?1, ?2, 'PENDING', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+         VALUES (?1, ?2, 'PENDING', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
         params![
             id,
             t.name,
@@ -135,6 +145,7 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
             t.timeout_min.unwrap_or(45),
             depends_on,
             policy,
+            verifiers,
             now,
         ],
     )
@@ -154,7 +165,7 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
 pub fn get_task(conn: &Connection, id: &str) -> Result<Option<TaskRow>, String> {
     conn.query_row(
         "SELECT id, name, state, role, cwd, prompt, model, budget_usd,
-                max_retries, timeout_min, depends_on, policy,
+                max_retries, timeout_min, depends_on, policy, verifiers,
                 created_at, updated_at
          FROM tasks WHERE id = ?1",
         params![id],
@@ -166,7 +177,7 @@ pub fn get_task(conn: &Connection, id: &str) -> Result<Option<TaskRow>, String> 
 
 pub fn list_tasks(conn: &Connection, state: Option<TaskState>) -> Result<Vec<TaskRow>, String> {
     let sql = "SELECT id, name, state, role, cwd, prompt, model, budget_usd,
-                      max_retries, timeout_min, depends_on, policy,
+                      max_retries, timeout_min, depends_on, policy, verifiers,
                       created_at, updated_at
                FROM tasks
                WHERE (?1 IS NULL OR state = ?1)
@@ -217,6 +228,44 @@ pub fn transition(
     .map_err(|e| format!("log transition: {e}"))?;
     tx.commit().map_err(|e| format!("commit: {e}"))?;
     Ok(())
+}
+
+/// Record one verifier verdict against an attempt (#347). The actuator
+/// writes one row per verifier the gate produced — PASS rows so the
+/// audit trail shows what was tried, FAIL rows so the retry-prompt
+/// builder can lift the failure output.
+pub fn record_verification(
+    conn: &Connection,
+    attempt_id: &str,
+    kind: &str,
+    command: &str,
+    verdict: &str,
+    output: &str,
+    cost_usd: f64,
+) -> Result<(), String> {
+    let now = now();
+    conn.execute(
+        "INSERT INTO task_verifications (attempt_id, kind, command, verdict, output, cost_usd, ran_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![attempt_id, kind, command, verdict, output, cost_usd, now],
+    )
+    .map_err(|e| format!("insert verification: {e}"))?;
+    Ok(())
+}
+
+/// Lookup the latest attempt id for `task_id`, used by the actuator
+/// when transitioning Running → Verifying so the verifier rows attach
+/// to the right attempt. Mirrors `latest_attempt_age_minutes` but
+/// returns the id instead of the elapsed time.
+pub fn latest_attempt_id(conn: &Connection, task_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT id FROM task_attempts WHERE task_id = ?1
+         ORDER BY attempt_num DESC LIMIT 1",
+        params![task_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| format!("latest attempt id: {e}"))
 }
 
 /// Append-only log used by `insert_task` (CREATED bookmark) and tests.
@@ -372,6 +421,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
     let state_str: String = row.get(2)?;
     let depends_on_str: String = row.get(10)?;
     let policy_str: Option<String> = row.get(11)?;
+    let verifiers_str: Option<String> = row.get(12)?;
     Ok(TaskRow {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -385,8 +435,11 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         timeout_min: row.get::<_, i64>(9)? as u32,
         depends_on: serde_json::from_str(&depends_on_str).unwrap_or_default(),
         policy: policy_str.and_then(|s| serde_json::from_str(&s).ok()),
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        verifiers: verifiers_str
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -418,6 +471,7 @@ mod tests {
             timeout_min: Some(45),
             depends_on: vec![],
             policy: None,
+            verifiers: vec![],
         }
     }
 

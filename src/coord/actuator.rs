@@ -21,12 +21,15 @@
 use rusqlite::Connection;
 
 use super::supervisor::Action;
-use super::tasks::{TaskState, attempt_count, get_task, insert_attempt, transition};
+use super::tasks::{
+    TaskState, attempt_count, get_task, insert_attempt, record_verification, transition,
+};
+use super::verify::{VerdictKind, VerifierBackend, run_verifier};
 
 /// Side-effect surface the actuator depends on. Stubbed in tests so the
 /// crash-safety test can drive every transition without spinning up a
 /// real bus or terminal launcher.
-pub trait SideEffects {
+pub trait SideEffects: VerifierBackend {
     /// Write a `task.assigned` message to the role's mailbox. Returns
     /// the bus `message_id` so the actuator can store it on the
     /// attempt row — that link is what lets the reconciler later
@@ -115,14 +118,111 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             )?;
             Ok(())
         }
-        // The remaining variants belong to PR5 / PR6 — stubbed out so
-        // the reconciler can emit them today without the actuator
-        // panicking.
-        Action::RunVerifier { .. }
-        | Action::WriteSessionPolicy { .. }
+        Action::RunVerifier {
+            task_id,
+            attempt_id,
+        } => {
+            let task =
+                get_task(conn, task_id)?.ok_or_else(|| format!("task {task_id} not found"))?;
+            // Only valid from Running — guards against a stale tick
+            // emitting verify against a task that's already moved on.
+            if task.state != TaskState::Running && task.state != TaskState::Verifying {
+                return Ok(());
+            }
+            // Move to Verifying if we're not already there. The
+            // transition is the "verifier pass started" marker an
+            // operator looking at `task_status` should see.
+            if task.state == TaskState::Running {
+                transition(
+                    conn,
+                    task_id,
+                    TaskState::Running,
+                    TaskState::Verifying,
+                    "running-complete",
+                )?;
+            }
+
+            // No verifiers declared ⇒ task graduates straight to Done.
+            // Gates are opt-in; an empty list is a perfectly valid
+            // contract that says "trust the agent."
+            if task.verifiers.is_empty() {
+                transition(
+                    conn,
+                    task_id,
+                    TaskState::Verifying,
+                    TaskState::Done,
+                    "no-verifiers",
+                )?;
+                return Ok(());
+            }
+
+            // Walk verifiers in declared order. Short-circuit on first
+            // FAIL — RFC §5's verifier-is-the-gradient principle.
+            let cwd = std::path::PathBuf::from(&task.cwd);
+            for verifier in &task.verifiers {
+                let verdict = run_verifier(fx, &cwd, verifier)?;
+                let verdict_str = match verdict.verdict {
+                    VerdictKind::Pass => "PASS",
+                    VerdictKind::Fail => "FAIL",
+                };
+                record_verification(
+                    conn,
+                    attempt_id,
+                    verifier.kind(),
+                    verifier.command_text(),
+                    verdict_str,
+                    &verdict.output,
+                    verdict.cost_usd,
+                )?;
+                if verdict.verdict == VerdictKind::Fail {
+                    // Attempts cap → NEEDS_HUMAN; otherwise retry.
+                    let used = attempt_count(conn, task_id)?;
+                    let next_state = if used > task.max_retries {
+                        TaskState::NeedsHuman
+                    } else {
+                        TaskState::Retrying
+                    };
+                    transition(
+                        conn,
+                        task_id,
+                        TaskState::Verifying,
+                        next_state,
+                        match next_state {
+                            TaskState::NeedsHuman => "retries-exhausted",
+                            _ => "verify-fail",
+                        },
+                    )?;
+                    return Ok(());
+                }
+                // PASS path: fall through to the next verifier.
+                let _ = retry_prompt_for_fail; // retain reference for clippy
+            }
+            // All verifiers passed.
+            transition(
+                conn,
+                task_id,
+                TaskState::Verifying,
+                TaskState::Done,
+                "verify-pass",
+            )?;
+            Ok(())
+        }
+        // The remaining variants belong to PR6 — stubbed out so the
+        // reconciler can emit them today without the actuator
+        // panicking. Implementation lands with the resume protocol.
+        Action::WriteSessionPolicy { .. }
         | Action::ClearSessionPolicy { .. }
         | Action::EscalateHuman { .. } => Ok(()),
     }
+}
+
+/// Compose the retry-prompt fed back to the agent on `Retrying`. The
+/// supervisor doesn't *use* this yet — it lands when M6's resume
+/// protocol takes the Retrying → Assigned edge — but lives here next
+/// to the verifier dispatch so the verifier output it consumes is
+/// obviously the same string the ledger recorded.
+pub fn retry_prompt_for_fail(original_prompt: &str, verifier_kind: &str, output: &str) -> String {
+    super::verify::build_retry_prompt(original_prompt, verifier_kind, output)
 }
 
 /// Connect the bus `message_id` to the attempt row. Separate from
@@ -151,12 +251,19 @@ mod tests {
     use crate::coord::tasks::{NewTask, TaskState, get_task, insert_task, list_transitions};
 
     /// In-process recorder so tests can assert what side effects fired
-    /// without standing up a real bus or terminal.
+    /// without standing up a real bus or terminal. The `shell_results`
+    /// / `brain_replies` / `agent_replies` queues let verifier-flow
+    /// tests script each verifier's verdict deterministically.
     struct RecordingFx {
         published: std::cell::RefCell<Vec<(String, String, u32)>>,
         spawned: std::cell::RefCell<Vec<(std::path::PathBuf, String)>>,
         next_message_id: std::cell::RefCell<u64>,
         next_session_id: std::cell::RefCell<u64>,
+        shell_results:
+            std::cell::RefCell<std::collections::VecDeque<crate::coord::verify::ShellResult>>,
+        brain_replies: std::cell::RefCell<std::collections::VecDeque<String>>,
+        agent_replies:
+            std::cell::RefCell<std::collections::VecDeque<crate::coord::verify::AgentResult>>,
     }
 
     impl Default for RecordingFx {
@@ -166,7 +273,51 @@ mod tests {
                 spawned: Default::default(),
                 next_message_id: std::cell::RefCell::new(1),
                 next_session_id: std::cell::RefCell::new(1),
+                shell_results: Default::default(),
+                brain_replies: Default::default(),
+                agent_replies: Default::default(),
             }
+        }
+    }
+
+    impl VerifierBackend for RecordingFx {
+        fn run_shell(
+            &self,
+            _cwd: &std::path::Path,
+            command: &str,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::coord::verify::ShellResult, String> {
+            // Each command's exit / output is steered by the test via
+            // `shell_results` queue; default is exit 0 with the command
+            // echoed back so the assertions can read it without
+            // round-tripping a process.
+            let popped = self.shell_results.borrow_mut().pop_front();
+            Ok(popped.unwrap_or(crate::coord::verify::ShellResult {
+                exit_code: 0,
+                combined_output: format!("ran {command}"),
+            }))
+        }
+        fn query_brain(&self, _prompt: &str) -> Result<String, String> {
+            Ok(self
+                .brain_replies
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or_else(|| "PASS".into()))
+        }
+        fn run_agent(
+            &self,
+            _prompt: &str,
+            _model: Option<&str>,
+            _budget_usd: Option<f64>,
+        ) -> Result<crate::coord::verify::AgentResult, String> {
+            Ok(self
+                .agent_replies
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or_else(|| crate::coord::verify::AgentResult {
+                    reply: "PASS".into(),
+                    cost_usd: 0.0,
+                }))
         }
     }
 
@@ -209,6 +360,7 @@ mod tests {
             timeout_min: None,
             depends_on: vec![],
             policy: None,
+            verifiers: vec![],
         }
     }
 
@@ -280,6 +432,188 @@ mod tests {
         // Task is still Assigned.
         let task = get_task(&conn, &id).unwrap().unwrap();
         assert_eq!(task.state, TaskState::Assigned);
+    }
+
+    #[test]
+    fn run_verifier_pass_chain_lands_done() {
+        use crate::coord::tasks::list_transitions;
+        use crate::coord::verify::Verifier;
+
+        let mut conn = store::open_memory();
+        // Two passing verifiers chained.
+        let new_task = NewTask {
+            verifiers: vec![
+                Verifier::Run {
+                    command: "cargo test".into(),
+                },
+                Verifier::Brain {
+                    prompt: "Looks ok?".into(),
+                },
+            ],
+            ..sample_with_role(None)
+        };
+        let id = insert_task(&conn, &new_task).unwrap();
+        let fx = RecordingFx::default();
+        // Get the task into Running via the Spawn path so the verifier
+        // can advance it.
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Spawn {
+                task_id: id.clone(),
+                cwd: std::path::PathBuf::from("/work/x"),
+            },
+        )
+        .unwrap();
+        let attempt_id = crate::coord::tasks::latest_attempt_id(&conn, &id)
+            .unwrap()
+            .unwrap();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::RunVerifier {
+                task_id: id.clone(),
+                attempt_id,
+            },
+        )
+        .unwrap();
+        let task = get_task(&conn, &id).unwrap().unwrap();
+        assert_eq!(task.state, TaskState::Done);
+        // Transition log should end at Done with verify-pass.
+        let hist = list_transitions(&conn, &id).unwrap();
+        let last_cause = hist.last().unwrap().2.clone();
+        assert_eq!(last_cause, "verify-pass");
+    }
+
+    #[test]
+    fn run_verifier_first_fail_short_circuits_to_retrying() {
+        use crate::coord::tasks::list_transitions;
+        use crate::coord::verify::{ShellResult, Verifier};
+
+        let mut conn = store::open_memory();
+        let new_task = NewTask {
+            verifiers: vec![
+                Verifier::Run {
+                    command: "cargo test".into(),
+                },
+                // This second verifier must NEVER run — short-circuit on
+                // the first FAIL is the RFC §5 contract.
+                Verifier::Brain {
+                    prompt: "should be skipped".into(),
+                },
+            ],
+            max_retries: Some(2),
+            ..sample_with_role(None)
+        };
+        let id = insert_task(&conn, &new_task).unwrap();
+        let fx = RecordingFx::default();
+        // Script: first shell run returns exit 1 with output.
+        fx.shell_results.borrow_mut().push_back(ShellResult {
+            exit_code: 1,
+            combined_output: "test tests::auth FAILED".into(),
+        });
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Spawn {
+                task_id: id.clone(),
+                cwd: std::path::PathBuf::from("/work/x"),
+            },
+        )
+        .unwrap();
+        let attempt_id = crate::coord::tasks::latest_attempt_id(&conn, &id)
+            .unwrap()
+            .unwrap();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::RunVerifier {
+                task_id: id.clone(),
+                attempt_id,
+            },
+        )
+        .unwrap();
+        let task = get_task(&conn, &id).unwrap().unwrap();
+        assert_eq!(task.state, TaskState::Retrying);
+        // No brain reply consumed → the second verifier short-circuited.
+        assert!(fx.brain_replies.borrow().is_empty());
+        let hist = list_transitions(&conn, &id).unwrap();
+        let last_cause = &hist.last().unwrap().2;
+        assert_eq!(last_cause, "verify-fail");
+    }
+
+    #[test]
+    fn run_verifier_exhausted_retries_lands_needs_human() {
+        use crate::coord::verify::{ShellResult, Verifier};
+
+        let mut conn = store::open_memory();
+        // max_retries = 0 → first FAIL has no retry slot.
+        let new_task = NewTask {
+            verifiers: vec![Verifier::Run {
+                command: "cargo test".into(),
+            }],
+            max_retries: Some(0),
+            ..sample_with_role(None)
+        };
+        let id = insert_task(&conn, &new_task).unwrap();
+        let fx = RecordingFx::default();
+        fx.shell_results.borrow_mut().push_back(ShellResult {
+            exit_code: 1,
+            combined_output: "nope".into(),
+        });
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Spawn {
+                task_id: id.clone(),
+                cwd: std::path::PathBuf::from("/work/x"),
+            },
+        )
+        .unwrap();
+        let attempt_id = crate::coord::tasks::latest_attempt_id(&conn, &id)
+            .unwrap()
+            .unwrap();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::RunVerifier {
+                task_id: id.clone(),
+                attempt_id,
+            },
+        )
+        .unwrap();
+        let task = get_task(&conn, &id).unwrap().unwrap();
+        assert_eq!(task.state, TaskState::NeedsHuman);
+    }
+
+    #[test]
+    fn run_verifier_with_empty_list_graduates_directly() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(None)).unwrap();
+        let fx = RecordingFx::default();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Spawn {
+                task_id: id.clone(),
+                cwd: std::path::PathBuf::from("/work/x"),
+            },
+        )
+        .unwrap();
+        let attempt_id = crate::coord::tasks::latest_attempt_id(&conn, &id)
+            .unwrap()
+            .unwrap();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::RunVerifier {
+                task_id: id.clone(),
+                attempt_id,
+            },
+        )
+        .unwrap();
+        let task = get_task(&conn, &id).unwrap().unwrap();
+        assert_eq!(task.state, TaskState::Done);
     }
 
     #[test]

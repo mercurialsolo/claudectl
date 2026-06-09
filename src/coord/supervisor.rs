@@ -268,6 +268,7 @@ mod tests {
                 timeout_min: None,
                 depends_on: vec![],
                 policy: None,
+                verifiers: vec![],
             },
         )
         .unwrap();
@@ -303,6 +304,7 @@ mod tests {
                 timeout_min: None,
                 depends_on: vec![],
                 policy: None,
+                verifiers: vec![],
             },
         )
         .unwrap();
@@ -340,6 +342,7 @@ mod tests {
                     timeout_min: None,
                     depends_on: vec![],
                     policy: None,
+                    verifiers: vec![],
                 },
             )
             .unwrap();
