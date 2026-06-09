@@ -182,11 +182,9 @@ impl PeerRegistry {
                         }
                     }
                 }
-                PeerState::Disconnected if peer.is_initiator => {
-                    if peer.should_reconnect() {
-                        events.push(MeshEvent::ReconnectNeeded(peer.peer_id.clone(), peer.addr));
-                        peer.schedule_reconnect();
-                    }
+                PeerState::Disconnected if peer.is_initiator && peer.should_reconnect() => {
+                    events.push(MeshEvent::ReconnectNeeded(peer.peer_id.clone(), peer.addr));
+                    peer.schedule_reconnect();
                 }
                 _ => {}
             }

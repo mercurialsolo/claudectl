@@ -6,8 +6,8 @@ Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns fro
 
 ```bash
 cargo build                  # Debug build
-cargo build --release        # Release build, default features (hive only) — ~3.5 MB
-cargo build --release --features "bus,coord,relay,hive"   # Full feature set — ~6.3 MB; what the Homebrew bottle ships
+cargo build --release        # Release build, default features (bus+coord+relay+hive) — ~6.3 MB; matches the Homebrew bottle
+cargo build --release --no-default-features --features hive   # Minimal sync-only build — ~3.5 MB
 cargo test                   # Run all tests
 cargo clippy -- -D warnings  # Lint (warnings are errors in CI)
 cargo fmt --check            # Check formatting
@@ -137,7 +137,7 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 
 ## Key Design Decisions
 
-- **Minimal dependencies** — 7 runtime crates. Binary must stay under 1MB, startup under 50ms. **Exception:** the `bus` feature deliberately relaxes this (pulls rmcp + Tokio + schemars) because every available MCP SDK is async; the default build still honors the invariant.
+- **Minimal dependencies** — 7 runtime crates in the sync core. Startup under 50ms. **Exception:** the `bus` feature pulls rmcp + Tokio + schemars (every available MCP SDK is async) and is in the default feature set since the supervisor RFC (#342) — `cargo install` and `brew install` produce the same ~6 MB binary. The minimal sync-only build path (`--no-default-features --features hive`) remains CI-tested as the lower bound.
 - **Native `ps`** over `sysinfo` crate to keep binary small.
 - **Multi-signal status inference** — combines CPU usage, JSONL events, and timestamps (not just one signal).
 - **Incremental JSONL parsing** — tracks file offsets, never rereads full files.

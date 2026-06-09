@@ -17,8 +17,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Default features now include bus+coord+relay+hive (mirrors the
+      # Homebrew bottle). The no-default-features matrix preserves coverage
+      # of the minimal sync-only build path.
       - run: cargo check --all-targets
-      - run: cargo check --all-targets --features coord
+      - run: cargo check --all-targets --no-default-features --features hive
 
   fmt:
     name: Format
@@ -40,7 +43,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo clippy --all-targets --features coord -- -D warnings
+      - run: cargo clippy --all-targets --no-default-features --features hive -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -53,7 +56,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-targets
-      - run: cargo test --all-targets --features coord
+      - run: cargo test --all-targets --no-default-features --features hive
 
   # Workspace refactor (#279) — verify claudectl-core builds and tests
   # standalone, without the binary crate. Guards the

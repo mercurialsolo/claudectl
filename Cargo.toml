@@ -20,15 +20,21 @@ categories = ["command-line-utilities", "development-tools"]
 exclude = ["*.gif", "*.cast", "claude-demo.*", "CLAUDE.md", ".github/"]
 
 [features]
-default = ["hive"]
+# Default features mirror the Homebrew bottle (see .github/workflows/release.yml)
+# so `cargo install claudectl` and `brew install claudectl` produce identical
+# binaries. The supervisor (issue #342) requires `coord` at minimum and
+# `bus` for its MCP tool surface — keeping defaults aligned prevents the
+# "cargo users hit silent no-ops" gap that motivated this change.
+default = ["bus", "coord", "relay", "hive"]
 # Propagated to claudectl-tui so its `App` struct can cfg-gate the matching
 # UI panels (coord widgets, relay peers panel, hive overlay tabs).
 coord = ["rusqlite", "claudectl-tui/coord"]
 relay = ["claudectl-tui/relay"]
 hive = ["claudectl-tui/hive"]
 # The agent bus (docs/AGENT_BUS.md). Lives on top of coord's SQLite layer and
-# pulls in an async MCP server stack (rmcp + tokio). Opt-in: the default build
-# stays small and sync.
+# pulls in an async MCP server stack (rmcp + tokio). Now in defaults; opt
+# out with `cargo build --no-default-features --features hive` for the
+# ~3.5 MB sync-only build.
 bus = ["coord", "dep:rmcp", "dep:tokio", "dep:schemars", "dep:async-trait"]
 
 [[bin]]
