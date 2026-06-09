@@ -35,15 +35,28 @@ If you only want the hook install (the previous `--init` flag), that's the **Plu
 
 Your existing Claude Code settings are preserved; the hook install only adds claudectl entries.
 
-**What gets added:**
+**What gets added:** the Plugin phase writes hooks in two places — into `~/.claude/settings.json` (the dashboard-observability hooks) and into the embedded plugin at `~/.claude/plugins/claudectl/hooks/hooks.json` (the bus + brain plugin hooks). Both sets coexist; Claude Code merges them.
 
-| Hook | Matcher | What it does |
-|------|---------|--------------|
-| `PreToolUse` | `Bash` | Lets claudectl see commands before they run |
-| `PostToolUse` | `*` | Notifies claudectl after every tool completion |
-| `Stop` | (all) | Notifies claudectl when a session ends |
+**`~/.claude/settings.json` (dashboard observability):**
 
-The hooks call `claudectl --json 2>/dev/null || true` — if claudectl isn't running, Claude Code continues normally.
+| Hook | Matcher | Command | What it does |
+|------|---------|---------|--------------|
+| `PreToolUse` | `Bash` | `claudectl --json 2>/dev/null \|\| true` | Lets claudectl see Bash commands before they run |
+| `PostToolUse` | `*` | `claudectl --json 2>/dev/null \|\| true` | Notifies claudectl after every tool completion |
+| `Stop` | (all) | `claudectl --json 2>/dev/null \|\| true` | Notifies claudectl when a turn ends |
+
+These are fire-and-forget snapshot reads. `|| true` keeps Claude Code unblockable if claudectl isn't installed or fails.
+
+**`~/.claude/plugins/claudectl/hooks/hooks.json` (bus + brain plugin):**
+
+| Hook | Matcher | Script | What it does |
+|------|---------|--------|--------------|
+| `PreToolUse` | `Bash\|Write\|Edit\|NotebookEdit` | `brain-gate.sh` | Queries the local LLM for approve/deny on potentially destructive tool calls |
+| `PostToolUse` | `Bash\|Write\|Edit\|NotebookEdit` | `outcome-record.sh` | Records the outcome so the brain learns from your corrections |
+| `SessionStart` | (all) | `session-briefing.sh` | Surfaces queued mail and recent context at session start |
+| `Stop` | (all) | `inbox-drain.sh` | Drains the agent's bus mailbox; can return `decision:"block"` with `additionalContext` to deliver mail in the same turn (Trigger A in [docs/AGENT_BUS.md](AGENT_BUS.md#6-notification--delivery-handshake)) |
+
+Both sets are removed cleanly by `claudectl init --remove`.
 
 ## 3. Verify the install
 

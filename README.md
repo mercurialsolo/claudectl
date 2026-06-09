@@ -45,12 +45,11 @@ Run `claudectl --brain-stats impact` to see your numbers:
 ## Install
 
 ```bash
-brew install mercurialsolo/tap/claudectl     # Homebrew (macOS / Linux) — ships with bus/coord/relay/hive
-cargo install claudectl                       # Cargo (any platform) — default features (hive only)
-cargo install claudectl --features bus,coord,relay,hive    # Cargo with all features
+brew install mercurialsolo/tap/claudectl     # Homebrew (macOS / Linux)
+cargo install claudectl                       # Cargo (any platform)
 ```
 
-Homebrew ships the full-feature binary so `claudectl bus`, `coord`, `relay`, and `hive` work out of the box (~6 MB). `cargo install` defaults to the minimal build (`hive` only, ~3.5 MB) — opt in to the rest with `--features` as shown.
+Both produce the same ~6 MB binary with bus/coord/relay/hive enabled — `claudectl bus`, `coord`, `relay`, and `hive` work out of the box. For the minimal ~3.5 MB sync-only build, opt out with `cargo install claudectl --no-default-features --features hive`.
 
 <details>
 <summary>Other methods</summary>
@@ -173,7 +172,7 @@ claudectl
 
 Multi-agent coordination for parallel coding sessions. Prevents duplicate work, manages ownership, and routes context between agents.
 
-Build with `cargo build --features coord` to enable.
+Enabled by default. For the minimal sync-only build, use `cargo build --no-default-features --features hive`.
 
 ```bash
 # Ownership leases — prevent two agents from editing the same file
@@ -206,7 +205,7 @@ The coordination layer stores state in a local SQLite database (`~/.claudectl/co
 
 A durable directory + mailbox that exposes the running swarm as an MCP server. Agents discover each other (`list_agents`), look up their own role (`whoami`), publish directed messages, and drain their inbox at turn boundaries. Phases 1–4 of the [design spec](docs/AGENT_BUS.md) are shipped.
 
-Build with `cargo build --features bus` to enable. Pulls in `rmcp` + a current-thread Tokio runtime, so the bus-enabled binary is larger (~6.4 MB vs. ~3.5 MB default) and the no-async-runtime invariant is deliberately relaxed for this feature path only.
+Enabled by default. Pulls in `rmcp` + a current-thread Tokio runtime, which is why the default binary is ~6 MB; the no-async-runtime invariant is deliberately relaxed for the `bus` feature path. For the minimal sync-only build (~3.5 MB), use `cargo build --no-default-features --features hive`.
 
 ```bash
 # Bind durable role addresses to working directories
@@ -243,8 +242,7 @@ claudectl hive status
 claudectl hive knowledge
 claudectl hive distill                # Condense archive into curriculum
 
-# Add relay for cross-machine networking
-cargo install claudectl --features relay
+# Relay for cross-machine networking is enabled by default
 claudectl relay invite                # Generate an invite code
 claudectl relay join YEK-AGA-YHK-QAA-BM       # Join from another machine
 claudectl relay discover              # Scan LAN for nearby instances

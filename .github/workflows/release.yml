@@ -76,9 +76,10 @@ jobs:
       - name: Build (native)
         # #321 — release tarballs (and therefore Homebrew bottles)
         # include every optional feature so `claudectl bus`, `coord`,
-        # `relay`, and `hive` all work out of the box. Cargo-install
-        # users still get the default (`hive`) build; they can opt in
-        # with `cargo install claudectl --features bus,coord,relay,hive`.
+        # `relay`, and `hive` all work out of the box. Since the
+        # supervisor RFC (#342, PR1) the cargo defaults match this set,
+        # so `--features` here is redundant but kept explicit — release
+        # builds should never silently drift if defaults change later.
         if: matrix.target != 'aarch64-unknown-linux-musl'
         run: |
           cargo build --release \
