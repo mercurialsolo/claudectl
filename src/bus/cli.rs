@@ -50,7 +50,8 @@ pub enum BusCommand {
         #[arg(long, default_value = "normal")]
         priority: String,
     },
-    /// Drain pending directed messages for a role.
+    /// Drain pending directed messages for a role (or peek without
+    /// consuming them via `--peek`).
     Inbox {
         /// Role to drain. Defaults to cwd inference.
         #[arg(long)]
@@ -60,6 +61,11 @@ pub enum BusCommand {
         /// the hook never blocks a session.
         #[arg(long)]
         json: bool,
+        /// Non-destructive read (#344). Lists pending messages without
+        /// marking them delivered, so a subsequent `bus inbox` still
+        /// drains them. Supervisor uses this for exactly-once assignment.
+        #[arg(long)]
+        peek: bool,
     },
     /// Report which role the current cwd resolves to.
     Whoami {
@@ -144,7 +150,7 @@ pub fn dispatch(cmd: &BusCommand) -> Result<(), String> {
             from,
             priority,
         } => dispatch_send(to, body, subject, msg_type, from.as_deref(), priority),
-        BusCommand::Inbox { role, json } => dispatch_inbox(role.as_deref(), *json),
+        BusCommand::Inbox { role, json, peek } => dispatch_inbox(role.as_deref(), *json, *peek),
         BusCommand::Whoami { role, json } => dispatch_whoami(role.as_deref(), *json),
         BusCommand::StopHook => dispatch_stop_hook(),
         BusCommand::Prune { days, dry_run } => dispatch_prune(*days, *dry_run),
@@ -282,6 +288,10 @@ fn dispatch_send(
     policy::validate_body(body, DEFAULT_MAX_BODY_BYTES).map_err(|e| e.to_string())?;
     let sanitized = policy::sanitize_body(body);
     let conn = store::open()?;
+    // CLI sends are originating messages — hop count starts at 1, the same
+    // value `publish` would write for `parent_hop = 0`. Forwards initiated
+    // by the supervisor use the MCP `publish` path which inherits the
+    // parent hop.
     let id = store::insert_message(
         &conn,
         subject,
@@ -291,6 +301,7 @@ fn dispatch_send(
         None,
         &sanitized,
         priority,
+        1,
     )?;
     println!("queued {id} -> {to}");
     Ok(())
@@ -345,7 +356,11 @@ impl From<MessageRow> for InboxMessageJson {
 /// Resolve the caller's role and drain its mailbox. Soft-fails: unbound and
 /// ambiguous cwds produce a `note` rather than an error, so JSON callers (the
 /// Stop hook) can no-op cleanly without aborting a Claude Code session.
-fn fetch_inbox(role: Option<&str>) -> Result<InboxOutcome, String> {
+///
+/// `peek=true` switches to the non-destructive read path (#344): same rows,
+/// `status='pending'` left untouched, so a subsequent drain still hands the
+/// messages out. The supervisor uses this for exactly-once assignment.
+fn fetch_inbox(role: Option<&str>, peek: bool) -> Result<InboxOutcome, String> {
     let mut conn = store::open()?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let resolution = roles::resolve(&conn, role, &cwd)?;
@@ -357,7 +372,11 @@ fn fetch_inbox(role: Option<&str>) -> Result<InboxOutcome, String> {
         RoleResolution::Unbound { cwd } => (None, Some(format!("unbound (cwd={cwd})"))),
     };
     let messages = if let Some(name) = role.as_deref() {
-        store::drain_inbox(&mut conn, name, None)?
+        if peek {
+            store::peek_inbox(&conn, name, None)?
+        } else {
+            store::drain_inbox(&mut conn, name, None)?
+        }
     } else {
         Vec::new()
     };
@@ -368,8 +387,8 @@ fn fetch_inbox(role: Option<&str>) -> Result<InboxOutcome, String> {
     })
 }
 
-fn dispatch_inbox(role: Option<&str>, json: bool) -> Result<(), String> {
-    let outcome = fetch_inbox(role)?;
+fn dispatch_inbox(role: Option<&str>, json: bool, peek: bool) -> Result<(), String> {
+    let outcome = fetch_inbox(role, peek)?;
 
     if json {
         let payload = InboxOutcomeJson {
@@ -451,7 +470,9 @@ fn dispatch_prune(days: u64, dry_run: bool) -> Result<(), String> {
 /// (missing DB, unbound role, ambiguous cwd, drain error) so the hook never
 /// blocks a session because of a bus problem.
 fn dispatch_stop_hook() -> Result<(), String> {
-    let outcome = match fetch_inbox(None) {
+    // Stop hook must drain — leaving messages pending would cause the next
+    // turn boundary to redeliver them indefinitely.
+    let outcome = match fetch_inbox(None, false) {
         Ok(o) => o,
         Err(_) => return Ok(()),
     };

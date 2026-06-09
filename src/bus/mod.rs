@@ -15,6 +15,7 @@
 pub mod cli;
 pub mod mcp;
 pub mod policy;
+pub mod rate_limit;
 pub mod roles;
 pub mod stop_hook;
 pub mod store;

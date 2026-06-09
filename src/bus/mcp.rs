@@ -29,7 +29,8 @@ use rusqlite::Connection;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::policy::{self, DEFAULT_MAX_BODY_BYTES};
+use super::policy::{self, DEFAULT_MAX_BODY_BYTES, DEFAULT_MAX_HOPS};
+use super::rate_limit::RateLimiter;
 use super::roles::{self, RoleResolution};
 use super::store::{self, MessageRow};
 
@@ -88,12 +89,20 @@ pub struct PublishArgs {
     /// Optional sender role override; otherwise inferred from caller cwd.
     #[serde(default)]
     pub sender_role: Option<String>,
+    /// Parent hop count (#344). The publish handler stores `parent_hop + 1`
+    /// and refuses to write rows above `policy::DEFAULT_MAX_HOPS`. Omitted
+    /// or zero means "originating message"; supervisor-routed forwards must
+    /// carry the inherited hop from the message that triggered them.
+    #[serde(default)]
+    pub parent_hop: Option<u32>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PublishResult {
     pub message_id: String,
     pub sanitized: bool,
+    /// The hop count stored on the new row (`parent_hop + 1`).
+    pub hop_count: u32,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -103,6 +112,12 @@ pub struct ReadInboxArgs {
     /// ISO timestamp. Only messages created after this are returned.
     #[serde(default)]
     pub since: Option<String>,
+    /// Non-destructive read (#344). When true, returns the same rows
+    /// `drain` would but leaves their status `pending` so a subsequent
+    /// drain still hands them out. Supervisor uses this for exactly-once
+    /// assignment.
+    #[serde(default)]
+    pub peek: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -122,6 +137,10 @@ pub struct InboxEntry {
     pub body: String,
     pub priority: String,
     pub created_at: String,
+    /// Hop count carried with the message (#344). Recipients reading via
+    /// peek can decide whether forwarding the message would exceed the
+    /// cap without taking the drain side-effect.
+    pub hop_count: u32,
 }
 
 impl From<MessageRow> for InboxEntry {
@@ -135,6 +154,7 @@ impl From<MessageRow> for InboxEntry {
             body: m.body,
             priority: m.priority,
             created_at: m.created_at,
+            hop_count: m.hop_count,
         }
     }
 }
@@ -143,6 +163,7 @@ impl From<MessageRow> for InboxEntry {
 
 pub struct BusServer {
     conn: Mutex<Connection>,
+    rate_limiter: RateLimiter,
     tool_router: ToolRouter<Self>,
 }
 
@@ -150,6 +171,7 @@ impl BusServer {
     pub fn new(conn: Connection) -> Self {
         Self {
             conn: Mutex::new(conn),
+            rate_limiter: RateLimiter::with_defaults(),
             tool_router: Self::tool_router(),
         }
     }
@@ -222,6 +244,33 @@ impl BusServer {
         policy::validate_body(&args.body, DEFAULT_MAX_BODY_BYTES)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
+        // Hop guard (#344). `parent_hop` carries the hop count of the
+        // message that triggered this publish — 0 for originating messages,
+        // inherited for forwards. The outgoing hop is `parent_hop + 1`.
+        // Rejecting `outgoing > DEFAULT_MAX_HOPS` means the eighth forward
+        // is the last; the ninth attempt is what RFC v2 §9 calls "supervisor
+        // escalation expected."
+        let outgoing_hop = args.parent_hop.unwrap_or(0).saturating_add(1);
+        policy::validate_hop_count(outgoing_hop, DEFAULT_MAX_HOPS)
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
+        // Rate limit per sender role. Anonymous sends (no role) skip the
+        // limiter — that path is rare and not the vector RFC v2 §9 calls
+        // out; the reserved-role guard handles the privileged endpoints.
+        if let Some(sender) = args.sender_role.as_deref() {
+            if !self
+                .rate_limiter
+                .try_acquire(sender, std::time::Instant::now())
+            {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "rate limit exceeded for sender role '{sender}'; retry after the bucket refills"
+                    ),
+                    None,
+                ));
+            }
+        }
+
         let sanitized_body = policy::sanitize_body(&args.body);
         let sanitized = sanitized_body != args.body;
         let priority = args.priority.as_deref().unwrap_or("normal");
@@ -236,15 +285,19 @@ impl BusServer {
             args.thread_id.as_deref(),
             &sanitized_body,
             priority,
+            outgoing_hop,
         )
         .map_err(|e| McpError::internal_error(e, None))?;
         Ok(Json(PublishResult {
             message_id: id,
             sanitized,
+            hop_count: outgoing_hop,
         }))
     }
 
-    #[tool(description = "Drain pending directed messages addressed to the caller's role.")]
+    #[tool(
+        description = "Read pending directed messages addressed to the caller's role. Drains by default; pass peek=true to read without marking delivered."
+    )]
     async fn read_inbox(
         &self,
         Parameters(args): Parameters<ReadInboxArgs>,
@@ -262,11 +315,16 @@ impl BusServer {
                 }));
             }
         };
-        let drained = store::drain_inbox(&mut conn, &resolved, args.since.as_deref())
-            .map_err(|e| McpError::internal_error(e, None))?;
+        let rows = if args.peek {
+            store::peek_inbox(&conn, &resolved, args.since.as_deref())
+                .map_err(|e| McpError::internal_error(e, None))?
+        } else {
+            store::drain_inbox(&mut conn, &resolved, args.since.as_deref())
+                .map_err(|e| McpError::internal_error(e, None))?
+        };
         Ok(Json(ReadInboxResult {
             role: Some(resolved),
-            messages: drained.into_iter().map(InboxEntry::from).collect(),
+            messages: rows.into_iter().map(InboxEntry::from).collect(),
         }))
     }
 }

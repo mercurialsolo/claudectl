@@ -107,7 +107,12 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         CREATE INDEX IF NOT EXISTS idx_msg_subj   ON messages(subject, status, created_at);
         CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread_id);
         ",
-    )
+    )?;
+    // Migration #3: hop count column (#344). Carried per message so the
+    // supervisor can refuse to forward beyond `policy::DEFAULT_MAX_HOPS`.
+    // Existing rows default to 0; new rows inherit `parent_hop + 1` when
+    // they're a forward.
+    add_column_if_missing(conn, "messages", "hop_count", "INTEGER NOT NULL DEFAULT 0")
 }
 
 // ---------------- Roles ------------------------------------------------------
@@ -130,6 +135,10 @@ pub struct RoleRow {
 /// role behaves exactly like the pre-#307 cwd-only binding. Passing `None`
 /// on an update keeps the existing pid (so a re-bind that only refreshes
 /// `session_id` doesn't clobber a pid set elsewhere).
+///
+/// Rejects any name listed in `policy::RESERVED_ROLES` (#344). Reserved
+/// names are owned by the supervisor subsystem; allowing arbitrary sessions
+/// to bind them would let a hostile cwd intercept escalations.
 pub fn upsert_role(
     conn: &Connection,
     role: &str,
@@ -137,6 +146,7 @@ pub fn upsert_role(
     session_id: Option<&str>,
     pid: Option<u32>,
 ) -> Result<(), String> {
+    super::policy::validate_role_name(role).map_err(|e| e.to_string())?;
     let now = now_iso();
     conn.execute(
         "INSERT INTO roles(role, cwd_selector, last_session_id, last_seen, created_at, pid)
@@ -242,6 +252,10 @@ pub struct MessageRow {
     pub status: String,
     pub created_at: String,
     pub delivered_at: Option<String>,
+    /// Hop count carried with the message (#344). Each forward bumps this by
+    /// one; the publish handler refuses to insert rows above
+    /// `policy::DEFAULT_MAX_HOPS`.
+    pub hop_count: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -254,13 +268,14 @@ pub fn insert_message(
     thread_id: Option<&str>,
     body: &str,
     priority: &str,
+    hop_count: u32,
 ) -> Result<String, String> {
     let id = gen_id("msg");
     let now = now_iso();
     conn.execute(
         "INSERT INTO messages(id, subject, msg_type, sender_role, addressed_to,
-                               thread_id, body, priority, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9)",
+                               thread_id, body, priority, status, created_at, hop_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10)",
         params![
             id,
             subject,
@@ -270,11 +285,66 @@ pub fn insert_message(
             thread_id,
             body,
             priority,
-            now
+            now,
+            hop_count,
         ],
     )
     .map_err(|e| format!("insert message: {e}"))?;
     Ok(id)
+}
+
+/// Shared SQL for both `peek_inbox` and `drain_inbox`. Keeping one query
+/// guarantees the two paths never diverge on which rows they consider
+/// pending — supervisor exactly-once delivery depends on `peek` returning
+/// the same set the next `drain` will hand out.
+const INBOX_QUERY: &str = "SELECT id, subject, msg_type, sender_role, addressed_to, thread_id,
+                                  body, priority, status, created_at, delivered_at, hop_count
+                           FROM messages
+                           WHERE addressed_to = ?1
+                             AND status = 'pending'
+                             AND (?2 IS NULL OR created_at > ?2)
+                           ORDER BY
+                               CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+                               created_at";
+
+fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
+    Ok(MessageRow {
+        id: row.get(0)?,
+        subject: row.get(1)?,
+        msg_type: row.get(2)?,
+        sender_role: row.get(3)?,
+        addressed_to: row.get(4)?,
+        thread_id: row.get(5)?,
+        body: row.get(6)?,
+        priority: row.get(7)?,
+        status: row.get(8)?,
+        created_at: row.get(9)?,
+        delivered_at: row.get(10)?,
+        hop_count: row.get::<_, i64>(11)? as u32,
+    })
+}
+
+/// Non-destructive read (#344, RFC v2 §9). Returns the same rows
+/// `drain_inbox` would, but leaves their `status = 'pending'` so a
+/// subsequent drain still hands them out. The supervisor uses this to
+/// decide whether to actuate without committing the messages as
+/// delivered until the assignment lands.
+pub fn peek_inbox(
+    conn: &Connection,
+    role: &str,
+    since: Option<&str>,
+) -> Result<Vec<MessageRow>, String> {
+    let mut stmt = conn
+        .prepare(INBOX_QUERY)
+        .map_err(|e| format!("prepare peek: {e}"))?;
+    let rows = stmt
+        .query_map(params![role, since], row_to_message)
+        .map_err(|e| format!("peek query: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("row: {e}"))?);
+    }
+    Ok(out)
 }
 
 /// Pending directed messages for `role`, optionally filtered by an ISO
@@ -287,34 +357,10 @@ pub fn drain_inbox(
     let tx = conn.transaction().map_err(|e| format!("begin tx: {e}"))?;
     let rows = {
         let mut stmt = tx
-            .prepare(
-                "SELECT id, subject, msg_type, sender_role, addressed_to, thread_id,
-                        body, priority, status, created_at, delivered_at
-                 FROM messages
-                 WHERE addressed_to = ?1
-                   AND status = 'pending'
-                   AND (?2 IS NULL OR created_at > ?2)
-                 ORDER BY
-                     CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
-                     created_at",
-            )
+            .prepare(INBOX_QUERY)
             .map_err(|e| format!("prepare drain: {e}"))?;
         let rows = stmt
-            .query_map(params![role, since], |row| {
-                Ok(MessageRow {
-                    id: row.get(0)?,
-                    subject: row.get(1)?,
-                    msg_type: row.get(2)?,
-                    sender_role: row.get(3)?,
-                    addressed_to: row.get(4)?,
-                    thread_id: row.get(5)?,
-                    body: row.get(6)?,
-                    priority: row.get(7)?,
-                    status: row.get(8)?,
-                    created_at: row.get(9)?,
-                    delivered_at: row.get(10)?,
-                })
-            })
+            .query_map(params![role, since], row_to_message)
             .map_err(|e| format!("drain query: {e}"))?;
         let mut out = Vec::new();
         for r in rows {
@@ -412,6 +458,24 @@ mod tests {
     }
 
     #[test]
+    fn reserved_role_names_are_rejected_at_binding() {
+        let conn = open_memory();
+        assert!(
+            upsert_role(&conn, "supervisor", "/work/anywhere", None, None).is_err(),
+            "binding the reserved 'supervisor' name must fail"
+        );
+        assert!(
+            upsert_role(&conn, "operator", "/work/anywhere", None, None).is_err(),
+            "binding the reserved 'operator' name must fail"
+        );
+        // Mixed-case variant — policy::validate_role_name compares
+        // case-insensitively.
+        assert!(upsert_role(&conn, "Supervisor", "/work/anywhere", None, None).is_err());
+        // Empty roles table — no partial binding.
+        assert!(list_roles(&conn).unwrap().is_empty());
+    }
+
+    #[test]
     fn drains_directed_messages_in_priority_order() {
         let mut conn = open_memory();
         insert_message(
@@ -423,6 +487,7 @@ mod tests {
             None,
             "low body",
             "normal",
+            0,
         )
         .unwrap();
         insert_message(
@@ -434,6 +499,7 @@ mod tests {
             None,
             "urgent body",
             "high",
+            0,
         )
         .unwrap();
         // Different recipient — should not be drained.
@@ -446,6 +512,7 @@ mod tests {
             None,
             "noise",
             "high",
+            0,
         )
         .unwrap();
 
@@ -489,6 +556,7 @@ mod tests {
             None,
             "pending body",
             "normal",
+            0,
         )
         .unwrap();
         assert_eq!(message_count(&conn).unwrap(), 3);
@@ -545,8 +613,61 @@ mod tests {
             None,
             "body",
             "normal",
+            0,
         )
         .unwrap();
         assert_eq!(message_count(&conn).unwrap(), 1);
+    }
+
+    #[test]
+    fn peek_is_idempotent_and_drain_after_peek_still_works() {
+        let mut conn = open_memory();
+        insert_message(
+            &conn,
+            "task.created",
+            "task",
+            Some("spec"),
+            Some("impl"),
+            None,
+            "do it",
+            "normal",
+            0,
+        )
+        .unwrap();
+        let peeked1 = peek_inbox(&conn, "impl", None).unwrap();
+        let peeked2 = peek_inbox(&conn, "impl", None).unwrap();
+        assert_eq!(peeked1.len(), 1);
+        assert_eq!(peeked2.len(), 1);
+        assert_eq!(peeked1[0].id, peeked2[0].id);
+        // Drain after peek still hands the message out — peek must not have
+        // mutated status.
+        let drained = drain_inbox(&mut conn, "impl", None).unwrap();
+        assert_eq!(drained.len(), 1);
+        // Second drain is empty — drain *did* mutate.
+        let drained2 = drain_inbox(&mut conn, "impl", None).unwrap();
+        assert!(drained2.is_empty());
+        // Peek after drain is also empty.
+        let peeked3 = peek_inbox(&conn, "impl", None).unwrap();
+        assert!(peeked3.is_empty());
+    }
+
+    #[test]
+    fn hop_count_round_trips_through_store() {
+        let mut conn = open_memory();
+        insert_message(
+            &conn,
+            "task.assigned",
+            "task",
+            Some("supervisor"),
+            Some("impl"),
+            None,
+            "body",
+            "normal",
+            3,
+        )
+        .unwrap();
+        let drained = drain_inbox(&mut conn, "impl", None).unwrap();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].hop_count, 3);
     }
 }

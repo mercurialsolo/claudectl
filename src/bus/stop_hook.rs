@@ -117,6 +117,7 @@ mod tests {
             status: "delivered".into(),
             created_at: "2026-06-06T00:00:00Z".into(),
             delivered_at: Some("2026-06-06T00:00:01Z".into()),
+            hop_count: 1,
         }
     }
 
