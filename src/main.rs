@@ -28,6 +28,8 @@ mod coord;
 mod doctor;
 #[cfg(feature = "hive")]
 mod hive;
+#[cfg(feature = "coord")]
+mod ingest;
 mod init;
 mod orchestrator;
 #[cfg(feature = "relay")]
@@ -83,6 +85,19 @@ pub(crate) enum Command {
     Bus {
         #[command(subcommand)]
         command: bus::cli::BusCommand,
+    },
+
+    #[cfg(feature = "coord")]
+    /// Ingest a Claude Code hook payload from stdin into the coord
+    /// `hook_events` table (#345, RFC v2 §6). Best-effort by
+    /// construction — meant to be called from a bash hook with
+    /// `2>/dev/null || true`. JSONL tail + `ps` stay authoritative;
+    /// this is a latency optimization for the supervisor's reconciler.
+    Ingest {
+        /// Which hook is calling. One of `PreToolUse`, `PostToolUse`,
+        /// `Stop`, `SessionStart`, `Notification`, `UserPromptSubmit`.
+        #[arg(long)]
+        hook: String,
     },
 
     /// Onboarding wizard (budget, brain, hooks, bus, skills). See issue #257.
@@ -790,6 +805,12 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
             #[cfg(feature = "bus")]
             Command::Bus { command } => return bus::cli::dispatch_command(command, cli.json),
+
+            #[cfg(feature = "coord")]
+            Command::Ingest { hook } => {
+                let code = ingest::run(hook)?;
+                std::process::exit(code);
+            }
 
             Command::Init {
                 check,

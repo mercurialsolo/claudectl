@@ -49,6 +49,24 @@ pub fn gen_id(prefix: &str) -> String {
     format!("{prefix}_{epoch}_{seq}")
 }
 
+/// Schema version the running binary expects to see in
+/// `PRAGMA user_version`. Bumped whenever `migrate()` adds a column or
+/// table that older binaries don't know about.
+///
+/// `migrate()` always brings older DBs *forward* to this version. The
+/// version gate (`check_schema_version`) only ever rejects the reverse
+/// case: a DB at `user_version > EXPECTED` — meaning a newer binary
+/// ran first and bumped the schema, and now an older binary is being
+/// pointed at it (downgrade after `brew upgrade`, or two binaries on
+/// `$PATH` at once). Without the gate, the older binary would happily
+/// write rows against a schema it doesn't understand — the manual-upgrade
+/// gap RFC v2 §12 calls out as worse than loudly refusing.
+///
+/// v1 = baseline (lease/blocker/handoff/interrupt/memory tables).
+/// v2 = supervisor tables (#345): tasks, task_attempts,
+///       task_verifications, task_transitions, hook_events.
+pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 2;
+
 /// Open (or create) the coordination database and run migrations.
 pub fn open() -> Result<Connection, String> {
     let path = db_path();
@@ -61,6 +79,7 @@ pub fn open() -> Result<Connection, String> {
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|e| format!("foreign_keys: {e}"))?;
     migrate(&conn).map_err(|e| format!("migrate: {e}"))?;
+    check_schema_version(&conn)?;
     Ok(conn)
 }
 
@@ -68,7 +87,26 @@ pub fn open() -> Result<Connection, String> {
 pub fn open_memory() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     migrate(&conn).unwrap();
+    check_schema_version(&conn).expect("in-memory schema version gate");
     conn
+}
+
+/// Refuse to proceed if the DB's `user_version` is *ahead* of the binary's
+/// `EXPECTED_COORD_SCHEMA_VERSION`. Equal or behind is fine — `migrate()`
+/// would have brought a behind-DB forward already.
+pub fn check_schema_version(conn: &Connection) -> Result<(), String> {
+    let actual: u32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+        .map_err(|e| format!("read user_version: {e}"))?;
+    if actual > EXPECTED_COORD_SCHEMA_VERSION {
+        return Err(format!(
+            "coord DB schema at v{actual} but this binary expects v{expected}. \
+             A newer claudectl initialized this DB. Upgrade to that version, or \
+             run `claudectl init --upgrade` after upgrading the binary.",
+            expected = EXPECTED_COORD_SCHEMA_VERSION
+        ));
+    }
+    Ok(())
 }
 
 fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -226,6 +264,98 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
             ",
         )?;
     }
+
+    // Migration to schema v2 — supervisor tables (#345). Idempotent: every
+    // statement uses `IF NOT EXISTS` so re-running on a DB already at v2 is
+    // a no-op. The pre-existing TUI / brain code paths do not touch these.
+    conn.execute_batch(
+        "
+        -- Desired task state. One row per task; cattle-vs-pets: the task,
+        -- not the session, carries identity, budget, attempt count.
+        CREATE TABLE IF NOT EXISTS tasks (
+            id            TEXT PRIMARY KEY,
+            name          TEXT NOT NULL,
+            state         TEXT NOT NULL,
+            role          TEXT,
+            cwd           TEXT NOT NULL,
+            prompt        TEXT NOT NULL,
+            model         TEXT,
+            budget_usd    REAL,
+            max_retries   INTEGER NOT NULL DEFAULT 2,
+            timeout_min   INTEGER NOT NULL DEFAULT 45,
+            depends_on    TEXT NOT NULL DEFAULT '[]',
+            policy        TEXT,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
+        CREATE INDEX IF NOT EXISTS idx_tasks_role  ON tasks(role) WHERE role IS NOT NULL;
+
+        -- One row per attempt at a task.
+        CREATE TABLE IF NOT EXISTS task_attempts (
+            id              TEXT PRIMARY KEY,
+            task_id         TEXT NOT NULL REFERENCES tasks(id),
+            attempt_num     INTEGER NOT NULL,
+            session_id      TEXT,
+            bus_message_id  TEXT,
+            cwd_hash        TEXT,
+            started_at      TEXT NOT NULL,
+            ended_at        TEXT,
+            cost_usd        REAL NOT NULL DEFAULT 0,
+            outcome         TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_attempts_task    ON task_attempts(task_id);
+        CREATE INDEX IF NOT EXISTS idx_attempts_session ON task_attempts(session_id) WHERE session_id IS NOT NULL;
+
+        -- Verifier verdicts. Retry-prompt builder reads these to compose
+        -- 'previous attempt failed for these reasons' feedback.
+        CREATE TABLE IF NOT EXISTS task_verifications (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            attempt_id  TEXT NOT NULL REFERENCES task_attempts(id),
+            kind        TEXT NOT NULL,
+            command     TEXT NOT NULL,
+            verdict     TEXT NOT NULL,
+            output      TEXT,
+            cost_usd    REAL NOT NULL DEFAULT 0,
+            ran_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_verifications_attempt ON task_verifications(attempt_id);
+
+        -- Append-only ledger of state-machine moves. Crash recovery is
+        -- 'rebuild observed state by replaying transitions.'
+        CREATE TABLE IF NOT EXISTS task_transitions (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id     TEXT NOT NULL REFERENCES tasks(id),
+            from_state  TEXT NOT NULL,
+            to_state    TEXT NOT NULL,
+            cause       TEXT NOT NULL,
+            at          TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_transitions_task ON task_transitions(task_id);
+
+        -- Hook event ingestion (RFC v2 §6). Hooks push payloads here via
+        -- `claudectl ingest` so the reconciler reacts in one tick instead
+        -- of waiting on file-watch debounce. JSONL tail stays authoritative
+        -- — this table is best-effort by construction (`|| true` in hook
+        -- commands), which is why it cannot be the source of record.
+        -- Name distinguishes it from the pre-existing coord `events` table.
+        CREATE TABLE IF NOT EXISTS hook_events (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            hook         TEXT NOT NULL,
+            session_id   TEXT,
+            tool         TEXT,
+            payload      TEXT NOT NULL,
+            ingested_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_hook_events_session  ON hook_events(session_id, ingested_at);
+        CREATE INDEX IF NOT EXISTS idx_hook_events_ingested ON hook_events(ingested_at);
+        ",
+    )?;
+
+    // Bump `user_version` last — table creation runs first so a partially
+    // migrated DB never gets the version stamp; the gate then refuses to
+    // start if anything drifted.
+    conn.pragma_update(None, "user_version", EXPECTED_COORD_SCHEMA_VERSION)?;
 
     Ok(())
 }
@@ -1289,6 +1419,69 @@ mod tests {
         let conn = open_memory();
         // Second migration should succeed without error
         migrate(&conn).unwrap();
+        // Triple-migrate too — `IF NOT EXISTS` should make this a no-op.
+        migrate(&conn).unwrap();
+    }
+
+    #[test]
+    fn schema_version_pragma_bumps_to_expected() {
+        let conn = open_memory();
+        let v: u32 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(v, EXPECTED_COORD_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn schema_version_gate_refuses_future_db() {
+        // Simulate the downgrade scenario: a newer binary stamped the DB
+        // at EXPECTED+1, then an older binary is asked to open it. The
+        // gate must refuse loudly with the `init --upgrade` remediation.
+        let conn = open_memory();
+        let future = EXPECTED_COORD_SCHEMA_VERSION + 1;
+        conn.pragma_update(None, "user_version", future).unwrap();
+        let err = check_schema_version(&conn).expect_err("must refuse a future-version DB");
+        assert!(
+            err.contains(&format!("v{future}")),
+            "error must name actual version: {err}"
+        );
+        assert!(
+            err.contains("init --upgrade"),
+            "error must point at the remediation: {err}"
+        );
+    }
+
+    #[test]
+    fn schema_version_gate_accepts_equal_or_lower() {
+        let conn = open_memory();
+        // Equal — happy path.
+        check_schema_version(&conn).unwrap();
+        // Lower — happens transiently if migrate() was rolled back mid-run.
+        // The gate's job is not to flag underrun (migrate handles forward);
+        // it only rejects overrun.
+        conn.pragma_update(None, "user_version", 0u32).unwrap();
+        check_schema_version(&conn).unwrap();
+    }
+
+    #[test]
+    fn v2_tables_exist_after_migrate() {
+        let conn = open_memory();
+        for table in [
+            "tasks",
+            "task_attempts",
+            "task_verifications",
+            "task_transitions",
+            "hook_events",
+        ] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
+                    params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "v2 table missing: {table}");
+        }
     }
 
     #[test]

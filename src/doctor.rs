@@ -67,6 +67,8 @@ pub fn run_all_checks() -> Vec<Check> {
         check_bus_feature(),
         check_bus_db(),
         check_bus_retention(),
+        check_coord_schema(),
+        check_coord_session_policy_dir(),
         check_session_discovery(),
         check_terminal_integration(),
     ]
@@ -476,6 +478,113 @@ fn check_bus_retention() -> Check {
             fix_hint: Some(
                 "Run `claudectl bus prune` to delete delivered messages older than 30 days. Add `--days N` to override.".into(),
             ),
+        }
+    }
+}
+
+/// Supervisor schema row (#345). Opens the coord DB and verifies the
+/// `PRAGMA user_version` matches what this binary expects. Drift here is
+/// the manual-upgrade gap RFC v2 §12 calls out — a `brew upgrade
+/// claudectl` without a follow-up `claudectl init --upgrade` lands the
+/// new binary on disk but leaves the schema at the old version. The
+/// store's `open()` would refuse loudly in that case; doctor surfaces it
+/// up-front so the user sees the fix in their checklist instead of in a
+/// runtime error.
+fn check_coord_schema() -> Check {
+    #[cfg(not(feature = "coord"))]
+    {
+        Check {
+            name: "coord schema".into(),
+            status: CheckStatus::Skipped,
+            message: "coord feature not compiled in".into(),
+            fix_hint: None,
+        }
+    }
+    #[cfg(feature = "coord")]
+    {
+        match crate::coord::store::open() {
+            Ok(_) => Check {
+                name: "coord schema".into(),
+                status: CheckStatus::Pass,
+                message: format!(
+                    "v{} (binary expects v{})",
+                    crate::coord::store::EXPECTED_COORD_SCHEMA_VERSION,
+                    crate::coord::store::EXPECTED_COORD_SCHEMA_VERSION
+                ),
+                fix_hint: None,
+            },
+            Err(e) if e.contains("schema") => Check {
+                name: "coord schema".into(),
+                status: CheckStatus::Fail,
+                message: e,
+                fix_hint: Some(
+                    "Run `claudectl init --upgrade` to migrate the coord DB.".into(),
+                ),
+            },
+            Err(e) => Check {
+                name: "coord schema".into(),
+                status: CheckStatus::Fail,
+                message: format!("cannot open coord DB: {e}"),
+                fix_hint: Some(
+                    "Check that ~/.claudectl/coord/ is writable. `claudectl init --purge --yes` resets everything.".into(),
+                ),
+            },
+        }
+    }
+}
+
+/// Per-session policy directory row (#345). The supervisor writes
+/// `~/.claudectl/coord/session-policy/<session>.json` at task assignment
+/// so the brain-gate hook can do a single `fs::read_to_string` per tool
+/// call. Pass when the dir exists and is writable; Advisory when the
+/// supervisor hasn't run yet (no dir created) — that's expected on a
+/// fresh install.
+fn check_coord_session_policy_dir() -> Check {
+    #[cfg(not(feature = "coord"))]
+    {
+        Check {
+            name: "session-policy dir".into(),
+            status: CheckStatus::Skipped,
+            message: "coord feature not compiled in".into(),
+            fix_hint: None,
+        }
+    }
+    #[cfg(feature = "coord")]
+    {
+        let dir = crate::coord::session_policy::dir();
+        if !dir.exists() {
+            return Check {
+                name: "session-policy dir".into(),
+                status: CheckStatus::Advisory,
+                message: format!(
+                    "{} not present (supervisor hasn't assigned any tasks yet)",
+                    dir.display()
+                ),
+                fix_hint: None,
+            };
+        }
+        // Writability probe: try to create a sentinel file and remove it.
+        // `tempfile` would pull a dep just for this one check; the
+        // hand-rolled probe is plenty.
+        let sentinel = dir.join(".doctor-probe");
+        match std::fs::write(&sentinel, b"") {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&sentinel);
+                Check {
+                    name: "session-policy dir".into(),
+                    status: CheckStatus::Pass,
+                    message: format!("{} writable", dir.display()),
+                    fix_hint: None,
+                }
+            }
+            Err(e) => Check {
+                name: "session-policy dir".into(),
+                status: CheckStatus::Fail,
+                message: format!("{} not writable: {e}", dir.display()),
+                fix_hint: Some(
+                    "Check ownership/permissions on ~/.claudectl/coord/session-policy/. The brain-gate hook reads files here on every tool call.".into(),
+                ),
+            },
         }
     }
 }

@@ -1035,6 +1035,12 @@ pub(crate) fn run_headless(
         app.sessions.iter().map(|s| (s.pid, s.status)).collect();
     #[cfg(feature = "coord")]
     let mut tick_count: u64 = 0;
+    // Supervisor reconciler (#345). Pure tick() returns the action list;
+    // the actuator wiring lands in PR4 (#346). For now this drives the
+    // skeleton against the live coord DB so any panic / lock issue
+    // surfaces in headless before the actuator goes hot.
+    #[cfg(feature = "coord")]
+    let supervisor = crate::coord::supervisor::Supervisor::with_defaults();
 
     loop {
         std::thread::sleep(tick_rate);
@@ -1081,6 +1087,33 @@ pub(crate) fn run_headless(
         // Context rot prevention
         #[cfg(feature = "coord")]
         check_context_rot(&app, json_mode);
+
+        // Supervisor reconciler tick (#345). Opening the coord DB on every
+        // tick is cheap (SQLite WAL keeps the connection lightweight) and
+        // sidesteps any lifetime tangle with the App's borrows. PR4 will
+        // hold the conn as state once the actuator needs to write
+        // transitions in the same pass.
+        #[cfg(feature = "coord")]
+        if let Ok(conn) = crate::coord::store::open() {
+            let sensors = NoopSensors;
+            match supervisor.tick(&conn, &sensors) {
+                Ok(actions) if !actions.is_empty() => {
+                    emit_headless_event(
+                        "supervisor_actions",
+                        serde_json::json!({"count": actions.len()}),
+                        json_mode,
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    emit_headless_event(
+                        "supervisor_error",
+                        serde_json::json!({"error": e}),
+                        json_mode,
+                    );
+                }
+            }
+        }
 
         // Periodic coordination summary (every ~30s)
         #[cfg(feature = "coord")]
@@ -1145,6 +1178,22 @@ fn emit_headless_event(event: &str, data: serde_json::Value, json_mode: bool) {
 }
 
 /// Check for context rot and raise typed interrupts for decaying sessions.
+/// Sensor stub for headless mode while the live JSONL/`ps`/hook-event
+/// reader lands in PR4 (#346). Reports zero events seen and no sessions,
+/// which keeps `Supervisor::tick` in the "do nothing safely" branch — the
+/// crash-safety baseline before any actuation goes live.
+#[cfg(feature = "coord")]
+struct NoopSensors;
+#[cfg(feature = "coord")]
+impl crate::coord::supervisor::Sensors for NoopSensors {
+    fn last_hook_event_id(&self) -> i64 {
+        0
+    }
+    fn observed_sessions(&self) -> Vec<crate::coord::supervisor::ObservedSession> {
+        Vec::new()
+    }
+}
+
 #[cfg(feature = "coord")]
 fn check_context_rot(app: &App, json_mode: bool) {
     let conn = match crate::coord::store::open() {
