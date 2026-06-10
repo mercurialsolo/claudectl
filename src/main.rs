@@ -100,6 +100,14 @@ pub(crate) enum Command {
         hook: String,
     },
 
+    #[cfg(feature = "coord")]
+    /// Supervisor task surface (#349, RFC §10). Submit, inspect, and
+    /// drain the durable task ledger.
+    Supervisor {
+        #[command(subcommand)]
+        command: coord::supervisor_cli::SupervisorCommand,
+    },
+
     /// Onboarding wizard (budget, brain, hooks, bus, skills). See issue #257.
     Init {
         /// Drift report comparing recorded onboarding against current state.
@@ -811,6 +819,9 @@ fn run_main(cli: Cli) -> io::Result<()> {
                 let code = ingest::run(hook)?;
                 std::process::exit(code);
             }
+
+            #[cfg(feature = "coord")]
+            Command::Supervisor { command } => return coord::supervisor_cli::dispatch(command),
 
             Command::Init {
                 check,

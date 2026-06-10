@@ -69,6 +69,7 @@ pub fn run_all_checks() -> Vec<Check> {
         check_bus_retention(),
         check_coord_schema(),
         check_coord_session_policy_dir(),
+        check_supervisor_drain_state(),
         check_session_discovery(),
         check_terminal_integration(),
     ]
@@ -585,6 +586,46 @@ fn check_coord_session_policy_dir() -> Check {
                     "Check ownership/permissions on ~/.claudectl/coord/session-policy/. The brain-gate hook reads files here on every tool call.".into(),
                 ),
             },
+        }
+    }
+}
+
+/// Supervisor drain marker row (#349). Pass when no drain marker exists
+/// (the supervisor will issue new assignments). Advisory when the
+/// marker is set — the operator drained intentionally; the doctor's
+/// job here is to surface that state so it doesn't get forgotten in a
+/// terminal.
+fn check_supervisor_drain_state() -> Check {
+    #[cfg(not(feature = "coord"))]
+    {
+        Check {
+            name: "supervisor drain".into(),
+            status: CheckStatus::Skipped,
+            message: "coord feature not compiled in".into(),
+            fix_hint: None,
+        }
+    }
+    #[cfg(feature = "coord")]
+    {
+        if crate::coord::supervisor_cli::is_draining() {
+            Check {
+                name: "supervisor drain".into(),
+                status: CheckStatus::Advisory,
+                message: format!(
+                    "drain marker present at {}",
+                    crate::coord::supervisor_cli::drain_marker_path().display()
+                ),
+                fix_hint: Some(
+                    "Run `claudectl supervisor undrain` to resume issuing new assignments.".into(),
+                ),
+            }
+        } else {
+            Check {
+                name: "supervisor drain".into(),
+                status: CheckStatus::Pass,
+                message: "no drain marker (supervisor accepts new assignments)".into(),
+                fix_hint: None,
+            }
         }
     }
 }
