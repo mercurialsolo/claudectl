@@ -12,11 +12,11 @@
 | 3. Provisioning (role binding + plugin install + hook capability probe) | **Shipped via `claudectl init`** (PR #283) — five-phase wizard owns bus role binding alongside budget, brain, hooks, and skill suggestions. Lifecycle verbs: `init`, `init --non-interactive`, `init --check`, `init --remove`, `init --reset`. Tracking: [#257](https://github.com/mercurialsolo/claudectl/issues/257). | `src/init/` |
 | 4. Mailbox + directed `publish` / `read_inbox` | **Shipped** | `src/bus/store.rs`, `src/bus/mcp.rs` |
 | 5. `Stop` hook → `read_inbox` (Trigger A) + `/inbox` fallback (Trigger B) | **Shipped (Trigger A continue-in-turn + Trigger B)** | `src/bus/stop_hook.rs`, `claude-plugin/hooks/scripts/inbox-drain.sh`, `claude-plugin/commands/inbox.md` |
-| 6. Command sanitization + content validation | **Shipped (subset)** — leading-`/` neutralized, body cap, subject grammar, type allowlist. Hop/rate/echo guards not yet. | `src/bus/policy.rs` |
+| 6. Command sanitization + content validation | **Shipped** — leading-`/` neutralized, body cap, subject grammar, type allowlist, hop cap (default 8), per-sender-role rate limit (60/min token bucket), reserved-role guard (`supervisor`/`operator` cannot be bound). | `src/bus/policy.rs`, `src/bus/rate_limit.rs` |
 | 7. Subjects + `subscribe` + claim protocol | **Not started** | — |
-| 8. Flow guards (rate/hop/loop/cost) + ACLs | **Not started** | — |
-| 9. Managed-artifact lifecycle (update/migrate/drift) | **Not started** | — |
-| 10. Supervisor + long-horizon persistence | **Not started** | — |
+| 8. Flow guards (rate/hop/loop/cost) + ACLs | **Shipped (hop + rate + reserved-role ACL)** via PR #351 / #344. Loop detection and cost-based throttling are deferred. | `src/bus/policy.rs`, `src/bus/rate_limit.rs` |
+| 9. Managed-artifact lifecycle (update/migrate/drift) | **Partial** — `init --upgrade` re-syncs hooks + plugin files + DB migrations (#327); drift surfaces in `claudectl doctor` via the `plugin version` row. | `src/init/`, `src/doctor.rs` |
+| 10. Supervisor + long-horizon persistence | **Shipped** via PRs #352–#356 — coord task tables, pure reconciler + actuator, bus-native assignment, verifier gates (`run`/`brain`/`agent`), resume protocol with tree-state drift detection, health-check transition triggers, `claudectl supervisor` CLI tree, v1 NDJSON event schema, Prometheus exporter. See [supervisor section](#10-supervisor--long-horizon-persistence) below. | `src/coord/{supervisor,actuator,verify,resume,events,exporter,supervisor_cli,tasks,session_policy,hook_events}.rs`, `src/ingest.rs` |
 | 11. TUI bus view | **Not started** | — |
 
 **Build / run:** `cargo build --release --features bus`. End-to-end smoke covered: role bind → cwd inference (macOS symlink resolution) → directed send → priority-ordered drain → leading-`/` neutralization → policy rejections. MCP handshake (`initialize` + `notifications/initialized` + `tools/list`) verified end-to-end. **Not yet exercised:** the plugin loaded inside Claude Code driving real cross-session traffic.

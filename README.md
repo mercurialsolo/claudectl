@@ -230,7 +230,70 @@ Mailboxes live in `~/.claudectl/bus/bus.db` (SQLite WAL). Message bodies are san
 
 **Full guide:** [Agent Bus](docs/agent-bus.md) — wire-up, role binding, sending and receiving messages, worked planner→implementer example, where state lives, uninstall.
 
-Not yet built: pub/sub subscribe + claim protocol, flow guards, and the supervisor for long-horizon role persistence. See [AGENT_BUS.md](docs/AGENT_BUS.md#implementation-status) for the per-phase status table.
+Flow guards (hop limit, per-role rate limit, reserved-role ACL) and the supervisor for long-horizon role persistence are shipped. Pub/sub `subscribe` + claim protocol and the TUI bus view are still in flight. See [AGENT_BUS.md](docs/AGENT_BUS.md#implementation-status) for the per-phase status table.
+
+## Supervisor
+
+Durable, verified task lifecycles on top of the bus. Where the agent bus answers "how do I talk to the swarm?", the supervisor answers "how do I trust the swarm to run unattended overnight?" Submit a task, it lands in a SQLite ledger; the reconciler assigns it via mailbox (or spawns a session if no role is set); declared verifiers (`run` / `brain` / `agent`) gate the move to DONE; a dead session triggers Resume with a recovery prompt that carries autopsy findings forward; health-check signals (stalled, retry loop) become first-class transitions instead of dashboard warnings.
+
+```bash
+# One-shot inline submission
+claudectl supervisor submit \
+  --name "auth-middleware" \
+  --cwd ~/work/services \
+  --prompt "Add JWT middleware to all API routes" \
+  --role backend --budget-usd 3.00
+
+# Batch submission from a TOML file
+claudectl supervisor run tasks.toml --dry-run    # preview
+claudectl supervisor run tasks.toml              # commit
+
+# Inspect fleet state
+claudectl supervisor status
+claudectl supervisor status --state RUNNING
+claudectl supervisor logs <task_id>              # full transition log + verifier history
+
+# Lifecycle controls
+claudectl supervisor cancel <task_id>            # idempotent move to CANCELLED
+claudectl supervisor drain                       # stop issuing new assignments
+claudectl supervisor undrain                     # resume
+```
+
+A `tasks.toml` block carrying every supported field — including the three verifier kinds:
+
+```toml
+[[task]]
+name        = "auth-middleware"
+role        = "backend"
+cwd         = "./services"
+prompt      = "Add JWT auth middleware to all API routes"
+model       = "sonnet"
+budget_usd  = 3.00
+max_retries = 2
+timeout_min = 45
+
+  [[task.verify]]
+  run  = "cargo test --all-targets"            # exit code is the verdict
+
+  [[task.verify]]
+  brain = "Review the diff for auth-coverage gaps. PASS or FAIL with reasons."
+                                                # routed to the local brain — free
+
+  [[task.verify]]
+  agent = "Adversarial review: find a request that bypasses the middleware."
+  model = "haiku"                               # headless claude -p, own budget
+  budget_usd = 0.25
+```
+
+Tasks are submittable three ways: this CLI, a `task.created` bus message addressed to the `supervisor` role, or the `submit_task` MCP tool from inside a Claude Code session. All three land as the same SQLite row.
+
+Three load-bearing properties from the design spec:
+
+- **Cattle vs. pets** — a task survives the death of the session executing it; the next attempt is a fresh session that reads the recovery context (original prompt + autopsy + prior verifier failures + tree-state drift warning).
+- **Crash-safe by construction** — kill the headless daemon mid-tick, restart, and observed state re-converges from `~/.claudectl/coord/coord.db`. The ledger is the source of truth.
+- **Fail-closed verifiers** — a brain/agent verifier whose reply lacks the leading `PASS` / `FAIL:` marker is treated as FAIL. RFC §5 calls this the verifier-is-the-gradient principle: every FAIL output becomes the retry prompt the next attempt sees.
+
+Metrics: `claudectl supervisor` exposes a Prometheus exporter shape (`claudectl_tasks_by_state`, `claudectl_fleet_cost_usd_total`, `claudectl_retries_total`, `claudectl_verifier_pass_rate`). The headless flag that binds the listener is on the follow-up roadmap; the metrics surface itself is testable today via the `coord::exporter` API.
 
 ## Hive Mind & Relay
 

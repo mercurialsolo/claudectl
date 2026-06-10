@@ -96,6 +96,27 @@ Runs with fake sessions so you can explore the dashboard, keybindings, and featu
 | `n` | Launch a new session |
 | `?` | Show all keybindings |
 
+## Optional: submit a task to the supervisor
+
+The supervisor turns the durable coord ledger into a task runner: submit work, declare verifiers, let the reconciler hand it to a role's mailbox (or spawn a fresh session). It survives daemon restarts.
+
+```bash
+# Inline submission — useful for one-shot scripts
+claudectl supervisor submit \
+  --name "rename-utils" \
+  --cwd "$PWD" \
+  --prompt "Rename utils.rs → helpers.rs and update every import" \
+  --role backend
+
+# Inspect what's running
+claudectl supervisor status            # compact table
+claudectl supervisor logs <task_id>    # transitions + verifier history
+```
+
+Batch from a `tasks.toml` file (RFC §4 shape) with `claudectl supervisor run tasks.toml --dry-run` to preview, then without `--dry-run` to commit. See the [README's Supervisor section](../README.md#supervisor) for the verifier syntax (`run` / `brain` / `agent`) and the full design overview.
+
+`claudectl supervisor drain` halts new assignments without killing running tasks; the `supervisor drain` row in `claudectl doctor` surfaces the state.
+
 ## Optional: project-scoped hooks
 
 If you only want claudectl hooks in specific projects (not globally), the `--init` legacy flag still works for hook-only installs:
