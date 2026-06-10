@@ -207,12 +207,56 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             )?;
             Ok(())
         }
+        Action::Resume { task_id, cause } => {
+            let task =
+                get_task(conn, task_id)?.ok_or_else(|| format!("task {task_id} not found"))?;
+            let from_state = task.state;
+            // Only valid from Running. Resuming → Assigned happens later
+            // in this branch; other states are stale-tick no-ops.
+            if from_state != TaskState::Running {
+                return Ok(());
+            }
+            // Attempts cap → NeedsHuman instead of resuming forever.
+            let used = attempt_count(conn, task_id)?;
+            if used > task.max_retries {
+                transition(
+                    conn,
+                    task_id,
+                    from_state,
+                    TaskState::NeedsHuman,
+                    "resume-cap",
+                )?;
+                return Ok(());
+            }
+            transition(conn, task_id, from_state, TaskState::Resuming, cause)?;
+            // Re-enter via Pending so the reconciler picks the same
+            // assignment lane the original task did — mailbox-first
+            // for tasks with a role, spawn for roleless. Going straight
+            // to a fresh attempt here would race the reconciler.
+            transition(
+                conn,
+                task_id,
+                TaskState::Resuming,
+                TaskState::Pending,
+                "resume-ready",
+            )?;
+            Ok(())
+        }
+        Action::EscalateHuman { task_id, cause } => {
+            let task =
+                get_task(conn, task_id)?.ok_or_else(|| format!("task {task_id} not found"))?;
+            // Idempotent against already-terminal tasks; race-safe
+            // against another tick that escalated first.
+            if task.state.is_terminal() {
+                return Ok(());
+            }
+            transition(conn, task_id, task.state, TaskState::NeedsHuman, cause)?;
+            Ok(())
+        }
         // The remaining variants belong to PR6 — stubbed out so the
         // reconciler can emit them today without the actuator
         // panicking. Implementation lands with the resume protocol.
-        Action::WriteSessionPolicy { .. }
-        | Action::ClearSessionPolicy { .. }
-        | Action::EscalateHuman { .. } => Ok(()),
+        Action::WriteSessionPolicy { .. } | Action::ClearSessionPolicy { .. } => Ok(()),
     }
 }
 

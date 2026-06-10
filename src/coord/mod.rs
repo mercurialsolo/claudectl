@@ -9,6 +9,7 @@ pub mod injection;
 pub mod interrupt_bus;
 pub mod metrics;
 pub mod promotion;
+pub mod resume;
 pub mod session_policy;
 pub mod store;
 pub mod supervisor;

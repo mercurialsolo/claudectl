@@ -253,6 +253,23 @@ pub fn record_verification(
     Ok(())
 }
 
+/// Latest attempt's session_id, used by the reconciler to map a task
+/// back to its observable session and decide whether to emit Resume on
+/// Dead status (RFC §7). Returns `None` when the latest attempt was a
+/// mailbox assignment that hasn't been picked up yet (no session_id
+/// on the row).
+pub fn latest_session_id(conn: &Connection, task_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT session_id FROM task_attempts WHERE task_id = ?1
+         ORDER BY attempt_num DESC LIMIT 1",
+        params![task_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|opt| opt.flatten())
+    .map_err(|e| format!("latest session id: {e}"))
+}
+
 /// Lookup the latest attempt id for `task_id`, used by the actuator
 /// when transitioning Running → Verifying so the verifier rows attach
 /// to the right attempt. Mirrors `latest_attempt_age_minutes` but
