@@ -117,11 +117,27 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 
 **Bus** (`src/bus/`): Agent-bus MCP server, durable role directory, and mailbox (feature-gated behind `bus`; see `docs/AGENT_BUS.md`).
 - `mod.rs` — module surface
-- `store.rs` — SQLite (WAL) at `~/.claudectl/bus/bus.db`: roles + messages tables, drain-on-read semantics
+- `store.rs` — SQLite (WAL) at `~/.claudectl/bus/bus.db`: roles + messages tables (with `hop_count` column), drain + peek semantics
 - `roles.rs` — Role addressing, cwd-inference, ambiguity/unbound resolution. Caller may override with `CLAUDECTL_BUS_ROLE` or `--role`
-- `policy.rs` — Phase-4 guardrails: subject grammar, type allowlist, body cap, leading-`/` neutralization (§9)
-- `mcp.rs` — rmcp stdio server exposing `whoami`, `list_agents`, `publish`, `read_inbox`
-- `cli.rs` — `claudectl bus` subcommand (stdio, role bind/list, send, inbox, whoami)
+- `policy.rs` — Guardrails: subject grammar, type allowlist, body cap, leading-`/` neutralization (§9), hop cap (default 8), reserved-role guard (`supervisor`/`operator` cannot be bound)
+- `rate_limit.rs` — In-process token bucket per `sender_role`; default 60 messages/min, refills continuously without a background timer
+- `mcp.rs` — rmcp stdio server exposing `whoami`, `list_agents`, `publish` (with `parent_hop`), `read_inbox` (with `peek`), plus supervisor tools `submit_task` / `list_tasks` / `task_status`
+- `cli.rs` — `claudectl bus` subcommand (stdio, role bind/list, send, inbox + `--peek`, whoami, stop-hook driver, prune)
+
+**Supervisor** (`src/coord/{supervisor,actuator,verify,resume,tasks,session_policy,hook_events,events,exporter,supervisor_cli}.rs`, `src/ingest.rs`): Durable, verified task lifecycles on top of the bus (see `docs/AGENT_BUS.md#10-supervisor` and README §Supervisor).
+- `tasks.rs` — `tasks` / `task_attempts` / `task_verifications` / `task_transitions` CRUD + state machine. Every transition writes state + log in one transaction so the ledger invariant "every state has a cause" holds.
+- `supervisor.rs` — **pure** reconciler. Reads desired state from coord, observed state from `Sensors`, returns `Vec<Action>`. No I/O. Health-check → `HealthAction` mapping table. `Unknown` observed status is the no-actuation backstop (RFC §6).
+- `actuator.rs` — Carries out `Action`s. Three-step: insert attempt → perform side effect → log transition. Side-effect failure stops *before* the transition is recorded, so the next tick re-emits.
+- `verify.rs` — `Verifier` enum (Run/Brain/Agent) + `run_verifier` dispatch. Fail-closed on missing PASS/FAIL marker. `build_retry_prompt` composes original + failure output + "fix these issues" feedback.
+- `resume.rs` — Tree-state hash (git when available, mtime fallback) + recovery-prompt builder. Resume the *task*, not the session.
+- `session_policy.rs` — Atomic per-session policy file at `~/.claudectl/coord/session-policy/<session>.json`. Brain-gate hook reads it on every tool call; fail-open to `Inherit` keeps the manual-upgrade gap non-breaking.
+- `hook_events.rs` — `hook_events` table (latency-only signal path; JSONL tail stays authoritative).
+- `events.rs` — v1 NDJSON event schema (frozen). Three families: `task.transition`, `task.verification`, `task.escalated`.
+- `exporter.rs` — Hand-rolled HTTP `/metrics` server (no web framework dep). Worker thread per scrape so the tick loop never blocks. Exposes `claudectl_tasks_by_state`, `claudectl_fleet_cost_usd_total`, `claudectl_retries_total`, `claudectl_verifier_pass_rate`.
+- `supervisor_cli.rs` — `claudectl supervisor` subcommand (run / submit / status / logs / cancel / drain / undrain). Hand-rolled TOML reader for the `tasks.toml` subset.
+- `src/ingest.rs` — `claudectl ingest --hook <name>` subcommand. Bash hooks call `claudectl ingest --hook PostToolUse 2>/dev/null || true`. Best-effort by construction.
+
+Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION = 3` today). A binary that meets a newer schema refuses to start with the exact `init --upgrade` remediation in the error.
 
 **Hive** (`src/hive/`): Gossip-based knowledge sharing across connected brains (feature-gated behind `relay`).
 - `mod.rs` — KnowledgeUnit, KnowledgeScope, KnowledgeContent types, semantic key, broadcast channel

@@ -169,7 +169,7 @@ Press `R` on any session to record a per-session highlight reel (edits, commands
 
 ### Coordination (--features coord)
 
-Inspect multi-session coordination state. Requires `cargo install claudectl --features coord`.
+Inspect multi-session coordination state. Enabled by default since the supervisor RFC (#342).
 
 | Command | Description |
 |---------|-------------|
@@ -182,6 +182,28 @@ Inspect multi-session coordination state. Requires `cargo install claudectl --fe
 | `coord memory search <q>` | Full-text search coordination memory |
 | `coord promote --project <name>` | Promote brain patterns to coordination memory |
 | `coord prune [--days N]` | Delete old events, resolved blockers, expired leases (default: 30 days) |
+
+### Supervisor
+
+Durable task lifecycles on top of the bus. See the [README's Supervisor section](../README.md#supervisor) for the design overview and `tasks.toml` shape.
+
+| Command | Description |
+|---------|-------------|
+| `supervisor run <tasks.toml> [--dry-run]` | Batch-submit one or more tasks from a TOML file (RFC §4 shape) |
+| `supervisor submit --name --cwd --prompt [--role ...]` | One-shot inline submission |
+| `supervisor status [--state STATE]` | Compact task table; optional state filter (`PENDING` / `RUNNING` / `DONE` / `NEEDS_HUMAN` / …) |
+| `supervisor logs <task_id>` | Task detail + full transition log |
+| `supervisor cancel <task_id>` | Idempotent move to CANCELLED |
+| `supervisor drain` | Set sentinel file at `~/.claudectl/coord/drain`; reconciler stops issuing new assignments |
+| `supervisor undrain` | Clear the drain marker |
+
+Coord schema is gated on `PRAGMA user_version`. A binary that meets a newer schema (e.g. after `brew upgrade` without a follow-up `init --upgrade`) refuses to start with the exact remediation in the error.
+
+### Ingest
+
+| Command | Description |
+|---------|-------------|
+| `ingest --hook <PreToolUse\|PostToolUse\|Stop\|SessionStart\|Notification\|UserPromptSubmit>` | Append the hook's stdin payload to coord `hook_events`. Best-effort by construction — meant to be called from a bash hook with `2>/dev/null \|\| true`. JSONL tail + `ps` stay authoritative; this is a latency optimization for the supervisor's reconciler. |
 
 ### Relay (--features relay)
 
