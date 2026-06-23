@@ -266,6 +266,11 @@ pub struct App {
     pub role_bind_target_pid: Option<u32>,
     pub role_bind_target_cwd: Option<String>,
     pub notify: bool,
+    /// Minimum time between desktop notifications that share the same key.
+    /// Suppresses flapping (e.g. a session oscillating in/out of NeedsInput).
+    pub notify_cooldown: std::time::Duration,
+    /// Last time a notification fired, keyed by event (e.g. "needs-input:<pid>").
+    pub last_notified: HashMap<String, std::time::Instant>,
     pub prev_statuses: HashMap<u32, SessionStatus>,
     pub show_help: bool,
     pub sort_column: usize,
@@ -526,6 +531,20 @@ fn observation_from(
     }
 }
 
+/// Decide whether a notification keyed by some event may fire now, given when it
+/// last fired. Pure (takes `now` rather than reading the clock) so the cooldown
+/// rule can be unit-tested deterministically.
+pub fn should_notify(
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+    cooldown: std::time::Duration,
+) -> bool {
+    match last {
+        Some(t) => now.duration_since(t) >= cooldown,
+        None => true,
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         let mut app = Self {
@@ -542,6 +561,8 @@ impl App {
             input_buffer: String::new(),
             input_target_pid: None,
             notify: false,
+            notify_cooldown: std::time::Duration::from_secs(30),
+            last_notified: HashMap::new(),
             prev_statuses: HashMap::new(),
             show_help: false,
             sort_column: 0,
@@ -650,6 +671,26 @@ impl App {
         app
     }
 
+    /// Emit a desktop notification, gated by the master `notify` toggle and a
+    /// per-key cooldown. Every notification routes through here so a single
+    /// `notify = false` silences every category, and a flapping condition
+    /// (same `key`) cannot re-fire faster than `notify_cooldown`.
+    fn notify_user(&mut self, key: &str, message: &str) {
+        if !self.notify {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if !should_notify(
+            self.last_notified.get(key).copied(),
+            now,
+            self.notify_cooldown,
+        ) {
+            return;
+        }
+        self.last_notified.insert(key.to_string(), now);
+        fire_notification(message);
+    }
+
     pub fn refresh(&mut self) {
         let tick_start = std::time::Instant::now();
 
@@ -753,7 +794,10 @@ impl App {
                         session.cost_usd,
                         budget
                     );
-                    fire_notification(&format!("{} budget {:.0}%", session.display_name(), pct));
+                    self.notify_user(
+                        &format!("budget-warn:{}", session.pid),
+                        &format!("{} budget at {:.0}%", session.display_name(), pct),
+                    );
                     self.hooks.fire(HookEvent::BudgetWarning, session);
                 }
 
@@ -776,7 +820,10 @@ impl App {
                             budget
                         );
                     }
-                    fire_notification(&format!("{} exceeded budget!", session.display_name()));
+                    self.notify_user(
+                        &format!("budget-kill:{}", session.pid),
+                        &format!("{} exceeded budget!", session.display_name()),
+                    );
                     self.hooks.fire(HookEvent::BudgetExceeded, session);
                 }
             }
@@ -794,11 +841,10 @@ impl App {
                         session.display_name(),
                         pct
                     );
-                    fire_notification(&format!(
-                        "{} context at {:.0}%",
-                        session.display_name(),
-                        pct
-                    ));
+                    self.notify_user(
+                        &format!("context:{}", session.pid),
+                        &format!("{} context at {:.0}%", session.display_name(), pct),
+                    );
                     self.hooks.fire(HookEvent::ContextHigh, session);
                 } else if pct < threshold && self.context_warned.contains(&session.pid) {
                     // Reset warning if context dropped (e.g., after /compact)
@@ -871,9 +917,12 @@ impl App {
                 ),
             );
 
-            // Desktop notification on NeedsInput
-            if self.notify && session.status == SessionStatus::NeedsInput {
-                fire_notification(&session.project_name);
+            // Desktop notification on NeedsInput (gated + cooldown via notify_user)
+            if session.status == SessionStatus::NeedsInput {
+                self.notify_user(
+                    &format!("needs-input:{}", session.pid),
+                    &format!("{} needs input", session.project_name),
+                );
             }
 
             // Webhook on status change
@@ -970,7 +1019,10 @@ impl App {
                         .unwrap_or("unknown");
                     self.status_msg =
                         format!("CONFLICT: {} sessions sharing {}", pids.len(), project);
-                    fire_notification(&format!("{} sessions in {}", pids.len(), project));
+                    self.notify_user(
+                        &format!("conflict:{wt}"),
+                        &format!("{} sessions in {}", pids.len(), project),
+                    );
                     if let Some(session) = sessions.iter().find(|s| s.pid == pids[0]) {
                         self.hooks.fire(HookEvent::ConflictDetected, session);
                     }
@@ -1050,7 +1102,10 @@ impl App {
                         let short = file.rsplit('/').next().unwrap_or(file);
                         self.status_msg =
                             format!("FILE CONFLICT: {} edited by {}", short, names.join(", "));
-                        fire_notification(&format!("File conflict: {short}"));
+                        self.notify_user(
+                            &format!("file-conflict:{file}"),
+                            &format!("File conflict: {short}"),
+                        );
                         if let Some(session) = sessions.iter().find(|s| s.pid == pids[0]) {
                             self.hooks.fire(HookEvent::ConflictDetected, session);
                         }
@@ -1478,14 +1533,17 @@ impl App {
     }
 
     fn check_aggregate_budgets(&mut self) {
-        let ws = &self.weekly_summary;
+        // Copy the scalar totals up front so the immutable borrow of
+        // `weekly_summary` doesn't conflict with `notify_user(&mut self)` below.
+        let today_cost_usd = self.weekly_summary.today_cost_usd;
+        let week_cost_usd = self.weekly_summary.cost_usd;
 
         // Also include cost from currently live sessions (not yet in history)
         let live_cost: f64 = self.sessions.iter().map(|s| s.cost_usd).sum();
 
         // Daily limit check
         if let Some(daily_limit) = self.daily_limit {
-            let today_total = ws.today_cost_usd + live_cost;
+            let today_total = today_cost_usd + live_cost;
             let pct = today_total / daily_limit * 100.0;
 
             if pct >= 80.0 && !self.daily_alert_fired {
@@ -1494,7 +1552,7 @@ impl App {
                     "DAILY BUDGET: ${:.2}/${:.2} ({:.0}%)",
                     today_total, daily_limit, pct
                 );
-                fire_notification(&format!("Daily budget at {:.0}%", pct));
+                self.notify_user("daily-budget", &format!("Daily budget at {:.0}%", pct));
 
                 // Fire hooks with a synthetic session containing aggregate data
                 let mut dummy = create_aggregate_session(today_total, daily_limit, "daily");
@@ -1509,7 +1567,7 @@ impl App {
 
         // Weekly limit check
         if let Some(weekly_limit) = self.weekly_limit {
-            let week_total = ws.cost_usd + live_cost;
+            let week_total = week_cost_usd + live_cost;
             let pct = week_total / weekly_limit * 100.0;
 
             if pct >= 80.0 && !self.weekly_alert_fired {
@@ -1518,7 +1576,7 @@ impl App {
                     "WEEKLY BUDGET: ${:.2}/${:.2} ({:.0}%)",
                     week_total, weekly_limit, pct
                 );
-                fire_notification(&format!("Weekly budget at {:.0}%", pct));
+                self.notify_user("weekly-budget", &format!("Weekly budget at {:.0}%", pct));
 
                 let mut dummy = create_aggregate_session(week_total, weekly_limit, "weekly");
                 self.hooks.fire(HookEvent::BudgetWarning, &dummy);
@@ -3166,6 +3224,36 @@ fn short_id(id: &str) -> String {
 mod tests {
     use super::*;
     use claudectl_core::session::{RawSession, TelemetryStatus};
+
+    #[test]
+    fn should_notify_fires_when_never_fired() {
+        let now = std::time::Instant::now();
+        assert!(should_notify(None, now, std::time::Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn should_notify_suppresses_within_cooldown() {
+        // A flapping session re-entering NeedsInput 10s after the last ping
+        // must stay silent under a 60s cooldown.
+        let base = std::time::Instant::now();
+        let now = base + std::time::Duration::from_secs(10);
+        assert!(!should_notify(
+            Some(base),
+            now,
+            std::time::Duration::from_secs(60)
+        ));
+    }
+
+    #[test]
+    fn should_notify_fires_after_cooldown() {
+        let base = std::time::Instant::now();
+        let now = base + std::time::Duration::from_secs(70);
+        assert!(should_notify(
+            Some(base),
+            now,
+            std::time::Duration::from_secs(60)
+        ));
+    }
 
     fn make_session(
         pid: u32,

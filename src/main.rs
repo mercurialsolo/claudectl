@@ -312,6 +312,10 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Budget & Notifications")]
     pub(crate) notify: bool,
 
+    /// Min seconds between repeat notifications for the same event (anti-flap)
+    #[arg(long, value_name = "SECS", help_heading = "Budget & Notifications")]
+    pub(crate) notify_cooldown: Option<u64>,
+
     /// Webhook URL to POST JSON on status changes
     #[arg(long, help_heading = "Budget & Notifications")]
     pub(crate) webhook: Option<String>,
@@ -647,6 +651,9 @@ fn run_main(cli: Cli) -> io::Result<()> {
     }
     if cli.notify {
         cfg.notify = true;
+    }
+    if let Some(secs) = cli.notify_cooldown {
+        cfg.notify_cooldown_secs = secs;
     }
     if cli.debug {
         cfg.debug = true;
@@ -1146,6 +1153,7 @@ fn run_tui<W: io::Write>(
     // free; the production wiring happens here, in main.
     app.runtime = runtime::build_runtime();
     app.notify = cfg.notify;
+    app.notify_cooldown = std::time::Duration::from_secs(cfg.notify_cooldown_secs);
     app.debug = cfg.debug;
     app.webhook_url = cfg.webhook.clone();
     app.webhook_filter = cfg.webhook_on.clone();

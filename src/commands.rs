@@ -980,6 +980,7 @@ pub(crate) fn run_headless(
     app.budget_usd = cfg.budget;
     app.kill_on_budget = cfg.kill_on_budget;
     app.notify = cfg.notify;
+    app.notify_cooldown = std::time::Duration::from_secs(cfg.notify_cooldown_secs);
     app.context_warn_threshold = cfg.context_warn_threshold;
     app.daily_limit = cfg.daily_limit;
     app.weekly_limit = cfg.weekly_limit;
