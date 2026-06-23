@@ -7,15 +7,18 @@ fn applescript_escape(s: &str) -> String {
 }
 
 /// Find the best matching Ghostty terminal for a session.
-/// Ghostty's AppleScript API exposes: id, name, working directory (no tty/pid).
 ///
-/// Matching priority:
-///   1. session.terminal_id — present when the agent-sandbox wrapper captured
-///      the host Ghostty tab's AppleScript id at launch time. Unambiguous.
-///   2. CWD match + title-contains-session-name disambiguator — fallback for
-///      host-native sessions and for sandbox sessions launched before the
-///      wrapper could probe Ghostty. Breaks down when multiple unnamed claudes
-///      share a CWD.
+/// Matching priority (most precise first):
+///   1. `session.terminal_id` — the surface's AppleScript id, captured at launch
+///      by the agent-sandbox wrapper. Unambiguous.
+///   2. `tty` — Ghostty >= 1.4.0 exposes a `tty` property on terminals
+///      (ghostty-org/ghostty#11922): an exact 1:1 key, same as iTerm2. Matched
+///      with `contains` because `ps` reports `ttysNNN` while Ghostty reports
+///      `/dev/ttysNNN` (mirrors the iTerm2 matcher), and wrapped in `try` so it's
+///      a harmless no-op on Ghostty <= 1.3.1 (where the property doesn't exist
+///      and the query errors) — we then fall through to the CWD match.
+///   3. working directory, exact then substring, + title disambiguator — the
+///      fallback for older Ghostty. Breaks down when multiple claudes share a CWD.
 fn find_terminal_script(session: &ClaudeSession) -> String {
     if let Some(ref id) = session.terminal_id {
         let escaped = applescript_escape(id);
@@ -29,50 +32,47 @@ fn find_terminal_script(session: &ClaudeSession) -> String {
     }
     let cwd = applescript_escape(&session.cwd);
     let session_name = applescript_escape(&session.session_name);
+    let tty = applescript_escape(&session.tty);
 
-    // Match on working directory, preferring an EXACT match before a substring
-    // one. Exact-first is what stops a shallow cwd (e.g. the home directory)
-    // from matching every surface nested under it — `... contains "/Users/x"`
-    // matches `/Users/x`, `/Users/x/repo`, … and would focus an arbitrary one.
-    // The `contains` fallback preserves the old behavior when Ghostty reports a
-    // path that doesn't byte-match the session's recorded cwd (symlink
-    // normalization like /tmp -> /private/tmp, or a trailing slash).
-    if session_name.is_empty() {
-        // No session name — match by CWD only, take the first match.
-        format!(
-            r#"
-            set matches to every terminal whose working directory is "{cwd}"
+    // Build the candidate list in order of precision: tty (exact, Ghostty >=
+    // 1.4.0) → working directory exact → working directory substring. Exact-cwd
+    // before substring stops a shallow cwd (e.g. the home directory) from
+    // matching every surface nested under it; the substring fallback preserves
+    // behavior when Ghostty reports a normalized path (symlink /tmp ->
+    // /private/tmp, or a trailing slash) that doesn't byte-match the cwd.
+    let mut find = String::from("\n            set matches to {}\n");
+    if !tty.is_empty() {
+        find.push_str(&format!(
+            "            try\n                set matches to every terminal whose tty contains \"{tty}\"\n            end try\n"
+        ));
+    }
+    find.push_str(&format!(
+        r#"            if (count of matches) = 0 then
+                set matches to every terminal whose working directory is "{cwd}"
+            end if
             if (count of matches) = 0 then
                 set matches to every terminal whose working directory contains "{cwd}"
             end if
             if (count of matches) = 0 then error "No Ghostty terminal found for {cwd}"
             set t to item 1 of matches
-            "#,
-        )
-    } else {
-        // CWD match, then disambiguate by title. Claude Code sets the terminal
-        // title to "<spinner> <task_description>", which often contains the
-        // session name (from --name or --resume), so prefer a title match when
-        // several surfaces share the CWD.
-        format!(
-            r#"
-            set matches to every terminal whose working directory is "{cwd}"
-            if (count of matches) = 0 then
-                set matches to every terminal whose working directory contains "{cwd}"
-            end if
-            if (count of matches) = 0 then error "No Ghostty terminal found for {cwd}"
-
-            -- Disambiguate: find the terminal whose title contains our session name
-            set t to item 1 of matches
-            repeat with candidate in matches
+"#
+    ));
+    if !session_name.is_empty() {
+        // Disambiguate by title when several surfaces share a CWD. Claude Code
+        // sets the title to "<spinner> <task_description>", which often contains
+        // the session name. (A tty match, when available, is already unique, so
+        // this loop is a no-op there.)
+        find.push_str(&format!(
+            r#"            repeat with candidate in matches
                 if name of candidate contains "{session_name}" then
                     set t to candidate
                     exit repeat
                 end if
             end repeat
-            "#,
-        )
+"#
+        ));
     }
+    find
 }
 
 pub fn switch(session: &ClaudeSession) -> Result<(), String> {
@@ -170,6 +170,26 @@ mod tests {
         assert!(script.contains("name of candidate contains \"my-task\""));
         // Should set fallback before loop
         assert!(script.contains("set t to item 1 of matches"));
+    }
+
+    #[test]
+    fn find_script_prefers_tty_when_present() {
+        let mut s = make_session("/tmp/p", "task");
+        s.tty = "ttys014".into();
+        let script = find_terminal_script(&s);
+        // tty match first, `try`-wrapped (no-op on Ghostty <= 1.3.1), matched
+        // with `contains` (ps `ttysNNN` vs Ghostty `/dev/ttysNNN`).
+        assert!(script.contains("try"));
+        assert!(script.contains("whose tty contains \"ttys014\""));
+        // CWD fallback still present after the tty attempt.
+        assert!(script.contains("working directory is \"/tmp/p\""));
+    }
+
+    #[test]
+    fn find_script_omits_tty_block_when_tty_empty() {
+        let s = make_session("/tmp/p", ""); // tty defaults to empty
+        let script = find_terminal_script(&s);
+        assert!(!script.contains("whose tty"));
     }
 
     #[test]
