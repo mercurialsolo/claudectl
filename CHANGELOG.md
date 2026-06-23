@@ -2,6 +2,17 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.57.3] - 2026-06-22
+
+### Fixed — notification cooldown + unified toggle (#364)
+- Desktop notifications now route through a single gate (`App::notify_user`) that honors the master `notify` toggle **and** a per-event cooldown. Previously only the "needs input" notification was gated by `notify`; budget, context, and conflict pings fired regardless, so `notify = false` did not actually silence everything.
+- **Anti-flap cooldown** — a session oscillating `NeedsInput ↔ Running` no longer re-pings on every transition. Per-event keys (`needs-input:<pid>`, `budget-warn:<pid>`, `conflict:<wt>`, …) scope the cooldown so each event fires at most once per window.
+- New **`notify_cooldown_secs`** config knob (default **30s**), wired through all three layers: CLI `--notify-cooldown <SECS>`, `[defaults]` TOML, `config set`/`config show`, and known-keys validation.
+- `fire_notification` no longer hardcodes `" needs input"` onto every message — budget/conflict notifications read correctly instead of e.g. "x budget needs input".
+- New pure `should_notify` helper with unit tests for the never-fired / within-cooldown / after-cooldown cases.
+
+Workspace crates bumped: `claudectl-core` and `claudectl-tui` → 0.52.2 (both touched by the fix).
+
 ## [0.57.2] - 2026-06-07
 
 ### Added — `claudectl init --upgrade` + plugin-version doctor row (closes #327)
