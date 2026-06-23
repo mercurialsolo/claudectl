@@ -452,7 +452,8 @@ mod tests {
         // the upper-bound timeout, the session stays NeedsInput forever.
         let mut s = fresh_state("sid");
         s.notification_kind = Some("permission_prompt".into());
-        s.last_notification_ts_ms = now_ms().saturating_sub(PERMISSION_PROMPT_MAX_SILENCE_MS + 1_000);
+        s.last_notification_ts_ms =
+            now_ms().saturating_sub(PERMISSION_PROMPT_MAX_SILENCE_MS + 1_000);
         // All resolution timestamps are zero — no hook event ever fired.
         assert!(!is_at_permission_prompt(&s));
     }
