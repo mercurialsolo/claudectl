@@ -299,6 +299,14 @@ pub fn is_permission_prompt_kind(kind: Option<&str>) -> bool {
     matches!(kind, Some("permission_prompt" | "worker_permission_prompt"))
 }
 
+/// Maximum age for a permission prompt with no resolution events. If Stop,
+/// PreToolUse, PostToolUse, and UserPromptSubmit have all been silent since
+/// the notification fired, the prompt is almost certainly stale — the hook
+/// configuration changed mid-session and resolution events stopped reaching
+/// claudectl. Real permission prompts are resolved in seconds to minutes;
+/// 30 minutes is a conservative upper bound.
+const PERMISSION_PROMPT_MAX_SILENCE_MS: u64 = 30 * 60 * 1000;
+
 /// Whether the session is currently sitting on a permission prompt.
 ///
 /// Pure deterministic check: the `Notification (permission_prompt)` or
@@ -308,10 +316,15 @@ pub fn is_permission_prompt_kind(kind: Option<&str>) -> bool {
 /// pivoted to a new prompt). No CPU or JSONL second-guessing — those
 /// introduced the false-negatives we just had.
 ///
-/// 750ms grace period: auto-approved prompts (acceptEdits, allowlisted)
+/// 750ms lower bound: auto-approved prompts (acceptEdits, allowlisted)
 /// fire Notification + near-instant PreToolUse; the dialog never opens
 /// visibly. Suppressing the marker for the first 750ms filters those out.
 /// Real prompts sit far longer, so this costs them nothing.
+///
+/// 30 min upper bound: if no resolution event has reached claudectl in
+/// 30 minutes, the hook configuration is almost certainly incomplete (e.g.
+/// Stop lost its claudectl call mid-session) and the marker is stale. Without
+/// this bound, a single missed Stop permanently locks the status to NeedsInput.
 pub fn is_at_permission_prompt(state: &HookState) -> bool {
     if !is_permission_prompt_kind(state.notification_kind.as_deref()) {
         return false;
@@ -327,7 +340,8 @@ pub fn is_at_permission_prompt(state: &HookState) -> bool {
     if !still_latest {
         return false;
     }
-    now_ms().saturating_sub(notif) > 750
+    let age = now_ms().saturating_sub(notif);
+    age > 750 && age < PERMISSION_PROMPT_MAX_SILENCE_MS
 }
 
 /// How long a session is allowed to sit in "compacting" before we give up and
@@ -421,12 +435,26 @@ mod tests {
     fn permission_prompt_then_pretooluse_clears() {
         let mut s = fresh_state("sid");
         s.notification_kind = Some("permission_prompt".into());
-        s.last_notification_ts_ms = 1000;
+        s.last_notification_ts_ms = now_ms().saturating_sub(2_000);
         assert!(is_at_permission_prompt(&s));
 
         // Simulate PreToolUse arriving (manually, mirroring record_hook_event)
-        s.last_pretooluse_ts_ms = 2000;
+        s.last_pretooluse_ts_ms = now_ms();
         s.notification_kind = None;
+        assert!(!is_at_permission_prompt(&s));
+    }
+
+    #[test]
+    fn permission_prompt_ages_out_after_30_minutes() {
+        // Repro for the "stuck NeedsInput" failure mode: Stop hook loses its
+        // claudectl call mid-session, so the notification fires and sets
+        // notification_kind but no resolution event ever clears it. Without
+        // the upper-bound timeout, the session stays NeedsInput forever.
+        let mut s = fresh_state("sid");
+        s.notification_kind = Some("permission_prompt".into());
+        s.last_notification_ts_ms =
+            now_ms().saturating_sub(PERMISSION_PROMPT_MAX_SILENCE_MS + 1_000);
+        // All resolution timestamps are zero — no hook event ever fired.
         assert!(!is_at_permission_prompt(&s));
     }
 

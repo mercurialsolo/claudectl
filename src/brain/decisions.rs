@@ -803,6 +803,8 @@ mod tests {
             terminal_id: None,
             host_terminal_target: None,
             sidecar_loaded: false,
+            terminal: None,
+            terminal_resolved: false,
             status: SessionStatus::Processing,
             cpu_percent: 50.0,
             cpu_history: vec![],

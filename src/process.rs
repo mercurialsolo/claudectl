@@ -92,6 +92,18 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
             }
             session.sidecar_loaded = true;
         }
+
+        // Resolve which terminal this session runs in, once, from its own
+        // process environment — so claudectl can switch/input/approve a session
+        // that lives in a different terminal than claudectl itself. Host-native
+        // only: sandbox sessions carry a sidecar terminal_id/host target and are
+        // routed via the bridge, so we leave their `terminal` as None.
+        if !session.terminal_resolved {
+            if session.terminal_id.is_none() && session.host_terminal_target.is_none() {
+                session.terminal = crate::terminals::detect_terminal_for_pid(pid);
+            }
+            session.terminal_resolved = true;
+        }
         session.mem_mb = mem_mb;
 
         // CPU smoothing: track last 3 readings, use average
