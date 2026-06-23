@@ -11,6 +11,7 @@ use crate::rules::{AutoRule, RuleAction};
 pub struct Config {
     pub interval: u64,
     pub notify: bool,
+    pub notify_cooldown_secs: u64, // Min seconds between repeat notifications per event
     pub debug: bool,
     pub grouped: bool,
     pub sort: Option<String>,
@@ -180,6 +181,7 @@ impl Default for Config {
         Self {
             interval: 2000,
             notify: false,
+            notify_cooldown_secs: 30,
             debug: false,
             grouped: false,
             sort: None,
@@ -210,6 +212,7 @@ impl Default for Config {
 struct RawConfig {
     interval: Option<u64>,
     notify: Option<bool>,
+    notify_cooldown_secs: Option<u64>,
     debug: Option<bool>,
     grouped: Option<bool>,
     sort: Option<String>,
@@ -309,6 +312,9 @@ impl Config {
         }
         if let Some(v) = raw.notify {
             self.notify = v;
+        }
+        if let Some(v) = raw.notify_cooldown_secs {
+            self.notify_cooldown_secs = v;
         }
         if let Some(v) = raw.debug {
             self.debug = v;
@@ -547,6 +553,7 @@ impl Config {
         println!();
         println!("  interval:       {}ms", self.interval);
         println!("  notify:         {}", self.notify);
+        println!("  notify_cooldown: {}s", self.notify_cooldown_secs);
         println!("  debug:          {}", self.debug);
         println!("  grouped:        {}", self.grouped);
         println!(
@@ -670,6 +677,10 @@ impl Config {
 
 # Enable desktop notifications on NeedsInput transitions
 # notify = false
+
+# Minimum seconds between repeat notifications for the same event (anti-flap).
+# A session oscillating in/out of NeedsInput won't ping more than once per window.
+# notify_cooldown_secs = 30
 
 # Show debug timing metrics in the footer
 # debug = false
@@ -902,6 +913,9 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
             }
             ("" | "defaults", "notify") => {
                 raw.notify = parse_bool(value);
+            }
+            ("" | "defaults", "notify_cooldown_secs") => {
+                raw.notify_cooldown_secs = value.parse().ok();
             }
             ("" | "defaults", "debug") => {
                 raw.debug = parse_bool(value);
@@ -1206,6 +1220,7 @@ fn known_keys(section: &str) -> Option<&'static [&'static str]> {
         "" | "defaults" => Some(&[
             "interval",
             "notify",
+            "notify_cooldown_secs",
             "debug",
             "grouped",
             "sort",

@@ -100,18 +100,20 @@ pub fn chrono_now_iso() -> String {
 }
 
 /// Fire a desktop notification (macOS via osascript, Linux via notify-send).
-pub fn fire_notification(project: &str) {
-    let safe = project.replace('"', "'").replace('\\', "");
+/// `message` is shown verbatim as the notification body — callers pass the full
+/// text (e.g. "myproject needs input", "myproject budget at 80%").
+pub fn fire_notification(message: &str) {
+    let safe = message.replace('"', "'").replace('\\', "");
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("osascript")
         .args([
             "-e",
-            &format!("display notification \"{safe} needs input\" with title \"claudectl\""),
+            &format!("display notification \"{safe}\" with title \"claudectl\""),
         ])
         .spawn();
     #[cfg(target_os = "linux")]
     let _ = std::process::Command::new("notify-send")
-        .args(["claudectl", &format!("{safe} needs input")])
+        .args(["claudectl", &safe])
         .spawn();
 }
 
