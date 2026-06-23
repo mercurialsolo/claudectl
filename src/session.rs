@@ -146,6 +146,17 @@ pub struct ClaudeSession {
     /// never mutated, so re-reading every tick burned ~70 ms / tick at
     /// 40 sandboxed sessions for no information gain.
     pub sidecar_loaded: bool,
+    /// Which terminal application this session runs in, detected once from the
+    /// session process's own environment (TERM_PROGRAM / GHOSTTY_RESOURCES_DIR /
+    /// KITTY_WINDOW_ID / …). Lets claudectl focus/input/approve a session that
+    /// lives in a *different* terminal than the one claudectl itself runs in
+    /// (e.g. claudectl in iTerm2 switching to a session in Ghostty). None until
+    /// resolved or when no terminal signal is present; callers then fall back to
+    /// the terminal claudectl itself runs in.
+    pub terminal: Option<crate::terminals::Terminal>,
+    /// True once `process::fetch_and_enrich` has attempted to resolve `terminal`
+    /// (one `ps eww` per pid); avoids repeating the probe every refresh tick.
+    pub terminal_resolved: bool,
     pub status: SessionStatus,
     pub cpu_percent: f32,
     pub cpu_history: Vec<f32>, // Last N CPU readings for smoothing
@@ -361,6 +372,8 @@ impl ClaudeSession {
             terminal_id: None,
             host_terminal_target: None,
             sidecar_loaded: false,
+            terminal: None,
+            terminal_resolved: false,
             status: SessionStatus::Idle,
             cpu_percent: 0.0,
             cpu_history: Vec::new(),

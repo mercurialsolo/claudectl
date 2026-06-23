@@ -11,6 +11,7 @@ mod windows_terminal;
 
 use crate::session::{ClaudeSession, HostTerminalTarget};
 use sandbox_terminal_bridge::{BridgeError, BridgeTarget, BridgeTerminal, BridgeVerb};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,15 +293,24 @@ pub fn detect_terminal() -> Terminal {
         return term;
     }
 
-    match std::env::var("TERM_PROGRAM").as_deref() {
-        Ok("ghostty") => Terminal::Ghostty,
-        Ok("WarpTerminal") => Terminal::Warp,
-        Ok("iTerm.app") => Terminal::ITerm2,
-        Ok("kitty") => Terminal::Kitty,
-        Ok("WezTerm") => Terminal::WezTerm,
-        Ok("Apple_Terminal") => Terminal::Apple,
-        Ok(other) => Terminal::Unknown(other.to_string()),
+    match std::env::var("TERM_PROGRAM") {
+        Ok(term_program) => terminal_from_term_program(&term_program),
         Err(_) => Terminal::Unknown("unknown".to_string()),
+    }
+}
+
+/// Map a `TERM_PROGRAM` value to a `Terminal`. Shared by `detect_terminal`
+/// (claudectl's own env) and `classify_session_env` (a session's env) so the
+/// mapping can't drift between the two.
+fn terminal_from_term_program(term_program: &str) -> Terminal {
+    match term_program {
+        "ghostty" => Terminal::Ghostty,
+        "WarpTerminal" => Terminal::Warp,
+        "iTerm.app" => Terminal::ITerm2,
+        "kitty" => Terminal::Kitty,
+        "WezTerm" => Terminal::WezTerm,
+        "Apple_Terminal" => Terminal::Apple,
+        other => Terminal::Unknown(other.to_string()),
     }
 }
 
@@ -329,6 +339,86 @@ fn detect_by_native_env() -> Option<Terminal> {
     }
 
     None
+}
+
+/// Classify a terminal from a getter over environment variables. Same precedence
+/// as `detect_terminal` (multiplexer first, then per-terminal native vars, then
+/// `TERM_PROGRAM`), but driven by an arbitrary env source so it can classify a
+/// *session's* environment, not just claudectl's own process. Returns None when
+/// no terminal signal is present.
+fn classify_session_env(get: impl Fn(&str) -> Option<String>) -> Option<Terminal> {
+    if get("TMUX").is_some() {
+        return Some(Terminal::Tmux);
+    }
+    if get("GNOME_TERMINAL_SERVICE").is_some() || get("GNOME_TERMINAL_SCREEN").is_some() {
+        return Some(Terminal::Gnome);
+    }
+    if get("KITTY_WINDOW_ID").is_some() {
+        return Some(Terminal::Kitty);
+    }
+    if get("WEZTERM_EXECUTABLE").is_some() {
+        return Some(Terminal::WezTerm);
+    }
+    if get("GHOSTTY_RESOURCES_DIR").is_some() {
+        return Some(Terminal::Ghostty);
+    }
+    if get("TERM").as_deref() == Some("xterm-kitty") {
+        return Some(Terminal::Kitty);
+    }
+    get("TERM_PROGRAM").map(|tp| terminal_from_term_program(&tp))
+}
+
+/// Run `ps` with the given args under a cleared environment (mirrors the other
+/// `ps` call in `process.rs`; `ps` reads the kernel and needs no inherited env).
+/// Returns stdout, or None if `ps` failed.
+fn run_ps_command(args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(args)
+        .env_clear()
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Parse a process's environment out of `ps` output. `ps` appends the
+/// environment AFTER the full argv on one line with NO delimiter, so parsing
+/// the whole line would let an argv token shaped like KEY=VALUE — a claude
+/// prompt, or a `-e FOO=bar` flag — masquerade as an env var and misclassify
+/// the terminal. We therefore strip the argv prefix (`with_argv_only`) and keep
+/// only the trailing env block. The env vars we classify on contain no spaces,
+/// so whitespace-tokenising that suffix into `KEY=VALUE` pairs is sufficient.
+fn parse_env_block(with_argv_only: &str, with_env: &str) -> HashMap<String, String> {
+    let env_block = with_env
+        .strip_prefix(with_argv_only.trim_end())
+        .unwrap_or(with_env);
+    let mut env = HashMap::new();
+    for token in env_block.split_whitespace() {
+        if let Some((key, value)) = token.split_once('=') {
+            env.insert(key.to_string(), value.to_string());
+        }
+    }
+    env
+}
+
+/// Read a process's environment via `ps`. Two invocations: argv alone, then
+/// argv+env — see `parse_env_block` for why (isolating the env from argv).
+fn read_pid_env(pid: u32) -> Option<HashMap<String, String>> {
+    let pid_arg = pid.to_string();
+    let argv = run_ps_command(&["-ww", "-o", "command=", "-p", &pid_arg])?;
+    let with_env = run_ps_command(&["-Eww", "-o", "command=", "-p", &pid_arg])?;
+    Some(parse_env_block(&argv, &with_env))
+}
+
+/// Detect which terminal a session (by pid) runs in, from its *own* environment.
+/// This is what lets claudectl route control to the session's terminal even when
+/// claudectl runs in a different one. None when the env can't be read or carries
+/// no terminal signal — callers then fall back to claudectl's own terminal.
+pub(crate) fn detect_terminal_for_pid(pid: u32) -> Option<Terminal> {
+    let env = read_pid_env(pid)?;
+    classify_session_env(|key| env.get(key).cloned())
 }
 
 fn ancestor_process_contains(needle: &str) -> bool {
@@ -1095,7 +1185,10 @@ pub fn switch_to_terminal(session: &ClaudeSession) -> Result<(), String> {
         return dispatch_terminal_bridge(t, session, BridgeVerb::FocusTab);
     }
 
-    let terminal = detect_terminal();
+    // Route by the SESSION's terminal (detected from its own process env), not
+    // claudectl's own. This lets claudectl-in-iTerm focus a session in Ghostty.
+    // Falls back to claudectl's terminal when the session's couldn't be resolved.
+    let terminal = session.terminal.clone().unwrap_or_else(detect_terminal);
 
     // Only require a TTY for terminals that match sessions by TTY name.
     // Kitty, Ghostty, and Warp use their own IPC (PID/cwd matching) and don't need it.
@@ -1145,7 +1238,7 @@ pub fn send_input(session: &ClaudeSession, text: &str) -> Result<(), String> {
             },
         );
     }
-    match detect_terminal() {
+    match session.terminal.clone().unwrap_or_else(detect_terminal) {
         Terminal::Gnome => gnome_terminal::send_input(session, text),
         Terminal::Ghostty => ghostty::send_input(session, text),
         Terminal::Kitty => kitty::send_input(session, text),
@@ -1185,7 +1278,7 @@ pub fn approve_session(session: &ClaudeSession) -> Result<(), String> {
             },
         );
     }
-    match detect_terminal() {
+    match session.terminal.clone().unwrap_or_else(detect_terminal) {
         Terminal::Gnome => gnome_terminal::approve(session),
         Terminal::Ghostty => ghostty::approve(session),
         Terminal::Kitty => kitty::approve(session),
@@ -1548,5 +1641,72 @@ mod tests {
             }
             assert_eq!(detect_by_native_env(), Some(Terminal::Kitty));
         });
+    }
+
+    // Per-session terminal classification: this is what lets claudectl route
+    // control to the terminal a session lives in, independent of claudectl's own.
+    fn env_of(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for (key, value) in pairs {
+            map.insert(key.to_string(), value.to_string());
+        }
+        map
+    }
+
+    #[test]
+    fn classify_session_env_detects_ghostty() {
+        let env = env_of(&[("TERM_PROGRAM", "ghostty"), ("GHOSTTY_RESOURCES_DIR", "/x")]);
+        assert_eq!(
+            classify_session_env(|k| env.get(k).cloned()),
+            Some(Terminal::Ghostty)
+        );
+    }
+
+    #[test]
+    fn classify_session_env_detects_iterm_via_term_program() {
+        let env = env_of(&[("TERM_PROGRAM", "iTerm.app")]);
+        assert_eq!(
+            classify_session_env(|k| env.get(k).cloned()),
+            Some(Terminal::ITerm2)
+        );
+    }
+
+    #[test]
+    fn classify_session_env_tmux_wins_over_term_program() {
+        let env = env_of(&[("TMUX", "/tmp/tmux,1,0"), ("TERM_PROGRAM", "ghostty")]);
+        assert_eq!(
+            classify_session_env(|k| env.get(k).cloned()),
+            Some(Terminal::Tmux)
+        );
+    }
+
+    #[test]
+    fn classify_session_env_none_without_signal() {
+        let env = env_of(&[]);
+        assert_eq!(classify_session_env(|k| env.get(k).cloned()), None);
+    }
+
+    #[test]
+    fn parse_env_block_ignores_argv_tokens() {
+        // `ps` prints argv before the env block. An argv token shaped KEY=VALUE
+        // (a claude prompt, or a `-e FOO=bar` flag) must NOT win over the real
+        // env var, and an argv-only key must NOT leak into the env at all.
+        let argv = "claude -p TERM_PROGRAM=kitty TMUX=x";
+        let with_env = "claude -p TERM_PROGRAM=kitty TMUX=x TERM_PROGRAM=ghostty SHELL=/bin/bash";
+        let env = parse_env_block(argv, with_env);
+        assert_eq!(env.get("TERM_PROGRAM").map(String::as_str), Some("ghostty"));
+        assert_eq!(env.get("TMUX"), None);
+        assert_eq!(env.get("SHELL").map(String::as_str), Some("/bin/bash"));
+    }
+
+    #[test]
+    fn term_program_mapping_covers_known_and_unknown() {
+        assert_eq!(terminal_from_term_program("ghostty"), Terminal::Ghostty);
+        assert_eq!(terminal_from_term_program("iTerm.app"), Terminal::ITerm2);
+        assert_eq!(terminal_from_term_program("WezTerm"), Terminal::WezTerm);
+        assert!(matches!(
+            terminal_from_term_program("something-else"),
+            Terminal::Unknown(_)
+        ));
     }
 }

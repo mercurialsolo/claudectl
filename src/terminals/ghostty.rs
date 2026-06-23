@@ -30,23 +30,36 @@ fn find_terminal_script(session: &ClaudeSession) -> String {
     let cwd = applescript_escape(&session.cwd);
     let session_name = applescript_escape(&session.session_name);
 
-    // If we have a session name, try to match it against the terminal title first.
-    // Claude Code sets the terminal title to "<spinner> <task_description>" which
-    // often contains the session name (from --name or --resume flags).
+    // Match on working directory, preferring an EXACT match before a substring
+    // one. Exact-first is what stops a shallow cwd (e.g. the home directory)
+    // from matching every surface nested under it — `... contains "/Users/x"`
+    // matches `/Users/x`, `/Users/x/repo`, … and would focus an arbitrary one.
+    // The `contains` fallback preserves the old behavior when Ghostty reports a
+    // path that doesn't byte-match the session's recorded cwd (symlink
+    // normalization like /tmp -> /private/tmp, or a trailing slash).
     if session_name.is_empty() {
-        // No session name — match by CWD only, take first match
+        // No session name — match by CWD only, take the first match.
         format!(
             r#"
-            set matches to every terminal whose working directory contains "{cwd}"
+            set matches to every terminal whose working directory is "{cwd}"
+            if (count of matches) = 0 then
+                set matches to every terminal whose working directory contains "{cwd}"
+            end if
             if (count of matches) = 0 then error "No Ghostty terminal found for {cwd}"
             set t to item 1 of matches
             "#,
         )
     } else {
-        // Try CWD + name match first, fall back to CWD-only
+        // CWD match, then disambiguate by title. Claude Code sets the terminal
+        // title to "<spinner> <task_description>", which often contains the
+        // session name (from --name or --resume), so prefer a title match when
+        // several surfaces share the CWD.
         format!(
             r#"
-            set matches to every terminal whose working directory contains "{cwd}"
+            set matches to every terminal whose working directory is "{cwd}"
+            if (count of matches) = 0 then
+                set matches to every terminal whose working directory contains "{cwd}"
+            end if
             if (count of matches) = 0 then error "No Ghostty terminal found for {cwd}"
 
             -- Disambiguate: find the terminal whose title contains our session name
@@ -140,6 +153,8 @@ mod tests {
     fn find_script_unnamed_session() {
         let s = make_session("/tmp/my-project", "");
         let script = find_terminal_script(&s);
+        // Exact-first, with a substring fallback.
+        assert!(script.contains("working directory is \"/tmp/my-project\""));
         assert!(script.contains("working directory contains \"/tmp/my-project\""));
         // Should NOT have name-matching logic
         assert!(!script.contains("name of candidate"));
@@ -149,6 +164,8 @@ mod tests {
     fn find_script_named_session() {
         let s = make_session("/tmp/my-project", "my-task");
         let script = find_terminal_script(&s);
+        // Exact-first, with a substring fallback.
+        assert!(script.contains("working directory is \"/tmp/my-project\""));
         assert!(script.contains("working directory contains \"/tmp/my-project\""));
         assert!(script.contains("name of candidate contains \"my-task\""));
         // Should set fallback before loop
