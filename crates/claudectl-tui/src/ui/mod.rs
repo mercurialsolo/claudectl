@@ -7,4 +7,6 @@ pub mod help;
 pub mod peers;
 pub mod skills;
 pub mod status_bar;
+#[cfg(feature = "coord")]
+pub mod supervisor;
 pub mod table;

@@ -277,12 +277,33 @@ pub struct InterruptSummary {
     pub created_at: String,
 }
 
-/// Read access to coordination state (leases, handoffs, interrupts).
+/// A supervisor task lifecycle, projected for the TUI. One row per task in the
+/// coord `tasks` table. `state` is the wire label (`TaskState::as_str`), kept as
+/// a string so the contract doesn't drag the coord state enum upward.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSummary {
+    pub id: String,
+    pub name: String,
+    pub state: String,
+    pub role: Option<String>,
+    /// Number of recorded attempts so far.
+    pub attempts: u32,
+    pub max_retries: u32,
+    /// Session id of the most recent attempt, when one has run.
+    pub last_session_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Read access to coordination state (leases, handoffs, interrupts, tasks).
 /// Backed today by the `coord` SQLite store; in tests, by a fixture.
 pub trait CoordView: Send + Sync {
     fn active_leases(&self) -> Vec<LeaseSummary>;
     fn pending_handoffs(&self) -> Vec<HandoffSummary>;
     fn pending_interrupts(&self) -> Vec<InterruptSummary>;
+    /// Supervisor task lifecycles, newest first. Empty when the `coord` feature
+    /// is off so the TUI can render a "no supervisor" state without cfg.
+    fn tasks(&self) -> Vec<TaskSummary>;
 }
 
 // ============================================================================
@@ -665,6 +686,7 @@ pub struct MockRuntime {
     pub leases: Vec<LeaseSummary>,
     pub handoffs: Vec<HandoffSummary>,
     pub interrupts: Vec<InterruptSummary>,
+    pub tasks: Vec<TaskSummary>,
     pub agents: Vec<AgentDirectoryEntry>,
     pub roles: Vec<RoleBinding>,
     pub actions_log: std::sync::Mutex<Vec<MockAction>>,
@@ -779,6 +801,9 @@ impl CoordView for MockRuntime {
     }
     fn pending_interrupts(&self) -> Vec<InterruptSummary> {
         self.interrupts.clone()
+    }
+    fn tasks(&self) -> Vec<TaskSummary> {
+        self.tasks.clone()
     }
 }
 
@@ -967,6 +992,30 @@ mod tests {
         assert!(rt.coord.active_leases().is_empty());
         assert!(rt.coord.pending_handoffs().is_empty());
         assert!(rt.coord.pending_interrupts().is_empty());
+        assert!(rt.coord.tasks().is_empty());
+    }
+
+    #[test]
+    fn coord_view_returns_task_fixture() {
+        let mock = MockRuntime {
+            tasks: vec![TaskSummary {
+                id: "t1".into(),
+                name: "ship the thing".into(),
+                state: "running".into(),
+                role: Some("backend".into()),
+                attempts: 2,
+                max_retries: 3,
+                last_session_id: Some("sess-abcdef12".into()),
+                created_at: "2026-06-25T10:00:00Z".into(),
+                updated_at: "2026-06-25T10:05:00Z".into(),
+            }],
+            ..Default::default()
+        };
+        let rt = mock.into_runtime();
+        let tasks = rt.coord.tasks();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].state, "running");
+        assert_eq!(tasks[0].attempts, 2);
     }
 
     #[test]

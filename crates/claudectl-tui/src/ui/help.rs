@@ -123,6 +123,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw("  Brain Metrics — scorecard + interactive review/teach loop"),
         ]),
         Line::from(vec![
+            Span::styled("  T              ", Style::default().fg(t.highlight_key)),
+            Span::raw("  Supervisor — task ledger (state, attempts, session)"),
+        ]),
+        Line::from(vec![
             Span::styled("  ?              ", Style::default().fg(t.highlight_key)),
             Span::raw("  Toggle this help"),
         ]),
