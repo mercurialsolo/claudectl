@@ -347,6 +347,16 @@ pub struct App {
     pub coord_pending_interrupts: Vec<claudectl_core::runtime::InterruptSummary>,
     #[cfg(feature = "coord")]
     pub coord_tick: u32,
+    /// Supervisor task ledger (#368). Populated by `coord_refresh`.
+    #[cfg(feature = "coord")]
+    pub coord_tasks: Vec<claudectl_core::runtime::TaskSummary>,
+    /// When true, the draw loop renders the full-screen Supervisor panel.
+    #[cfg(feature = "coord")]
+    pub show_supervisor: bool,
+    #[cfg(feature = "coord")]
+    pub supervisor_selected: usize,
+    #[cfg(feature = "coord")]
+    pub supervisor_status_msg: Option<String>,
     // Relay peers panel (feature-gated)
     #[cfg(feature = "relay")]
     pub show_peers_panel: bool,
@@ -635,6 +645,14 @@ impl App {
             coord_pending_interrupts: Vec::new(),
             #[cfg(feature = "coord")]
             coord_tick: 0,
+            #[cfg(feature = "coord")]
+            coord_tasks: Vec::new(),
+            #[cfg(feature = "coord")]
+            show_supervisor: false,
+            #[cfg(feature = "coord")]
+            supervisor_selected: 0,
+            #[cfg(feature = "coord")]
+            supervisor_status_msg: None,
             #[cfg(feature = "relay")]
             show_peers_panel: false,
             #[cfg(feature = "relay")]
@@ -1443,6 +1461,10 @@ impl App {
         self.coord_leases = self.runtime.coord.active_leases();
         self.coord_handoffs = self.runtime.coord.pending_handoffs();
         self.coord_pending_interrupts = self.runtime.coord.pending_interrupts();
+        self.coord_tasks = self.runtime.coord.tasks();
+        if self.supervisor_selected >= self.coord_tasks.len() {
+            self.supervisor_selected = self.coord_tasks.len().saturating_sub(1);
+        }
 
         self.coord_lease_sessions = self
             .coord_leases
@@ -1465,6 +1487,47 @@ impl App {
             .iter()
             .map(|i| i.target_session_id.clone())
             .collect();
+    }
+
+    /// Open the full-screen Supervisor task panel (#368).
+    #[cfg(feature = "coord")]
+    pub fn open_supervisor_overlay(&mut self) {
+        self.coord_refresh();
+        self.supervisor_selected = 0;
+        self.supervisor_status_msg = None;
+        self.show_supervisor = true;
+    }
+
+    /// Keymap for the Supervisor panel: j/k navigate, r refresh, Esc/T/q close.
+    /// Read-only for now (#368, increment 1).
+    #[cfg(feature = "coord")]
+    fn handle_supervisor_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('T') | KeyCode::Char('q') => {
+                self.show_supervisor = false;
+                self.supervisor_status_msg = None;
+            }
+            KeyCode::Char('r') => {
+                self.coord_refresh();
+                self.supervisor_status_msg = Some("Refreshed.".into());
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let last = self.coord_tasks.len().saturating_sub(1);
+                if self.supervisor_selected < last {
+                    self.supervisor_selected += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if self.supervisor_selected > 0 {
+                    self.supervisor_selected -= 1;
+                }
+            }
+            KeyCode::Char('g') | KeyCode::Home => self.supervisor_selected = 0,
+            KeyCode::Char('G') | KeyCode::End => {
+                self.supervisor_selected = self.coord_tasks.len().saturating_sub(1);
+            }
+            _ => {}
+        }
     }
 
     #[cfg(feature = "coord")]
@@ -1953,6 +2016,13 @@ impl App {
         // Brain overlay: dedicated keymap (j/k navigate, Tab switch, m mark, n note, r refresh, Esc/B close)
         if self.show_brain {
             self.handle_brain_key(key);
+            return true;
+        }
+
+        // Supervisor overlay: dedicated keymap (j/k navigate, r refresh, Esc/T close)
+        #[cfg(feature = "coord")]
+        if self.show_supervisor {
+            self.handle_supervisor_key(key);
             return true;
         }
 
@@ -2475,6 +2545,12 @@ impl App {
                 self.cancel_pending_kill();
                 self.cancel_pending_auto_approve();
                 self.open_brain_overlay();
+            }
+            #[cfg(feature = "coord")]
+            (KeyCode::Char('T'), _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.open_supervisor_overlay();
             }
             (KeyCode::Char('s'), _) => {
                 self.cancel_pending_kill();

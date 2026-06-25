@@ -1258,6 +1258,13 @@ fn run_tui<W: io::Write>(
                 return;
             }
 
+            // Full-screen mode: Supervisor task ledger (#368).
+            #[cfg(feature = "coord")]
+            if app.show_supervisor {
+                ui::supervisor::render_supervisor_screen(frame, area, &app);
+                return;
+            }
+
             #[cfg(feature = "relay")]
             let main_area = if app.show_peers_panel {
                 let chunks = ratatui::layout::Layout::default()

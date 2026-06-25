@@ -4,7 +4,9 @@
 //! store. Without it, every accessor returns an empty list so the TUI can
 //! render the "no coord" state without conditional compilation.
 
-use claudectl_core::runtime::{CoordView, HandoffSummary, InterruptSummary, LeaseSummary};
+use claudectl_core::runtime::{
+    CoordView, HandoffSummary, InterruptSummary, LeaseSummary, TaskSummary,
+};
 
 pub struct LiveCoordView;
 
@@ -57,6 +59,41 @@ impl CoordView for LiveCoordView {
     }
     #[cfg(not(feature = "coord"))]
     fn pending_interrupts(&self) -> Vec<InterruptSummary> {
+        Vec::new()
+    }
+
+    #[cfg(feature = "coord")]
+    fn tasks(&self) -> Vec<TaskSummary> {
+        use crate::coord::{store, tasks};
+        let Ok(conn) = store::open() else {
+            return Vec::new();
+        };
+        // `list_tasks` is ORDER BY created_at (oldest-first); reverse so the
+        // panel shows newest tasks on top. Derive attempt count + latest
+        // session per task — both cheap indexed lookups.
+        tasks::list_tasks(&conn, None)
+            .unwrap_or_default()
+            .into_iter()
+            .rev()
+            .map(|t| {
+                let attempts = tasks::attempt_count(&conn, &t.id).unwrap_or(0);
+                let last_session_id = tasks::latest_session_id(&conn, &t.id).ok().flatten();
+                TaskSummary {
+                    id: t.id,
+                    name: t.name,
+                    state: t.state.as_str().to_string(),
+                    role: t.role,
+                    attempts,
+                    max_retries: t.max_retries,
+                    last_session_id,
+                    created_at: t.created_at,
+                    updated_at: t.updated_at,
+                }
+            })
+            .collect()
+    }
+    #[cfg(not(feature = "coord"))]
+    fn tasks(&self) -> Vec<TaskSummary> {
         Vec::new()
     }
 }
