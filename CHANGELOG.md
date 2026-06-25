@@ -2,6 +2,17 @@
 
 All notable changes to claudectl are documented here.
 
+## [0.58.0] - 2026-06-25
+
+### Added — Supervisor TUI panel (#368)
+- **Full-screen Supervisor panel** in the dashboard (press `T`). The durable, verified task engine (`src/coord/`) was CLI-only; this renders the task ledger — `STATE / TRIES / TASK / ROLE / SESSION / UPDATED`, state-colored to match the session palette — so an operator can see tracked, verified work without dropping to `claudectl supervisor status`.
+- Keymap: `T` opens; `j/k/g/G` navigate, `r` refresh, `Esc/T/q` close. Help overlay + draw dispatch wired. All behind the `coord` feature.
+- **Contract extension**: new `TaskSummary` DTO + `CoordView::tasks()` on the UI↔runtime trait. `LiveCoordView::tasks()` reads coord `tasks` newest-first, deriving attempt count + latest session per task.
+
+This is increment 1 (read-only). One-key retry/approve/cancel/drain, per-task cost + verifier-verdict columns, and sessions↔tasks linkage are the next increment of #368.
+
+Workspace crates bumped: `claudectl-core` and `claudectl-tui` → 0.53.0 (the `CoordView` trait gained a method).
+
 ## [0.57.3] - 2026-06-22
 
 ### Fixed — notification cooldown + unified toggle (#364)
