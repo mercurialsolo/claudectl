@@ -2,6 +2,11 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Documented — MSRV (#328)
+- README install section now states the **rustc 1.88+** requirement for source builds, so users on an older toolchain get a clear fix (`rustup update stable`) instead of an opaque transitive-dependency error. The `rust-version = "1.88"` pin was already in all three crate manifests; this closes the remaining doc gap.
+
 ## [0.58.0] - 2026-06-25
 
 ### Added — Supervisor TUI panel (#368)
