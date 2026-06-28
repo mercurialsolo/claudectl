@@ -2,6 +2,12 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Added — brain model routing (#370, increment 2)
+- The brain can now **escalate low-confidence decisions to a stronger model**. Set `escalation_model` (+ optional `escalation_threshold`, default 0.7) in the `[brain]` config: the cheap/primary `model` answers every gate decision, and only when it's uncertain is the prompt re-run on the stronger model. Off by default (no `escalation_model` ⇒ today's single-model behavior, byte-for-byte).
+- A failed escalation falls back to the primary suggestion rather than erroring, so routing never makes the brain less available than before.
+
 ## [0.59.0] - 2026-06-28
 
 ### Added — budget-ETA cost forecasting (#370, increment 1)

@@ -818,6 +818,10 @@ impl Config {
 # enabled = true
 # endpoint = "http://localhost:11434/api/generate"
 # model = "gemma4:e4b"
+# Optional: escalate low-confidence decisions from `model` to a stronger model.
+# Unset = no routing (every decision uses `model`).
+# escalation_model = "gemma4:27b"
+# escalation_threshold = 0.7
 # auto = false
 # timeout_ms = 5000
 # max_context_tokens = 4000
@@ -1055,6 +1059,12 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     }
                     "endpoint" => brain.endpoint = unquote(value),
                     "model" => brain.model = unquote(value),
+                    "escalation_model" => brain.escalation_model = Some(unquote(value)),
+                    "escalation_threshold" => {
+                        if let Ok(v) = value.parse() {
+                            brain.escalation_threshold = v;
+                        }
+                    }
                     "auto" => {
                         if let Some(v) = parse_bool(value) {
                             brain.auto_mode = v;
@@ -1267,6 +1277,8 @@ fn known_keys(section: &str) -> Option<&'static [&'static str]> {
             "enabled",
             "endpoint",
             "model",
+            "escalation_model",
+            "escalation_threshold",
             "auto",
             "timeout_ms",
             "max_context_tokens",
@@ -1720,6 +1732,8 @@ action = "terminate"
 enabled = true
 endpoint = "http://localhost:8080/v1/chat"
 model = "llama3:8b"
+escalation_model = "llama3:70b"
+escalation_threshold = 0.6
 auto = true
 timeout_ms = 3000
 max_context_tokens = 8000
@@ -1733,6 +1747,8 @@ max_context_tokens = 8000
         assert!(brain.enabled);
         assert_eq!(brain.endpoint, "http://localhost:8080/v1/chat");
         assert_eq!(brain.model, "llama3:8b");
+        assert_eq!(brain.escalation_model.as_deref(), Some("llama3:70b"));
+        assert!((brain.escalation_threshold - 0.6).abs() < f64::EPSILON);
         assert!(brain.auto_mode);
         assert_eq!(brain.timeout_ms, 3000);
         assert_eq!(brain.max_context_tokens, 8000);

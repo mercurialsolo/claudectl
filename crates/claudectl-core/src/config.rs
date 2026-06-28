@@ -19,6 +19,13 @@ pub struct BrainConfig {
     pub max_sessions: usize,
     pub orchestrate: bool,
     pub orchestrate_interval_secs: u64,
+    /// Optional stronger model to escalate to when the primary (`model`)
+    /// returns a low-confidence decision. `None` ⇒ routing off; every decision
+    /// uses `model` (today's behavior). See `brain::client::infer_routed` (#370).
+    pub escalation_model: Option<String>,
+    /// Confidence below which a primary-model decision is re-run on
+    /// `escalation_model`. Only consulted when an escalation model is set.
+    pub escalation_threshold: f64,
     /// Command prefixes that identify test-runner invocations. When one of
     /// these fails (non-zero exit), the reaper fans the failure out to recent
     /// brain-approved edits as a `TestFailed` outcome (#238). Empty disables
@@ -63,6 +70,8 @@ impl Default for BrainConfig {
             max_sessions: 10,
             orchestrate: false,
             orchestrate_interval_secs: 30,
+            escalation_model: None,
+            escalation_threshold: 0.7,
             test_runners: default_test_runners(),
         }
     }
