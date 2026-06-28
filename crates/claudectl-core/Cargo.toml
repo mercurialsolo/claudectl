@@ -1,6 +1,6 @@
 [package]
 name = "claudectl-core"
-version = "0.53.0"
+version = "0.54.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Foundational types and IO primitives for claudectl. Shared across the TUI, the binary, and future crates."

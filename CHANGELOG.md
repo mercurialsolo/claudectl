@@ -2,7 +2,7 @@
 
 All notable changes to claudectl are documented here.
 
-## [Unreleased]
+## [0.59.0] - 2026-06-28
 
 ### Added — budget-ETA cost forecasting (#370, increment 1)
 - The dashboard detail panel now shows a **Budget ETA** when a per-session budget is set: smoothed time-to-cap with a p10/p90 band (e.g. `~1h20m  (range ~40m–~3h10m)`).
@@ -16,6 +16,8 @@ All notable changes to claudectl are documented here.
 
 ### Documented — MSRV (#328)
 - README install section now states the **rustc 1.88+** requirement for source builds, so users on an older toolchain get a clear fix (`rustup update stable`) instead of an opaque transitive-dependency error. The `rust-version = "1.88"` pin was already in all three crate manifests; this closes the remaining doc gap.
+
+Workspace crates bumped: `claudectl-core` and `claudectl-tui` → 0.54.0 (new `forecast` module + new public session API).
 
 ## [0.58.0] - 2026-06-25
 
