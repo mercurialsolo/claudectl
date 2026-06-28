@@ -51,6 +51,8 @@ cargo install claudectl                       # Cargo (any platform)
 
 Both produce the same ~6 MB binary with bus/coord/relay/hive enabled — `claudectl bus`, `coord`, `relay`, and `hive` work out of the box. For the minimal ~3.5 MB sync-only build, opt out with `cargo install claudectl --no-default-features --features hive`.
 
+Building from source (Cargo) requires **rustc 1.88+**. Older toolchains fail with an opaque transitive-dependency error before the build starts — run `rustup update stable` first. The Homebrew bottle ships prebuilt and has no toolchain requirement.
+
 <details>
 <summary>Other methods</summary>
 
