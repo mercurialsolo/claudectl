@@ -1,0 +1,21 @@
+# verify-then-merge.toml — a single task gated by verifiers.
+# On VERIFYING the supervisor runs the verifiers in order and stops at the
+# first FAIL. A `run` verifier passes on exit code 0; a `brain` verifier
+# asks the local LLM a yes/no question. Use this shape when a task must
+# prove itself before it counts as DONE.
+#
+#   claudectl supervisor run examples/tasks/verify-then-merge.toml
+
+[[task]]
+name = "fix-flaky-test"
+cwd = "."
+prompt = "Diagnose and fix the flaky test in the auth module."
+role = "backend"
+max_retries = 3
+budget_usd = 8.0
+
+[[task.verify]]
+run = "cargo test --quiet"
+
+[[task.verify]]
+brain = "Did the fix address the root cause rather than just adding a retry or sleep?"

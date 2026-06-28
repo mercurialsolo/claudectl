@@ -4,6 +4,11 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — supervisor tasks.toml scaffolding + validation (#371)
+- **`claudectl supervisor init`** scaffolds a documented starter `tasks.toml` in the cwd (every optional key present but commented). Refuses to overwrite without `--force`.
+- **`claudectl supervisor validate <file>`** parses + validates without submitting, reporting the first problem with context — missing required field, dangling `depends_on`, or duplicate task name — instead of failing at insert time. `supervisor run` now runs the same validation before inserting.
+- New **`examples/tasks/`** directory: `fan-out.toml`, `dependency-chain.toml`, `verify-then-merge.toml`. A test asserts the scaffold and all shipped examples parse and validate.
+
 ### Documented — MSRV (#328)
 - README install section now states the **rustc 1.88+** requirement for source builds, so users on an older toolchain get a clear fix (`rustup update stable`) instead of an opaque transitive-dependency error. The `rust-version = "1.88"` pin was already in all three crate manifests; this closes the remaining doc gap.
 
