@@ -28,6 +28,21 @@ pub enum SupervisorCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Scaffold a starter `tasks.toml` in the current directory, with the
+    /// full key set documented inline. Refuses to clobber an existing file
+    /// unless `--force`.
+    Init {
+        /// Overwrite an existing tasks.toml.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Parse + validate a `tasks.toml` without submitting anything. Reports
+    /// the first problem with a clear message (missing field, dangling
+    /// dependency, duplicate name) instead of failing at insert time.
+    Validate {
+        /// Path to the `tasks.toml` to check.
+        file: PathBuf,
+    },
     /// Submit a single task inline. Useful for one-shot scripts that
     /// don't want to author a TOML file.
     Submit {
@@ -73,6 +88,8 @@ pub enum SupervisorCommand {
 pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
     match cmd {
         SupervisorCommand::Run { file, dry_run } => run_from_file(file, *dry_run),
+        SupervisorCommand::Init { force } => write_scaffold(*force),
+        SupervisorCommand::Validate { file } => validate_from_file(file),
         SupervisorCommand::Submit {
             name,
             cwd,
@@ -135,6 +152,7 @@ fn submit_inline(
 fn run_from_file(path: &PathBuf, dry_run: bool) -> io::Result<()> {
     let body = std::fs::read_to_string(path)?;
     let parsed: TaskFile = toml_parse(&body).map_err(io::Error::other)?;
+    validate_tasks(&parsed).map_err(io::Error::other)?;
     if dry_run {
         for task in &parsed.task {
             println!("[dry-run] would submit: {}", task.name);
@@ -254,6 +272,100 @@ fn set_drain(enabled: bool) -> io::Result<()> {
                 println!("(no drain marker)");
             }
             Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+// ---------- Scaffolding + validation (#371) ----------------------------------
+
+/// Starter `tasks.toml` written by `supervisor init`. Every optional key is
+/// present but commented, so the file both runs as-is and documents the schema.
+/// Kept in sync with `TaskEntry` / `toml_parse` — the test below asserts it
+/// parses and validates.
+const SCAFFOLD: &str = r#"# tasks.toml — claudectl supervisor task declarations (RFC §4 shape).
+#   Submit:    claudectl supervisor run tasks.toml
+#   Preview:   claudectl supervisor run tasks.toml --dry-run
+#   Validate:  claudectl supervisor validate tasks.toml
+
+[[task]]
+name = "example-task"
+cwd = "."
+prompt = "Describe the work this agent should do."
+# role = "backend"             # bus role to assign this task to
+# model = "claude-opus-4-8"    # model override for the spawned session
+# budget_usd = 5.0             # per-task spend cap
+# max_retries = 2              # retry budget (default comes from config)
+# timeout_min = 30             # wall-clock timeout
+# depends_on = ["other-task"]  # run only after these task names finish
+
+# Verifier gates run in order on VERIFYING; the first FAIL stops the task.
+# [[task.verify]]
+# run = "cargo test"           # shell command — non-zero exit is a FAIL
+#
+# [[task.verify]]
+# brain = "Did the change keep the public API stable?"
+"#;
+
+/// Write the scaffold to `./tasks.toml`. Refuses to overwrite without `force`.
+fn write_scaffold(force: bool) -> io::Result<()> {
+    let path = PathBuf::from("tasks.toml");
+    if path.exists() && !force {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "tasks.toml already exists — pass --force to overwrite",
+        ));
+    }
+    std::fs::write(&path, SCAFFOLD)?;
+    println!("wrote {}", path.display());
+    println!("next: edit it, then `claudectl supervisor run tasks.toml --dry-run`");
+    Ok(())
+}
+
+/// Parse + validate a file without touching the store.
+fn validate_from_file(path: &PathBuf) -> io::Result<()> {
+    let body = std::fs::read_to_string(path)?;
+    let parsed = toml_parse(&body).map_err(io::Error::other)?;
+    validate_tasks(&parsed).map_err(io::Error::other)?;
+    println!("{}: {} task(s), valid", path.display(), parsed.task.len());
+    Ok(())
+}
+
+/// Semantic checks the structural TOML reader can't make: required fields are
+/// present, dependency names resolve within the file, and names are unique.
+/// Returns the first problem with enough context to fix it.
+fn validate_tasks(tf: &TaskFile) -> Result<(), String> {
+    if tf.task.is_empty() {
+        return Err("no [[task]] blocks found".into());
+    }
+    let names: Vec<&str> = tf.task.iter().map(|t| t.name.as_str()).collect();
+    let mut seen = std::collections::HashSet::new();
+    for (i, t) in tf.task.iter().enumerate() {
+        let label = if t.name.trim().is_empty() {
+            format!("task #{}", i + 1)
+        } else {
+            format!("task #{} ({})", i + 1, t.name)
+        };
+        if t.name.trim().is_empty() {
+            return Err(format!("{label}: missing required `name`"));
+        }
+        if t.cwd.trim().is_empty() {
+            return Err(format!("{label}: missing required `cwd`"));
+        }
+        if t.prompt.trim().is_empty() {
+            return Err(format!("{label}: missing required `prompt`"));
+        }
+        if !seen.insert(t.name.as_str()) {
+            return Err(format!("{label}: duplicate task name `{}`", t.name));
+        }
+        if let Some(deps) = &t.depends_on {
+            for d in deps {
+                if !names.contains(&d.as_str()) {
+                    return Err(format!(
+                        "{label}: depends_on `{d}` — no task with that name in this file"
+                    ));
+                }
+            }
         }
     }
     Ok(())
@@ -499,5 +611,70 @@ prompt = "do"
 flavour = "vanilla"
 "#;
         assert!(toml_parse(body).is_err());
+    }
+
+    #[test]
+    fn scaffold_parses_and_validates() {
+        let parsed = toml_parse(SCAFFOLD).expect("scaffold parses");
+        assert_eq!(parsed.task.len(), 1);
+        validate_tasks(&parsed).expect("scaffold validates");
+    }
+
+    #[test]
+    fn shipped_examples_parse_and_validate() {
+        for body in [
+            include_str!("../../examples/tasks/fan-out.toml"),
+            include_str!("../../examples/tasks/dependency-chain.toml"),
+            include_str!("../../examples/tasks/verify-then-merge.toml"),
+        ] {
+            let parsed = toml_parse(body).expect("example parses");
+            validate_tasks(&parsed).expect("example validates");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_missing_required_field() {
+        // Empty prompt — structurally valid TOML, semantically incomplete.
+        let body = r#"
+[[task]]
+name = "x"
+cwd = "/x"
+prompt = ""
+"#;
+        let parsed = toml_parse(body).expect("parse");
+        let err = validate_tasks(&parsed).unwrap_err();
+        assert!(err.contains("prompt"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_dangling_dependency() {
+        let body = r#"
+[[task]]
+name = "a"
+cwd = "/a"
+prompt = "do a"
+depends_on = ["ghost"]
+"#;
+        let parsed = toml_parse(body).expect("parse");
+        let err = validate_tasks(&parsed).unwrap_err();
+        assert!(err.contains("ghost"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_names() {
+        let body = r#"
+[[task]]
+name = "dup"
+cwd = "/a"
+prompt = "do a"
+
+[[task]]
+name = "dup"
+cwd = "/b"
+prompt = "do b"
+"#;
+        let parsed = toml_parse(body).expect("parse");
+        let err = validate_tasks(&parsed).unwrap_err();
+        assert!(err.contains("duplicate"), "got: {err}");
     }
 }

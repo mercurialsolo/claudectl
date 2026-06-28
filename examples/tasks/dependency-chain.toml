@@ -1,0 +1,24 @@
+# dependency-chain.toml — ordered tasks via depends_on.
+# `migrate` runs first; `backfill` waits for it; `verify-data` waits for
+# backfill. The supervisor won't assign a task until every name in its
+# depends_on list has reached a terminal DONE state.
+#
+#   claudectl supervisor validate examples/tasks/dependency-chain.toml
+#   claudectl supervisor run examples/tasks/dependency-chain.toml
+
+[[task]]
+name = "migrate"
+cwd = "."
+prompt = "Write and apply the schema migration for the new users table."
+
+[[task]]
+name = "backfill"
+cwd = "."
+prompt = "Backfill the new users table from the legacy store."
+depends_on = ["migrate"]
+
+[[task]]
+name = "verify-data"
+cwd = "."
+prompt = "Verify row counts match between legacy and new tables."
+depends_on = ["backfill"]

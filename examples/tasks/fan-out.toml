@@ -1,0 +1,26 @@
+# fan-out.toml — independent tasks that run in parallel.
+# No depends_on, so the supervisor assigns all three on the same tick
+# (subject to the max-concurrent ceiling). Use this shape when you want
+# several agents working unrelated areas of the codebase at once.
+#
+#   claudectl supervisor run examples/tasks/fan-out.toml --dry-run
+#   claudectl supervisor run examples/tasks/fan-out.toml
+
+[[task]]
+name = "docs-sweep"
+cwd = "."
+prompt = "Find and fix stale references in the docs/ directory."
+role = "docs"
+
+[[task]]
+name = "dep-audit"
+cwd = "."
+prompt = "Audit Cargo.toml dependencies for CVEs and unused crates; report only."
+role = "security"
+
+[[task]]
+name = "test-coverage"
+cwd = "."
+prompt = "Add unit tests for the least-covered module you can find."
+role = "backend"
+budget_usd = 5.0

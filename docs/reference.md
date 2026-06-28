@@ -189,7 +189,9 @@ Durable task lifecycles on top of the bus. See the [README's Supervisor section]
 
 | Command | Description |
 |---------|-------------|
-| `supervisor run <tasks.toml> [--dry-run]` | Batch-submit one or more tasks from a TOML file (RFC §4 shape) |
+| `supervisor init [--force]` | Scaffold a documented starter `tasks.toml` in the cwd (won't clobber without `--force`) |
+| `supervisor validate <tasks.toml>` | Parse + validate without submitting — reports the first problem (missing field, dangling `depends_on`, duplicate name) |
+| `supervisor run <tasks.toml> [--dry-run]` | Batch-submit one or more tasks from a TOML file (RFC §4 shape); validated before insert |
 | `supervisor submit --name --cwd --prompt [--role ...]` | One-shot inline submission |
 | `supervisor status [--state STATE]` | Compact task table; optional state filter (`PENDING` / `RUNNING` / `DONE` / `NEEDS_HUMAN` / …) |
 | `supervisor logs <task_id>` | Task detail + full transition log |
