@@ -123,6 +123,12 @@ pub struct ClaudeSession {
     pub context_max: u64,
     pub prev_cost_usd: f64,
     pub burn_rate_per_hr: f64,
+    /// EWMA-smoothed burn rate ($/hr) used for budget forecasting. Damps the
+    /// tick-to-tick flicker of `burn_rate_per_hr`. See `forecast` (#370).
+    pub burn_rate_ewma: f64,
+    /// Recent instantaneous burn samples ($/hr), capped at `BURN_SAMPLE_CAP`,
+    /// for the p10/p90 ETA band. In-memory only (rebuilt at runtime).
+    pub burn_samples: std::collections::VecDeque<f64>,
     pub subagent_count: usize,
     pub active_subagent_count: usize,
     pub active_subagent_jsonl_paths: Vec<PathBuf>,
@@ -328,6 +334,8 @@ impl ClaudeSession {
             context_max: 0,
             prev_cost_usd: 0.0,
             burn_rate_per_hr: 0.0,
+            burn_rate_ewma: 0.0,
+            burn_samples: std::collections::VecDeque::new(),
             subagent_count: 0,
             active_subagent_count: 0,
             active_subagent_jsonl_paths: Vec::new(),
@@ -397,6 +405,35 @@ impl ClaudeSession {
             self.current_window_errors = 0;
             self.window_tick_counter = 0;
         }
+    }
+
+    /// Fold the current instantaneous `burn_rate_per_hr` into the EWMA and the
+    /// rolling sample window. Call once per refresh after burn is recomputed.
+    /// `interval_secs` is the refresh cadence (shapes the EWMA half-life).
+    pub fn record_burn_sample(&mut self, interval_secs: f64) {
+        let sample = self.burn_rate_per_hr;
+        let alpha = crate::forecast::alpha_for_half_life(
+            crate::forecast::BURN_HALF_LIFE_SECS,
+            interval_secs,
+        );
+        let prev = if self.burn_samples.is_empty() {
+            None
+        } else {
+            Some(self.burn_rate_ewma)
+        };
+        self.burn_rate_ewma = crate::forecast::ewma(prev, sample, alpha);
+        self.burn_samples.push_back(sample);
+        while self.burn_samples.len() > crate::forecast::BURN_SAMPLE_CAP {
+            self.burn_samples.pop_front();
+        }
+    }
+
+    /// Forecast time-to-budget for this session given a per-session cap, as a
+    /// p10/p90 interval. `None` when the session isn't burning or has no cap.
+    pub fn budget_eta(&self, budget_usd: f64) -> crate::forecast::EtaBand {
+        let headroom = budget_usd - self.cost_usd;
+        let samples: Vec<f64> = self.burn_samples.iter().copied().collect();
+        crate::forecast::budget_eta_band(headroom, self.burn_rate_ewma, &samples)
     }
 
     /// Render the sparkline as unicode block characters.
@@ -863,6 +900,35 @@ mod tests {
             cwd: "/tmp/project".into(),
             started_at: 0,
         })
+    }
+
+    #[test]
+    fn record_burn_sample_smooths_and_caps_window() {
+        let mut s = make_session();
+        // A steady burn settles the EWMA near the true rate and fills the window.
+        for _ in 0..crate::forecast::BURN_SAMPLE_CAP + 10 {
+            s.burn_rate_per_hr = 6.0;
+            s.record_burn_sample(2.0);
+        }
+        assert_eq!(s.burn_samples.len(), crate::forecast::BURN_SAMPLE_CAP);
+        assert!(
+            (s.burn_rate_ewma - 6.0).abs() < 0.5,
+            "ewma: {}",
+            s.burn_rate_ewma
+        );
+    }
+
+    #[test]
+    fn budget_eta_forecasts_time_to_cap() {
+        let mut s = make_session();
+        for _ in 0..20 {
+            s.burn_rate_per_hr = 5.0;
+            s.record_burn_sample(2.0);
+        }
+        s.cost_usd = 5.0; // $5 spent of a $15 cap ⇒ $10 headroom at ~$5/hr ≈ 2h
+        let band = s.budget_eta(15.0);
+        let mid = band.mid_hours.expect("burning, so an ETA exists");
+        assert!((mid - 2.0).abs() < 0.4, "eta hours: {mid}");
     }
 
     #[test]

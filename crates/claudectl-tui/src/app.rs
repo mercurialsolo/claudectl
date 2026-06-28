@@ -795,6 +795,10 @@ impl App {
                     }
                 }
             }
+            // Fold the instantaneous rate into the smoothed EWMA + sample window
+            // used for budget forecasting (#370). The 2s constant matches the
+            // `* 1800.0` per-hour conversion above (3600 / 1800 = 2s ticks).
+            session.record_burn_sample(2.0);
         }
 
         // Budget enforcement

@@ -4,6 +4,11 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — budget-ETA cost forecasting (#370, increment 1)
+- The dashboard detail panel now shows a **Budget ETA** when a per-session budget is set: smoothed time-to-cap with a p10/p90 band (e.g. `~1h20m  (range ~40m–~3h10m)`).
+- Burn rate is now folded into an **EWMA** (~45s half-life) instead of being read off a single tick, so the forecast tracks real spend regime changes without flickering on bursty token usage. The ETA interval comes from the p10/p90 of recent samples, so auto-actions can later gate on the conservative bound.
+- New pure, fully-tested `claudectl_core::forecast` module (EWMA, percentile, ETA band, formatting). Model routing — the other half of #370 — is a separate increment.
+
 ### Added — supervisor tasks.toml scaffolding + validation (#371)
 - **`claudectl supervisor init`** scaffolds a documented starter `tasks.toml` in the cwd (every optional key present but commented). Refuses to overwrite without `--force`.
 - **`claudectl supervisor validate <file>`** parses + validates without submitting, reporting the first problem with context — missing required field, dangling `depends_on`, or duplicate task name — instead of failing at insert time. `supervisor run` now runs the same validation before inserting.
