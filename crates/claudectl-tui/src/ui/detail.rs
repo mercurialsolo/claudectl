@@ -123,6 +123,23 @@ pub fn render_detail_panel(frame: &mut Frame, area: Rect, session: &ClaudeSessio
         detail_line("  Estimate", &estimate, t),
     ];
 
+    // Budget ETA forecast (#370): smoothed time-to-cap with a p10/p90 band, only
+    // when a per-session budget is configured.
+    if let Some(budget) = app.budget_usd {
+        if budget > 0.0 {
+            let band = session.budget_eta(budget);
+            let mid = claudectl_core::forecast::format_eta(band.mid_hours);
+            let eta_text = if band.mid_hours.is_none() {
+                format!("{mid} (not burning)")
+            } else {
+                let soonest = claudectl_core::forecast::format_eta(band.low_hours);
+                let latest = claudectl_core::forecast::format_eta(band.high_hours);
+                format!("{mid}  (range {soonest}–{latest})")
+            };
+            lines.push(detail_line("  Budget ETA", &eta_text, t));
+        }
+    }
+
     // Cognitive Health section
     if session.has_usage_metrics() && session.decay_score > 0 {
         lines.push(Line::from(""));

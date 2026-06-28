@@ -1118,6 +1118,8 @@ mod tests {
             context_max: 100000,
             prev_cost_usd: 3.0,
             burn_rate_per_hr: 2.5,
+            burn_rate_ewma: 2.5,
+            burn_samples: std::collections::VecDeque::new(),
             subagent_count: 1,
             active_subagent_count: 0,
             active_subagent_jsonl_paths: vec![],
