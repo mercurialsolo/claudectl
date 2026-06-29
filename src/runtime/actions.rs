@@ -112,6 +112,55 @@ impl Actions for LiveActions {
             Err("bus feature not compiled in this build".into())
         }
     }
+
+    fn cancel_task(&self, task_id: &str) -> Result<(), String> {
+        #[cfg(feature = "coord")]
+        {
+            use crate::coord::tasks::{self, TaskState};
+            let mut conn = crate::coord::store::open()?;
+            let task = tasks::get_task(&conn, task_id)?
+                .ok_or_else(|| format!("task {task_id} not found"))?;
+            if task.state.is_terminal() {
+                return Err(format!("task already {}", task.state.as_str()));
+            }
+            tasks::transition(
+                &mut conn,
+                task_id,
+                task.state,
+                TaskState::Cancelled,
+                "operator-cancel",
+            )
+        }
+        #[cfg(not(feature = "coord"))]
+        {
+            let _ = task_id;
+            Err("coord feature not compiled in this build".into())
+        }
+    }
+
+    fn set_supervisor_drain(&self, draining: bool) -> Result<(), String> {
+        #[cfg(feature = "coord")]
+        {
+            let path = crate::coord::supervisor_cli::drain_marker_path();
+            if draining {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|e| format!("create drain dir: {e}"))?;
+                }
+                fs::write(&path, b"draining\n").map_err(|e| format!("write drain marker: {e}"))
+            } else {
+                match fs::remove_file(&path) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(e) => Err(format!("clear drain marker: {e}")),
+                }
+            }
+        }
+        #[cfg(not(feature = "coord"))]
+        {
+            let _ = draining;
+            Err("coord feature not compiled in this build".into())
+        }
+    }
 }
 
 /// Inverse of `crate::runtime::brain::parse_gate_mode` — writes the canonical

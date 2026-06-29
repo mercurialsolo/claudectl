@@ -467,6 +467,16 @@ pub trait Actions: Send + Sync {
     /// Returns `Err` when the bus feature is compiled out or the DB write
     /// fails. See issue #307.
     fn bind_bus_role(&self, name: &str, cwd: &str, pid: u32) -> Result<(), String>;
+
+    /// Cancel a supervisor task (move it to CANCELLED). Used by the Supervisor
+    /// panel's one-key cancel (#368). `Err` when the `coord` feature is compiled
+    /// out, the task is already terminal, or the store write fails.
+    fn cancel_task(&self, task_id: &str) -> Result<(), String>;
+
+    /// Set or clear the supervisor drain marker. When draining, the reconciler
+    /// stops issuing new task assignments while letting running tasks finish.
+    /// `Err` when the `coord` feature is compiled out.
+    fn set_supervisor_drain(&self, draining: bool) -> Result<(), String>;
 }
 
 // ============================================================================
@@ -722,6 +732,12 @@ pub enum MockAction {
         cwd: String,
         pid: u32,
     },
+    CancelTask {
+        task_id: String,
+    },
+    SetSupervisorDrain {
+        draining: bool,
+    },
 }
 
 impl PartialEq for ObservationInput {
@@ -915,6 +931,22 @@ impl Actions for MockRuntime {
             });
         Ok(())
     }
+    fn cancel_task(&self, task_id: &str) -> Result<(), String> {
+        self.actions_log
+            .lock()
+            .expect("actions_log poisoned")
+            .push(MockAction::CancelTask {
+                task_id: task_id.into(),
+            });
+        Ok(())
+    }
+    fn set_supervisor_drain(&self, draining: bool) -> Result<(), String> {
+        self.actions_log
+            .lock()
+            .expect("actions_log poisoned")
+            .push(MockAction::SetSupervisorDrain { draining });
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1054,6 +1086,21 @@ mod tests {
         // through the trait by going via the *original* Arc through inspecting
         // the trait's behavior — the integration test in the binary covers
         // that surface. Here we just assert the calls succeeded.
+    }
+
+    #[test]
+    fn actions_task_writes_record_in_log() {
+        let mock = MockRuntime::default();
+        // MockRuntime itself implements Actions; call directly so we can read
+        // the recorded log via the public `actions()` accessor.
+        mock.cancel_task("t-1").unwrap();
+        mock.set_supervisor_drain(true).unwrap();
+        let actions = mock.actions();
+        assert!(matches!(&actions[0], MockAction::CancelTask { task_id } if task_id == "t-1"));
+        assert!(matches!(
+            actions[1],
+            MockAction::SetSupervisorDrain { draining: true }
+        ));
     }
 
     #[test]

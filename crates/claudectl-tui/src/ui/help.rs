@@ -124,7 +124,7 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
         ]),
         Line::from(vec![
             Span::styled("  T              ", Style::default().fg(t.highlight_key)),
-            Span::raw("  Supervisor — task ledger (state, attempts, session)"),
+            Span::raw("  Supervisor — task ledger; c cancel, d drain, r refresh"),
         ]),
         Line::from(vec![
             Span::styled("  ?              ", Style::default().fg(t.highlight_key)),
