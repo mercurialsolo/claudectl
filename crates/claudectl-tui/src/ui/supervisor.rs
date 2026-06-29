@@ -167,6 +167,8 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" move  ", Style::default().fg(t.text_muted)),
         Span::styled("c", Style::default().fg(t.highlight_key)),
         Span::styled(" cancel  ", Style::default().fg(t.text_muted)),
+        Span::styled("R", Style::default().fg(t.highlight_key)),
+        Span::styled(" retry  ", Style::default().fg(t.text_muted)),
         Span::styled("d", Style::default().fg(t.highlight_key)),
         Span::styled(
             if app.supervisor_draining {
