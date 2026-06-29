@@ -165,6 +165,17 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let hint = Line::from(vec![
         Span::styled("  j/k", Style::default().fg(t.highlight_key)),
         Span::styled(" move  ", Style::default().fg(t.text_muted)),
+        Span::styled("c", Style::default().fg(t.highlight_key)),
+        Span::styled(" cancel  ", Style::default().fg(t.text_muted)),
+        Span::styled("d", Style::default().fg(t.highlight_key)),
+        Span::styled(
+            if app.supervisor_draining {
+                " undrain  "
+            } else {
+                " drain  "
+            },
+            Style::default().fg(t.text_muted),
+        ),
         Span::styled("r", Style::default().fg(t.highlight_key)),
         Span::styled(" refresh  ", Style::default().fg(t.text_muted)),
         Span::styled("Esc/T", Style::default().fg(t.highlight_key)),

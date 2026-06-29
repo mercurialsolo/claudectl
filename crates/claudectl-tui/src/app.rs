@@ -357,6 +357,12 @@ pub struct App {
     pub supervisor_selected: usize,
     #[cfg(feature = "coord")]
     pub supervisor_status_msg: Option<String>,
+    /// Task index armed for cancel — the first `c` arms, the second confirms.
+    #[cfg(feature = "coord")]
+    pub supervisor_pending_cancel: Option<usize>,
+    /// Local view of the supervisor drain marker, toggled by `d`.
+    #[cfg(feature = "coord")]
+    pub supervisor_draining: bool,
     // Relay peers panel (feature-gated)
     #[cfg(feature = "relay")]
     pub show_peers_panel: bool,
@@ -647,6 +653,10 @@ impl App {
             coord_tick: 0,
             #[cfg(feature = "coord")]
             coord_tasks: Vec::new(),
+            #[cfg(feature = "coord")]
+            supervisor_pending_cancel: None,
+            #[cfg(feature = "coord")]
+            supervisor_draining: false,
             #[cfg(feature = "coord")]
             show_supervisor: false,
             #[cfg(feature = "coord")]
@@ -1506,6 +1516,8 @@ impl App {
     /// Read-only for now (#368, increment 1).
     #[cfg(feature = "coord")]
     fn handle_supervisor_key(&mut self, key: KeyEvent) {
+        // Any key other than a second `c` disarms a pending cancel.
+        let was_armed = self.supervisor_pending_cancel.take();
         match key.code {
             KeyCode::Esc | KeyCode::Char('T') | KeyCode::Char('q') => {
                 self.show_supervisor = false;
@@ -1530,7 +1542,50 @@ impl App {
             KeyCode::Char('G') | KeyCode::End => {
                 self.supervisor_selected = self.coord_tasks.len().saturating_sub(1);
             }
+            // Cancel selected task — double-tap `c` to confirm (destructive).
+            KeyCode::Char('c') => self.handle_supervisor_cancel(was_armed),
+            // Toggle the supervisor drain marker.
+            KeyCode::Char('d') => self.handle_supervisor_drain_toggle(),
             _ => {}
+        }
+    }
+
+    #[cfg(feature = "coord")]
+    fn handle_supervisor_cancel(&mut self, was_armed: Option<usize>) {
+        let Some(task) = self.coord_tasks.get(self.supervisor_selected) else {
+            return;
+        };
+        let id = task.id.clone();
+        let name = task.name.clone();
+        if was_armed == Some(self.supervisor_selected) {
+            // Second press on the same row — execute.
+            match self.runtime.actions.cancel_task(&id) {
+                Ok(()) => {
+                    self.supervisor_status_msg = Some(format!("Cancelled {name}"));
+                    self.coord_refresh();
+                }
+                Err(e) => self.supervisor_status_msg = Some(format!("Cancel failed: {e}")),
+            }
+        } else {
+            // First press — arm and prompt for confirmation.
+            self.supervisor_pending_cancel = Some(self.supervisor_selected);
+            self.supervisor_status_msg = Some(format!("Press c again to cancel {name}"));
+        }
+    }
+
+    #[cfg(feature = "coord")]
+    fn handle_supervisor_drain_toggle(&mut self) {
+        let target = !self.supervisor_draining;
+        match self.runtime.actions.set_supervisor_drain(target) {
+            Ok(()) => {
+                self.supervisor_draining = target;
+                self.supervisor_status_msg = Some(if target {
+                    "Draining — reconciler will stop issuing new assignments".into()
+                } else {
+                    "Drain cleared — new assignments resume".into()
+                });
+            }
+            Err(e) => self.supervisor_status_msg = Some(format!("Drain toggle failed: {e}")),
         }
     }
 
