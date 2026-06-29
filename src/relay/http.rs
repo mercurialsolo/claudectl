@@ -55,7 +55,10 @@ impl HttpServer {
                         });
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(100));
+                        // Short poll: bounds first-accept latency (and the
+                        // startup race a client hits) to ~10ms rather than 100ms,
+                        // while still checking the shutdown flag each loop.
+                        std::thread::sleep(Duration::from_millis(10));
                     }
                     Err(_) => {
                         std::thread::sleep(Duration::from_millis(500));
@@ -301,6 +304,32 @@ fn send_response(stream: &mut TcpStream, status: u16, body: &str) {
 mod tests {
     use super::*;
 
+    /// Send `request` to `127.0.0.1:port`, retrying a fresh connect+read until
+    /// a non-empty response arrives or `deadline` elapses. This removes the
+    /// startup race where the server's accept loop hasn't yet picked up the
+    /// connection — each attempt is a clean, full request, so it's safe for the
+    /// idempotent GET/heartbeat endpoints under test. Returns "" on timeout.
+    fn request_until_response(port: u16, request: &[u8], deadline: Duration) -> String {
+        let start = std::time::Instant::now();
+        loop {
+            if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{port}")) {
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                let _ = stream.write_all(request);
+                let _ = stream.flush();
+                let mut buf = [0u8; 4096];
+                if let Ok(n) = stream.read(&mut buf) {
+                    if n > 0 {
+                        return String::from_utf8_lossy(&buf[..n]).to_string();
+                    }
+                }
+            }
+            if start.elapsed() >= deadline {
+                return String::new();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     #[test]
     fn send_response_formats_correctly() {
         // We can't easily test TCP streams, but we verify the format string logic
@@ -405,21 +434,9 @@ mod tests {
         let server = HttpServer::start(addr, "secret-token".into(), state).unwrap();
         let port = server.addr.port();
 
-        // Connect and send a request with wrong token
-        std::thread::sleep(Duration::from_millis(50));
-        if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{port}")) {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-            let request = "GET /api/sessions HTTP/1.1\r\nAuthorization: Bearer wrong-token\r\n\r\n";
-            let _ = stream.write_all(request.as_bytes());
-            let _ = stream.flush();
-
-            let mut response = String::new();
-            let mut buf = [0u8; 1024];
-            if let Ok(n) = stream.read(&mut buf) {
-                response = String::from_utf8_lossy(&buf[..n]).to_string();
-            }
-            assert!(response.contains("401"));
-        }
+        let request = "GET /api/sessions HTTP/1.1\r\nAuthorization: Bearer wrong-token\r\n\r\n";
+        let response = request_until_response(port, request.as_bytes(), Duration::from_secs(5));
+        assert!(response.contains("401"), "got: {response:?}");
 
         server.stop();
     }
@@ -436,22 +453,11 @@ mod tests {
         let server = HttpServer::start(addr, "tok".into(), state).unwrap();
         let port = server.addr.port();
 
-        std::thread::sleep(Duration::from_millis(50));
-        if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{port}")) {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-            let request = "GET /api/sessions HTTP/1.1\r\nAuthorization: Bearer tok\r\n\r\n";
-            let _ = stream.write_all(request.as_bytes());
-            let _ = stream.flush();
-
-            let mut response = String::new();
-            let mut buf = [0u8; 4096];
-            if let Ok(n) = stream.read(&mut buf) {
-                response = String::from_utf8_lossy(&buf[..n]).to_string();
-            }
-            assert!(response.contains("200 OK"));
-            assert!(response.contains("\"pid\":42"));
-            assert!(response.contains("\"worker_id\":\"local\""));
-        }
+        let request = "GET /api/sessions HTTP/1.1\r\nAuthorization: Bearer tok\r\n\r\n";
+        let response = request_until_response(port, request.as_bytes(), Duration::from_secs(5));
+        assert!(response.contains("200 OK"), "got: {response:?}");
+        assert!(response.contains("\"pid\":42"));
+        assert!(response.contains("\"worker_id\":\"local\""));
 
         server.stop();
     }
@@ -469,28 +475,18 @@ mod tests {
         let server = HttpServer::start(addr, "t".into(), state).unwrap();
         let port = server.addr.port();
 
-        std::thread::sleep(Duration::from_millis(50));
-        if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{port}")) {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-            let body = r#"{"worker_id":"remote-1","sessions":[{"pid":1}]}"#;
-            let request = format!(
-                "POST /api/heartbeat HTTP/1.1\r\nAuthorization: Bearer t\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = stream.write_all(request.as_bytes());
-            let _ = stream.flush();
+        let body = r#"{"worker_id":"remote-1","sessions":[{"pid":1}]}"#;
+        let request = format!(
+            "POST /api/heartbeat HTTP/1.1\r\nAuthorization: Bearer t\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let response = request_until_response(port, request.as_bytes(), Duration::from_secs(5));
+        assert!(response.contains("200 OK"), "got: {response:?}");
 
-            let mut response = String::new();
-            let mut buf = [0u8; 1024];
-            if let Ok(n) = stream.read(&mut buf) {
-                response = String::from_utf8_lossy(&buf[..n]).to_string();
-            }
-            assert!(response.contains("200 OK"));
-        }
-
-        // Verify the worker state was stored
-        std::thread::sleep(Duration::from_millis(50));
+        // The heartbeat upserts worker "remote-1"; the request helper may retry,
+        // but each POST replaces (not appends) the session list, so the count
+        // stays 1 regardless of how many succeeded.
         if let Ok(cs) = state_check.lock() {
             assert!(cs.workers.contains_key("remote-1"));
             assert_eq!(cs.workers["remote-1"].sessions.len(), 1);
