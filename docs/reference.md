@@ -196,7 +196,7 @@ Durable task lifecycles on top of the bus. See the [README's Supervisor section]
 | `supervisor status [--state STATE]` | Compact task table; optional state filter (`PENDING` / `RUNNING` / `DONE` / `NEEDS_HUMAN` / …) |
 | `supervisor logs <task_id>` | Task detail + full transition log |
 | `supervisor cancel <task_id>` | Idempotent move to CANCELLED |
-| `supervisor pr <task_id>` | Post a task summary as a comment on its branch's PR via `gh` (#369). Best-effort — no open PR / no `gh` / not a repo prints a skip and exits 0 |
+| `supervisor pr <task_id>` | Post a task summary comment on its branch's PR **and** set a `claudectl/verifier` commit status from the latest verdict, via `gh` (#369). Best-effort — no open PR / no `gh` / not a repo prints a skip and exits 0 |
 | `supervisor drain` | Set sentinel file at `~/.claudectl/coord/drain`; reconciler stops issuing new assignments |
 | `supervisor undrain` | Clear the drain marker |
 

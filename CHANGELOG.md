@@ -2,6 +2,11 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Added — verifier-as-check (#369, increment 2)
+- `claudectl supervisor pr <task_id>` now also sets a **`claudectl/verifier` commit status** on the branch's HEAD, reflecting the task's latest verifier verdict (PASS → success, FAIL → failure, none → pending). It rides the existing best-effort path — the status post can't undo the comment already landed, and a missing `gh`/repo just appends a skip note. Auto-posting on task DONE from the reconciler is the remaining slice of #369.
+
 ## [0.61.0] - 2026-06-29
 
 ### Fixed — headless relay delegate/interrupt actually send now (#378)

@@ -6,9 +6,10 @@
 //! clear skip message rather than failing the task. This mirrors the plugin
 //! hooks' "never block on integration" convention.
 //!
-//! Increment 1 (this file): `supervisor pr <task_id>` composes and posts a task
-//! summary comment. Verifier-as-check (a PR status check from the Run/Brain/Agent
-//! verdict) and auto-posting on task DONE are increment 2.
+//! `supervisor pr <task_id>` composes and posts a task summary comment, and
+//! reflects the latest verifier verdict as a GitHub commit status on HEAD
+//! (verifier-as-check). Auto-posting on task DONE from the reconciler is the
+//! remaining slice of #369.
 
 use std::path::Path;
 use std::process::Command;
@@ -79,6 +80,66 @@ pub fn build_pr_comment(task: &TaskRow, attempts: u32) -> String {
     s
 }
 
+/// Current HEAD commit SHA at `cwd`, or `None` outside a repo. Used as the
+/// target of the verifier status check.
+pub fn current_head_sha(cwd: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() { None } else { Some(sha) }
+}
+
+/// Map a verifier verdict to a GitHub commit-status `(state, description)`.
+/// Pure so the mapping is testable. Unknown / no verdict ⇒ `pending`.
+pub fn verdict_to_status(verdict: Option<&str>) -> (&'static str, &'static str) {
+    match verdict {
+        Some("PASS") => ("success", "claudectl verifier passed"),
+        Some("FAIL") => ("failure", "claudectl verifier failed"),
+        _ => ("pending", "claudectl verifier has not run"),
+    }
+}
+
+/// Post a commit status (#369 inc 2 — verifier-as-check) on `sha` via `gh api`.
+/// `gh` templates `{owner}`/`{repo}` from the repo at `cwd`. Best-effort.
+pub fn post_status_check(
+    cwd: &Path,
+    sha: &str,
+    state: &str,
+    description: &str,
+) -> Result<(), String> {
+    let out = Command::new("gh")
+        .current_dir(cwd)
+        .args([
+            "api",
+            "--method",
+            "POST",
+            &format!("repos/{{owner}}/{{repo}}/statuses/{sha}"),
+            "-f",
+            &format!("state={state}"),
+            "-f",
+            "context=claudectl/verifier",
+            "-f",
+            &format!("description={description}"),
+        ])
+        .output()
+        .map_err(|e| format!("gh not available: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "gh status check failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
 /// Post a comment to PR `pr` at `cwd` via `gh`. Best-effort: a missing `gh` or a
 /// failed call returns `Err` with the reason for the caller to surface as a skip.
 pub fn post_comment(cwd: &Path, pr: u64, body: &str) -> Result<(), String> {
@@ -112,7 +173,27 @@ pub fn post_task_summary(task_id: &str) -> Result<String, String> {
     let attempts = super::tasks::attempt_count(&conn, task_id).unwrap_or(0);
     let body = build_pr_comment(&task, attempts);
     post_comment(cwd, pr, &body)?;
-    Ok(format!("posted summary to PR #{pr} (branch {branch})"))
+
+    // Verifier-as-check (#369 inc 2): reflect the latest verdict as a commit
+    // status on HEAD. Best-effort — a failed status post doesn't undo the
+    // comment we already landed, so it's appended to the result, not returned
+    // as an error.
+    let mut extra = String::new();
+    if let Some(sha) = current_head_sha(cwd) {
+        let verdict = super::tasks::latest_verification(&conn, task_id)
+            .ok()
+            .flatten()
+            .map(|(_kind, verdict)| verdict);
+        let (state, desc) = verdict_to_status(verdict.as_deref());
+        let short = &sha[..sha.len().min(7)];
+        match post_status_check(cwd, &sha, state, desc) {
+            Ok(()) => extra = format!("; verifier status '{state}' on {short}"),
+            Err(e) => extra = format!("; status check skipped ({e})"),
+        }
+    }
+    Ok(format!(
+        "posted summary to PR #{pr} (branch {branch}){extra}"
+    ))
 }
 
 #[cfg(test)]
@@ -137,6 +218,14 @@ mod tests {
             created_at: "2026-06-28T10:00:00Z".into(),
             updated_at: "2026-06-28T10:05:00Z".into(),
         }
+    }
+
+    #[test]
+    fn verdict_maps_to_commit_status() {
+        assert_eq!(verdict_to_status(Some("PASS")).0, "success");
+        assert_eq!(verdict_to_status(Some("FAIL")).0, "failure");
+        assert_eq!(verdict_to_status(None).0, "pending");
+        assert_eq!(verdict_to_status(Some("weird")).0, "pending");
     }
 
     #[test]
