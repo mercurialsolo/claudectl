@@ -2,6 +2,11 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Fixed — flaky relay HTTP server tests (#381)
+- The relay coordinator's HTTP server tests raced the accept loop: a fixed 50ms pre-sleep then a single read could miss the response on a loaded CI runner, intermittently failing the release. The tests now retry connect+read until a response or a 5s deadline (deterministic), and the server's non-blocking accept poll shrank from 100ms to 10ms — bounding first-request latency and the race window.
+
 ## [0.60.0] - 2026-06-28
 
 ### Added — PR-native integration (#369, increment 1)
