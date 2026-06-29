@@ -2,7 +2,7 @@
 
 All notable changes to claudectl are documented here.
 
-## [Unreleased]
+## [0.61.0] - 2026-06-29
 
 ### Fixed — headless relay delegate/interrupt actually send now (#378)
 - `claudectl relay delegate <peer> "<prompt>"` and `relay interrupt` were no-ops outside the TUI: they built the message, printed a success line, and exited 0 without transmitting. They now open a one-shot authenticated connection to the peer (using the stored PSK + address, the same path `relay connect` uses) and send the frame — no running daemon required. On any failure (peer not paired, no address, connection refused) they print a clear error and **exit non-zero**, so scripts no longer mistake a built-but-unsent message for a delivered one.
@@ -13,6 +13,8 @@ All notable changes to claudectl are documented here.
 
 ### Fixed — flaky relay HTTP server tests (#381)
 - The relay coordinator's HTTP server tests raced the accept loop: a fixed 50ms pre-sleep then a single read could miss the response on a loaded CI runner, intermittently failing the release. The tests now retry connect+read until a response or a 5s deadline (deterministic), and the server's non-blocking accept poll shrank from 100ms to 10ms — bounding first-request latency and the race window.
+
+Workspace crates bumped: `claudectl-core` and `claudectl-tui` → 0.56.0 (new `TaskSummary` verdict + cost fields).
 
 ## [0.60.0] - 2026-06-28
 
