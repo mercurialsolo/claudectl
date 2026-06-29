@@ -4,6 +4,10 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed — headless relay delegate/interrupt actually send now (#378)
+- `claudectl relay delegate <peer> "<prompt>"` and `relay interrupt` were no-ops outside the TUI: they built the message, printed a success line, and exited 0 without transmitting. They now open a one-shot authenticated connection to the peer (using the stored PSK + address, the same path `relay connect` uses) and send the frame — no running daemon required. On any failure (peer not paired, no address, connection refused) they print a clear error and **exit non-zero**, so scripts no longer mistake a built-but-unsent message for a delivered one.
+- `relay interrupt` gains a required `--peer <id>` so the interrupt can be routed to the peer that owns the task.
+
 ### Added — supervisor panel: verdict + cost columns (#368, increment 2a)
 - The Supervisor panel (`T`) now shows a **VERDICT** column (latest verifier result, green PASS / red FAIL) and a **COST** column (total $ across the task's attempts), replacing the low-value session-hash column. New `tasks::latest_verification` and `tasks::task_cost_usd` read APIs back this and are shared with PR-native (#369). One-key write actions (retry/approve/cancel/drain) remain the next slice of #368.
 

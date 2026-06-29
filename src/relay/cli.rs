@@ -12,7 +12,7 @@ use super::listener::RelayListener;
 use super::mesh::PeerRegistry;
 use super::peer::PeerConnection;
 use super::{
-    PENDING_PEER_ID, clear_pending_psk, forget_peer, gen_msg_id, is_valid_peer_id,
+    PENDING_PEER_ID, RelayMessage, clear_pending_psk, forget_peer, gen_msg_id, is_valid_peer_id,
     list_known_peers, load_or_create_identity, load_peer_meta, load_peer_psk, load_pending_psk,
     save_peer_psk, save_pending_psk,
 };
@@ -86,6 +86,9 @@ pub enum RelayCommand {
 
     /// Interrupt a remote task
     Interrupt {
+        /// Peer that owns the task (required to route the interrupt)
+        #[arg(long)]
+        peer: String,
         /// Task ID
         task_id: String,
         /// Interrupt type (nudge, stop, reroute)
@@ -137,10 +140,11 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
         } => cmd_delegate(peer, prompt, cwd.as_deref(), git_ref.clone(), json_mode),
         RelayCommand::Status => cmd_task_status(json_mode),
         RelayCommand::Interrupt {
+            peer,
             task_id,
             interrupt_type,
             reason,
-        } => cmd_interrupt(task_id, interrupt_type, reason),
+        } => cmd_interrupt(peer, task_id, interrupt_type, reason),
         RelayCommand::Invite { qr, words } => cmd_invite(*qr, *words, json_mode),
         RelayCommand::Join { input } => cmd_join(input),
         RelayCommand::Discover => cmd_discover(json_mode),
@@ -564,6 +568,45 @@ fn try_connect(
     Ok((remote_id, registry))
 }
 
+/// Open a one-shot authenticated connection to `peer_id`, send `msg`, and close
+/// (#378). This is how `relay delegate`/`interrupt` actually reach a peer from a
+/// standalone CLI process — it connects directly to the peer using the stored
+/// PSK + address, independent of any running `relay serve` daemon. Returns the
+/// resolved remote id on success; an `Err` here must surface as a non-zero exit
+/// so scripts never mistake a built-but-unsent message for a delivered one.
+fn send_message_to_peer(
+    peer_id: &str,
+    identity: &super::PeerId,
+    msg: &RelayMessage,
+) -> Result<String, String> {
+    let psk = load_peer_psk(peer_id).ok_or_else(|| {
+        format!("peer '{peer_id}' is not paired — run `claudectl relay pair` first")
+    })?;
+    let meta = load_peer_meta(peer_id)
+        .ok_or_else(|| format!("no stored address for peer '{peer_id}' — pair or connect first"))?;
+    let addr_str = meta
+        .get("addr")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("peer '{peer_id}' metadata has no address"))?;
+    let addr: SocketAddr = addr_str
+        .parse()
+        .map_err(|e| format!("invalid stored address '{addr_str}' for '{peer_id}': {e}"))?;
+
+    let (remote_id, registry) = try_connect(addr, &psk, identity)?;
+    if remote_id != peer_id {
+        return Err(format!(
+            "remote identity mismatch at {addr}: expected {peer_id}, got {remote_id}"
+        ));
+    }
+    registry
+        .lock()
+        .map_err(|_| "registry lock poisoned".to_string())?
+        .send_to(&remote_id, msg)?;
+    // Let the frame flush to the peer before the connection drops at scope end.
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    Ok(remote_id)
+}
+
 /// Reconnect an existing peer in a registry using its stored PSK.
 fn reconnect_peer(
     reg: &mut PeerRegistry,
@@ -739,28 +782,36 @@ fn cmd_delegate(
         delegation::build_delegate_message(&task_id, prompt, cwd, &context, identity.as_str())
             .map_err(|e| io::Error::other(format!("build message: {e}")))?;
 
+    // Actually transmit to the peer (#378). On failure we must exit non-zero so
+    // callers don't treat a built-but-unsent message as delivered.
+    let sent = send_message_to_peer(peer_id, &identity, &msg);
+
     if json_mode {
         let output = serde_json::json!({
             "task_id": task_id,
             "peer": peer_id,
             "prompt": prompt,
             "cwd": cwd,
-            "status": "delegated",
-            "message": msg,
+            "status": if sent.is_ok() { "delegated" } else { "failed" },
+            "error": sent.as_ref().err(),
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
-        println!("Task {} delegated to peer {}", task_id, peer_id);
-        println!("  Prompt: {}", prompt);
-        if let Some(c) = cwd {
-            println!("  CWD: {}", c);
+        match &sent {
+            Ok(remote) => {
+                println!("Task {task_id} delegated to peer {remote}");
+                println!("  Prompt: {prompt}");
+                if let Some(c) = cwd {
+                    println!("  CWD: {c}");
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to delegate task {task_id} to {peer_id}: {e}");
+            }
         }
-        println!();
-        println!("Note: In standalone CLI mode, the message is built but not sent.");
-        println!("Use `claudectl relay serve` or TUI mode for live delegation.");
     }
 
-    Ok(())
+    sent.map(|_| ()).map_err(io::Error::other)
 }
 
 /// `claudectl relay status`
@@ -788,7 +839,12 @@ fn cmd_task_status(json_mode: bool) -> io::Result<()> {
 }
 
 /// `claudectl relay interrupt <task_id> <type> [reason]`
-fn cmd_interrupt(task_id: &str, interrupt_type: &str, reason: &[String]) -> io::Result<()> {
+fn cmd_interrupt(
+    peer_id: &str,
+    task_id: &str,
+    interrupt_type: &str,
+    reason: &[String],
+) -> io::Result<()> {
     let reason_str = reason.join(" ");
 
     let identity = load_or_create_identity();
@@ -799,17 +855,24 @@ fn cmd_interrupt(task_id: &str, interrupt_type: &str, reason: &[String]) -> io::
         identity.as_str(),
     );
 
-    println!("Interrupt built for task {}", task_id);
-    println!("  Type: {}", interrupt_type);
-    if !reason_str.is_empty() {
-        println!("  Reason: {}", reason_str);
-    }
-    println!("  Message ID: {}", msg.id);
-    println!();
-    println!("Note: In standalone CLI mode, the message is built but not sent.");
-    println!("Use `claudectl relay serve` or TUI mode for live interrupts.");
+    // Route the interrupt to the peer that owns the task (#378).
+    let sent = send_message_to_peer(peer_id, &identity, &msg);
 
-    Ok(())
+    match &sent {
+        Ok(remote) => {
+            println!("Interrupt sent for task {task_id} to peer {remote}");
+            println!("  Type: {interrupt_type}");
+            if !reason_str.is_empty() {
+                println!("  Reason: {reason_str}");
+            }
+            println!("  Message ID: {}", msg.id);
+        }
+        Err(e) => {
+            eprintln!("Failed to send interrupt for task {task_id}: {e}");
+        }
+    }
+
+    sent.map(|_| ()).map_err(io::Error::other)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
