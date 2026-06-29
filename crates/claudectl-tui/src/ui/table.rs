@@ -491,13 +491,18 @@ fn session_row(s: &ClaudeSession, app: &App) -> Row<'static> {
         (false, false, true) => "REC ",
         (false, false, false) => "",
     };
-    // Coordination badges: L = active lease, H = pending handoff, I = pending interrupt
+    // Coordination badges: T = supervisor task, L = active lease,
+    // H = pending handoff, I = pending interrupt
     #[cfg(feature = "coord")]
     let prefix = {
+        let is_task = app.session_is_task(&s.session_id);
         let has_lease = app.session_has_lease(&s.session_id);
         let has_handoff = app.session_has_handoff(&s.session_id);
         let has_interrupt = app.session_has_interrupt(&s.session_id);
         let mut p = prefix.to_string();
+        if is_task {
+            p.push_str("T ");
+        }
         if has_lease {
             p.push_str("L ");
         }

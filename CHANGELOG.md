@@ -4,6 +4,9 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — sessions↔tasks linkage in the dashboard (#368, closes the issue)
+- Sessions in the main dashboard table that are **supervisor task attempts** now carry a **`T`** badge (alongside the existing `L`/`H`/`I` coordination badges), so an operator can tell at a glance which live Claude sessions belong to a tracked task. With the panel write actions + verdict/cost columns already shipped, this completes #368.
+
 ### Added — supervisor panel approve action (#368)
 - The Supervisor panel gains **`a`** to **approve** a `NEEDS_HUMAN` task — accept the work as-is and move it to DONE, an operator override of the verifier that escalated it. Routes through the new `Actions::approve_task`. With cancel (`c`), retry (`R`), and drain (`d`), the panel's operator action set is complete.
 
