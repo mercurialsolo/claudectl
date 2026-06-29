@@ -75,6 +75,10 @@ pub enum SupervisorCommand {
     /// Move a task to CANCELLED. Idempotent — already-terminal tasks
     /// are left alone.
     Cancel { task_id: String },
+    /// Post a summary of a task as a comment on its branch's PR (#369).
+    /// Best-effort: no open PR / no `gh` / not a repo prints a skip and
+    /// exits 0 rather than failing.
+    Pr { task_id: String },
     /// Set a "drain" marker so the reconciler stops issuing new
     /// assignments while keeping running tasks alive. The marker is a
     /// sentinel file at `~/.claudectl/coord/drain`. Remove with
@@ -112,6 +116,7 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
         SupervisorCommand::Status { state } => render_status(state.as_deref()),
         SupervisorCommand::Logs { task_id } => render_logs(task_id),
         SupervisorCommand::Cancel { task_id } => cancel_task(task_id),
+        SupervisorCommand::Pr { task_id } => post_pr_summary(task_id),
         SupervisorCommand::Drain => set_drain(true),
         SupervisorCommand::Undrain => set_drain(false),
     }
@@ -243,6 +248,17 @@ fn cancel_task(task_id: &str) -> io::Result<()> {
     )
     .map_err(io::Error::other)?;
     println!("cancelled {task_id}");
+    Ok(())
+}
+
+/// Post a task summary to its branch's PR (#369). Best-effort: anything that
+/// prevents posting (no PR, no `gh`, not a repo) prints a `skipped:` line and
+/// exits 0, so it's safe to call unconditionally from scripts or CI.
+fn post_pr_summary(task_id: &str) -> io::Result<()> {
+    match super::pr::post_task_summary(task_id) {
+        Ok(msg) => println!("{msg}"),
+        Err(reason) => println!("skipped: {reason}"),
+    }
     Ok(())
 }
 
