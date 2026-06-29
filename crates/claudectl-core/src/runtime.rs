@@ -482,6 +482,11 @@ pub trait Actions: Send + Sync {
     /// reconciler re-assigns it). `Err` for a DONE task (nothing to retry), a
     /// still-active task, or when the `coord` feature is compiled out.
     fn retry_task(&self, task_id: &str) -> Result<(), String>;
+
+    /// Approve a NEEDS_HUMAN task — accept the work as-is and move it to DONE,
+    /// overriding the verifier that escalated it. `Err` when the task isn't in
+    /// NEEDS_HUMAN, or the `coord` feature is compiled out.
+    fn approve_task(&self, task_id: &str) -> Result<(), String>;
 }
 
 // ============================================================================
@@ -746,6 +751,9 @@ pub enum MockAction {
     RetryTask {
         task_id: String,
     },
+    ApproveTask {
+        task_id: String,
+    },
 }
 
 impl PartialEq for ObservationInput {
@@ -964,6 +972,15 @@ impl Actions for MockRuntime {
             });
         Ok(())
     }
+    fn approve_task(&self, task_id: &str) -> Result<(), String> {
+        self.actions_log
+            .lock()
+            .expect("actions_log poisoned")
+            .push(MockAction::ApproveTask {
+                task_id: task_id.into(),
+            });
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1113,6 +1130,7 @@ mod tests {
         mock.cancel_task("t-1").unwrap();
         mock.set_supervisor_drain(true).unwrap();
         mock.retry_task("t-2").unwrap();
+        mock.approve_task("t-3").unwrap();
         let actions = mock.actions();
         assert!(matches!(&actions[0], MockAction::CancelTask { task_id } if task_id == "t-1"));
         assert!(matches!(
@@ -1120,6 +1138,7 @@ mod tests {
             MockAction::SetSupervisorDrain { draining: true }
         ));
         assert!(matches!(&actions[2], MockAction::RetryTask { task_id } if task_id == "t-2"));
+        assert!(matches!(&actions[3], MockAction::ApproveTask { task_id } if task_id == "t-3"));
     }
 
     #[test]
