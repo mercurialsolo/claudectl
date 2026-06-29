@@ -2,7 +2,7 @@
 
 All notable changes to claudectl are documented here.
 
-## [Unreleased]
+## [0.60.0] - 2026-06-28
 
 ### Added — PR-native integration (#369, increment 1)
 - **`claudectl supervisor pr <task_id>`** posts a task summary (state, attempts, role) as a comment on the PR for the task's branch, resolved via `git` + `gh`. Best-effort by construction: no open PR, no `gh`, or not a git repo prints a `skipped:` line and exits 0 — it never fails the task. Verifier-as-check and auto-posting on task DONE are increment 2.
@@ -10,6 +10,8 @@ All notable changes to claudectl are documented here.
 ### Added — brain model routing (#370, increment 2)
 - The brain can now **escalate low-confidence decisions to a stronger model**. Set `escalation_model` (+ optional `escalation_threshold`, default 0.7) in the `[brain]` config: the cheap/primary `model` answers every gate decision, and only when it's uncertain is the prompt re-run on the stronger model. Off by default (no `escalation_model` ⇒ today's single-model behavior, byte-for-byte).
 - A failed escalation falls back to the primary suggestion rather than erroring, so routing never makes the brain less available than before.
+
+Workspace crates bumped: `claudectl-core` and `claudectl-tui` → 0.55.0 (new `BrainConfig` routing fields).
 
 ## [0.59.0] - 2026-06-28
 
