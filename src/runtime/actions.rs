@@ -138,6 +138,27 @@ impl Actions for LiveActions {
         }
     }
 
+    fn retry_task(&self, task_id: &str) -> Result<(), String> {
+        #[cfg(feature = "coord")]
+        {
+            use crate::coord::tasks::{self, TaskState};
+            let mut conn = crate::coord::store::open()?;
+            let task = tasks::get_task(&conn, task_id)?
+                .ok_or_else(|| format!("task {task_id} not found"))?;
+            match task.state {
+                TaskState::Done => Err("task already succeeded — nothing to retry".into()),
+                s if !s.is_terminal() => Err(format!("task is still active ({})", s.as_str())),
+                // NEEDS_HUMAN or CANCELLED → back to PENDING for re-assignment.
+                s => tasks::transition(&mut conn, task_id, s, TaskState::Pending, "operator-retry"),
+            }
+        }
+        #[cfg(not(feature = "coord"))]
+        {
+            let _ = task_id;
+            Err("coord feature not compiled in this build".into())
+        }
+    }
+
     fn set_supervisor_drain(&self, draining: bool) -> Result<(), String> {
         #[cfg(feature = "coord")]
         {

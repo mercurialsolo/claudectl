@@ -477,6 +477,11 @@ pub trait Actions: Send + Sync {
     /// stops issuing new task assignments while letting running tasks finish.
     /// `Err` when the `coord` feature is compiled out.
     fn set_supervisor_drain(&self, draining: bool) -> Result<(), String>;
+
+    /// Re-queue a failed/cancelled task (move it back to PENDING so the
+    /// reconciler re-assigns it). `Err` for a DONE task (nothing to retry), a
+    /// still-active task, or when the `coord` feature is compiled out.
+    fn retry_task(&self, task_id: &str) -> Result<(), String>;
 }
 
 // ============================================================================
@@ -738,6 +743,9 @@ pub enum MockAction {
     SetSupervisorDrain {
         draining: bool,
     },
+    RetryTask {
+        task_id: String,
+    },
 }
 
 impl PartialEq for ObservationInput {
@@ -947,6 +955,15 @@ impl Actions for MockRuntime {
             .push(MockAction::SetSupervisorDrain { draining });
         Ok(())
     }
+    fn retry_task(&self, task_id: &str) -> Result<(), String> {
+        self.actions_log
+            .lock()
+            .expect("actions_log poisoned")
+            .push(MockAction::RetryTask {
+                task_id: task_id.into(),
+            });
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1095,12 +1112,14 @@ mod tests {
         // the recorded log via the public `actions()` accessor.
         mock.cancel_task("t-1").unwrap();
         mock.set_supervisor_drain(true).unwrap();
+        mock.retry_task("t-2").unwrap();
         let actions = mock.actions();
         assert!(matches!(&actions[0], MockAction::CancelTask { task_id } if task_id == "t-1"));
         assert!(matches!(
             actions[1],
             MockAction::SetSupervisorDrain { draining: true }
         ));
+        assert!(matches!(&actions[2], MockAction::RetryTask { task_id } if task_id == "t-2"));
     }
 
     #[test]

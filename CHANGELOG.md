@@ -5,7 +5,7 @@ All notable changes to claudectl are documented here.
 ## [Unreleased]
 
 ### Added — supervisor panel write actions (#368, increment 2b)
-- The Supervisor panel (`T`) is now operational: **`c`** cancels the selected task (double-tap to confirm — moves it to CANCELLED) and **`d`** toggles the supervisor **drain** marker (reconciler stops issuing new assignments while running tasks finish). Both route through new `Actions::cancel_task` / `Actions::set_supervisor_drain` methods; the footer + help reflect the keys. One-key retry/approve are a later slice.
+- The Supervisor panel (`T`) is now operational: **`c`** cancels the selected task (double-tap to confirm — moves it to CANCELLED), **`R`** re-queues a failed/cancelled task (back to PENDING so the reconciler re-assigns it), and **`d`** toggles the supervisor **drain** marker (reconciler stops issuing new assignments while running tasks finish). All route through new `Actions::cancel_task` / `Actions::retry_task` / `Actions::set_supervisor_drain` methods; the footer + help reflect the keys. One-key approve for NEEDS_HUMAN tasks is a later slice.
 
 ### Added — verifier-as-check (#369, increment 2)
 - `claudectl supervisor pr <task_id>` now also sets a **`claudectl/verifier` commit status** on the branch's HEAD, reflecting the task's latest verifier verdict (PASS → success, FAIL → failure, none → pending). It rides the existing best-effort path — the status post can't undo the comment already landed, and a missing `gh`/repo just appends a skip note. Auto-posting on task DONE from the reconciler is the remaining slice of #369.
