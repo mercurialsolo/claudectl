@@ -78,6 +78,11 @@ impl CoordView for LiveCoordView {
             .map(|t| {
                 let attempts = tasks::attempt_count(&conn, &t.id).unwrap_or(0);
                 let last_session_id = tasks::latest_session_id(&conn, &t.id).ok().flatten();
+                let last_verdict = tasks::latest_verification(&conn, &t.id)
+                    .ok()
+                    .flatten()
+                    .map(|(_kind, verdict)| verdict);
+                let cost_usd = tasks::task_cost_usd(&conn, &t.id).unwrap_or(0.0);
                 TaskSummary {
                     id: t.id,
                     name: t.name,
@@ -86,6 +91,8 @@ impl CoordView for LiveCoordView {
                     attempts,
                     max_retries: t.max_retries,
                     last_session_id,
+                    last_verdict,
+                    cost_usd,
                     created_at: t.created_at,
                     updated_at: t.updated_at,
                 }

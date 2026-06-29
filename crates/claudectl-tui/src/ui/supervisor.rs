@@ -30,12 +30,6 @@ fn state_color(state: &str, t: &Theme) -> Color {
     }
 }
 
-/// Last path segment of a session id / uuid, truncated for the narrow column.
-fn short_session(id: &str) -> String {
-    let tail = id.rsplit(['/', '-']).next().unwrap_or(id);
-    tail.chars().take(8).collect()
-}
-
 pub fn render_supervisor_screen(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.theme;
 
@@ -67,10 +61,19 @@ pub fn render_supervisor_screen(frame: &mut Frame, area: Rect, app: &App) {
     render_footer(frame, layout[2], app);
 }
 
+/// Color a verifier verdict — green PASS, red FAIL, muted when none/unknown.
+fn verdict_color(verdict: &str, t: &Theme) -> Color {
+    match verdict {
+        "PASS" => t.success,
+        "FAIL" => t.error,
+        _ => t.text_muted,
+    }
+}
+
 fn render_header(frame: &mut Frame, area: Rect, t: &Theme) {
     let header = format!(
-        " {:<10} {:>6}  {:<28} {:<10} {:<10} {}",
-        "STATE", "TRIES", "TASK", "ROLE", "SESSION", "UPDATED"
+        "   {:<8} {:>5} {:<7} {:>7} {:<26} {:<10} {}",
+        "STATE", "TRIES", "VERDICT", "COST", "TASK", "ROLE", "UPDATED"
     );
     let p = Paragraph::new(Line::from(Span::styled(
         header,
@@ -99,11 +102,8 @@ fn render_task_list(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(i, task)| {
             let is_sel = i == selected;
             let tries = format!("{}/{}", task.attempts, task.max_retries);
-            let session = task
-                .last_session_id
-                .as_deref()
-                .map(short_session)
-                .unwrap_or_else(|| "—".into());
+            let verdict = task.last_verdict.as_deref().unwrap_or("—");
+            let cost = format!("${:.2}", task.cost_usd);
             let role = task.role.as_deref().unwrap_or("—");
             let updated = task
                 .updated_at
@@ -115,21 +115,25 @@ fn render_task_list(frame: &mut Frame, area: Rect, app: &App) {
             let row = Line::from(vec![
                 Span::raw(if is_sel { " ▸ " } else { "   " }),
                 Span::styled(
-                    format!("{:<8}", task.state),
+                    format!("{:<8} ", task.state),
                     Style::default()
                         .fg(state_color(&task.state, t))
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("{tries:>6}  "), Style::default().fg(t.text_muted)),
+                Span::styled(format!("{tries:>5} "), Style::default().fg(t.text_muted)),
                 Span::styled(
-                    format!("{:<28}", truncate(&task.name, 28)),
+                    format!("{verdict:<7} "),
+                    Style::default().fg(verdict_color(verdict, t)),
+                ),
+                Span::styled(format!("{cost:>7} "), Style::default().fg(t.text_muted)),
+                Span::styled(
+                    format!("{:<26} ", truncate(&task.name, 26)),
                     Style::default().fg(t.text_primary),
                 ),
                 Span::styled(
                     format!("{:<10} ", truncate(role, 10)),
                     Style::default().fg(t.text_muted),
                 ),
-                Span::styled(format!("{session:<10} "), Style::default().fg(t.text_muted)),
                 Span::styled(updated.to_string(), Style::default().fg(t.text_muted)),
             ]);
             let style = if is_sel {
@@ -195,9 +199,11 @@ mod tests {
     }
 
     #[test]
-    fn short_session_takes_trailing_segment() {
-        assert_eq!(short_session("path/to/sess-abcdef1234"), "abcdef12");
-        assert_eq!(short_session("plainid"), "plainid");
+    fn verdict_color_maps_pass_fail() {
+        let t = Theme::from_mode(claudectl_core::theme::ThemeMode::Dark);
+        assert_eq!(verdict_color("PASS", &t), t.success);
+        assert_eq!(verdict_color("FAIL", &t), t.error);
+        assert_eq!(verdict_color("—", &t), t.text_muted);
     }
 
     #[test]

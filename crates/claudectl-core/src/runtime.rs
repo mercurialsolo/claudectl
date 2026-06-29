@@ -291,6 +291,13 @@ pub struct TaskSummary {
     pub max_retries: u32,
     /// Session id of the most recent attempt, when one has run.
     pub last_session_id: Option<String>,
+    /// Most recent verifier verdict (e.g. "PASS"/"FAIL"), or `None` if no
+    /// verifier has run for this task yet.
+    #[serde(default)]
+    pub last_verdict: Option<String>,
+    /// Total cost in USD across all attempts.
+    #[serde(default)]
+    pub cost_usd: f64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1006,6 +1013,8 @@ mod tests {
                 attempts: 2,
                 max_retries: 3,
                 last_session_id: Some("sess-abcdef12".into()),
+                last_verdict: Some("PASS".into()),
+                cost_usd: 1.25,
                 created_at: "2026-06-25T10:00:00Z".into(),
                 updated_at: "2026-06-25T10:05:00Z".into(),
             }],

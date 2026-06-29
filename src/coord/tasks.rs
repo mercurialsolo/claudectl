@@ -253,6 +253,38 @@ pub fn record_verification(
     Ok(())
 }
 
+/// Most recent verifier `(kind, verdict)` for a task, across all its attempts
+/// (#368/#369). Joins `task_verifications` → `task_attempts` on `attempt_id`
+/// and takes the newest by `ran_at`. `None` when no verifier has run yet.
+pub fn latest_verification(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<Option<(String, String)>, String> {
+    conn.query_row(
+        "SELECT v.kind, v.verdict
+         FROM task_verifications v
+         JOIN task_attempts a ON v.attempt_id = a.id
+         WHERE a.task_id = ?1
+         ORDER BY v.ran_at DESC, v.id DESC
+         LIMIT 1",
+        params![task_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .optional()
+    .map_err(|e| format!("latest_verification: {e}"))
+}
+
+/// Total cost in USD across all attempts of a task. Zero when no attempt has
+/// recorded cost yet.
+pub fn task_cost_usd(conn: &Connection, task_id: &str) -> Result<f64, String> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(cost_usd), 0) FROM task_attempts WHERE task_id = ?1",
+        params![task_id],
+        |row| row.get::<_, f64>(0),
+    )
+    .map_err(|e| format!("task_cost_usd: {e}"))
+}
+
 /// Latest attempt's session_id, used by the reconciler to map a task
 /// back to its observable session and decide whether to emit Resume on
 /// Dead status (RFC §7). Returns `None` when the latest attempt was a
@@ -507,6 +539,33 @@ mod tests {
         assert_eq!(hist.len(), 1);
         assert_eq!(hist[0].0, "CREATED");
         assert_eq!(hist[0].1, "PENDING");
+    }
+
+    #[test]
+    fn latest_verification_returns_newest_across_attempts() {
+        let conn = open_memory_for_tests();
+        let id = insert_task(&conn, &sample()).unwrap();
+        // No verifier has run yet.
+        assert_eq!(latest_verification(&conn, &id).unwrap(), None);
+
+        let a1 = insert_attempt(&conn, &id, 1, Some("sess-1"), None, None).unwrap();
+        record_verification(&conn, &a1, "run", "cargo test", "FAIL", "1 failed", 0.0).unwrap();
+        let a2 = insert_attempt(&conn, &id, 2, Some("sess-2"), None, None).unwrap();
+        record_verification(&conn, &a2, "run", "cargo test", "PASS", "ok", 0.0).unwrap();
+
+        let (kind, verdict) = latest_verification(&conn, &id).unwrap().expect("a verdict");
+        assert_eq!(kind, "run");
+        assert_eq!(verdict, "PASS");
+    }
+
+    #[test]
+    fn task_cost_sums_attempts_and_defaults_zero() {
+        let conn = open_memory_for_tests();
+        let id = insert_task(&conn, &sample()).unwrap();
+        assert_eq!(task_cost_usd(&conn, &id).unwrap(), 0.0);
+        // Attempts default to cost 0; the SUM stays 0 and never errors.
+        insert_attempt(&conn, &id, 1, Some("s"), None, None).unwrap();
+        assert_eq!(task_cost_usd(&conn, &id).unwrap(), 0.0);
     }
 
     #[test]
