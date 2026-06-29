@@ -4,6 +4,9 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — supervisor panel: verdict + cost columns (#368, increment 2a)
+- The Supervisor panel (`T`) now shows a **VERDICT** column (latest verifier result, green PASS / red FAIL) and a **COST** column (total $ across the task's attempts), replacing the low-value session-hash column. New `tasks::latest_verification` and `tasks::task_cost_usd` read APIs back this and are shared with PR-native (#369). One-key write actions (retry/approve/cancel/drain) remain the next slice of #368.
+
 ### Fixed — flaky relay HTTP server tests (#381)
 - The relay coordinator's HTTP server tests raced the accept loop: a fixed 50ms pre-sleep then a single read could miss the response on a loaded CI runner, intermittently failing the release. The tests now retry connect+read until a response or a 5s deadline (deterministic), and the server's non-blocking accept poll shrank from 100ms to 10ms — bounding first-request latency and the race window.
 
