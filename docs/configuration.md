@@ -34,6 +34,10 @@ warn_threshold = 75
 enabled = true
 endpoint = "http://localhost:11434/api/generate"
 model = "gemma4:e4b"
+# Optional model routing: a low-confidence decision from `model` is re-run on
+# `escalation_model`. Unset = no routing (every decision uses `model`).
+escalation_model = "gemma4:27b"
+escalation_threshold = 0.7
 auto = false
 timeout_ms = 5000
 max_context_tokens = 4000

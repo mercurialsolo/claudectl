@@ -400,7 +400,7 @@ impl BrainEngine {
         self.inflight.insert(pid);
 
         std::thread::spawn(move || {
-            let suggestion = super::client::infer(&config, &prompt);
+            let suggestion = super::client::infer_routed(&config, &prompt);
             let _ = tx.send(BrainResult { pid, suggestion });
         });
     }
@@ -589,7 +589,7 @@ impl BrainEngine {
 
         // Use PID 0 as sentinel for orchestration results
         std::thread::spawn(move || {
-            let suggestion = super::client::infer(&config, &prompt);
+            let suggestion = super::client::infer_routed(&config, &prompt);
             let _ = tx.send(BrainResult { pid: 0, suggestion });
         });
 
@@ -831,6 +831,8 @@ mod tests {
             max_sessions: 10,
             orchestrate: false,
             orchestrate_interval_secs: 30,
+            escalation_model: None,
+            escalation_threshold: 0.7,
             test_runners: crate::config::default_test_runners(),
         }
     }

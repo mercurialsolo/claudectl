@@ -17,14 +17,65 @@ pub struct BrainSuggestion {
     pub suggested_at: u64,
 }
 
-/// Call the local LLM endpoint via curl and parse the response.
+/// Call the local LLM endpoint via curl and parse the response, using the
+/// model configured as the primary (`config.model`).
 pub fn infer(config: &BrainConfig, prompt: &str) -> Result<BrainSuggestion, String> {
+    infer_with_model(config, prompt, &config.model)
+}
+
+/// Whether a primary-model decision is too uncertain and should be re-run on
+/// the stronger escalation model. Pure so the routing policy is unit-testable
+/// without an LLM. Escalation only happens when a strong model is configured.
+pub fn should_escalate(confidence: f64, threshold: f64, has_strong_model: bool) -> bool {
+    has_strong_model && confidence < threshold
+}
+
+/// Two-tier routed inference (#370): ask the cheap/primary model first; if it
+/// returns a low-confidence decision and an `escalation_model` is configured,
+/// re-run the prompt on the stronger model and take that answer. With no
+/// escalation model this is byte-for-byte `infer`. A failed escalation falls
+/// back to the primary suggestion rather than erroring.
+pub fn infer_routed(config: &BrainConfig, prompt: &str) -> Result<BrainSuggestion, String> {
+    let primary = infer_with_model(config, prompt, &config.model)?;
+    let Some(strong) = config.escalation_model.as_deref() else {
+        return Ok(primary);
+    };
+    if !should_escalate(primary.confidence, config.escalation_threshold, true) {
+        return Ok(primary);
+    }
+    crate::logger::log(
+        "DEBUG",
+        &format!(
+            "brain routing: confidence {:.2} < {:.2}, escalating {} -> {strong}",
+            primary.confidence, config.escalation_threshold, config.model
+        ),
+    );
+    match infer_with_model(config, prompt, strong) {
+        Ok(escalated) => Ok(escalated),
+        Err(e) => {
+            crate::logger::log(
+                "WARN",
+                &format!("brain escalation to {strong} failed ({e}); using primary"),
+            );
+            Ok(primary)
+        }
+    }
+}
+
+/// Call the local LLM endpoint via curl with an explicit `model`, parsing the
+/// response. The model is a parameter so the router can target either the
+/// primary or the escalation model without cloning the whole config.
+fn infer_with_model(
+    config: &BrainConfig,
+    prompt: &str,
+    model: &str,
+) -> Result<BrainSuggestion, String> {
     let is_openai = is_openai_compatible(&config.endpoint);
 
     let payload = if is_openai {
         // OpenAI-compatible format (llama.cpp, vLLM, LM Studio)
         serde_json::json!({
-            "model": config.model,
+            "model": model,
             "messages": [
                 {"role": "user", "content": prompt}
             ],
@@ -34,7 +85,7 @@ pub fn infer(config: &BrainConfig, prompt: &str) -> Result<BrainSuggestion, Stri
     } else {
         // Ollama /api/generate format (default)
         serde_json::json!({
-            "model": config.model,
+            "model": model,
             "prompt": prompt,
             "stream": false,
             "format": "json",
@@ -369,6 +420,17 @@ fn epoch_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escalate_only_when_uncertain_and_strong_model_present() {
+        // Low confidence + a strong model configured ⇒ escalate.
+        assert!(should_escalate(0.5, 0.7, true));
+        // Confident enough ⇒ keep the primary answer.
+        assert!(!should_escalate(0.7, 0.7, true));
+        assert!(!should_escalate(0.95, 0.7, true));
+        // No escalation model ⇒ never escalate, even when uncertain.
+        assert!(!should_escalate(0.1, 0.7, false));
+    }
 
     #[test]
     fn parse_approve_suggestion() {
