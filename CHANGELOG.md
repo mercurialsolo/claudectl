@@ -4,6 +4,9 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — supervisor panel approve action (#368)
+- The Supervisor panel gains **`a`** to **approve** a `NEEDS_HUMAN` task — accept the work as-is and move it to DONE, an operator override of the verifier that escalated it. Routes through the new `Actions::approve_task`. With cancel (`c`), retry (`R`), and drain (`d`), the panel's operator action set is complete.
+
 ### Added — supervisor panel write actions (#368, increment 2b)
 - The Supervisor panel (`T`) is now operational: **`c`** cancels the selected task (double-tap to confirm — moves it to CANCELLED), **`R`** re-queues a failed/cancelled task (back to PENDING so the reconciler re-assigns it), and **`d`** toggles the supervisor **drain** marker (reconciler stops issuing new assignments while running tasks finish). All route through new `Actions::cancel_task` / `Actions::retry_task` / `Actions::set_supervisor_drain` methods; the footer + help reflect the keys. One-key approve for NEEDS_HUMAN tasks is a later slice.
 

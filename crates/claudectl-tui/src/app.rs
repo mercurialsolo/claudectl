@@ -1546,6 +1546,8 @@ impl App {
             KeyCode::Char('c') => self.handle_supervisor_cancel(was_armed),
             // Re-queue a failed/cancelled task.
             KeyCode::Char('R') => self.handle_supervisor_retry(),
+            // Approve a NEEDS_HUMAN task — accept it as DONE.
+            KeyCode::Char('a') => self.handle_supervisor_approve(),
             // Toggle the supervisor drain marker.
             KeyCode::Char('d') => self.handle_supervisor_drain_toggle(),
             _ => {}
@@ -1565,6 +1567,22 @@ impl App {
                 self.coord_refresh();
             }
             Err(e) => self.supervisor_status_msg = Some(format!("Retry failed: {e}")),
+        }
+    }
+
+    #[cfg(feature = "coord")]
+    fn handle_supervisor_approve(&mut self) {
+        let Some(task) = self.coord_tasks.get(self.supervisor_selected) else {
+            return;
+        };
+        let id = task.id.clone();
+        let name = task.name.clone();
+        match self.runtime.actions.approve_task(&id) {
+            Ok(()) => {
+                self.supervisor_status_msg = Some(format!("Approved {name} (→ DONE)"));
+                self.coord_refresh();
+            }
+            Err(e) => self.supervisor_status_msg = Some(format!("Approve failed: {e}")),
         }
     }
 
