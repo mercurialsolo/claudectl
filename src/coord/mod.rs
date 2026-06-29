@@ -10,6 +10,7 @@ pub mod hook_events;
 pub mod injection;
 pub mod interrupt_bus;
 pub mod metrics;
+pub mod pr;
 pub mod promotion;
 pub mod resume;
 pub mod session_policy;
