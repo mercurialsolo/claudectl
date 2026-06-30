@@ -344,6 +344,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Style::default().fg(t.text_primary),
     )];
 
+    // Guided-tour orientation tip (#373) — only in demo mode.
+    if app.demo_mode {
+        title_spans.push(Span::styled(
+            format!("\u{2502} {} ", crate::demo::demo_tour_tip(app.demo_tick)),
+            Style::default().fg(t.highlight_key),
+        ));
+    }
+
     if !rec_indicator.is_empty() {
         title_spans.push(Span::styled(
             rec_indicator,

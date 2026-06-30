@@ -444,6 +444,23 @@ pub fn demo_event(tick: u32) -> Option<DemoEvent> {
     }
 }
 
+/// Rotating orientation tip shown in the demo dashboard title (#373), so a
+/// first-time viewer understands what they're looking at. Cycles slowly through
+/// a short tour of the key surfaces — distinct from `demo_event`, which narrates
+/// simulated activity in the status bar.
+pub fn demo_tour_tip(tick: u32) -> &'static str {
+    const TIPS: &[&str] = &[
+        "Demo — this is your agent fleet: every running Claude Code session at a glance",
+        "Status colors: magenta = needs input, green = working, yellow = waiting",
+        "The brain auto-approves safe tool calls and blocks risky ones — watch the footer",
+        "Health flags catch stalls, cost spikes, loops, and context saturation",
+        "Press T for the Supervisor, K for Skills & Hive, M for Brain metrics",
+        "Cost and burn-rate are tracked per session — cap spend with --budget",
+    ];
+    // ~5 ticks per tip (~10s at the 2s demo cadence) so each is readable.
+    TIPS[((tick / 5) as usize) % TIPS.len()]
+}
+
 /// A scripted event in the demo timeline.
 pub struct DemoEvent {
     pub message: String,
@@ -955,6 +972,17 @@ mod tour_tests {
 mod highlight_tests {
     use super::*;
     use claudectl_core::transcript::{TranscriptEvent, parse_line};
+
+    #[test]
+    fn demo_tour_tip_rotates_and_is_nonempty() {
+        // Always returns a non-empty tip.
+        assert!(!demo_tour_tip(0).is_empty());
+        // Same tip held for ~5 ticks, then advances.
+        assert_eq!(demo_tour_tip(0), demo_tour_tip(4));
+        assert_ne!(demo_tour_tip(0), demo_tour_tip(5));
+        // Wraps around without panicking on large ticks.
+        let _ = demo_tour_tip(10_000);
+    }
 
     #[test]
     fn demo_highlight_generates_valid_jsonl() {
