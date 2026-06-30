@@ -200,6 +200,8 @@ Durable task lifecycles on top of the bus. See the [README's Supervisor section]
 | `supervisor drain` | Set sentinel file at `~/.claudectl/coord/drain`; reconciler stops issuing new assignments |
 | `supervisor undrain` | Clear the drain marker |
 
+Set `CLAUDECTL_PR_AUTO_POST=1` in the supervisor daemon's environment to run the `supervisor pr` flow automatically whenever a task reaches DONE (#369). Off by default; the post runs on a detached thread so it never blocks the reconciler tick.
+
 Coord schema is gated on `PRAGMA user_version`. A binary that meets a newer schema (e.g. after `brew upgrade` without a follow-up `init --upgrade`) refuses to start with the exact remediation in the error.
 
 ### Ingest

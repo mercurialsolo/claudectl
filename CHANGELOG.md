@@ -2,6 +2,11 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Added — PR auto-post on task DONE (#369, closes the issue)
+- With `CLAUDECTL_PR_AUTO_POST=1` set in the supervisor daemon's environment, the reconciler now runs the `supervisor pr` flow automatically when a task reaches DONE — posting the summary comment + `claudectl/verifier` commit status to its branch's PR. Opt-in (off by default), and the post runs on a **detached thread** so git/gh latency never blocks the reconciler tick. The transition is committed before the post fires, so a failed post is logged, never propagated. This completes #369.
+
 ## [0.62.0] - 2026-06-29
 
 ### Added — sessions↔tasks linkage in the dashboard (#368, closes the issue)
