@@ -2,7 +2,7 @@
 
 All notable changes to claudectl are documented here.
 
-## [Unreleased]
+## [0.62.0] - 2026-06-29
 
 ### Added — sessions↔tasks linkage in the dashboard (#368, closes the issue)
 - Sessions in the main dashboard table that are **supervisor task attempts** now carry a **`T`** badge (alongside the existing `L`/`H`/`I` coordination badges), so an operator can tell at a glance which live Claude sessions belong to a tracked task. With the panel write actions + verdict/cost columns already shipped, this completes #368.
@@ -15,6 +15,8 @@ All notable changes to claudectl are documented here.
 
 ### Added — verifier-as-check (#369, increment 2)
 - `claudectl supervisor pr <task_id>` now also sets a **`claudectl/verifier` commit status** on the branch's HEAD, reflecting the task's latest verifier verdict (PASS → success, FAIL → failure, none → pending). It rides the existing best-effort path — the status post can't undo the comment already landed, and a missing `gh`/repo just appends a skip note. Auto-posting on task DONE from the reconciler is the remaining slice of #369.
+
+Workspace crates bumped: `claudectl-core` and `claudectl-tui` → 0.57.0 (new `Actions` task-control methods).
 
 ## [0.61.0] - 2026-06-29
 
