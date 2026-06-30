@@ -183,6 +183,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw("before project = directory conflict"),
         ]),
         Line::from(vec![
+            Span::styled("  T  ", Style::default().fg(t.highlight_key)),
+            Span::raw("before project = supervisor task attempt"),
+        ]),
+        Line::from(vec![
             Span::styled("  (Xm Xs) ", Style::default().fg(t.highlight_key)),
             Span::raw("after Needs Input = wait time"),
         ]),

@@ -339,6 +339,10 @@ pub struct App {
     pub coord_handoffs: Vec<claudectl_core::runtime::HandoffSummary>,
     #[cfg(feature = "coord")]
     pub coord_lease_sessions: HashSet<String>,
+    /// Session ids that are supervisor task attempts (latest attempt per task),
+    /// used to badge them `T` in the session table (#368).
+    #[cfg(feature = "coord")]
+    pub coord_task_sessions: HashSet<String>,
     #[cfg(feature = "coord")]
     pub coord_handoff_sessions: HashSet<String>,
     #[cfg(feature = "coord")]
@@ -643,6 +647,8 @@ impl App {
             coord_handoffs: Vec::new(),
             #[cfg(feature = "coord")]
             coord_lease_sessions: HashSet::new(),
+            #[cfg(feature = "coord")]
+            coord_task_sessions: HashSet::new(),
             #[cfg(feature = "coord")]
             coord_handoff_sessions: HashSet::new(),
             #[cfg(feature = "coord")]
@@ -1479,6 +1485,11 @@ impl App {
         if self.supervisor_selected >= self.coord_tasks.len() {
             self.supervisor_selected = self.coord_tasks.len().saturating_sub(1);
         }
+        self.coord_task_sessions = self
+            .coord_tasks
+            .iter()
+            .filter_map(|t| t.last_session_id.clone())
+            .collect();
 
         self.coord_lease_sessions = self
             .coord_leases
@@ -1628,6 +1639,12 @@ impl App {
     #[cfg(feature = "coord")]
     pub fn session_has_lease(&self, session_id: &str) -> bool {
         self.coord_lease_sessions.contains(session_id)
+    }
+
+    /// Whether this session is the latest attempt of a supervisor task (#368).
+    #[cfg(feature = "coord")]
+    pub fn session_is_task(&self, session_id: &str) -> bool {
+        self.coord_task_sessions.contains(session_id)
     }
 
     #[cfg(feature = "coord")]
