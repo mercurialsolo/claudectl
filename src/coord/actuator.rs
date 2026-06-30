@@ -153,6 +153,7 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                     TaskState::Done,
                     "no-verifiers",
                 )?;
+                maybe_auto_post_pr(task_id);
                 return Ok(());
             }
 
@@ -205,6 +206,7 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                 TaskState::Done,
                 "verify-pass",
             )?;
+            maybe_auto_post_pr(task_id);
             Ok(())
         }
         Action::Resume { task_id, cause } => {
@@ -269,6 +271,34 @@ pub fn retry_prompt_for_fail(original_prompt: &str, verifier_kind: &str, output:
     super::verify::build_retry_prompt(original_prompt, verifier_kind, output)
 }
 
+/// Parse the `CLAUDECTL_PR_AUTO_POST` flag value. Pure so the gate is testable
+/// without touching the process environment.
+fn parse_auto_post_flag(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1" | "true" | "yes" | "on"))
+}
+
+/// Whether to auto-post a task's PR summary + verifier status when it reaches
+/// DONE. Opt-in via env so it never surprises a user, and so the reconciler's
+/// default behavior (no network calls) is unchanged.
+fn pr_auto_post_enabled() -> bool {
+    parse_auto_post_flag(std::env::var("CLAUDECTL_PR_AUTO_POST").ok().as_deref())
+}
+
+/// When enabled, post the task's PR summary + verifier status (#369) on a
+/// **detached** thread — git/gh can take seconds, and the reconciler tick must
+/// never block on them. Best-effort: the transition is already committed before
+/// this runs, so a failed post is logged, not propagated.
+fn maybe_auto_post_pr(task_id: &str) {
+    if !pr_auto_post_enabled() {
+        return;
+    }
+    let task_id = task_id.to_string();
+    std::thread::spawn(move || match super::pr::post_task_summary(&task_id) {
+        Ok(msg) => crate::logger::log("DEBUG", &format!("pr auto-post: {msg}")),
+        Err(e) => crate::logger::log("DEBUG", &format!("pr auto-post skipped: {e}")),
+    });
+}
+
 /// Connect the bus `message_id` to the attempt row. Separate from
 /// `insert_attempt` because the message id only exists after the bus
 /// publish succeeds, and we want the attempt row to exist *before* the
@@ -293,6 +323,16 @@ mod tests {
     use crate::coord::store;
     use crate::coord::supervisor::Action;
     use crate::coord::tasks::{NewTask, TaskState, get_task, insert_task, list_transitions};
+
+    #[test]
+    fn auto_post_flag_is_opt_in() {
+        assert!(parse_auto_post_flag(Some("1")));
+        assert!(parse_auto_post_flag(Some("true")));
+        assert!(parse_auto_post_flag(Some(" on ")));
+        assert!(!parse_auto_post_flag(Some("0")));
+        assert!(!parse_auto_post_flag(Some("")));
+        assert!(!parse_auto_post_flag(None));
+    }
 
     /// In-process recorder so tests can assert what side effects fired
     /// without standing up a real bus or terminal. The `shell_results`
