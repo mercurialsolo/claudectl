@@ -460,6 +460,16 @@ fn render_review_detail(frame: &mut Frame, area: Rect, app: &App) {
             primary,
         ),
     ]));
+    // #372: surface the auditable "why" behind this decision.
+    if !d.why.is_empty() {
+        lines.push(Line::from(Span::styled("  why:", muted)));
+        for chunk in wrap_lines(&d.why, 70) {
+            lines.push(Line::from(Span::styled(
+                format!("    {}", chunk),
+                Style::default().fg(t.highlight_key),
+            )));
+        }
+    }
     let reasoning = d.reasoning.as_deref().unwrap_or("");
     if !reasoning.is_empty() {
         lines.push(Line::from(Span::styled("  reasoning:", muted)));

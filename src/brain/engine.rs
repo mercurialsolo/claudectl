@@ -354,6 +354,7 @@ impl BrainEngine {
             config.few_shot_count.min(3)
         };
 
+        let mut few_shot_ids: Vec<String> = Vec::new();
         if few_shot_limit > 0 {
             let similar = super::decisions::retrieve_similar(
                 session.pending_tool_name.as_deref(),
@@ -361,6 +362,10 @@ impl BrainEngine {
                 few_shot_limit,
                 Some(DecisionType::Session),
             );
+            few_shot_ids = similar
+                .iter()
+                .filter_map(|d| d.decision_id.clone())
+                .collect();
             brain_ctx.few_shot_examples = super::decisions::format_few_shot_examples(&similar);
         }
 
@@ -400,7 +405,12 @@ impl BrainEngine {
         self.inflight.insert(pid);
 
         std::thread::spawn(move || {
-            let suggestion = super::client::infer_routed(&config, &prompt);
+            let suggestion = super::client::infer_routed(&config, &prompt).map(|mut s| {
+                // Record the few-shot examples that informed this call so the
+                // decision's "why" (#372) can name them.
+                s.cause.few_shot_ids = few_shot_ids;
+                s
+            });
             let _ = tx.send(BrainResult { pid, suggestion });
         });
     }
@@ -864,6 +874,7 @@ mod tests {
             reasoning: "safe".into(),
             confidence: 0.95,
             suggested_at: 0,
+            cause: Default::default(),
         };
         let rm = suggestion_to_rule_match(&suggestion);
         assert_eq!(rm.action, RuleAction::Approve);
@@ -881,6 +892,7 @@ mod tests {
                 reasoning: "test".into(),
                 confidence: 0.9,
                 suggested_at: 0,
+                cause: Default::default(),
             },
         );
 
@@ -901,6 +913,7 @@ mod tests {
                 reasoning: "test".into(),
                 confidence: 0.9,
                 suggested_at: 0,
+                cause: Default::default(),
             },
         );
 
@@ -1074,6 +1087,7 @@ mod tests {
                 reasoning: "test".into(),
                 confidence: 0.9,
                 suggested_at: 0,
+                cause: Default::default(),
             },
         );
 

@@ -110,6 +110,51 @@ pub struct DecisionRecord {
     /// material via `claudectl brain review`. Canonical decisions get a
     /// large score boost in few-shot retrieval. None == not reviewed.
     pub canonical: Option<bool>,
+    /// Where the decision originated (#372): "llm", "rule", "few_shot", etc.
+    /// None on records written before the field existed.
+    pub decision_source: Option<String>,
+    /// The auto-rule that fired, when this was a rule decision (#372).
+    pub rule_name: Option<String>,
+    /// decision_ids of the past examples retrieved into the prompt (#372).
+    pub few_shot_ids: Vec<String>,
+}
+
+impl DecisionRecord {
+    /// A one-line, human-readable explanation of *why* the brain reached this
+    /// decision (#372): the source, confidence, any rule that fired, and how
+    /// many past examples informed it. Used by the review UI, `--brain-query`,
+    /// and the audit-log export.
+    pub fn why(&self) -> String {
+        let source = self.decision_source.as_deref().unwrap_or_else(|| {
+            // Infer a source for records written before the field existed.
+            if self.rule_name.is_some() {
+                "rule"
+            } else if self.brain_action.is_empty() {
+                "observed"
+            } else {
+                "llm"
+            }
+        });
+        let mut parts = vec![format!("via {source}")];
+        if self.brain_action.is_empty() {
+            // Pure observation — no brain confidence to report.
+        } else {
+            parts.push(format!("{:.0}% confidence", self.brain_confidence * 100.0));
+        }
+        if let Some(rule) = &self.rule_name {
+            parts.push(format!("rule '{rule}'"));
+        }
+        if self.cache_hit == Some(true) {
+            parts.push("few-shot cache hit".to_string());
+        }
+        if !self.few_shot_ids.is_empty() {
+            parts.push(format!("{} past example(s)", self.few_shot_ids.len()));
+        }
+        if self.user_action == "deny_rule_override" {
+            parts.push("overridden by deny rule".to_string());
+        }
+        parts.join(" · ")
+    }
 }
 
 /// Generate a unique decision id.
@@ -194,6 +239,9 @@ impl From<&DecisionRecord> for claudectl_core::runtime::DecisionSummary {
             }),
             suggested_at: r.suggested_at,
             resolved_at: r.resolved_at,
+            why: r.why(),
+            decision_source: r.decision_source.clone(),
+            rule_name: r.rule_name.clone(),
         }
     }
 }
@@ -421,6 +469,10 @@ pub fn log_decision_full(
         "decision_id": decision_id,
         "brain_decision_ms": brain_decision_ms,
         "cache_hit": cache_hit,
+        // Auditable provenance for this decision (#372).
+        "decision_source": suggestion.cause.source,
+        "rule_name": suggestion.cause.rule_name,
+        "few_shot_ids": suggestion.cause.few_shot_ids,
     });
     if let Some(s) = session {
         record["context"] = snapshot_context(s);
@@ -779,6 +831,24 @@ pub fn read_all_decisions() -> Vec<DecisionRecord> {
                         _ => None,
                     }
                 },
+                // Backwards-compatible: old records won't have these #372 fields
+                decision_source: json
+                    .get("decision_source")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                rule_name: json
+                    .get("rule_name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                few_shot_ids: json
+                    .get("few_shot_ids")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             })
         })
         .collect()
@@ -822,6 +892,65 @@ pub fn mark_canonical(decision_id: &str, note: Option<&str>) -> Result<(), Strin
     Ok(())
 }
 
+/// Record a human correction of a past decision (#372 correct-and-learn).
+///
+/// Appends a fresh, high-confidence decision that captures the *right* answer
+/// for this tool/command and immediately marks it canonical, so few-shot
+/// retrieval teaches the corrected behaviour on the next similar call. Returns
+/// the new decision id. This is the one-key learning path from `brain review`.
+pub fn record_correction(
+    original: &DecisionRecord,
+    corrected_action: &str,
+    note: Option<&str>,
+) -> Result<String, String> {
+    let decision_id = gen_decision_id();
+    let reasoning = match note {
+        Some(n) if !n.trim().is_empty() => {
+            format!(
+                "human correction of {}: {}",
+                original.brain_action,
+                n.trim()
+            )
+        }
+        _ => format!("human correction of {}", original.brain_action),
+    };
+    let record = serde_json::json!({
+        "ts": timestamp_now(),
+        "pid": original.pid,
+        "project": original.project,
+        "tool": original.tool,
+        "command": original.command,
+        "brain_action": corrected_action,
+        "brain_confidence": 1.0,
+        "brain_reasoning": reasoning,
+        "user_action": "corrected",
+        "decision_type": original.decision_type.label(),
+        "decision_id": decision_id,
+        "decision_source": "correction",
+        "corrected_from": original.decision_id,
+    });
+
+    let path = decisions_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("open decisions log: {e}"))?;
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&record).unwrap_or_default()
+    )
+    .map_err(|e| format!("write correction: {e}"))?;
+
+    // Mark the corrected example canonical so it gets the retrieval boost.
+    mark_canonical(&decision_id, note)?;
+    Ok(decision_id)
+}
+
 /// Read the set of decision ids that have been marked canonical.
 pub fn read_canonical_ids() -> std::collections::HashSet<String> {
     let path = canonical_path();
@@ -856,6 +985,7 @@ mod tests {
             reasoning: "safe command".into(),
             confidence: 0.95,
             suggested_at: 0,
+            cause: Default::default(),
         }
     }
 
@@ -880,6 +1010,9 @@ mod tests {
             brain_decision_ms: None,
             cache_hit: None,
             canonical: None,
+            decision_source: None,
+            rule_name: None,
+            few_shot_ids: Vec::new(),
         }
     }
 
@@ -939,7 +1072,76 @@ mod tests {
             brain_decision_ms: None,
             cache_hit: None,
             canonical: None,
+            decision_source: None,
+            rule_name: None,
+            few_shot_ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn why_reports_llm_source_and_examples() {
+        let mut d = make_decision("Bash", "proj", "accept");
+        d.decision_source = Some("llm".into());
+        d.brain_confidence = 0.92;
+        d.few_shot_ids = vec!["dec_1".into(), "dec_2".into()];
+        let why = d.why();
+        assert!(why.contains("via llm"), "got: {why}");
+        assert!(why.contains("92% confidence"), "got: {why}");
+        assert!(why.contains("2 past example(s)"), "got: {why}");
+    }
+
+    #[test]
+    fn why_reports_rule_and_override() {
+        let mut d = make_decision("Bash", "proj", "deny_rule_override");
+        d.decision_source = Some("rule".into());
+        d.rule_name = Some("deny rm -rf".into());
+        let why = d.why();
+        assert!(why.contains("via rule"), "got: {why}");
+        assert!(why.contains("deny rm -rf"), "got: {why}");
+        assert!(why.contains("overridden by deny rule"), "got: {why}");
+    }
+
+    #[test]
+    fn why_infers_source_for_legacy_records() {
+        // Old record with no decision_source but a brain action → inferred llm.
+        let d = make_decision("Bash", "proj", "accept");
+        assert!(d.why().contains("via llm"), "got: {}", d.why());
+    }
+
+    #[test]
+    fn record_correction_appends_canonical_example() {
+        // Override HOME so we write to a clean tmp ~/.claudectl/brain.
+        let tmp = tempfile::tempdir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        // SAFETY: cargo test in this crate runs sequentially for env mutation.
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+
+        let mut original = make_decision("Bash", "acme", "reject");
+        original.brain_action = "approve".into();
+        original.decision_id = Some("dec_orig".into());
+
+        let result = record_correction(&original, "deny", Some("this deletes prod data"));
+
+        let all = read_all_decisions();
+        let canon = read_canonical_ids();
+
+        if let Some(h) = original_home {
+            unsafe { std::env::set_var("HOME", h) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
+        }
+
+        let new_id = result.expect("correction recorded");
+        let corrected = all
+            .iter()
+            .find(|d| d.decision_id.as_deref() == Some(new_id.as_str()))
+            .expect("corrected record present");
+        assert_eq!(corrected.brain_action, "deny");
+        assert_eq!(corrected.user_action, "corrected");
+        assert_eq!(corrected.decision_source.as_deref(), Some("correction"));
+        assert!(corrected.brain_reasoning.contains("this deletes prod data"));
+        // The new example is canonical so few-shot retrieval boosts it.
+        assert!(canon.contains(&new_id));
     }
 
     #[test]

@@ -75,6 +75,7 @@ impl Actions for LiveActions {
             reasoning: input.suggestion.reasoning,
             confidence: input.suggestion.confidence,
             suggested_at: input.suggestion.suggested_at,
+            cause: brain::client::DecisionCause::default(),
         };
 
         let decision_type = match input.decision_type {

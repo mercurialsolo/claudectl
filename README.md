@@ -67,6 +67,7 @@ git clone https://github.com/mercurialsolo/claudectl.git && cd claudectl && carg
 ## Get started
 
 ```bash
+claudectl demo                # Guided first-value tour — no live sessions needed
 claudectl init                # Onboarding wizard (budget, brain, hooks, bus, skills)
 claudectl doctor              # Verify install + runtime health (✓ checklist)
 claudectl                     # Live dashboard — see all sessions at a glance
@@ -118,6 +119,18 @@ The brain learns from **everything** you do — not just brain-involved decision
 | **Temporal patterns** | Behavioral sequences and time-of-day behavior | `After 3+ errors: user usually denies` |
 | **Per-project models** | Separate preferences per project | `[Read] always approve in frontend, usually deny in infra` |
 | **Adaptive thresholds** | Per-tool confidence requirements based on accuracy | 90%+ accurate on Read = auto-execute at 0.5 confidence |
+
+### Explain & audit every decision
+
+To leave the brain unattended you need to trust and audit it. Every decision now carries a **"why"** — the source (rule, few-shot, or LLM), the confidence, and the past examples that informed it — surfaced inline in `--brain-query` output and the Brain Review panel.
+
+```bash
+claudectl --brain-review           # Triage decisions; press [c] to correct-and-learn in one keystroke
+claudectl --brain-export           # Export the decision timeline as Markdown (paste into a PR)
+claudectl --brain-export json --project acme   # …or JSON, filtered to one project (or --pid <n>)
+```
+
+A one-key **correct-and-learn** in the review view records the right answer as canonical training material, so the next similar decision improves.
 
 ### Self-improving sessions
 

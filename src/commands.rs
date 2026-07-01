@@ -1960,6 +1960,8 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             "reasoning": format!("Deny rule '{}' matched", deny_match.rule_name),
             "confidence": 1.0,
             "source": "rule",
+            "rule_name": deny_match.rule_name,
+            "why": format!("via rule · deny rule '{}' matched", deny_match.rule_name),
         });
         println!("{}", serde_json::to_string(&result).unwrap());
         return Ok(());
@@ -1977,6 +1979,8 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             "reasoning": format!("Approve rule '{}' matched", approve_match.rule_name),
             "confidence": 1.0,
             "source": "rule",
+            "rule_name": approve_match.rule_name,
+            "why": format!("via rule · approve rule '{}' matched", approve_match.rule_name),
         });
         println!("{}", serde_json::to_string(&result).unwrap());
         return Ok(());
@@ -2009,19 +2013,19 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
     };
 
     // Load few-shot examples
-    let few_shot_section = {
-        let similar = brain::decisions::retrieve_similar(
-            Some(&tool_name),
-            &project,
-            brain_cfg.few_shot_count.min(5),
-            Some(brain::decisions::DecisionType::Session),
-        );
-        if similar.is_empty() {
-            String::new()
-        } else {
-            let examples = brain::decisions::format_few_shot_examples(&similar);
-            format!("\n\n## Past Decisions\n{examples}")
-        }
+    let similar = brain::decisions::retrieve_similar(
+        Some(&tool_name),
+        &project,
+        brain_cfg.few_shot_count.min(5),
+        Some(brain::decisions::DecisionType::Session),
+    );
+    let few_shot_count = similar.len();
+    let has_prefs = !pref_section.is_empty();
+    let few_shot_section = if similar.is_empty() {
+        String::new()
+    } else {
+        let examples = brain::decisions::format_few_shot_examples(&similar);
+        format!("\n\n## Past Decisions\n{examples}")
     };
 
     let prompt = format!(
@@ -2044,6 +2048,20 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             let threshold = brain::decisions::adaptive_threshold(Some(&tool_name)).unwrap_or(0.6);
             let below_threshold = suggestion.confidence < threshold;
 
+            // Human-readable "why" (#372): source + confidence + what informed it.
+            let mut why = format!(
+                "via brain · {:.0}% confidence",
+                suggestion.confidence * 100.0
+            );
+            if has_prefs {
+                why.push_str(" · learned preferences");
+            }
+            if few_shot_count > 0 {
+                why.push_str(&format!(" · {few_shot_count} past example(s)"));
+            }
+            if below_threshold {
+                why.push_str(&format!(" · below adaptive threshold {threshold:.2}"));
+            }
             let mut result = serde_json::json!({
                 "action": suggestion.action.label(),
                 "reasoning": suggestion.reasoning,
@@ -2052,6 +2070,8 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
                 "source": "brain",
                 "below_threshold": below_threshold,
                 "threshold": threshold,
+                "few_shot_count": few_shot_count,
+                "why": why,
             });
             if let Some(d) = diff_digest.as_ref() {
                 result["diff_digest"] = d.to_log_json();

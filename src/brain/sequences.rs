@@ -472,6 +472,9 @@ mod tests {
             brain_decision_ms: None,
             cache_hit: None,
             canonical: None,
+            decision_source: None,
+            rule_name: None,
+            few_shot_ids: Vec::new(),
         }
     }
 

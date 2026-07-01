@@ -951,6 +951,9 @@ mod tests {
             brain_decision_ms: None,
             cache_hit: None,
             canonical: None,
+            decision_source: None,
+            rule_name: None,
+            few_shot_ids: Vec::new(),
         }
     }
 
@@ -980,6 +983,9 @@ mod tests {
             brain_decision_ms: None,
             cache_hit: None,
             canonical: None,
+            decision_source: None,
+            rule_name: None,
+            few_shot_ids: Vec::new(),
         }
     }
 
@@ -1044,6 +1050,9 @@ mod tests {
             brain_decision_ms: None,
             cache_hit: None,
             canonical: None,
+            decision_source: None,
+            rule_name: None,
+            few_shot_ids: Vec::new(),
         }
     }
 
@@ -1333,6 +1342,9 @@ mod tests {
                 brain_decision_ms: None,
                 cache_hit: None,
                 canonical: None,
+                decision_source: None,
+                rule_name: None,
+                few_shot_ids: Vec::new(),
             },
             DecisionRecord {
                 timestamp: "2".into(),
@@ -1354,6 +1366,9 @@ mod tests {
                 brain_decision_ms: None,
                 cache_hit: None,
                 canonical: None,
+                decision_source: None,
+                rule_name: None,
+                few_shot_ids: Vec::new(),
             },
         ];
 
@@ -1394,6 +1409,9 @@ mod tests {
                 brain_decision_ms: None,
                 cache_hit: None,
                 canonical: None,
+                decision_source: None,
+                rule_name: None,
+                few_shot_ids: Vec::new(),
             });
         }
         // Then user denies
@@ -1417,6 +1435,9 @@ mod tests {
             brain_decision_ms: None,
             cache_hit: None,
             canonical: None,
+            decision_source: None,
+            rule_name: None,
+            few_shot_ids: Vec::new(),
         });
         // Repeat the streak pattern to reach threshold of 2
         for _ in 0..4 {
@@ -1440,6 +1461,9 @@ mod tests {
                 brain_decision_ms: None,
                 cache_hit: None,
                 canonical: None,
+                decision_source: None,
+                rule_name: None,
+                few_shot_ids: Vec::new(),
             });
         }
         decisions.push(DecisionRecord {
@@ -1462,6 +1486,9 @@ mod tests {
             brain_decision_ms: None,
             cache_hit: None,
             canonical: None,
+            decision_source: None,
+            rule_name: None,
+            few_shot_ids: Vec::new(),
         });
 
         let patterns = detect_temporal_patterns(&decisions);
