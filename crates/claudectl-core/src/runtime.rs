@@ -174,6 +174,18 @@ pub struct DecisionSummary {
     /// passive observations or records still in flight.
     #[serde(default)]
     pub resolved_at: Option<u64>,
+    /// One-line, human-readable explanation of *why* the brain reached this
+    /// decision (#372): source, confidence, rule/few-shot provenance. Rendered
+    /// inline in the review detail panel. Empty for records that carry no
+    /// derivable cause.
+    #[serde(default)]
+    pub why: String,
+    /// Where the decision originated (#372): `"llm"`, `"rule"`, `"few_shot"`.
+    #[serde(default)]
+    pub decision_source: Option<String>,
+    /// The auto-rule that fired, when this was a rule decision (#372).
+    #[serde(default)]
+    pub rule_name: Option<String>,
 }
 
 impl DecisionSummary {
@@ -1049,6 +1061,9 @@ mod tests {
                     outcome_detail: None,
                     suggested_at: None,
                     resolved_at: None,
+                    why: String::new(),
+                    decision_source: None,
+                    rule_name: None,
                 })
                 .collect(),
             ..Default::default()

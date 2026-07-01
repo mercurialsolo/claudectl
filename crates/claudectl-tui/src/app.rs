@@ -317,6 +317,8 @@ pub struct App {
     pub demo_mode: bool,
     pub demo_tick: u32,
     pub demo_highlight: Option<crate::demo::DemoHighlightState>,
+    /// Active narrated guided tour (#373). `Some` only under `claudectl demo`.
+    pub demo_tour: Option<crate::demo::DemoTour>,
     pub session_recordings: HashMap<u32, String>, // pid -> output_path for active recordings
     pub rules: Vec<claudectl_core::rules::AutoRule>,
     pub auto_actions_fired: HashMap<u32, std::time::Instant>, // Debounce: pid -> last action time
@@ -628,6 +630,7 @@ impl App {
             demo_mode: false,
             demo_tick: 0,
             demo_highlight: None,
+            demo_tour: None,
             session_recordings: HashMap::new(),
             rules: Vec::new(),
             auto_actions_fired: HashMap::new(),
@@ -1226,7 +1229,13 @@ impl App {
     }
 
     fn refresh_demo(&mut self) {
-        self.demo_tick += 1;
+        // During the guided tour (#373) pin the scene to the current step so
+        // the moment being narrated stays on screen while the user reads.
+        if let Some(tour) = &self.demo_tour {
+            self.demo_tick = tour.step().demo_tick;
+        } else {
+            self.demo_tick += 1;
+        }
         let mut sessions = crate::demo::generate_sessions(self.demo_tick);
 
         // When the Skills & Hive view is open during a demo, scripted
@@ -2088,6 +2097,38 @@ impl App {
                 self.idle_report.clear();
             }
             self.idle_tasks_launched.clear();
+        }
+
+        // Guided tour overlay (#373): space/enter/→ advance, ←/p back up,
+        // Esc/q exit into the live demo. Never quits the app.
+        if self.demo_tour.is_some() {
+            match key.code {
+                KeyCode::Char(' ')
+                | KeyCode::Enter
+                | KeyCode::Char('n')
+                | KeyCode::Right
+                | KeyCode::Down => {
+                    let advanced = self
+                        .demo_tour
+                        .as_mut()
+                        .map(|t| t.advance())
+                        .unwrap_or(false);
+                    if !advanced {
+                        // Past the last step — drop into the live demo.
+                        self.demo_tour = None;
+                    }
+                }
+                KeyCode::Left | KeyCode::Up | KeyCode::Char('p') => {
+                    if let Some(t) = self.demo_tour.as_mut() {
+                        t.prev();
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.demo_tour = None;
+                }
+                _ => {}
+            }
+            return true;
         }
 
         // Help overlay: any key dismisses

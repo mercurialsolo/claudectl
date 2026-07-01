@@ -13,7 +13,7 @@
 
 use std::io::{self, BufRead, Write};
 
-use super::decisions::{DecisionRecord, mark_canonical, read_all_decisions};
+use super::decisions::{DecisionRecord, mark_canonical, read_all_decisions, record_correction};
 use super::metrics::{compute_counterfactuals, compute_tier_stats};
 use super::risk::{RiskTier, classify_risk};
 
@@ -119,7 +119,9 @@ pub fn run_interactive() -> usize {
         queue.len()
     );
     println!();
-    println!("For each: [m]ark canonical · [n]ote + mark · [s]kip · [d]etails · [q]uit");
+    println!(
+        "For each: [m]ark canonical · [n]ote + mark · [c]orrect + learn · [s]kip · [d]etails · [q]uit"
+    );
     println!();
 
     let stdin = io::stdin();
@@ -175,6 +177,45 @@ pub fn run_interactive() -> usize {
                         }
                     } else {
                         println!("  ! no decision_id — older record, can't mark");
+                    }
+                    break;
+                }
+                "c" | "correct" => {
+                    if item.record.decision_id.is_none() {
+                        println!("  ! no decision_id — older record, can't correct");
+                        break;
+                    }
+                    println!(
+                        "  brain chose '{}'. Correct answer? [a]pprove / [d]eny / [c]ancel",
+                        item.record.brain_action
+                    );
+                    print!("    > ");
+                    let _ = io::stdout().flush();
+                    let mut choice = String::new();
+                    let _ = reader.read_line(&mut choice);
+                    let corrected = match choice.trim() {
+                        "a" | "approve" => Some("approve"),
+                        "d" | "deny" => Some("deny"),
+                        _ => None,
+                    };
+                    let Some(corrected) = corrected else {
+                        println!("  (cancelled)");
+                        break;
+                    };
+                    print!("    why (optional): ");
+                    let _ = io::stdout().flush();
+                    let mut note = String::new();
+                    let _ = reader.read_line(&mut note);
+                    let note = note.trim();
+                    let note = if note.is_empty() { None } else { Some(note) };
+                    match record_correction(&item.record, corrected, note) {
+                        Ok(id) => {
+                            println!(
+                                "  ✓ recorded correction → '{corrected}' (canonical {id}); the brain will learn this"
+                            );
+                            marked += 1;
+                        }
+                        Err(e) => println!("  ! could not record correction: {e}"),
                     }
                     break;
                 }

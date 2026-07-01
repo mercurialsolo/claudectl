@@ -5,6 +5,41 @@ use std::process::Command;
 use crate::config::BrainConfig;
 use crate::rules::RuleAction;
 
+/// Why a decision was reached — the auditable "cause" behind a suggestion
+/// (#372). Carried on the suggestion so every downstream `log_decision` call
+/// records the same provenance without extra plumbing. Defaults to an empty
+/// `llm` cause so existing constructors only opt in when they know better.
+#[derive(Debug, Clone)]
+pub struct DecisionCause {
+    /// Where the decision originated: "llm", "rule", "few_shot", etc.
+    pub source: String,
+    /// The auto-rule that fired, if this was a rule decision.
+    pub rule_name: Option<String>,
+    /// decision_ids of the past examples retrieved into the prompt.
+    pub few_shot_ids: Vec<String>,
+}
+
+impl Default for DecisionCause {
+    fn default() -> Self {
+        DecisionCause {
+            source: "llm".to_string(),
+            rule_name: None,
+            few_shot_ids: Vec::new(),
+        }
+    }
+}
+
+impl DecisionCause {
+    /// A rule-sourced cause naming the rule that fired.
+    pub fn rule(rule_name: impl Into<String>) -> Self {
+        DecisionCause {
+            source: "rule".to_string(),
+            rule_name: Some(rule_name.into()),
+            few_shot_ids: Vec::new(),
+        }
+    }
+}
+
 /// The brain's suggestion for a session, parsed from the LLM response.
 #[derive(Debug, Clone)]
 pub struct BrainSuggestion {
@@ -15,6 +50,9 @@ pub struct BrainSuggestion {
     /// Epoch seconds when this suggestion was created.
     /// Used by time-to-correct analysis to measure user reaction latency.
     pub suggested_at: u64,
+    /// Auditable provenance for this suggestion (#372). Defaults to an `llm`
+    /// cause; the engine fills in few-shot ids and rule paths set the rule name.
+    pub cause: DecisionCause,
 }
 
 /// Call the local LLM endpoint via curl and parse the response, using the
@@ -407,6 +445,7 @@ pub fn parse_suggestion_json(text: &str) -> Result<BrainSuggestion, String> {
         reasoning,
         confidence: confidence.clamp(0.0, 1.0),
         suggested_at: epoch_secs(),
+        cause: DecisionCause::default(),
     })
 }
 

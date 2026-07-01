@@ -789,6 +789,168 @@ impl DemoHighlightState {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Guided first-value tour (#373)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// A single narrated step in the `claudectl demo` guided tour. Each step pins
+/// the demo scene to a fixed tick so the moment it describes stays on screen
+/// while the user reads.
+#[derive(Debug, Clone)]
+pub struct TourStep {
+    pub title: String,
+    pub body: String,
+    /// Demo tick the scene is pinned to for this step.
+    pub demo_tick: u32,
+}
+
+/// The scripted guided tour: an ordered list of narrated steps over the demo
+/// fixtures. The user advances with space/enter and can back up or exit.
+#[derive(Debug, Clone)]
+pub struct DemoTour {
+    pub steps: Vec<TourStep>,
+    pub current: usize,
+}
+
+impl Default for DemoTour {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DemoTour {
+    /// Build the default tour. Every step pins to tick 12, where the demo
+    /// fixtures show all health signals at once (stall, cost spike, context
+    /// saturation, conflict), so each moment the narration names is visible.
+    pub fn new() -> Self {
+        // Tick 12: past every `tick > N` health-override gate in
+        // `generate_sessions`, so all the flagged sessions are lit up.
+        let t = 12;
+        let steps = vec![
+            TourStep {
+                title: "Welcome to claudectl".into(),
+                body: "This is the live dashboard — eight Claude Code sessions across \
+                       six projects, one pane of glass. Cost, context, burn rate, and \
+                       health are inferred from each session's transcript in real time.\n\n\
+                       No live sessions of your own are needed for this tour."
+                    .into(),
+                demo_tick: t,
+            },
+            TourStep {
+                title: "Stall detection 🐌".into(),
+                body: "Look at infra-terraform: 15 minutes elapsed, $8+ spent, and zero \
+                       file edits. claudectl flags it as stalled — burning money without \
+                       making progress — so you can step in before the bill grows."
+                    .into(),
+                demo_tick: t,
+            },
+            TourStep {
+                title: "Budget & cost warnings 💸".into(),
+                body: "mobile-app's burn rate just spiked to ~6× its average. With a weekly \
+                       budget set, claudectl warns you (and can auto-deny or terminate) \
+                       before a runaway session blows through your spend cap."
+                    .into(),
+                demo_tick: t,
+            },
+            TourStep {
+                title: "Conflict alerts ⚠️".into(),
+                body: "The two acme-api sessions share one worktree. claudectl detects the \
+                       file-conflict risk and can demote an auto-approval to require your \
+                       confirmation, so two agents don't clobber each other's edits."
+                    .into(),
+                demo_tick: t,
+            },
+            TourStep {
+                title: "The brain — and its 'why' 🧠".into(),
+                body: "Press Ctrl-B any time to open Brain Review. The local-LLM brain \
+                       approves safe commands and denies destructive ones — and every \
+                       decision now shows exactly why: the rule or few-shot examples that \
+                       fired, and the confidence. One keystroke corrects it, and it learns."
+                    .into(),
+                demo_tick: t,
+            },
+            TourStep {
+                title: "Verified tasks, start to finish ✅".into(),
+                body: "Beyond monitoring, the supervisor runs durable tasks: it assigns \
+                       work, gates completion behind a verifier, retries on failure, and \
+                       posts a PR summary when a task lands DONE. Reliable autonomy, not \
+                       fire-and-forget."
+                    .into(),
+                demo_tick: t,
+            },
+            TourStep {
+                title: "That's the tour".into(),
+                body: "Press Esc to keep exploring this demo dashboard, or q to quit. \
+                       When you're ready for the real thing, run `claudectl init` to wire \
+                       up your own sessions. Star us if it's useful — happy shipping!"
+                    .into(),
+                demo_tick: t,
+            },
+        ];
+        DemoTour { steps, current: 0 }
+    }
+
+    /// The step currently being shown.
+    pub fn step(&self) -> &TourStep {
+        &self.steps[self.current.min(self.steps.len() - 1)]
+    }
+
+    /// Advance to the next step. Returns `false` when already on the last step
+    /// (the caller then exits the tour).
+    pub fn advance(&mut self) -> bool {
+        if self.current + 1 >= self.steps.len() {
+            false
+        } else {
+            self.current += 1;
+            true
+        }
+    }
+
+    /// Back up one step (no-op at the first step).
+    pub fn prev(&mut self) {
+        self.current = self.current.saturating_sub(1);
+    }
+
+    /// 1-based position and total, for the progress line.
+    pub fn progress(&self) -> (usize, usize) {
+        (self.current + 1, self.steps.len())
+    }
+}
+
+#[cfg(test)]
+mod tour_tests {
+    use super::*;
+
+    #[test]
+    fn tour_has_the_headline_moments() {
+        let tour = DemoTour::new();
+        let titles: Vec<&str> = tour.steps.iter().map(|s| s.title.as_str()).collect();
+        assert!(titles.iter().any(|t| t.contains("Stall")));
+        assert!(titles.iter().any(|t| t.contains("Budget")));
+        assert!(titles.iter().any(|t| t.contains("Conflict")));
+        assert!(titles.iter().any(|t| t.contains("Verified")));
+    }
+
+    #[test]
+    fn next_advances_then_stops_at_end() {
+        let mut tour = DemoTour::new();
+        let (_, total) = tour.progress();
+        for _ in 0..total - 1 {
+            assert!(tour.advance());
+        }
+        // On the last step, advance() returns false so the caller exits.
+        assert!(!tour.advance());
+        assert_eq!(tour.progress(), (total, total));
+    }
+
+    #[test]
+    fn prev_saturates_at_first_step() {
+        let mut tour = DemoTour::new();
+        tour.prev();
+        assert_eq!(tour.progress().0, 1);
+    }
+}
+
 #[cfg(test)]
 mod highlight_tests {
     use super::*;

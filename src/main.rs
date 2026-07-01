@@ -108,6 +108,12 @@ pub(crate) enum Command {
         command: coord::supervisor_cli::SupervisorCommand,
     },
 
+    /// Guided first-value tour over fake sessions (#373). Launches the
+    /// dashboard in demo mode with a narrated walkthrough — stall detection,
+    /// budget warnings, conflict alerts, and verified tasks. No live Claude
+    /// sessions required. Press space to advance, Esc to drop into the demo.
+    Demo,
+
     /// Onboarding wizard (budget, brain, hooks, bus, skills). See issue #257.
     Init {
         /// Drift report comparing recorded onboarding against current state.
@@ -364,6 +370,16 @@ pub(crate) struct Cli {
     /// interactive review (used by `brain counterfactual` output).
     #[arg(long, help_heading = "Brain (Local LLM)")]
     pub(crate) brain_mark_canonical: Option<String>,
+
+    /// Export the brain decision audit log as a readable timeline (#372).
+    /// Optional value selects the format: "md" (default) or "json".
+    /// Filter to one project with --project, or one session with --pid.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) brain_export: Option<Option<String>>,
+
+    /// Restrict --brain-export to a single session PID.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) pid: Option<u32>,
 
     /// Query the brain for a single tool-call decision and exit (JSON output).
     /// Used by Claude Code plugin hooks for inline approve/deny.
@@ -807,6 +823,21 @@ fn run_main(cli: Cli) -> io::Result<()> {
         return Ok(());
     }
 
+    if let Some(ref maybe_fmt) = cli.brain_export {
+        let format = maybe_fmt.as_deref().unwrap_or("md");
+        let out = brain::audit::export(format, cli.project.as_deref(), cli.pid);
+        match out {
+            Ok(text) => {
+                print!("{text}");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("brain export failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     if let Some(ref command) = cli.command {
         match command {
             #[cfg(feature = "relay")]
@@ -829,6 +860,9 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
             #[cfg(feature = "coord")]
             Command::Supervisor { command } => return coord::supervisor_cli::dispatch(command),
+
+            // Fall through to the TUI launch below with demo + tour enabled.
+            Command::Demo => {}
 
             Command::Init {
                 check,
@@ -1056,12 +1090,16 @@ fn run_main(cli: Cli) -> io::Result<()> {
     let theme_mode = theme::ThemeMode::detect(cli.theme.as_deref());
     let app_theme = theme::Theme::from_mode(theme_mode);
 
+    // `claudectl demo` (#373) implies demo mode plus the narrated tour.
+    let start_tour = matches!(cli.command, Some(Command::Demo));
+    let demo_mode = cli.demo || start_tour;
+
     // #322 — first-run nudge. If the user has neither onboarded nor
     // installed hooks, drop a hint above the TUI before launching so
     // they understand why the dashboard is going to be empty. Skipped in
     // --demo (the wizard's whole point is moot there) and when the
     // operator opts out via env.
-    if !cli.demo && std::env::var("CLAUDECTL_SKIP_FIRST_RUN").is_err() && is_first_run() {
+    if !demo_mode && std::env::var("CLAUDECTL_SKIP_FIRST_RUN").is_err() && is_first_run() {
         print_first_run_banner();
     }
 
@@ -1086,7 +1124,8 @@ fn run_main(cli: Cli) -> io::Result<()> {
             &cfg,
             app_theme,
             hook_registry,
-            cli.demo,
+            demo_mode,
+            start_tour,
             &filters,
             max_dur,
         );
@@ -1122,7 +1161,8 @@ fn run_main(cli: Cli) -> io::Result<()> {
             &cfg,
             app_theme,
             hook_registry,
-            cli.demo,
+            demo_mode,
+            start_tour,
             &filters,
             max_dur,
         );
@@ -1143,6 +1183,7 @@ fn run_tui<W: io::Write>(
     app_theme: theme::Theme,
     hook_registry: hooks::HookRegistry,
     demo_mode: bool,
+    start_tour: bool,
     filters: &ViewFilters,
     max_duration: Option<Duration>,
 ) -> io::Result<()> {
@@ -1201,6 +1242,12 @@ fn run_tui<W: io::Write>(
             app.brain_driver = Some(Box::new(runtime::LiveBrainDriver::new(
                 brain::engine::BrainEngine::new(config::BrainConfig::default()),
             )));
+        }
+        // Launch the narrated guided tour (#373) when invoked via
+        // `claudectl demo`. The tour pins the demo scene so the moments it
+        // narrates stay on screen while the user reads.
+        if start_tour {
+            app.demo_tour = Some(demo::DemoTour::new());
         }
         // Re-refresh to replace real sessions discovered during App::new()
         app.refresh();
@@ -1286,6 +1333,12 @@ fn run_tui<W: io::Write>(
             let main_area = area;
 
             ui::table::render(frame, main_area, &app);
+
+            // Narrated guided-tour overlay (#373), drawn on top of the live
+            // dashboard so the user sees the real thing behind the narration.
+            if app.demo_tour.is_some() {
+                ui::demo_tour::render(frame, area, &app);
+            }
         })?;
 
         let timeout = tick_rate

@@ -104,6 +104,7 @@ impl BrainDriver for LiveBrainDriver {
                 reasoning: suggestion.reasoning,
                 confidence: suggestion.confidence,
                 suggested_at: suggestion.suggested_at,
+                cause: Default::default(),
             },
         );
     }
@@ -135,6 +136,7 @@ mod tests {
             reasoning: "test".into(),
             confidence: 0.5,
             suggested_at: 0,
+            cause: Default::default(),
         };
         let proj = suggestion_from_brain(42, s);
         assert_eq!(proj.action, "approve");
@@ -150,6 +152,7 @@ mod tests {
             reasoning: "rm -rf".into(),
             confidence: 0.99,
             suggested_at: 1_780_000_000,
+            cause: Default::default(),
         };
         let proj = suggestion_from_brain(99, s);
         assert_eq!(proj.action, "deny");
