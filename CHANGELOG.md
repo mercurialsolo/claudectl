@@ -4,8 +4,20 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-07-01
+
+### Added — brain "why" + decision audit log (#372, closes the issue)
+- Every brain decision now carries an auditable **"why"**: a `DecisionCause` (source · rule · few-shot ids) rides on each suggestion, captured at decision time and persisted as three backwards-compatible `DecisionRecord` fields. `DecisionRecord::why()` renders a one-line cause (`via llm · 92% confidence · 2 past example(s)`), surfaced inline in `--brain-query` JSON and the Brain Review detail panel (via the `DecisionSummary` DTO).
+- **One-key correct-and-learn** (`[c]` in `--brain-review`): pick the right answer and it's recorded as a canonical example, so the next similar decision improves.
+- New **`--brain-export [md|json]`** with `--project`/`--pid` filters — a readable decision timeline to paste into a PR or hand to a teammate. Backed by the new `brain::audit` module.
+
+### Added — `claudectl demo` guided tour (#373, closes the issue)
+- New **`claudectl demo`** subcommand launches the dashboard in demo mode with a 7-step narrated overlay over the existing fixtures: stall detection, budget/cost warnings, conflict alerts, the brain's "why", and verified tasks. `space`/`→` advance, `←` back, `Esc` drops into the live demo; the scene is pinned per step so the moment stays on screen. No live Claude sessions required.
+
 ### Added — PR auto-post on task DONE (#369, closes the issue)
 - With `CLAUDECTL_PR_AUTO_POST=1` set in the supervisor daemon's environment, the reconciler now runs the `supervisor pr` flow automatically when a task reaches DONE — posting the summary comment + `claudectl/verifier` commit status to its branch's PR. Opt-in (off by default), and the post runs on a **detached thread** so git/gh latency never blocks the reconciler tick. The transition is committed before the post fires, so a failed post is logged, never propagated. This completes #369.
+
+With #372/#373 this closes the **developer-effectiveness epic (#367)**. Workspace crates bumped: `claudectl-core` and `claudectl-tui` → 0.58.0 (new `DecisionSummary` "why" fields; public `DemoTour` + `ui::demo_tour`).
 
 ## [0.62.0] - 2026-06-29
 
