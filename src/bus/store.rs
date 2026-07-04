@@ -526,6 +526,21 @@ mod tests {
         assert!(drained2.is_empty());
     }
 
+    /// ISO-8601 timestamp for `days` before *now*, derived the same way as
+    /// `prune_cutoff`. Age-based prune tests must use this rather than
+    /// hardcoded calendar dates — otherwise a fixed "5 days ago" row silently
+    /// crosses the retention cutoff as real time passes and breaks the suite.
+    fn days_ago(days: u64) -> String {
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(days * 86400);
+        let d = epoch / 86400;
+        let (year, month, day) = crate::logger::days_to_date(d);
+        format!("{year:04}-{month:02}-{day:02}T00:00:00Z")
+    }
+
     /// Helper: insert a message with an explicit `delivered_at` so tests can
     /// fabricate "this was delivered N days ago" rows without sleeping.
     fn insert_delivered_at(conn: &Connection, id: &str, delivered_at: &str) {
@@ -543,9 +558,9 @@ mod tests {
     fn prune_deletes_old_delivered_messages_only() {
         let conn = open_memory();
         // 60 days ago — should go.
-        insert_delivered_at(&conn, "old", "2026-04-08T00:00:00Z");
+        insert_delivered_at(&conn, "old", &days_ago(60));
         // 5 days ago — should stay.
-        insert_delivered_at(&conn, "fresh", "2026-06-02T00:00:00Z");
+        insert_delivered_at(&conn, "fresh", &days_ago(5));
         // Pending row from any era — should always stay.
         insert_message(
             &conn,
@@ -585,8 +600,8 @@ mod tests {
         // dated exactly today (or in the future) survive. This matches
         // the `<` in the DELETE WHERE clause.
         let conn = open_memory();
-        insert_delivered_at(&conn, "yday", "2026-06-06T00:00:00Z"); // strictly before today → drops
-        insert_delivered_at(&conn, "older", "2025-12-31T00:00:00Z"); // way before → drops
+        insert_delivered_at(&conn, "yday", &days_ago(1)); // strictly before today → drops
+        insert_delivered_at(&conn, "older", &days_ago(200)); // way before → drops
         let deleted = prune(&conn, Some(0)).unwrap();
         assert_eq!(deleted, 2);
     }
