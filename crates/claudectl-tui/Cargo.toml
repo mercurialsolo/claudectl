@@ -1,6 +1,6 @@
 [package]
 name = "claudectl-tui"
-version = "0.58.0"
+version = "0.59.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Terminal UI, dashboard recording, and demo-mode fixtures for claudectl. Splits out of the binary so the TUI can evolve independently of the brain/coord/bus subsystems."

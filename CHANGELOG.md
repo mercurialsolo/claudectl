@@ -4,8 +4,12 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-07-04
+
 ### Added — guided-tour orientation tips in demo mode (#373)
 - `claudectl --demo` now shows a rotating **orientation tip** in the dashboard title — a short tour of the key surfaces (status colors, the brain, health flags, `T`/`K`/`M` panels, per-session cost) so a first-time viewer understands what they're looking at, alongside the existing scripted activity narration in the status bar. Complements the modal `claudectl demo` guided tour shipped in 0.63.0.
+
+Workspace crate bumped: `claudectl-tui` → 0.59.0 (new public `demo_tour_tip`). `claudectl-core` unchanged at 0.58.0.
 
 ## [0.63.0] - 2026-07-01
 
