@@ -1224,7 +1224,7 @@ fn run_tui<W: io::Write>(
                 );
             } else {
                 app.status_msg = format!(
-                    "Error: Brain endpoint {} not reachable — run `claudectl --doctor` or start ollama",
+                    "Brain endpoint {} not reachable — run `claudectl doctor` for the exact fix",
                     brain_cfg.endpoint
                 );
             }

@@ -11,6 +11,7 @@ pub mod diff_digest;
 pub mod engine;
 pub mod evals;
 pub mod garden;
+pub mod health;
 pub mod insights;
 pub mod mailbox;
 pub mod metrics;

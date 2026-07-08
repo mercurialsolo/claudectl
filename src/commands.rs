@@ -175,19 +175,17 @@ pub(crate) fn print_doctor() -> io::Result<()> {
             "  Config: enabled={}, model={}, auto={}, few_shot={}",
             brain.enabled, brain.model, brain.auto_mode, brain.few_shot_count
         );
-        let endpoint_ok = check_brain_endpoint(&brain.endpoint, brain.timeout_ms);
+        // Use the shared health probe so this diagnostic distinguishes the
+        // three states — in particular "endpoint up but model not pulled",
+        // which a plain reachability check would report as healthy.
+        let health = claudectl::brain::health::probe(brain);
         println!(
-            "  [{}] endpoint {}: {}",
-            if endpoint_ok { "ok" } else { "!!" },
-            brain.endpoint,
-            if endpoint_ok {
-                "reachable"
-            } else {
-                "not reachable"
-            }
+            "  [{}] {}",
+            if health.is_ready() { "ok" } else { "!!" },
+            health.headline()
         );
-        if !endpoint_ok {
-            println!("      fix: start ollama with `ollama serve`, or check --brain-endpoint URL");
+        if let Some(hint) = health.fix_hint() {
+            println!("      fix: {hint}");
         }
     } else {
         println!("  Config: not configured");
@@ -1004,7 +1002,7 @@ pub(crate) fn run_headless(
                 );
             } else {
                 eprintln!(
-                    "Warning: brain endpoint {} not reachable -- running without brain",
+                    "Warning: brain endpoint {} not reachable -- running without brain (run `claudectl doctor` for the exact fix)",
                     brain_cfg.endpoint
                 );
                 emit_headless_event(
