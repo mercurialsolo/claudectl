@@ -2062,13 +2062,31 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             Ok(())
         }
         Err(e) => {
-            // On brain failure, output abstain (don't block the user)
-            let result = serde_json::json!({
-                "action": "abstain",
-                "reasoning": format!("Brain query failed: {e}"),
-                "confidence": 0.0,
-                "source": "error",
+            // No LLM reachable (endpoint down, or model not pulled → 404). Fall
+            // back to the zero-LLM heuristic instead of abstaining on
+            // everything: obviously-safe calls stay auto-handled and obviously-
+            // destructive ones stay blocked. Deny-first user rules already ran
+            // above, so this only decides the calls no rule matched.
+            let cmd = if command.is_empty() {
+                None
+            } else {
+                Some(command.as_str())
+            };
+            let decision = brain::heuristic::decide(Some(&tool_name), cmd);
+            let mut result = serde_json::json!({
+                "action": decision.action.label(),
+                "reasoning": decision.reasoning,
+                "confidence": decision.confidence,
+                "source": "heuristic",
+                "risk_tier": decision.tier.label(),
+                "why": format!(
+                    "via heuristic · {} risk · no local LLM ({e})",
+                    decision.tier.label()
+                ),
             });
+            if let Some(d) = diff_digest.as_ref() {
+                result["diff_digest"] = d.to_log_json();
+            }
             println!("{}", serde_json::to_string(&result).unwrap());
             Ok(())
         }
