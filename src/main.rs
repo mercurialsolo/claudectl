@@ -1212,6 +1212,14 @@ fn run_tui<W: io::Write>(
     app.auto_deny_file_conflicts = cfg.auto_deny_file_conflicts;
     app.idle_config = cfg.idle.clone();
     app.brain_config = cfg.brain.clone();
+    // First-run nudge (#322): if the environment isn't wired up, guide the user
+    // to `init` in the status bar. Set before the brain block so a live brain's
+    // "connected" message takes precedence when it runs.
+    if !demo_mode {
+        if let Some(msg) = init::nudge::nudge() {
+            app.status_msg = msg;
+        }
+    }
     if let Some(ref brain_cfg) = cfg.brain {
         if brain_cfg.enabled {
             // Gate on full health (see `commands::setup_app`): a reachable
