@@ -267,27 +267,6 @@ pub(crate) fn write_config_init() -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn check_brain_endpoint(endpoint: &str, timeout_ms: u64) -> bool {
-    let timeout_secs = (timeout_ms / 1000).max(1);
-    std::process::Command::new("curl")
-        .args([
-            "-s",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            "--max-time",
-            &timeout_secs.to_string(),
-            endpoint,
-        ])
-        .output()
-        .is_ok_and(|o| {
-            let code = String::from_utf8_lossy(&o.stdout);
-            // Any HTTP response (even 404/405) means the server is up
-            code.trim() != "000"
-        })
-}
-
 pub(crate) fn parse_duration_str(s: &str) -> Duration {
     let s = s.trim();
     if let Some(hours) = s.strip_suffix('h') {
@@ -983,10 +962,15 @@ pub(crate) fn run_headless(
     app.daily_limit = cfg.daily_limit;
     app.weekly_limit = cfg.weekly_limit;
 
-    // Initialize brain engine
+    // Initialize brain engine. Gate on the full health probe, not bare
+    // reachability: an endpoint that's up but missing the configured model
+    // can't actually infer (ollama 404s on an unpulled model), so attaching a
+    // brain there would only fail on the first call. Fail fast with the exact
+    // fix instead.
     if let Some(ref brain_cfg) = cfg.brain {
         if brain_cfg.enabled {
-            if check_brain_endpoint(&brain_cfg.endpoint, brain_cfg.timeout_ms) {
+            let health = claudectl::brain::health::probe(brain_cfg);
+            if health.is_ready() {
                 app.brain_driver = Some(Box::new(crate::runtime::LiveBrainDriver::new(
                     crate::brain::engine::BrainEngine::new(brain_cfg.clone()),
                 )));
@@ -1001,13 +985,13 @@ pub(crate) fn run_headless(
                     json_mode,
                 );
             } else {
-                eprintln!(
-                    "Warning: brain endpoint {} not reachable -- running without brain (run `claudectl doctor` for the exact fix)",
-                    brain_cfg.endpoint
-                );
+                eprintln!("Warning: {} -- running without brain.", health.headline());
+                if let Some(hint) = health.fix_hint() {
+                    eprintln!("  {hint}");
+                }
                 emit_headless_event(
                     "startup",
-                    serde_json::json!({"brain": false, "reason": "endpoint not reachable"}),
+                    serde_json::json!({"brain": false, "reason": health.headline()}),
                     json_mode,
                 );
             }

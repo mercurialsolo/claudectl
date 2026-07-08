@@ -1214,7 +1214,11 @@ fn run_tui<W: io::Write>(
     app.brain_config = cfg.brain.clone();
     if let Some(ref brain_cfg) = cfg.brain {
         if brain_cfg.enabled {
-            if commands::check_brain_endpoint(&brain_cfg.endpoint, brain_cfg.timeout_ms) {
+            // Gate on full health (see `commands::setup_app`): a reachable
+            // endpoint missing the configured model can't infer, so surface the
+            // exact fix rather than attaching a brain that fails on first call.
+            let health = brain::health::probe(brain_cfg);
+            if health.is_ready() {
                 app.brain_driver = Some(Box::new(runtime::LiveBrainDriver::new(
                     brain::engine::BrainEngine::new(brain_cfg.clone()),
                 )));
@@ -1223,10 +1227,8 @@ fn run_tui<W: io::Write>(
                     brain_cfg.endpoint, brain_cfg.model
                 );
             } else {
-                app.status_msg = format!(
-                    "Brain endpoint {} not reachable — run `claudectl doctor` for the exact fix",
-                    brain_cfg.endpoint
-                );
+                app.status_msg =
+                    format!("{} — run `claudectl doctor` for the fix", health.headline());
             }
         }
     }
