@@ -308,7 +308,7 @@ Three load-bearing properties from the design spec:
 - **Crash-safe by construction** — kill the headless daemon mid-tick, restart, and observed state re-converges from `~/.claudectl/coord/coord.db`. The ledger is the source of truth.
 - **Fail-closed verifiers** — a brain/agent verifier whose reply lacks the leading `PASS` / `FAIL:` marker is treated as FAIL. RFC §5 calls this the verifier-is-the-gradient principle: every FAIL output becomes the retry prompt the next attempt sees.
 
-Metrics: `claudectl supervisor` exposes a Prometheus exporter shape (`claudectl_tasks_by_state`, `claudectl_fleet_cost_usd_total`, `claudectl_retries_total`, `claudectl_verifier_pass_rate`). The headless flag that binds the listener is on the follow-up roadmap; the metrics surface itself is testable today via the `coord::exporter` API.
+Metrics (team observability): `claudectl supervisor metrics 0.0.0.0:9464` serves a Prometheus `/metrics` endpoint (`claudectl_tasks_by_state`, `claudectl_fleet_cost_usd_total`, `claudectl_retries_total`, `claudectl_verifier_pass_rate`) that Grafana or Datadog scrape with no claudectl-specific glue. Each scrape reads the coord DB fresh (WAL), so it runs safely alongside the reconciler. A ready dashboard and the full recipe live in [docs/team-observability.md](docs/team-observability.md).
 
 ## Hive Mind & Relay
 

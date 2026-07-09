@@ -1,7 +1,3 @@
-// Allow dead_code: `serve` is the public entry point the headless daemon
-// calls in PR8 once the `--exporter` flag lands; the rendering helpers
-// are exercised by the test suite.
-#![allow(dead_code)]
 //! Prometheus / OpenMetrics exporter (#349, RFC §10).
 //!
 //! Hand-rolled HTTP listener so we don't pull a web framework just to

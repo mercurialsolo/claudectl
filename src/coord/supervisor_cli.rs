@@ -87,6 +87,16 @@ pub enum SupervisorCommand {
     /// Clear the drain marker so the reconciler resumes new
     /// assignments.
     Undrain,
+    /// Serve fleet metrics in Prometheus text format on `<bind>` (default
+    /// `127.0.0.1:9464`). Point Grafana / Datadog at `http://<bind>/metrics`.
+    /// Blocks until Ctrl-C; each scrape reads the coord DB fresh (WAL), so it's
+    /// safe to run alongside the reconciler. This is the bridge from a solo
+    /// tool to team observability — see `docs/team-observability.md`.
+    Metrics {
+        /// Address to bind, e.g. `0.0.0.0:9464` to expose on the LAN.
+        #[arg(default_value = "127.0.0.1:9464")]
+        bind: String,
+    },
 }
 
 pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
@@ -119,6 +129,7 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
         SupervisorCommand::Pr { task_id } => post_pr_summary(task_id),
         SupervisorCommand::Drain => set_drain(true),
         SupervisorCommand::Undrain => set_drain(false),
+        SupervisorCommand::Metrics { bind } => serve_metrics(bind),
     }
 }
 
@@ -260,6 +271,26 @@ fn post_pr_summary(task_id: &str) -> io::Result<()> {
         Err(reason) => println!("skipped: {reason}"),
     }
     Ok(())
+}
+
+/// Serve the Prometheus exporter until the process is interrupted. Verifies the
+/// coord DB opens first so a misconfigured environment fails loudly here rather
+/// than returning empty scrapes. The `ExporterHandle` is held in a named
+/// binding for the life of the loop; dropping it would stop the listener.
+fn serve_metrics(bind: &str) -> io::Result<()> {
+    // Fail fast if coord isn't initialized — otherwise every scrape would 500.
+    store::open().map_err(|e| {
+        io::Error::other(format!(
+            "coord DB not reachable ({e}); run `claudectl init --upgrade` first"
+        ))
+    })?;
+
+    let _handle = super::exporter::serve(bind).map_err(io::Error::other)?;
+    println!("serving fleet metrics at http://{bind}/metrics");
+    println!("point Grafana / Datadog here (see docs/team-observability.md); Ctrl-C to stop.");
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
+    }
 }
 
 pub fn drain_marker_path() -> PathBuf {
