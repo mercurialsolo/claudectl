@@ -175,20 +175,24 @@ pub(crate) fn print_doctor() -> io::Result<()> {
             "  Config: enabled={}, model={}, auto={}, few_shot={}",
             brain.enabled, brain.model, brain.auto_mode, brain.few_shot_count
         );
-        let endpoint_ok = check_brain_endpoint(&brain.endpoint, brain.timeout_ms);
+        // Use the shared health probe so this diagnostic distinguishes the
+        // three states — in particular "endpoint up but model not pulled",
+        // which a plain reachability check would report as healthy.
+        let health = claudectl::brain::health::probe(brain);
         println!(
-            "  [{}] endpoint {}: {}",
-            if endpoint_ok { "ok" } else { "!!" },
-            brain.endpoint,
-            if endpoint_ok {
-                "reachable"
-            } else {
-                "not reachable"
-            }
+            "  [{}] {}",
+            if health.is_ready() { "ok" } else { "!!" },
+            health.headline()
         );
-        if !endpoint_ok {
-            println!("      fix: start ollama with `ollama serve`, or check --brain-endpoint URL");
+        if let Some(hint) = health.fix_hint() {
+            println!("      fix: {hint}");
         }
+        // Brain-lite: the zero-LLM fallback policy. Relevant precisely when the
+        // health probe above is not ready.
+        println!(
+            "  Brain-lite (no-LLM fallback): {}",
+            claudectl::brain::read_heuristic_mode().label()
+        );
     } else {
         println!("  Config: not configured");
         println!("  To enable: add [brain] section to .claudectl.toml or use --brain flag");
@@ -267,27 +271,6 @@ pub(crate) fn write_config_init() -> io::Result<()> {
     println!("Created .claudectl.toml with annotated defaults.");
     println!("Edit the file to customize, then run `claudectl --config-validate` to check.");
     Ok(())
-}
-
-pub(crate) fn check_brain_endpoint(endpoint: &str, timeout_ms: u64) -> bool {
-    let timeout_secs = (timeout_ms / 1000).max(1);
-    std::process::Command::new("curl")
-        .args([
-            "-s",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            "--max-time",
-            &timeout_secs.to_string(),
-            endpoint,
-        ])
-        .output()
-        .is_ok_and(|o| {
-            let code = String::from_utf8_lossy(&o.stdout);
-            // Any HTTP response (even 404/405) means the server is up
-            code.trim() != "000"
-        })
 }
 
 pub(crate) fn parse_duration_str(s: &str) -> Duration {
@@ -985,10 +968,15 @@ pub(crate) fn run_headless(
     app.daily_limit = cfg.daily_limit;
     app.weekly_limit = cfg.weekly_limit;
 
-    // Initialize brain engine
+    // Initialize brain engine. Gate on the full health probe, not bare
+    // reachability: an endpoint that's up but missing the configured model
+    // can't actually infer (ollama 404s on an unpulled model), so attaching a
+    // brain there would only fail on the first call. Fail fast with the exact
+    // fix instead.
     if let Some(ref brain_cfg) = cfg.brain {
         if brain_cfg.enabled {
-            if check_brain_endpoint(&brain_cfg.endpoint, brain_cfg.timeout_ms) {
+            let health = claudectl::brain::health::probe(brain_cfg);
+            if health.is_ready() {
                 app.brain_driver = Some(Box::new(crate::runtime::LiveBrainDriver::new(
                     crate::brain::engine::BrainEngine::new(brain_cfg.clone()),
                 )));
@@ -1003,13 +991,13 @@ pub(crate) fn run_headless(
                     json_mode,
                 );
             } else {
-                eprintln!(
-                    "Warning: brain endpoint {} not reachable -- running without brain",
-                    brain_cfg.endpoint
-                );
+                eprintln!("Warning: {} -- running without brain.", health.headline());
+                if let Some(hint) = health.fix_hint() {
+                    eprintln!("  {hint}");
+                }
                 emit_headless_event(
                     "startup",
-                    serde_json::json!({"brain": false, "reason": "endpoint not reachable"}),
+                    serde_json::json!({"brain": false, "reason": health.headline()}),
                     json_mode,
                 );
             }
@@ -1528,6 +1516,44 @@ pub(crate) fn run_brain_mode(mode: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Handle `--brain-lite <mode>`: set or show the zero-LLM heuristic policy used
+/// when no local model is reachable. Mirrors `run_brain_mode`: `balanced` is the
+/// default and clears the file (absence = default), other modes write it.
+pub(crate) fn run_brain_lite_mode(mode: &str) -> io::Result<()> {
+    if mode.is_empty() || mode == "status" {
+        let current = brain::read_heuristic_mode();
+        println!("Brain-lite mode: {}", current.label());
+        println!("  (used when no local LLM is reachable)");
+        println!();
+        println!("Modes:");
+        println!("  off           — no heuristic decisions; defer everything");
+        println!("  conservative  — block Critical ops, never auto-approve");
+        println!("  balanced      — auto-approve clearly-safe ops, block Critical (default)");
+        println!("  aggressive    — also auto-approve reversible edits; still defer High");
+        return Ok(());
+    }
+
+    let Some(parsed) = brain::heuristic::HeuristicMode::parse(mode) else {
+        eprintln!("Unknown brain-lite mode: {mode}");
+        eprintln!("Valid modes: off, conservative, balanced, aggressive, status");
+        std::process::exit(1);
+    };
+
+    let path = brain::heuristic_mode_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if parsed == brain::heuristic::HeuristicMode::Balanced {
+        // Balanced is the default — remove the file so absence = balanced.
+        let _ = std::fs::remove_file(&path);
+    } else {
+        std::fs::write(&path, parsed.label())?;
+    }
+
+    println!("Brain-lite mode set to: {}", parsed.label());
+    Ok(())
+}
+
 /// Handle --insights: show insights or set mode (on/off/status).
 /// Requires brain to be enabled.
 pub(crate) fn run_insights(cfg: &config::Config, cli: &Cli, arg: &str) -> io::Result<()> {
@@ -1888,6 +1914,33 @@ fn read_diff_digest_from_stdin(tool_name: &str) -> Option<brain::diff_digest::Di
     digest_from_hook_payload(tool_name, &buf)
 }
 
+/// Empty command strings carry no signal — normalize to `None` for logging and
+/// classification so an absent input isn't recorded as the literal "".
+fn command_arg(command: &str) -> Option<&str> {
+    if command.is_empty() {
+        None
+    } else {
+        Some(command)
+    }
+}
+
+/// Map a heuristic decision onto the rule-action vocabulary used by decision
+/// logging. `Abstain` is a non-decision and returns `None` (not logged).
+fn heuristic_rule_action(action: brain::heuristic::HeuristicAction) -> Option<rules::RuleAction> {
+    match action {
+        brain::heuristic::HeuristicAction::Approve => Some(rules::RuleAction::Approve),
+        brain::heuristic::HeuristicAction::Deny => Some(rules::RuleAction::Deny),
+        brain::heuristic::HeuristicAction::Abstain => None,
+    }
+}
+
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 /// Standalone brain query: builds a minimal context from CLI args, calls the
 /// local LLM, and prints a JSON decision to stdout. Designed to be called
 /// by Claude Code plugin hooks (PreToolUse) for inline approve/deny.
@@ -1955,6 +2008,17 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
 
     // Check deny rules
     if let Some(deny_match) = rules::evaluate(&deny_rules, &synthetic) {
+        // Rule decisions are recorded as observations (brain_action is null),
+        // so they show up as ground truth for distillation without being
+        // counted toward the brain's own auto-handled accuracy.
+        brain::decisions::log_observation(
+            std::process::id(),
+            &project,
+            Some(&tool_name),
+            command_arg(&command),
+            "rule_deny",
+            Some(&synthetic),
+        );
         let result = serde_json::json!({
             "action": "deny",
             "reasoning": format!("Deny rule '{}' matched", deny_match.rule_name),
@@ -1974,6 +2038,14 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
         .cloned()
         .collect();
     if let Some(approve_match) = rules::evaluate(&approve_rules, &synthetic) {
+        brain::decisions::log_observation(
+            std::process::id(),
+            &project,
+            Some(&tool_name),
+            command_arg(&command),
+            "rule_approve",
+            Some(&synthetic),
+        );
         let result = serde_json::json!({
             "action": "approve",
             "reasoning": format!("Approve rule '{}' matched", approve_match.rule_name),
@@ -2048,6 +2120,21 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             let threshold = brain::decisions::adaptive_threshold(Some(&tool_name)).unwrap_or(0.6);
             let below_threshold = suggestion.confidence < threshold;
 
+            // Record the brain's decision so `--brain-stats impact` reflects the
+            // gate stream, not just the TUI engine. Auto-applied by the gate,
+            // so user_action = "auto".
+            brain::decisions::log_decision(
+                std::process::id(),
+                &project,
+                Some(&tool_name),
+                command_arg(&command),
+                &suggestion,
+                "auto",
+                Some(&synthetic),
+                brain::decisions::DecisionType::Session,
+                None,
+            );
+
             // Human-readable "why" (#372): source + confidence + what informed it.
             let mut why = format!(
                 "via brain · {:.0}% confidence",
@@ -2080,16 +2167,92 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             Ok(())
         }
         Err(e) => {
-            // On brain failure, output abstain (don't block the user)
-            let result = serde_json::json!({
-                "action": "abstain",
-                "reasoning": format!("Brain query failed: {e}"),
-                "confidence": 0.0,
-                "source": "error",
+            // No LLM reachable (endpoint down, or model not pulled → 404). Fall
+            // back to the zero-LLM heuristic instead of abstaining on
+            // everything: obviously-safe calls stay auto-handled and obviously-
+            // destructive ones stay blocked. Deny-first user rules already ran
+            // above, so this only decides the calls no rule matched.
+            let cmd = command_arg(&command);
+            let decision = brain::heuristic::decide_with_mode(
+                Some(&tool_name),
+                cmd,
+                brain::read_heuristic_mode(),
+            );
+            // Log actionable heuristic decisions (not abstains) as brain
+            // decisions so brain-lite shows up on the impact scorecard even with
+            // no LLM installed. source = "heuristic" preserves provenance.
+            if let Some(action) = heuristic_rule_action(decision.action) {
+                let suggestion = brain::client::BrainSuggestion {
+                    action,
+                    message: None,
+                    reasoning: decision.reasoning.clone(),
+                    confidence: decision.confidence,
+                    suggested_at: epoch_secs(),
+                    cause: brain::client::DecisionCause {
+                        source: "heuristic".to_string(),
+                        rule_name: None,
+                        few_shot_ids: Vec::new(),
+                    },
+                };
+                brain::decisions::log_decision(
+                    std::process::id(),
+                    &project,
+                    Some(&tool_name),
+                    cmd,
+                    &suggestion,
+                    "auto",
+                    Some(&synthetic),
+                    brain::decisions::DecisionType::Session,
+                    None,
+                );
+            }
+            let mut result = serde_json::json!({
+                "action": decision.action.label(),
+                "reasoning": decision.reasoning,
+                "confidence": decision.confidence,
+                "source": "heuristic",
+                "risk_tier": decision.tier.label(),
+                "why": format!(
+                    "via heuristic · {} risk · no local LLM ({e})",
+                    decision.tier.label()
+                ),
             });
+            if let Some(d) = diff_digest.as_ref() {
+                result["diff_digest"] = d.to_log_json();
+            }
             println!("{}", serde_json::to_string(&result).unwrap());
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod gate_logging_tests {
+    use super::*;
+
+    #[test]
+    fn command_arg_normalizes_empty_to_none() {
+        assert_eq!(command_arg(""), None);
+        assert_eq!(command_arg("cargo test"), Some("cargo test"));
+    }
+
+    #[test]
+    fn heuristic_abstain_is_not_logged() {
+        // Abstain must map to None so the gate records no brain decision for it
+        // — abstains are deferrals, not auto-handled outcomes.
+        assert!(heuristic_rule_action(brain::heuristic::HeuristicAction::Abstain).is_none());
+    }
+
+    #[test]
+    fn heuristic_actionable_decisions_map_to_rule_actions() {
+        assert_eq!(
+            heuristic_rule_action(brain::heuristic::HeuristicAction::Approve),
+            Some(rules::RuleAction::Approve)
+        );
+        assert_eq!(
+            heuristic_rule_action(brain::heuristic::HeuristicAction::Deny),
+            Some(rules::RuleAction::Deny)
+        );
     }
 }
 

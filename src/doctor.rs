@@ -339,29 +339,26 @@ fn check_plugin_version() -> Check {
 }
 
 fn check_brain_endpoint() -> Check {
-    // Match the existing brain probe (curl + 1s timeout, common ollama
-    // port). When unreachable, advise — most users running the TUI
-    // without the brain enabled don't care.
-    let url = "http://localhost:11434/api/tags";
-    let curl = std::process::Command::new("curl")
-        .args(["-sS", "--max-time", "1", url])
-        .output();
-    match curl {
-        Ok(o) if o.status.success() && !o.stdout.is_empty() => Check {
-            name: "brain endpoint".into(),
-            status: CheckStatus::Pass,
-            message: format!("ollama reachable at {url}"),
-            fix_hint: None,
-        },
-        _ => Check {
-            name: "brain endpoint".into(),
-            status: CheckStatus::Advisory,
-            message: "no local-LLM endpoint reachable on localhost:11434".into(),
-            fix_hint: Some(
-                "Brain is optional. To enable: `brew install ollama && ollama serve &` + `ollama pull gemma4:e4b`."
-                    .into(),
-            ),
-        },
+    // Probe via the shared `brain::health` module so `doctor` reports the same
+    // three states everything else does. The key distinction over a plain
+    // reachability check: an endpoint that's *up* but missing the configured
+    // model (the most common activation failure) is called out with the exact
+    // `ollama pull` command, not silently passed.
+    let config = crate::config::Config::load().brain.unwrap_or_default();
+    let health = crate::brain::health::probe(&config);
+    // Ready → Pass. The two non-ready states are advisory — the brain is
+    // optional, so a user running the TUI without it still exits 0 — but each
+    // carries its own actionable next command via `fix_hint`.
+    let status = if health.is_ready() {
+        CheckStatus::Pass
+    } else {
+        CheckStatus::Advisory
+    };
+    Check {
+        name: "brain endpoint".into(),
+        status,
+        message: health.headline(),
+        fix_hint: health.fix_hint(),
     }
 }
 
