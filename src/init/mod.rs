@@ -30,6 +30,7 @@
 
 pub mod hooks;
 pub mod marker;
+pub mod nudge;
 pub mod phases;
 pub mod plugin_assets;
 pub mod prompt;

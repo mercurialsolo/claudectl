@@ -403,6 +403,12 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Brain (Local LLM)")]
     pub(crate) mode: Option<String>,
 
+    /// Set brain-lite mode used when no local LLM is reachable:
+    /// off, conservative, balanced (default), aggressive. Pass "status" to show
+    /// the current mode. Higher modes auto-handle more; all but off deny Critical ops.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) brain_lite: Option<String>,
+
     /// Record a tool-call outcome to the pending-outcomes spool.
     /// Used by the Claude Code PostToolUse hook for #220 baselining.
     /// Reads pending-outcome JSON from stdin (preferred) or builds one from
@@ -990,6 +996,10 @@ fn run_main(cli: Cli) -> io::Result<()> {
         return commands::run_brain_mode(mode);
     }
 
+    if let Some(ref mode) = cli.brain_lite {
+        return commands::run_brain_lite_mode(mode);
+    }
+
     if let Some(ref insights_arg) = cli.insights {
         return commands::run_insights(&cfg, &cli, insights_arg);
     }
@@ -1212,9 +1222,21 @@ fn run_tui<W: io::Write>(
     app.auto_deny_file_conflicts = cfg.auto_deny_file_conflicts;
     app.idle_config = cfg.idle.clone();
     app.brain_config = cfg.brain.clone();
+    // First-run nudge (#322): if the environment isn't wired up, guide the user
+    // to `init` in the status bar. Set before the brain block so a live brain's
+    // "connected" message takes precedence when it runs.
+    if !demo_mode {
+        if let Some(msg) = init::nudge::nudge() {
+            app.status_msg = msg;
+        }
+    }
     if let Some(ref brain_cfg) = cfg.brain {
         if brain_cfg.enabled {
-            if commands::check_brain_endpoint(&brain_cfg.endpoint, brain_cfg.timeout_ms) {
+            // Gate on full health (see `commands::setup_app`): a reachable
+            // endpoint missing the configured model can't infer, so surface the
+            // exact fix rather than attaching a brain that fails on first call.
+            let health = brain::health::probe(brain_cfg);
+            if health.is_ready() {
                 app.brain_driver = Some(Box::new(runtime::LiveBrainDriver::new(
                     brain::engine::BrainEngine::new(brain_cfg.clone()),
                 )));
@@ -1223,10 +1245,8 @@ fn run_tui<W: io::Write>(
                     brain_cfg.endpoint, brain_cfg.model
                 );
             } else {
-                app.status_msg = format!(
-                    "Error: Brain endpoint {} not reachable — run `claudectl --doctor` or start ollama",
-                    brain_cfg.endpoint
-                );
+                app.status_msg =
+                    format!("{} — run `claudectl doctor` for the fix", health.headline());
             }
         }
     }
