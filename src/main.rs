@@ -35,6 +35,7 @@ mod orchestrator;
 #[cfg(feature = "relay")]
 mod relay;
 mod runtime;
+mod team_policy;
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -408,6 +409,11 @@ pub(crate) struct Cli {
     /// the current mode. Higher modes auto-handle more; all but off deny Critical ops.
     #[arg(long, help_heading = "Brain (Local LLM)")]
     pub(crate) brain_lite: Option<String>,
+
+    /// Show the active team policy (checked-in `.claudectl/policy.toml`
+    /// guardrails), or `--policy init` to scaffold a starter file in the repo.
+    #[arg(long, help_heading = "Team")]
+    pub(crate) policy: Option<Option<String>>,
 
     /// Record a tool-call outcome to the pending-outcomes spool.
     /// Used by the Claude Code PostToolUse hook for #220 baselining.
@@ -998,6 +1004,10 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if let Some(ref mode) = cli.brain_lite {
         return commands::run_brain_lite_mode(mode);
+    }
+
+    if let Some(ref action) = cli.policy {
+        return commands::run_policy(action.as_deref());
     }
 
     if let Some(ref insights_arg) = cli.insights {
