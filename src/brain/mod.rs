@@ -43,3 +43,22 @@ pub fn read_gate_mode() -> String {
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "on".into())
 }
+
+/// Path to the brain-lite mode file (`~/.claudectl/brain/heuristic-mode`).
+pub fn heuristic_mode_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home)
+        .join(".claudectl")
+        .join("brain")
+        .join("heuristic-mode")
+}
+
+/// Read the brain-lite (heuristic) mode from disk. Absent file or unknown value
+/// ⇒ the default (`Balanced`), so a missing/corrupt file never disables the
+/// safety-relevant Critical-deny behavior.
+pub fn read_heuristic_mode() -> heuristic::HeuristicMode {
+    std::fs::read_to_string(heuristic_mode_path())
+        .ok()
+        .and_then(|s| heuristic::HeuristicMode::parse(&s))
+        .unwrap_or_default()
+}

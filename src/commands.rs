@@ -187,6 +187,12 @@ pub(crate) fn print_doctor() -> io::Result<()> {
         if let Some(hint) = health.fix_hint() {
             println!("      fix: {hint}");
         }
+        // Brain-lite: the zero-LLM fallback policy. Relevant precisely when the
+        // health probe above is not ready.
+        println!(
+            "  Brain-lite (no-LLM fallback): {}",
+            claudectl::brain::read_heuristic_mode().label()
+        );
     } else {
         println!("  Config: not configured");
         println!("  To enable: add [brain] section to .claudectl.toml or use --brain flag");
@@ -1510,6 +1516,44 @@ pub(crate) fn run_brain_mode(mode: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Handle `--brain-lite <mode>`: set or show the zero-LLM heuristic policy used
+/// when no local model is reachable. Mirrors `run_brain_mode`: `balanced` is the
+/// default and clears the file (absence = default), other modes write it.
+pub(crate) fn run_brain_lite_mode(mode: &str) -> io::Result<()> {
+    if mode.is_empty() || mode == "status" {
+        let current = brain::read_heuristic_mode();
+        println!("Brain-lite mode: {}", current.label());
+        println!("  (used when no local LLM is reachable)");
+        println!();
+        println!("Modes:");
+        println!("  off           — no heuristic decisions; defer everything");
+        println!("  conservative  — block Critical ops, never auto-approve");
+        println!("  balanced      — auto-approve clearly-safe ops, block Critical (default)");
+        println!("  aggressive    — also auto-approve reversible edits; still defer High");
+        return Ok(());
+    }
+
+    let Some(parsed) = brain::heuristic::HeuristicMode::parse(mode) else {
+        eprintln!("Unknown brain-lite mode: {mode}");
+        eprintln!("Valid modes: off, conservative, balanced, aggressive, status");
+        std::process::exit(1);
+    };
+
+    let path = brain::heuristic_mode_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if parsed == brain::heuristic::HeuristicMode::Balanced {
+        // Balanced is the default — remove the file so absence = balanced.
+        let _ = std::fs::remove_file(&path);
+    } else {
+        std::fs::write(&path, parsed.label())?;
+    }
+
+    println!("Brain-lite mode set to: {}", parsed.label());
+    Ok(())
+}
+
 /// Handle --insights: show insights or set mode (on/off/status).
 /// Requires brain to be enabled.
 pub(crate) fn run_insights(cfg: &config::Config, cli: &Cli, arg: &str) -> io::Result<()> {
@@ -2129,7 +2173,11 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
             // destructive ones stay blocked. Deny-first user rules already ran
             // above, so this only decides the calls no rule matched.
             let cmd = command_arg(&command);
-            let decision = brain::heuristic::decide(Some(&tool_name), cmd);
+            let decision = brain::heuristic::decide_with_mode(
+                Some(&tool_name),
+                cmd,
+                brain::read_heuristic_mode(),
+            );
             // Log actionable heuristic decisions (not abstains) as brain
             // decisions so brain-lite shows up on the impact scorecard even with
             // no LLM installed. source = "heuristic" preserves provenance.

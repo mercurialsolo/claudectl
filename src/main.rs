@@ -403,6 +403,12 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Brain (Local LLM)")]
     pub(crate) mode: Option<String>,
 
+    /// Set brain-lite mode used when no local LLM is reachable:
+    /// off, conservative, balanced (default), aggressive. Pass "status" to show
+    /// the current mode. Higher modes auto-handle more; all but off deny Critical ops.
+    #[arg(long, help_heading = "Brain (Local LLM)")]
+    pub(crate) brain_lite: Option<String>,
+
     /// Record a tool-call outcome to the pending-outcomes spool.
     /// Used by the Claude Code PostToolUse hook for #220 baselining.
     /// Reads pending-outcome JSON from stdin (preferred) or builds one from
@@ -988,6 +994,10 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if let Some(ref mode) = cli.mode {
         return commands::run_brain_mode(mode);
+    }
+
+    if let Some(ref mode) = cli.brain_lite {
+        return commands::run_brain_lite_mode(mode);
     }
 
     if let Some(ref insights_arg) = cli.insights {
