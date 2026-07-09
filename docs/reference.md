@@ -89,6 +89,7 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 | `--cwd <path>` | Working directory for the new session (default: `.`) |
 | `--prompt <text>` | Prompt to send to the new session |
 | `--resume <session-id>` | Resume a previous session by ID |
+| `--restore-sessions [sandbox]` | Restore agent-sandbox sessions after `sbx rm`: spawn one window per session that was live at teardown, each running `sc --resume <id>`. Omit the name to auto-pick (or choose when several sandboxes are registered); pair with `--dry-run` to preview |
 
 ### Budget & Notifications
 

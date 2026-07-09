@@ -25,6 +25,7 @@ pub mod process;
 pub mod reaper;
 pub mod recorder;
 pub mod rules;
+pub mod sandbox_registry;
 pub mod session;
 pub mod session_recorder;
 pub mod terminals;

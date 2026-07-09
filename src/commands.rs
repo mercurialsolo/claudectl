@@ -4,6 +4,7 @@
 //! called from `run_main()` dispatch in main.rs.
 
 use std::io;
+use std::path::Path;
 use std::time::Duration;
 
 use crate::Cli;
@@ -16,7 +17,9 @@ use crate::discovery;
 use crate::launch;
 use crate::process;
 use crate::rules;
+use crate::sandbox_registry;
 use crate::session;
+use crate::terminals;
 
 pub(crate) fn launch_session(
     cwd: &str,
@@ -37,6 +40,165 @@ pub(crate) fn launch_session(
         }
         Err(e) => Err(io::Error::other(e)),
     }
+}
+
+/// `--restore-sessions [name]`: bring back sandbox Claude sessions after
+/// `sbx rm`. Reads the host-shared registry (`sandbox_registry`), resolves
+/// which sandbox(es) to restore, and spawns one terminal window per session
+/// running `sc --resume <id>` in its recorded directory. With `--dry-run` (or
+/// a terminal that can't spawn windows) it prints the commands instead.
+pub(crate) fn restore_sessions(sandbox_arg: &str, dry_run: bool) -> io::Result<()> {
+    let registry = sandbox_registry::load();
+    if registry.sandboxes.is_empty() {
+        println!("No sandbox sessions registered — nothing to restore.");
+        return Ok(());
+    }
+
+    let targets = select_sandboxes(&registry, sandbox_arg)?;
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    let can_spawn = terminals::can_spawn_command_window();
+    let mut spawned = 0usize;
+    let mut skipped = 0usize;
+
+    for sandbox in &targets {
+        let Some(entries) = registry
+            .sandboxes
+            .get(sandbox)
+            .filter(|entries| !entries.is_empty())
+        else {
+            eprintln!("  '{sandbox}': no sessions registered");
+            continue;
+        };
+
+        println!("Restoring {} session(s) from '{sandbox}':", entries.len());
+        for entry in entries {
+            // A resume needs the JSONL transcript, which lives on the shared
+            // ~/.claude mount and normally survives `sbx rm`. If it's gone the
+            // session can't be resumed — skip it rather than open a window that
+            // immediately errors.
+            if !entry.transcript.is_empty() && !Path::new(&entry.transcript).exists() {
+                eprintln!(
+                    "  [skip] {} ({}): transcript missing",
+                    short_id(&entry.session_id),
+                    entry.cwd
+                );
+                skipped += 1;
+                continue;
+            }
+
+            let cwd = resolve_cwd(&entry.cwd);
+            let command = format!("sc --resume {}", entry.session_id);
+
+            if dry_run || !can_spawn {
+                let note = if dry_run {
+                    ""
+                } else {
+                    "   (this terminal can't spawn windows — run it manually)"
+                };
+                println!(
+                    "  {}  {cwd}\n      $ {command}{note}",
+                    short_id(&entry.session_id)
+                );
+                continue;
+            }
+
+            match terminals::spawn_command_window(&cwd, &command) {
+                Ok(term) => {
+                    println!("  ↻ {}  {cwd}  ({term})", short_id(&entry.session_id));
+                    spawned += 1;
+                }
+                Err(error) => {
+                    eprintln!("  [fail] {}: {error}", short_id(&entry.session_id));
+                    skipped += 1;
+                }
+            }
+        }
+    }
+
+    if !dry_run && can_spawn {
+        let tail = if skipped > 0 {
+            format!(" ({skipped} skipped)")
+        } else {
+            String::new()
+        };
+        println!("Restored {spawned} session(s){tail}.");
+    }
+    Ok(())
+}
+
+/// First 8 chars of a session id — enough to eyeball, short enough to scan.
+fn short_id(session_id: &str) -> &str {
+    session_id.get(..8).unwrap_or(session_id)
+}
+
+/// The directory to reopen a session in, falling back to `$HOME` (then `.`)
+/// when the registry has no recorded cwd.
+fn resolve_cwd(cwd: &str) -> String {
+    if cwd.trim().is_empty() {
+        std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+    } else {
+        cwd.to_string()
+    }
+}
+
+/// Decide which sandbox slice(s) to restore. An explicit name (or `all`) is
+/// honored directly; otherwise a single registered sandbox is auto-selected
+/// and multiple prompt an interactive pick.
+fn select_sandboxes(
+    registry: &sandbox_registry::Registry,
+    sandbox_arg: &str,
+) -> io::Result<Vec<String>> {
+    let arg = sandbox_arg.trim();
+    let names: Vec<String> = registry.sandboxes.keys().cloned().collect();
+
+    if !arg.is_empty() {
+        if arg.eq_ignore_ascii_case("all") {
+            return Ok(names);
+        }
+        if registry.sandboxes.contains_key(arg) {
+            return Ok(vec![arg.to_string()]);
+        }
+        eprintln!(
+            "No sessions registered for sandbox '{arg}'. Registered: {}",
+            names.join(", ")
+        );
+        return Ok(Vec::new());
+    }
+
+    if names.len() == 1 {
+        return Ok(names);
+    }
+
+    // Several sandboxes registered and none named — let the user choose.
+    println!("Multiple sandboxes have registered sessions:");
+    for (index, name) in names.iter().enumerate() {
+        let count = registry.sandboxes.get(name).map_or(0, Vec::len);
+        println!("  {}) {name}  ({count} session(s))", index + 1);
+    }
+    println!("  a) all");
+    print!("Restore which? [1-{}/a]: ", names.len());
+    io::Write::flush(&mut io::stdout())?;
+
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    let choice = line.trim();
+
+    if choice.eq_ignore_ascii_case("a") || choice.eq_ignore_ascii_case("all") {
+        return Ok(names);
+    }
+    if let Ok(number) = choice.parse::<usize>() {
+        if (1..=names.len()).contains(&number) {
+            return Ok(vec![names[number - 1].clone()]);
+        }
+    }
+    if registry.sandboxes.contains_key(choice) {
+        return Ok(vec![choice.to_string()]);
+    }
+    eprintln!("Nothing selected.");
+    Ok(Vec::new())
 }
 
 fn print_doctor_transcripts() {

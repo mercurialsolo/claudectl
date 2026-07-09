@@ -221,6 +221,38 @@ pub fn record_hook_event(payload: &serde_json::Value) -> io::Result<()> {
         return Ok(());
     };
 
+    // Sandbox session registry: when this hook fires inside an `sbx` sandbox,
+    // mirror the session into the host-shared registry so
+    // `claudectl --restore-sessions` can bring it back after `sbx rm`.
+    // Best-effort — registry I/O must never fail or block the hook path.
+    if let Some(sandbox) = crate::sandbox_registry::current_sandbox() {
+        match event {
+            "SessionStart" => {
+                let cwd = payload
+                    .get("cwd")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let transcript = payload
+                    .get("transcript_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let _ = crate::sandbox_registry::upsert(
+                    &sandbox,
+                    crate::sandbox_registry::SessionEntry {
+                        session_id: session_id.clone(),
+                        cwd: cwd.to_string(),
+                        transcript: transcript.to_string(),
+                        started_at_ms: now_ms(),
+                    },
+                );
+            }
+            "SessionEnd" => {
+                let _ = crate::sandbox_registry::remove_session(&session_id);
+            }
+            _ => {}
+        }
+    }
+
     // SessionEnd is the one event that removes state instead of updating it.
     if event == "SessionEnd" {
         return HookState::remove(&session_id);

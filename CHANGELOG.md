@@ -2,6 +2,17 @@
 
 All notable changes to claudectl are documented here.
 
+## [Unreleased]
+
+### Added
+- **`--restore-sessions [sandbox]`** — bring back Linera agent-sandbox Claude
+  sessions after `sbx rm`. `SessionStart`/`SessionEnd` hooks now mirror each
+  in-sandbox session into a host-shared registry
+  (`~/.local/share/claudectl/sandbox-sessions.json`), and `--restore-sessions`
+  spawns one terminal window per live-at-teardown session running
+  `sc --resume <id>` in its recorded directory (Ghostty on macOS; other
+  terminals print the commands). Pair with `--dry-run` to preview.
+
 ## [0.32.0] - 2026-04-20
 
 ### Added

@@ -1176,6 +1176,30 @@ pub fn launch_session(
     }
 }
 
+/// Spawn a brand-new terminal window that runs `command` in `cwd`, executed
+/// via a login shell so PATH (and thus `sbx` / `sc`) resolves. Used by
+/// `--restore-sessions` to relaunch `sc --resume <id>` after `sbx rm`.
+///
+/// Implemented for Ghostty on macOS — the terminal the agent sandbox runs in.
+/// Other terminals return `Err` so the caller can fall back to printing the
+/// command for the user to paste.
+pub fn spawn_command_window(cwd: &str, command: &str) -> Result<String, String> {
+    match detect_terminal() {
+        Terminal::Ghostty => ghostty::spawn_window(cwd, command),
+        other => Err(format!(
+            "window spawn is not implemented for {}",
+            terminal_name(&other)
+        )),
+    }
+}
+
+/// Whether [`spawn_command_window`] can open a new window in the current
+/// terminal. `--restore-sessions` uses this to decide between spawning windows
+/// and printing the `sc --resume` commands for manual use.
+pub fn can_spawn_command_window() -> bool {
+    matches!(detect_terminal(), Terminal::Ghostty) && cfg!(target_os = "macos")
+}
+
 pub fn switch_to_terminal(session: &ClaudeSession) -> Result<(), String> {
     // In-sandbox + Linux host terminal: route through sandbox-terminal-bridge
     // because the host terminal's CLI / unix socket is not reachable from
