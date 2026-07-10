@@ -1,0 +1,1564 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.">
+      
+      
+      
+        <link rel="canonical" href="https://mercurialsolo.github.io/claudectl/AGENT_BUS/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>claudectl Agent Bus — Design Specification - claudectl</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#claudectl-agent-bus-design-specification" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="claudectl" class="md-header__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            claudectl
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              claudectl Agent Bus — Design Specification
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="claudectl" class="md-nav__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    claudectl
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent-bus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Bus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive Mind
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terminal-support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terminal Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#implementation-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Motivation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Motivation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-mcp-server-starts-with-claudectl-no-separate-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The MCP server starts with claudectl (no separate command)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relationship-to-native-agent-teams-the-key-positioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relationship to native agent teams (the key positioning)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relationship-to-declarative-routing-workflowtoml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relationship to declarative routing (workflow.toml)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-coordination-model-publishsubscribe-with-optional-directed-send" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Coordination model: publish/subscribe with optional directed send
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Coordination model: publish/subscribe with optional directed send">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#subjects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subjects
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#claim-protocol-for-work-bearing-subjects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Claim protocol (for work-bearing subjects)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-mcp-tool-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. MCP tool surface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. MCP tool surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#messaging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Messaging
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-persistent-mailbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Persistent mailbox
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-self-registration-addressing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Self-registration / addressing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-notification-delivery-handshake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Notification &amp; delivery handshake
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Notification &amp; delivery handshake">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#trigger-a-claude-code-stop-hook-claudectl-mcp-tool-primary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trigger A — Claude Code Stop hook → claudectl MCP tool (primary)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trigger-b-claudectl-waiting-edge-injection-fallback-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trigger B — claudectl Waiting-edge injection (fallback only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#native-loop-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native loop safety
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limitation-no-true-preemption-unchanged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitation: no true preemption (unchanged)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-complement-agent-side-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional complement: agent-side /loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-transport-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Transport &amp; architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-agent-side-provisioning-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Agent-side provisioning &amp; lifecycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Agent-side provisioning &amp; lifecycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#provisioning-lives-inside-claudectl-init-not-a-separate-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provisioning lives inside claudectl init, not a separate command
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#package-as-a-claude-code-plugin-preferred-mechanism" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Package as a Claude Code plugin (preferred mechanism)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fallback-direct-settings-write" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fallback: direct settings write
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#managed-lifecycle-claudectl-owns-these-not-the-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managed lifecycle (claudectl owns these, not the user)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ownership-idempotency-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ownership &amp; idempotency rules
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-slash-commands-risk-and-capability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Slash commands: risk and capability
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Slash commands: risk and capability">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#risk-command-injection-at-the-delivery-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risk — command injection at the delivery boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#capability-slash-commands-as-the-clean-delivery-nudge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Capability — slash commands as the clean delivery nudge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolution
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-guardrails" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Guardrails
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Guardrails">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#content-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Content validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flow-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flow control
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authorization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authorization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example policy
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-open-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Open questions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-suggested-build-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Suggested build order
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-longevity-persistence-across-team-teardown-the-differentiated-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Longevity: persistence across team teardown (the differentiated layer)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Longevity: persistence across team teardown (the differentiated layer)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-model-episodic-bursts-under-a-durable-supervisor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The model: episodic bursts under a durable supervisor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-must-be-durable-survives-process-death-claudectl-restart-team-teardown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What must be durable (survives process death, claudectl restart, team teardown)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-explicitly-ephemeral-re-derived-never-relied-upon-long-term" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is explicitly ephemeral (re-derived, never relied upon long-term)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="claudectl-agent-bus-design-specification">claudectl Agent Bus — Design Specification</h1>
+<p><strong>Status:</strong> Draft / RFC. Phases 1–4 of §12 implemented behind the <code>bus</code> Cargo feature (see <a href="#implementation-status">Implementation status</a> below). Delivery mechanism verified against the current Claude Code Hooks reference (June 2026).
+<strong>Scope:</strong> Turn claudectl from a session monitor into a message bus that lets running Claude Code instances discover each other and coordinate, with agent-driven routing, persistent mailboxes, and centralized content/flow guardrails.</p>
+<h2 id="implementation-status">Implementation status</h2>
+<table>
+<thead>
+<tr>
+<th>Phase (§12)</th>
+<th>Status</th>
+<th>Module / artifact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. Roles + <code>whoami</code> + <code>list_agents</code></td>
+<td><strong>Shipped</strong></td>
+<td><code>src/bus/roles.rs</code>, <code>src/bus/mcp.rs</code></td>
+</tr>
+<tr>
+<td>2. In-process bus MCP server, autostarted</td>
+<td><strong>Partial</strong> — runs as a stdio subprocess (<code>claudectl bus stdio</code>); the in-process autostart-with-TUI form (Unix-socket singleton) is not built yet.</td>
+<td><code>src/bus/mcp.rs</code>, <code>claude-plugin/.mcp.json</code></td>
+</tr>
+<tr>
+<td>3. Provisioning (role binding + plugin install + hook capability probe)</td>
+<td><strong>Shipped via <code>claudectl init</code></strong> (PR #283) — five-phase wizard owns bus role binding alongside budget, brain, hooks, and skill suggestions. Lifecycle verbs: <code>init</code>, <code>init --non-interactive</code>, <code>init --check</code>, <code>init --remove</code>, <code>init --reset</code>. Tracking: <a href="https://github.com/mercurialsolo/claudectl/issues/257">#257</a>.</td>
+<td><code>src/init/</code></td>
+</tr>
+<tr>
+<td>4. Mailbox + directed <code>publish</code> / <code>read_inbox</code></td>
+<td><strong>Shipped</strong></td>
+<td><code>src/bus/store.rs</code>, <code>src/bus/mcp.rs</code></td>
+</tr>
+<tr>
+<td>5. <code>Stop</code> hook → <code>read_inbox</code> (Trigger A) + <code>/inbox</code> fallback (Trigger B)</td>
+<td><strong>Shipped (Trigger A continue-in-turn + Trigger B)</strong></td>
+<td><code>src/bus/stop_hook.rs</code>, <code>claude-plugin/hooks/scripts/inbox-drain.sh</code>, <code>claude-plugin/commands/inbox.md</code></td>
+</tr>
+<tr>
+<td>6. Command sanitization + content validation</td>
+<td><strong>Shipped</strong> — leading-<code>/</code> neutralized, body cap, subject grammar, type allowlist, hop cap (default 8), per-sender-role rate limit (60/min token bucket), reserved-role guard (<code>supervisor</code>/<code>operator</code> cannot be bound).</td>
+<td><code>src/bus/policy.rs</code>, <code>src/bus/rate_limit.rs</code></td>
+</tr>
+<tr>
+<td>7. Subjects + <code>subscribe</code> + claim protocol</td>
+<td><strong>Not started</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td>8. Flow guards (rate/hop/loop/cost) + ACLs</td>
+<td><strong>Shipped (hop + rate + reserved-role ACL)</strong> via PR #351 / #344. Loop detection and cost-based throttling are deferred.</td>
+<td><code>src/bus/policy.rs</code>, <code>src/bus/rate_limit.rs</code></td>
+</tr>
+<tr>
+<td>9. Managed-artifact lifecycle (update/migrate/drift)</td>
+<td><strong>Partial</strong> — <code>init --upgrade</code> re-syncs hooks + plugin files + DB migrations (#327); drift surfaces in <code>claudectl doctor</code> via the <code>plugin version</code> row.</td>
+<td><code>src/init/</code>, <code>src/doctor.rs</code></td>
+</tr>
+<tr>
+<td>10. Supervisor + long-horizon persistence</td>
+<td><strong>Shipped</strong> via PRs #352–#356 — coord task tables, pure reconciler + actuator, bus-native assignment, verifier gates (<code>run</code>/<code>brain</code>/<code>agent</code>), resume protocol with tree-state drift detection, health-check transition triggers, <code>claudectl supervisor</code> CLI tree, v1 NDJSON event schema, Prometheus exporter. See <a href="#10-supervisor--long-horizon-persistence">supervisor section</a> below.</td>
+<td><code>src/coord/{supervisor,actuator,verify,resume,events,exporter,supervisor_cli,tasks,session_policy,hook_events}.rs</code>, <code>src/ingest.rs</code></td>
+</tr>
+<tr>
+<td>11. TUI bus view</td>
+<td><strong>Not started</strong></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Build / run:</strong> <code>cargo build --release --features bus</code>. End-to-end smoke covered: role bind → cwd inference (macOS symlink resolution) → directed send → priority-ordered drain → leading-<code>/</code> neutralization → policy rejections. MCP handshake (<code>initialize</code> + <code>notifications/initialized</code> + <code>tools/list</code>) verified end-to-end. <strong>Not yet exercised:</strong> the plugin loaded inside Claude Code driving real cross-session traffic.</p>
+<p>The dependency cost of <code>--features bus</code> is a 6.4 MB release binary (vs. the default 3.5 MB) and a current-thread Tokio runtime inside <code>claudectl bus stdio</code>. The default build is otherwise untouched.</p>
+<hr />
+<h2 id="1-motivation">1. Motivation</h2>
+<p>claudectl already knows every running Claude Code session (PID, cwd, status, session ID) and already knows how to inject input into a session via terminal control (<code>tmux send-keys</code>, Kitty/Ghostty remote control, etc.). Today these are exposed only as TUI keybinds, and the loop is never closed: claudectl <em>detects</em> when a session is <code>Waiting</code>, and can <em>inject</em> input, but never connects the two.</p>
+<p>This spec closes that loop by exposing claudectl as an <strong>MCP server</strong>: a directory of running agents plus a persistent mailbox per agent. Running instances then coordinate themselves — the "what is my next step" decision lives in each agent's own reasoning and transcript, rather than in an external orchestrator.</p>
+<h3 id="the-mcp-server-starts-with-claudectl-no-separate-command">The MCP server starts with claudectl (no separate command)</h3>
+<p>The MCP server is <strong>not</strong> a separate <code>claudectl mcp</code> invocation the user must remember. When <code>claudectl</code> launches (TUI or any mode), it starts the bus MCP server <strong>by default</strong> as part of normal startup — same process, one core, the TUI and the MCP server are two frontends over it (§7). The server is up whenever claudectl is running, which is exactly when agents need it. Flags exist to disable it (<code>--no-bus</code>) or run headless server-only (<code>--bus-only</code>, for a daemon/CI context with no TUI), but the default is: start claudectl, the bus is live.</p>
+<h3 id="relationship-to-native-agent-teams-the-key-positioning">Relationship to native agent teams (the key positioning)</h3>
+<p>Claude Code ships a native <strong>agent teams</strong> feature (experimental, Opus 4.6+, <code>CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</code>). It already implements, <em>within one team's lifetime</em>, the exact intra-team primitives this spec's core describes: a shared task list with dependency auto-unblocking, a mailbox with automatic message delivery (no polling), and file-locked task claiming. claudectl should <strong>not reinvent these</strong>.</p>
+<p>But agent teams are a <strong>bounded-burst</strong> tool — create → parallelize one task → synthesize → tear down, on a minutes-to-hours horizon — and are structurally unfit for long-lived operation (see §13). claudectl's differentiated role is the <strong>durable supervision and persistence layer that agent teams lack</strong>:</p>
+<ul>
+<li>Agent teams are the <em>ephemeral execution unit</em> (a burst of parallel work).</li>
+<li>claudectl is the <em>long-horizon layer</em>: a durable role directory and mailbox that outlive any team's teardown, supervision/restart of dead leads, and orchestration of repeated bursts over a project that runs for weeks, months, or longer.</li>
+</ul>
+<p>So the framing is <strong>layered, not competing</strong>: where agents are inside one native team, the bus defers to the team's own task list/mailbox; the bus owns everything the team cannot — cross-team, cross-worktree, cross-machine, and cross-time coordination.</p>
+<h3 id="relationship-to-declarative-routing-workflowtoml">Relationship to declarative routing (<code>workflow.toml</code>)</h3>
+<p>Two philosophies, evaluated as alternatives rather than merged:</p>
+<ul>
+<li><strong>Centralized router (<code>workflow.toml</code>):</strong> an external process watches status, decides, and routes. Agents are passive nodes in a fixed graph.</li>
+<li><strong>Agent bus (this spec):</strong> claudectl is a bus the agents query and drive. Routing intelligence lives in the agents.</li>
+</ul>
+<p>The bus is the better fit when steps are not a fixed graph (usually the case with Claude instances). <code>workflow.toml</code> remains available as an opt-in for genuinely fixed orchestration.</p>
+<hr />
+<h2 id="2-coordination-model-publishsubscribe-with-optional-directed-send">2. Coordination model: publish/subscribe with optional directed send</h2>
+<p>This is the central design decision. Two candidate models:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Sender decides recipient?</th>
+<th>Scales with agent count</th>
+<th>Risk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Directed send</strong></td>
+<td>Yes ("A → B")</td>
+<td>Poorly — every sender models who does what</td>
+<td>Routing knowledge duplicated/rots</td>
+</tr>
+<tr>
+<td><strong>Publish/subscribe</strong></td>
+<td>No — broadcasts an event</td>
+<td>Well — senders need no recipient model</td>
+<td>Task can fall through if no subscriber claims it</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Chosen design: pub/sub as the transport, with optional <code>addressed_to</code>, plus a claim protocol.</strong></p>
+<p>Rationale: the bus's whole point is pushing the next-step decision into each agent's reasoning. Pub/sub is the consistent expression of that — the sender doesn't need to know who cares; each subscriber owns exactly one decision ("is this my concern?"). Adding an agent requires changing nothing about existing agents. Topics keep wake-cost bounded: an agent only wakes for subjects it subscribed to.</p>
+<p>The known weakness of pub/sub — a task no one claims — is handled by a <strong>claim/ack protocol</strong> plus a fallback escalation, giving the decoupling of pub/sub without the dropped-task risk. Directed send remains available (<code>addressed_to</code>) for the cases where the sender genuinely knows the recipient.</p>
+<blockquote>
+<p><strong>Scope boundary with native teams.</strong> This model governs coordination <em>between</em> agents that are not in the same native agent team — separate worktrees, separate teams, or long-lived roles. Agents <em>inside</em> one native team already coordinate through that team's shared task list and auto-delivered mailbox; the bus does not duplicate or intercept that intra-team traffic. The bus's pub/sub is the inter-team / cross-time fabric; the native task list is the intra-team fabric. They compose (§13).</p>
+</blockquote>
+<h3 id="subjects">Subjects</h3>
+<p>Messages are published to a dot-delimited subject, NATS-style:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>task.created
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>task.completed
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>review.requested
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>review.completed
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>status.update
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>question.raised
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>handoff
+</code></pre></div>
+<p>Agents subscribe to subject patterns (<code>task.*</code>, <code>review.requested</code>). Subjects are convention, not hardcoded; the policy file may constrain which roles may publish/subscribe to which subjects.</p>
+<h3 id="claim-protocol-for-work-bearing-subjects">Claim protocol (for work-bearing subjects)</h3>
+<ol>
+<li>Agent publishes <code>task.created</code> (no addressee).</li>
+<li>Subscribers wake, evaluate relevance.</li>
+<li>First interested agent calls <code>claim(message_id)</code>. The bus grants the claim atomically (single winner); others receive "already claimed" and drop it.</li>
+<li>Claimer publishes <code>task.completed</code> (or <code>task.failed</code>) referencing the original <code>message_id</code>/<code>thread_id</code>.</li>
+<li>If unclaimed after <code>claim_timeout</code>, the bus escalates: re-publish with higher priority, route to a designated <code>fallback</code> role, or notify the human via the TUI.</li>
+</ol>
+<p>Non-work subjects (<code>status.update</code>) are fire-and-forget, no claim needed.</p>
+<p><strong>Alignment with native Claude Code events.</strong> Claude Code exposes <code>TaskCreated</code> and <code>TaskCompleted</code> lifecycle hooks (both can block on exit 2 — rolling back creation or preventing completion). Where agents use Claude Code's native task mechanism, the bus's <code>task.created</code> / <code>task.completed</code> subjects and the claim protocol should bind to these real events rather than being simulated, so task state on the bus stays consistent with the agent's own task state. This is an integration opportunity, not a requirement — bus subjects also work for agents not using native tasks.</p>
+<hr />
+<h2 id="3-mcp-tool-surface">3. MCP tool surface</h2>
+<p>Exposed by a <code>claudectl mcp</code> subcommand (see §7). All tools are namespaced under the claudectl MCP server each instance adds to its own config.</p>
+<h3 id="discovery">Discovery</h3>
+<ul>
+<li><strong><code>list_agents()</code></strong> → live roster: <code>role</code>, <code>cwd</code>, <code>status</code> (<code>Waiting</code>/<code>Processing</code>/<code>NeedsInput</code>/<code>Idle</code>/<code>Finished</code>), <code>last_seen</code>, subscribed subjects. The discovery half — "who's up, what are they doing, what do they listen for."</li>
+<li><strong><code>whoami()</code></strong> → caller's own <code>role</code> / address. Used for self-registration (§5).</li>
+</ul>
+<h3 id="messaging">Messaging</h3>
+<ul>
+<li><strong><code>publish(subject, body, thread_id?, addressed_to?, type, priority?)</code></strong> → publish an event to the bus. <code>addressed_to</code> optionally pins a recipient (directed-send special case). <code>type</code> is a declared message type (§4).</li>
+<li><strong><code>subscribe(subjects[])</code></strong> → register interest in subject patterns. Persisted per role.</li>
+<li><strong><code>read_inbox(since?)</code></strong> / <strong><code>check_messages()</code></strong> → pull pending messages addressed to or matching the caller's subscriptions.</li>
+<li><strong><code>claim(message_id)</code></strong> → atomically claim a work-bearing message. Returns granted/already-claimed.</li>
+<li><strong><code>ack(message_id, result?)</code></strong> → acknowledge completion; closes the thread or emits a completion event.</li>
+</ul>
+<hr />
+<h2 id="4-persistent-mailbox">4. Persistent mailbox</h2>
+<p>The mailbox is the core reliability primitive.</p>
+<p><strong>Problem it solves:</strong> raw injection is fire-and-forget. If the recipient is mid-turn when a message arrives, injected keystrokes land in a half-finished prompt and corrupt it. The mailbox decouples <em>send</em> from <em>delivery</em>.</p>
+<ul>
+<li>Senders write to a recipient's (or subject's) mailbox at any time.</li>
+<li>claudectl delivers only on the recipient's <code>Processing → Waiting</code> edge (§6).</li>
+<li>Messages survive a recipient restart, because the mailbox is <strong>claudectl's state</strong>, not keystrokes typed into a now-dead pane.</li>
+</ul>
+<p>The mailbox is a property of a <strong>role</strong> (a persistent address), not of a session process. A restarted session re-binds to its role and finds its mailbox intact.</p>
+<p><strong>Persistence:</strong> SQLite (WAL mode) under <code>~/.config/claudectl/bus.db</code>. Chosen over flat JSON because multiple session processes may touch the store concurrently; WAL gives safe concurrent writers and crash recovery. Schema sketch:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>messages(id, subject, type, sender_role, addressed_to,
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>         thread_id, body, priority, status,
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>         claimed_by, created_at, delivered_at, acked_at)
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>subscriptions(role, subject_pattern)
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>roles(role, cwd_selector, last_session_id, last_seen, pid)
+</code></pre></div>
+<p><code>roles.pid</code> is nullable (#307 migration). When set, the resolver prefers it over cwd-inference for any caller whose ancestor pid chain contains that pid — see §5.</p>
+<hr />
+<h2 id="5-self-registration-addressing">5. Self-registration / addressing</h2>
+<p>An agent needs to know its own address. Resolution order, first match wins:</p>
+<ol>
+<li><strong>Explicit <code>--role</code></strong> (CLI) / <code>CLAUDECTL_BUS_ROLE</code> env at launch — used by <code>claudectl --new --role planner ...</code> and ambient scripting. Always wins when set.</li>
+<li><strong>PID-binding</strong> (#307) — any role bound to a pid in the caller's parent process chain. The resolver walks ancestor pids (depth 8 via <code>getppid</code> + native <code>ps</code>) and picks the first match. This is the disambiguator for "two sessions in one worktree" — they have different pids even when their cwd matches.</li>
+<li><strong>cwd inference</strong> — literal-prefix match against bound <code>cwd_selector</code>s. Zero agent cooperation; the fallback for cwd-only bindings.</li>
+</ol>
+<p>Four ways to create a binding:</p>
+<table>
+<thead>
+<tr>
+<th>How</th>
+<th>When</th>
+<th>Mnemonic</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>claudectl bus role bind &lt;name&gt; &lt;cwd&gt;</code></td>
+<td>provisioning a worktree, CI scripts</td>
+<td>cwd-keyed (original)</td>
+</tr>
+<tr>
+<td><code>claudectl bus role bind &lt;name&gt; &lt;cwd&gt; --pid &lt;pid&gt;</code></td>
+<td>known pid (orchestrator path)</td>
+<td>cwd + pid pinned</td>
+</tr>
+<tr>
+<td>TUI <strong><code>Ctrl+R</code></strong> on the selected session</td>
+<td>dashboard operator</td>
+<td>binds selected session's pid + cwd</td>
+</tr>
+<tr>
+<td><code>/role &lt;name&gt;</code> (Claude Code slash command)</td>
+<td>inside a running session</td>
+<td><code>--self</code> walks ancestry to find Claude's pid + uses current cwd</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Don't have a role name in mind?</strong> <code>claudectl bus role suggest --pid &lt;pid&gt;</code> (or <code>--self</code>-style auto-detection from a Claude session, or no <code>--pid</code> to walk the caller's ancestor chain) scans the session's transcript and cwd for signals — explicit "you are the X" mentions, tool fan-out shape (writes-heavy → <code>impl</code>, reads-heavy → <code>reviewer</code>, test-runs → <code>tester</code>), path patterns the session touches, and the cwd basename — and returns ranked candidates with reasons. Pure analysis: never writes a binding, never queries the LLM. Used by the TUI's Ctrl+R prompt and the <code>/role</code> slash command to pre-fill a sensible default (#309).</p>
+<p>Roles are the stable names everything else references. Session IDs are ephemeral and never used as durable addresses.</p>
+<hr />
+<h2 id="6-notification-delivery-handshake">6. Notification &amp; delivery handshake</h2>
+<p>This is <strong>push, not periodic polling</strong>. The agent does nothing proactive; it is woken when it next finishes a turn and has mail. Claude Code's mature hook system (verified against the current Hooks reference) makes the primary path far cleaner than terminal injection — claudectl exposes <code>read_inbox</code> as an MCP tool, and the recipient's own <code>Stop</code> hook calls it. There are two triggers; Trigger A is now strongly preferred and Trigger B is a rarely-needed fallback.</p>
+<h3 id="trigger-a-claude-code-stop-hook-claudectl-mcp-tool-primary">Trigger A — Claude Code <code>Stop</code> hook → claudectl MCP tool (primary)</h3>
+<p>Claude Code's <code>Stop</code> event fires when the model finishes responding, and a hook handler may be of type <code>mcp_tool</code>, calling a tool on an already-connected MCP server. So the recipient's <code>Stop</code> hook calls claudectl's <code>read_inbox</code> MCP tool <strong>directly</strong> — no terminal injection, no <code>/dev/tty</code>, no slash command needed for the common case. The agent drains its mailbox the instant it goes idle, through a fully controlled, structured path.</p>
+<p>Two delivery modes off the same hook:</p>
+<ul>
+<li><strong>Notify-and-idle:</strong> the <code>Stop</code> hook surfaces any messages, the turn ends, the agent acts on its next turn.</li>
+<li><strong>Continue-in-turn (preferred when mail is waiting):</strong> a <code>Stop</code> hook can return <code>decision: "block"</code> (or <code>hookSpecificOutput.additionalContext</code>) to <em>keep the conversation going</em> — feeding the new message into the agent so it picks the work up <strong>in the same turn</strong> instead of going idle. This is strictly better than the old "wait for idle, then nudge" loop: delivery is immediate at turn boundary, with no second round-trip.</li>
+</ul>
+<p>This path also structurally <strong>cannot corrupt the prompt</strong>: command hooks run without a controlling terminal and may only surface output via the restricted <code>terminalSequence</code> allowlist (notifications/titles/bell — nothing that moves the cursor). The "never inject mid-turn" rule (§4) is enforced by the hook system itself, not just by convention.</p>
+<h3 id="trigger-b-claudectl-waiting-edge-injection-fallback-only">Trigger B — claudectl <code>Waiting</code>-edge injection (fallback only)</h3>
+<p>Used only where a <code>Stop</code> hook can't be installed — e.g. an enterprise <code>allowManagedHooksOnly</code> policy blocks user/project/plugin hooks (§8), or the agent config is otherwise not under claudectl's control. claudectl falls back to what it already does: watch the JSONL, detect the <code>Processing → Waiting</code> edge, inject a short <code>/inbox</code> nudge (§9) via the terminal path. Same barge-in safety (delivery only at idle), but less clean and more terminal-dependent than Trigger A.</p>
+<h3 id="native-loop-safety">Native loop safety</h3>
+<p>The "two agents volley forever" fork-bomb has a built-in backstop independent of the bus's own hop caps: if a <code>Stop</code> hook blocks 8 times in a row within one turn, Claude Code short-circuits and ends the session (override via <code>CLAUDE_CODE_STOP_HOOK_BLOCK_CAP</code>). The bus's hop/loop guards (§10) layer on top of this, but the runtime already prevents the degenerate case.</p>
+<h3 id="limitation-no-true-preemption-unchanged">Limitation: no true preemption (unchanged)</h3>
+<p>Both triggers act at <strong>turn boundaries</strong>, not mid-turn. The <code>Stop</code> hook fires only when the model finishes; injection is safe only at idle. A message arriving while the recipient is mid-turn waits in the mailbox until the current turn ends. So an "urgent" message is delivered at the <em>next turn boundary</em> — it cannot preempt work already in progress. This is inherent and the spec accepts deferred-until-turn-boundary delivery as the contract. (The continue-in-turn mode narrows the window to "end of current turn," which is the best achievable.)</p>
+<h3 id="optional-complement-agent-side-loop">Optional complement: agent-side <code>/loop</code></h3>
+<p>For long-running autonomous agents that keep working across many turns, an opt-in <code>/loop</code> calling <code>/inbox</code> per iteration drains mail between steps. A complement to push, never the default — Triggers A/B handle the common case.</p>
+<hr />
+<h2 id="7-transport-architecture">7. Transport &amp; architecture</h2>
+<p>The MCP server runs <strong>in-process with claudectl and starts automatically on launch</strong> (§1) — there is no separate start command. claudectl is one process exposing two frontends over a shared core: the TUI and the bus MCP server. The server listens on a local transport (Unix socket / stdio bridge as appropriate); agents connect to it via the MCP registration that <code>claudectl init</code> installs (§8).</p>
+<p>Lifecycle:</p>
+<ul>
+<li><code>claudectl</code> (normal) → TUI <strong>and</strong> bus server both up.</li>
+<li><code>claudectl --bus-only</code> → headless server, no TUI (daemon / CI / long-running supervisor host).</li>
+<li><code>claudectl --no-bus</code> → TUI only, bus disabled (pure monitoring, the legacy behavior).</li>
+</ul>
+<p>Modules:</p>
+<ul>
+<li><strong><code>bus.rs</code></strong> (new): tool handlers, subject routing, claim protocol, mailbox state. Started by the main app init, not a subcommand.</li>
+<li><strong><code>policy.rs</code></strong> (new): content + flow validation (§10).</li>
+<li><strong><code>supervisor.rs</code></strong> (new): durable role directory, team-burst orchestration, dead-lead restart (§13).</li>
+<li><strong><code>discovery.rs</code></strong> / <strong><code>monitor.rs</code></strong> (existing): roster, status, <code>Waiting</code>-edge detection. Reused.</li>
+<li><strong><code>terminals/</code></strong> (existing): Trigger-B injection fallback. Reused.</li>
+<li><strong><code>orchestrator.rs</code></strong> (existing): optionally grows to host the <code>workflow.toml</code> centralized mode alongside the bus.</li>
+</ul>
+<p>A single shared in-process server serves all sessions (one shared mailbox store), rather than one server per session. Because the server's lifetime is claudectl's lifetime, the durable state (SQLite, §4) — not the process — is what guarantees messages and role addresses survive across claudectl restarts.</p>
+<hr />
+<h2 id="8-agent-side-provisioning-lifecycle">8. Agent-side provisioning &amp; lifecycle</h2>
+<p>For the bus to work, three things must exist in each participating agent's Claude Code config: the <strong>MCP server registration</strong>, the <strong><code>Stop</code> hook</strong> (Trigger A — now the primary path), and the <strong><code>/inbox</code> slash command</strong> (Trigger B fallback + optional <code>/loop</code> use). Today claudectl provisions none of this — every user would hand-wire three things per worktree and get them subtly wrong. claudectl MUST own the full lifecycle of these artifacts: install, update, verify, and uninstall.</p>
+<h3 id="provisioning-lives-inside-claudectl-init-not-a-separate-command">Provisioning lives inside <code>claudectl init</code>, not a separate command</h3>
+<p>There is <strong>no <code>claudectl setup</code> verb.</strong> The single canonical entry point for getting an environment ready is <a href="https://github.com/mercurialsolo/claudectl/issues/257"><strong><code>claudectl init</code></strong></a> — the same opinionated 60-second onboarding flow that handles the budget cap, brain auto-pilot detection, supervisor plugin install, and curated skill suggestions. Bus-readiness is one of its phases, not a parallel competing wizard. This matters because the worst onboarding bug we could ship is two separate "first-run" wizards a new user has to discover (the <a href="https://github.com/mercurialsolo/claudectl/issues/257">dashingsauce r/ClaudeCode comment</a> names that pattern explicitly: <em>"you end up connecting the same thing five times in five places"</em>).</p>
+<p><code>claudectl init</code> (no args) launches the interactive path; <code>--non-interactive</code> runs the same flow with prompted defaults for CI / dotfile automation. The bus-specific phases of that flow:</p>
+<ol>
+<li><strong>Discover worktrees / sessions</strong> — scan for git worktrees and running sessions, propose roles (defaulting role name from directory/branch).</li>
+<li><strong>Assign roles</strong> — confirm or edit the role for each, resolving the §5 shared-cwd ambiguity by prompting for explicit <code>--role</code> where needed.</li>
+<li><strong>Detect hook capability &amp; choose trigger per role</strong> — probe whether <code>Stop</code> hooks are installable (not blocked by <code>allowManagedHooksOnly</code>); select Trigger A (<code>Stop</code> hook → MCP tool, default) where possible, else Trigger B (<code>Waiting</code>-edge injection) (§6).</li>
+<li><strong>Install the claudectl-bus plugin (or fallback writes)</strong> — MCP server registration, <code>Stop</code> hook, <code>/inbox</code> command.</li>
+<li><strong>Subscriptions &amp; policy</strong> — optionally seed subject subscriptions (§3) and confirm the <code>[bus.policy]</code> defaults (§10).</li>
+</ol>
+<p>Non-interactive equivalent for a single role (the path that ships today):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>claudectl bus role bind implementer ~/proj-wt-impl
+</code></pre></div>
+<p>Future shape, once <code>init</code> lands:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>claudectl init --non-interactive \
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  --bus-role implementer --bus-cwd ~/proj-wt-impl \
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  --bus-trigger stop-hook --bus-subscribe &quot;task.*&quot;
+</code></pre></div>
+<h3 id="package-as-a-claude-code-plugin-preferred-mechanism">Package as a Claude Code plugin (preferred mechanism)</h3>
+<p>Claude Code plugins bundle hooks (<code>hooks/hooks.json</code>), slash commands, and MCP server config in a single installable unit. claudectl ships <strong>one "claudectl-bus" plugin</strong> carrying all three artifacts together, rather than editing <code>.claude/settings.json</code>, the commands dir, and the MCP config as three separate writes. Benefits: atomic install/uninstall, a single version to migrate, and the plugin's <code>${CLAUDE_PLUGIN_ROOT}</code> / <code>${CLAUDE_PLUGIN_DATA}</code> paths give claudectl a clean home for the hook scripts and any persistent state. <code>claudectl init</code> enables/configures this plugin; uninstall removes the plugin cleanly with no residue in user config.</p>
+<h3 id="fallback-direct-settings-write">Fallback: direct settings write</h3>
+<p>Where plugins are unavailable or an enterprise <code>allowManagedHooksOnly</code> policy blocks user/project/plugin hooks, <code>init</code> falls back to writing fenced entries into <code>.claude/settings.json</code> (or detecting that hooks are blocked entirely, in which case it provisions only the MCP server + <code>/inbox</code> command and selects <strong>Trigger B</strong> for that role).</p>
+<h3 id="managed-lifecycle-claudectl-owns-these-not-the-user">Managed lifecycle (claudectl owns these, not the user)</h3>
+<p>claudectl tracks every artifact it installs in its own state (<code>~/.claudectl/</code>) and manages the full lifecycle:</p>
+<ul>
+<li><strong>install</strong> — enable the plugin (or write fenced settings) idempotently; never clobber unmanaged user content (detect &amp; merge, or prompt).</li>
+<li><strong>verify / status</strong> — <code>claudectl init --check</code> reports whether each artifact is present, current-version, drifted, or missing. Drift = artifact edited out-of-band or stale after a claudectl upgrade.</li>
+<li><strong>update / migrate</strong> — on claudectl upgrade, re-render artifacts to the new version; <code>init</code> offers to migrate detected stale installs.</li>
+<li><strong>uninstall</strong> — <code>claudectl init --remove [--role X]</code> cleanly removes only claudectl-managed artifacts, leaving unmanaged config intact.</li>
+</ul>
+<p><code>init --reset</code> re-runs the full flow from scratch and is the recommended recovery path when an onboarding gets wedged.</p>
+<h3 id="ownership-idempotency-rules">Ownership &amp; idempotency rules</h3>
+<ul>
+<li>Managed artifacts are <strong>tagged/fenced</strong> (e.g. a <code># &gt;&gt;&gt; claudectl managed &gt;&gt;&gt;</code> marker block, or a dedicated managed file the user's config imports) so claudectl can update or remove exactly its own content without touching hand-written config.</li>
+<li>All operations are <strong>idempotent</strong> — re-running <code>init</code> converges to the desired state, never duplicates.</li>
+<li>claudectl <strong>never silently overwrites</strong> unmanaged content; conflicts surface in the interactive flow or fail loudly in <code>--non-interactive</code> mode.</li>
+<li>A marker file <code>~/.claudectl/onboarding.json</code> records the last completed init version so the flow doesn't re-prompt unnecessarily.</li>
+</ul>
+<p>This makes "is my environment bus-ready and current?" a single <code>claudectl init --check</code>, and makes onboarding a new worktree a single <code>init</code> pass rather than three manual edits.</p>
+<hr />
+<h2 id="9-slash-commands-risk-and-capability">9. Slash commands: risk and capability</h2>
+<p>Claude Code sessions interpret slash commands (<code>/loop</code>, custom commands). This cuts both ways and shapes two requirements.</p>
+<h3 id="risk-command-injection-at-the-delivery-boundary">Risk — command injection at the delivery boundary</h3>
+<p>If a delivered message body begins with <code>/</code>, the receiving session executes it as a <strong>command</strong> rather than reading it as content. A message could thereby smuggle <code>/loop</code> or a destructive custom command into a peer (accidentally, or via a poisoned upstream). </p>
+<p><strong>Requirement (non-optional):</strong> the bus MUST neutralize command semantics in message bodies at the injection boundary — escape/wrap a leading <code>/</code>, or reject the message. A <em>message</em> must never be able to become a <em>command</em> in the recipient. Sanitization lives at the injection point, since that is exactly where the message channel meets the command channel.</p>
+<h3 id="capability-slash-commands-as-the-clean-delivery-nudge">Capability — slash commands as the clean delivery nudge</h3>
+<p>Conversely, a custom slash command is a <em>better</em> nudge than raw text. Define <code>/inbox</code> (or similar) in each agent's config; claudectl's nudge is simply "run <code>/inbox</code>." The agent pulls its mailbox through a path it explicitly controls, sidestepping barge-in — a slash command is unambiguous and self-contained in a way a pasted paragraph is not.</p>
+<h3 id="resolution">Resolution</h3>
+<p>Commands flow <strong>one direction only</strong>: claudectl → session, as the controlled wake signal (<code>/inbox</code>). Message bodies flowing the other direction are stripped of all command syntax. This separates the control channel from the content channel cleanly.</p>
+<hr />
+<h2 id="10-guardrails">10. Guardrails</h2>
+<p>claudectl is the single process every message passes through, making it the correct, unbypassable enforcement point. Guardrails are <strong>policy, not hardcoded</strong> — a <code>[bus.policy]</code> config block with strict defaults, loosened opt-in.</p>
+<h3 id="content-validation">Content validation</h3>
+<ul>
+<li><strong>Type allowlist.</strong> Every message declares a <code>type</code> (<code>task</code>, <code>result</code>, <code>question</code>, <code>status</code>, <code>handoff</code>). Untyped/malformed messages are rejected. Prevents agents dumping whole reasoning traces into a send.</li>
+<li><strong>Command sanitization.</strong> Leading-<code>/</code> and known control sequences stripped/escaped/rejected at the injection boundary (§9). Non-optional.</li>
+<li><strong>Size limits.</strong> Max body length per message.</li>
+</ul>
+<h3 id="flow-control">Flow control</h3>
+<ul>
+<li><strong>Rate limits.</strong> Max messages per thread and per role per minute. Stops a looping agent flooding a peer before hop caps trigger.</li>
+<li><strong>Hop cap.</strong> Per-thread maximum number of hops; thread halts when exceeded.</li>
+<li><strong>Stop sentinel.</strong> A configured sentinel string in a body halts routing for that thread.</li>
+<li><strong>Loop / echo detection.</strong> Hash recent bodies per thread; near-identical repeated sends (semantic ping-pong) are flagged and halted early — catching the failure mode hop-counts catch only late.</li>
+<li><strong>Cost ceiling.</strong> Wire existing per-session cost/budget tracking into "stop delivering on budget exhaustion."</li>
+<li><strong>Global kill-switch.</strong> Operator can halt the entire bus.</li>
+</ul>
+<h3 id="authorization">Authorization</h3>
+<ul>
+<li><strong>Recipient / subject ACLs.</strong> Per-role rules: which roles may publish/subscribe to which subjects, who may broadcast, who may direct-send to whom. Makes fan-out topologies safe. Optional but recommended for &gt;2 agents.</li>
+</ul>
+<h3 id="example-policy">Example policy</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">[bus.policy]</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">allowed_types</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;task&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;result&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;question&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;status&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;handoff&quot;</span><span class="p">]</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">max_body_bytes</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="mi">8192</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">max_msgs_per_min</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">max_hops</span><span class="w">          </span><span class="o">=</span><span class="w"> </span><span class="mi">20</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">stop_sentinel</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;&lt;&lt;&lt;HALT&gt;&gt;&gt;&quot;</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">sanitize_commands</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">        </span><span class="c1"># non-optional in effect; strips leading &quot;/&quot;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">claim_timeout_s</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="mi">120</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="k">[bus.policy.acl]</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="n">planner</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">publish</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;task.*&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;review.requested&quot;</span><span class="p">],</span><span class="w"> </span><span class="n">subscribe</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;result.*&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;status.*&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="n">implementer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">publish</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;task.completed&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;status.update&quot;</span><span class="p">],</span><span class="w"> </span><span class="n">subscribe</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;task.*&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="n">reviewer</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">publish</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;review.completed&quot;</span><span class="p">],</span><span class="w"> </span><span class="n">subscribe</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;review.requested&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="n">fallback</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;human&quot;</span><span class="w">           </span><span class="c1"># unclaimed tasks escalate here</span>
+</code></pre></div>
+<hr />
+<h2 id="11-open-questions">11. Open questions</h2>
+<ul>
+<li><strong>Mailbox persistence format</strong> — SQLite (WAL, concurrent-safe) is the current lean. Confirm no objection to the dependency.</li>
+<li><strong>Shared cwd</strong> — <code>whoami</code> cwd-inference must require explicit <code>--role</code> when multiple sessions share a worktree.</li>
+<li><strong>Single vs. per-session server</strong> — single shared server assumed (shared mailbox); confirm.</li>
+<li><strong>Claim escalation target</strong> — human via TUI vs. a designated <code>fallback</code> role vs. priority re-publish. Possibly configurable per subject.</li>
+<li><strong>Subject taxonomy</strong> — ship a default set, or leave entirely to user config?</li>
+<li><strong>Managed-artifact fencing mechanism</strong> — claudectl-bus plugin (preferred, atomic) vs. fenced marker-block in <code>.claude/settings.json</code> (fallback). Plugin assumed primary; confirm.</li>
+<li><strong><code>Stop</code> hook availability</strong> — <em>resolved:</em> <code>Stop</code> hooks exist, support <code>mcp_tool</code> handlers, and can continue-in-turn. Remaining risk is only the enterprise <code>allowManagedHooksOnly</code> case, handled by the Trigger B fallback (§6, §8).</li>
+<li><strong>Native agent-teams integration</strong> — <em>resolved (see §1, §13):</em> agent teams are a bounded-burst execution unit, not a long-lived coordinator. claudectl does <strong>not</strong> reinvent intra-team primitives; it is the durable persistence/supervision layer <em>over</em> ephemeral teams. Remaining sub-question: should the supervisor spawn/drive native teams programmatically (via the Agent SDK env flag) or only observe and restart them?</li>
+<li><strong>Continue-in-turn vs. notify-and-idle default</strong> — should Trigger A default to blocking the <code>Stop</code> to deliver in-turn (lower latency, but interacts with the 8-block cap) or to notify-and-idle (simpler, one extra turn)? Possibly per-role policy.</li>
+<li><strong>Supervisor restart fidelity</strong> — native teams have no session resumption for in-process teammates; on a dead-lead restart the supervisor must re-spawn rather than resume. Confirm the durable task/message state in SQLite is sufficient to reconstruct a team's working context on respawn, or define what's lost.</li>
+</ul>
+<hr />
+<h2 id="12-suggested-build-order">12. Suggested build order</h2>
+<ol>
+<li><strong>Roles + <code>whoami</code> + <code>list_agents</code></strong> — durable names and a read-only directory. Lowest risk, immediately useful.</li>
+<li><strong>In-process bus MCP server, autostarted with claudectl</strong> — server skeleton over existing discovery; up by default on launch, <code>--no-bus</code> / <code>--bus-only</code> flags. No separate start command.</li>
+<li><strong>Provisioning via <code>claudectl init</code> (§8, tracked in #257)</strong> — bus-readiness phases (role assignment + managed install of MCP registration and <code>/inbox</code> command, with <code>--check</code>/<code>--remove</code>) fold into the umbrella <code>claudectl init</code> flow rather than a separate <code>setup</code> verb. Needed early: every later step assumes agents are wired up, and manual wiring is the main onboarding friction.</li>
+<li><strong>Mailbox (SQLite) + <code>publish</code> / <code>read_inbox</code> (directed <code>addressed_to</code> only)</strong> — point-to-point messaging working end to end.</li>
+<li><strong>Delivery: <code>Stop</code> hook → <code>read_inbox</code> MCP tool (Trigger A), <code>/inbox</code> injection fallback (Trigger B)</strong> — closes the loop; in-turn delivery, barge-in-safe by construction.</li>
+<li><strong>Command sanitization + content validation</strong> — guardrails before opening up routing.</li>
+<li><strong>Subjects + <code>subscribe</code> + claim protocol</strong> — full pub/sub.</li>
+<li><strong>Flow guards (rate/hop/loop/cost) + ACLs.</strong></li>
+<li><strong>Managed lifecycle: update/migrate on upgrade, drift detection</strong> — hardens §8 once artifacts are in real use.</li>
+<li><strong>Supervisor + long-horizon persistence (§13)</strong> — durable role directory across team teardown, dead-lead restart, repeated team-burst orchestration. The differentiated capability; build once the messaging substrate is solid.</li>
+<li><strong>TUI bus view</strong> — live roster + message-flow graph + team-burst lifecycle; the human's window into a bus the agents drive themselves.</li>
+</ol>
+<hr />
+<h2 id="13-longevity-persistence-across-team-teardown-the-differentiated-layer">13. Longevity: persistence across team teardown (the differentiated layer)</h2>
+<p>The target use case — agents collaborating continuously over a project that runs for weeks, months, or longer — is <strong>not</strong> served by native agent teams, which are a bounded-burst tool. The verified limitations that make teams unfit for long-horizon operation, and what claudectl supplies instead:</p>
+<table>
+<thead>
+<tr>
+<th>Agent-teams limitation (native)</th>
+<th>Consequence for long-running work</th>
+<th>claudectl supervisor provides</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No session resumption for in-process teammates; lead may message dead teammates after resume</td>
+<td>A team cannot survive a restart</td>
+<td>Durable role directory + mailbox in SQLite; on restart, re-spawn teammates and reattach by <strong>role</strong>, not session ID</td>
+</tr>
+<tr>
+<td>Lead is fixed for the team's lifetime; no leadership transfer</td>
+<td>Single point of failure over months</td>
+<td>Supervisor restarts a dead lead and re-creates the team from persisted task/role state</td>
+</tr>
+<tr>
+<td>Cleanup tears the team down on task completion</td>
+<td>Lifecycle is create→synthesize→destroy, not continuous</td>
+<td>Bursts are <em>episodes</em>; the durable layer persists between them and launches the next when work arrives</td>
+</tr>
+<tr>
+<td>One team at a time, no nested teams</td>
+<td>Can't run many concurrent long-lived workstreams</td>
+<td>Bus coordinates <em>across</em> multiple sequential/parallel team episodes and standalone agents</td>
+</tr>
+<tr>
+<td>Linear ~5x token cost per active teammate</td>
+<td>Continuous always-on teams are economically implausible</td>
+<td>Teams are spun up only for bursts of genuine parallel work, then torn down; the persistent layer between bursts is cheap (no idle teammates burning tokens)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-model-episodic-bursts-under-a-durable-supervisor">The model: episodic bursts under a durable supervisor</h3>
+<p>The right architecture for months-to-years collaboration is <strong>not</strong> an always-on swarm (too costly, and teams can't persist anyway). It is:</p>
+<ol>
+<li>A <strong>durable supervisor</strong> (claudectl <code>--bus-only</code> or the running TUI) holds the long-lived state: the role directory, the persistent mailboxes, the project-level task backlog, subscriptions, and policy. This survives indefinitely because it is process-independent SQLite state, not a set of live sessions.</li>
+<li>When a unit of work warrants parallelism, the supervisor <strong>spins up a native agent team as an episode</strong> — a bounded burst — optionally seeding it from the persisted backlog.</li>
+<li>The team does its parallel work using its <em>own</em> native task list and mailbox (the bus does not interfere intra-team, §2).</li>
+<li>On completion the team <strong>tears down normally</strong>; the supervisor harvests results into durable state and the role addresses persist for the next episode.</li>
+<li>Between episodes, standalone long-lived agents (not in any team) continue to coordinate over the bus, and the supervisor <strong>restarts anything that dies</strong>.</li>
+</ol>
+<p>This gives the months/years horizon as a <em>supervised sequence of cheap-to-persist, expensive-only-when-active episodes</em>, rather than an impossible continuous team. Native teams are the muscle; claudectl is the skeleton and memory that outlive any single contraction.</p>
+<h3 id="what-must-be-durable-survives-process-death-claudectl-restart-team-teardown">What must be durable (survives process death, claudectl restart, team teardown)</h3>
+<ul>
+<li>Role directory: role → cwd-selector binding, last-known session, subscriptions.</li>
+<li>Mailboxes: undelivered and threaded messages, keyed by role.</li>
+<li>Project task backlog: work not yet dispatched to an episode, plus harvested results.</li>
+<li>Policy and ACLs.</li>
+</ul>
+<h3 id="what-is-explicitly-ephemeral-re-derived-never-relied-upon-long-term">What is explicitly ephemeral (re-derived, never relied upon long-term)</h3>
+<ul>
+<li>Live session IDs, PIDs, tmux pane IDs (re-discovered each launch).</li>
+<li>A native team's in-flight intra-team task list (owned by the team; harvested at teardown, not mirrored live).</li>
+<li>Any agent's context window (teams don't resume; the supervisor reconstructs working context from durable state on respawn — see open question on restart fidelity).</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/mercurialsolo/claudectl" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
