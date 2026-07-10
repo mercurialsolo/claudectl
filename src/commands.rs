@@ -1554,6 +1554,80 @@ pub(crate) fn run_brain_lite_mode(mode: &str) -> io::Result<()> {
     Ok(())
 }
 
+const POLICY_SCAFFOLD: &str = "\
+# .claudectl/policy.toml — team guardrails, checked into the repo.
+#
+# These are enforced at the highest precedence by the brain gate and CANNOT be
+# softened by an individual developer's local config. Change them by changing
+# this file — a reviewed commit, not a silent local edit.
+#
+# See docs/policy-as-code.md.
+
+[deny]
+# Commands blocked anywhere in this repo (case-insensitive substring match).
+commands = [
+  \"git push --force\",
+  \"git push -f\",
+]
+# Tools blocked entirely (exact, case-insensitive). E.g. [\"WebFetch\"].
+tools = []
+";
+
+/// Handle `--policy [action]`: show the active team policy, or `init` to
+/// scaffold a starter `.claudectl/policy.toml` in the current directory.
+pub(crate) fn run_policy(action: Option<&str>) -> io::Result<()> {
+    match action {
+        Some("init") => {
+            let dir = std::path::Path::new(".claudectl");
+            let path = dir.join("policy.toml");
+            if path.exists() {
+                eprintln!("{} already exists — not overwriting.", path.display());
+                std::process::exit(1);
+            }
+            std::fs::create_dir_all(dir)?;
+            std::fs::write(&path, POLICY_SCAFFOLD)?;
+            println!("Wrote {}", path.display());
+            println!("Edit it, then commit it so the whole team inherits the guardrails.");
+            Ok(())
+        }
+        None | Some("") | Some("show") => {
+            match crate::team_policy::load() {
+                Some(policy) if !policy.is_empty() => {
+                    println!("Team policy: {}", policy.source.display());
+                    if !policy.deny_commands.is_empty() {
+                        println!("  Denied commands:");
+                        for c in &policy.deny_commands {
+                            println!("    - {c}");
+                        }
+                    }
+                    if !policy.deny_tools.is_empty() {
+                        println!("  Denied tools:");
+                        for t in &policy.deny_tools {
+                            println!("    - {t}");
+                        }
+                    }
+                    println!();
+                    println!(
+                        "Enforced by the brain gate at highest precedence — local config can't soften these."
+                    );
+                }
+                _ => {
+                    println!("No team policy in effect.");
+                    println!(
+                        "Scaffold one with `claudectl --policy init` (writes .claudectl/policy.toml)."
+                    );
+                }
+            }
+            Ok(())
+        }
+        Some(other) => {
+            eprintln!("Unknown policy action: {other}");
+            eprintln!("Usage: `claudectl --policy` (show) or `claudectl --policy init` (scaffold)");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Handle --insights: show insights or set mode (on/off/status).
 /// Requires brain to be enabled.
 pub(crate) fn run_insights(cfg: &config::Config, cli: &Cli, arg: &str) -> io::Result<()> {
@@ -2005,6 +2079,37 @@ pub(crate) fn run_brain_query(cfg: &config::Config, cli: &Cli) -> io::Result<()>
     } else {
         Some(command.clone())
     };
+
+    // Team policy (checked-in `.claudectl/policy.toml`) runs first and at the
+    // highest precedence: its denies come from version control, not a user's
+    // local config, so a developer can't soften them by editing rules. Reuses
+    // the same rule engine, so matching semantics match everything else.
+    if let Some(policy) = crate::team_policy::load() {
+        let policy_rules = policy.to_deny_rules();
+        if let Some(m) = rules::evaluate(&policy_rules, &synthetic) {
+            brain::decisions::log_observation(
+                std::process::id(),
+                &project,
+                Some(&tool_name),
+                command_arg(&command),
+                "policy_deny",
+                Some(&synthetic),
+            );
+            let reasoning = m
+                .message
+                .unwrap_or_else(|| "blocked by team policy".to_string());
+            let result = serde_json::json!({
+                "action": "deny",
+                "reasoning": reasoning,
+                "confidence": 1.0,
+                "source": "policy",
+                "rule_name": m.rule_name,
+                "why": format!("via team policy · {}", policy.source.display()),
+            });
+            println!("{}", serde_json::to_string(&result).unwrap());
+            return Ok(());
+        }
+    }
 
     // Check deny rules
     if let Some(deny_match) = rules::evaluate(&deny_rules, &synthetic) {

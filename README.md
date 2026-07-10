@@ -310,6 +310,8 @@ Three load-bearing properties from the design spec:
 
 Metrics (team observability): `claudectl supervisor metrics 0.0.0.0:9464` serves a Prometheus `/metrics` endpoint (`claudectl_tasks_by_state`, `claudectl_fleet_cost_usd_total`, `claudectl_retries_total`, `claudectl_verifier_pass_rate`) that Grafana or Datadog scrape with no claudectl-specific glue. Each scrape reads the coord DB fresh (WAL), so it runs safely alongside the reconciler. A ready dashboard and the full recipe live in [docs/team-observability.md](docs/team-observability.md).
 
+Policy as code (team guardrails): commit a `.claudectl/policy.toml` to the repo and its `[deny]` commands/tools are enforced by the brain gate at the highest precedence — a developer can't soften them by editing local config. Scaffold with `claudectl --policy init`, inspect with `claudectl --policy`. See [docs/policy-as-code.md](docs/policy-as-code.md).
+
 ## Hive Mind & Relay
 
 The brain distills your decisions into shareable knowledge. Connect instances across machines to build a convergent hive mind.

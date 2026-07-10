@@ -70,6 +70,7 @@ pub fn run_all_checks() -> Vec<Check> {
         check_coord_schema(),
         check_coord_session_policy_dir(),
         check_supervisor_drain_state(),
+        check_team_policy(),
         check_session_discovery(),
         check_terminal_integration(),
     ]
@@ -335,6 +336,32 @@ fn check_plugin_version() -> Check {
                 "Run `claudectl init upgrade` to re-sync hooks + plugin files + DB migrations to the current binary.".into(),
             ),
         }
+    }
+}
+
+fn check_team_policy() -> Check {
+    // Repo-scoped and optional: a repo with no `.claudectl/policy.toml` is the
+    // normal case, so absence is Skipped, not a problem. When present, confirm
+    // what's active so a lead can verify the guardrails are being read.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match crate::team_policy::load_from(&cwd) {
+        Some(policy) if !policy.is_empty() => Check {
+            name: "team policy".into(),
+            status: CheckStatus::Pass,
+            message: format!(
+                "{} command deny(s), {} tool deny(s) from {}",
+                policy.deny_commands.len(),
+                policy.deny_tools.len(),
+                policy.source.display()
+            ),
+            fix_hint: None,
+        },
+        _ => Check {
+            name: "team policy".into(),
+            status: CheckStatus::Skipped,
+            message: "no .claudectl/policy.toml in this repo (optional)".into(),
+            fix_hint: Some("Scaffold team guardrails with `claudectl --policy init`.".into()),
+        },
     }
 }
 
