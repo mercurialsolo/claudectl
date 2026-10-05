@@ -923,7 +923,7 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
         let value = value.trim();
 
         // Strip inline comments
-        let value = value.split('#').next().unwrap_or(value).trim();
+        let value = strip_inline_comment(value).trim();
 
         match (section.as_str(), key) {
             ("" | "defaults", "interval") => {
@@ -1466,6 +1466,32 @@ fn parse_hooks_from_file(path: &PathBuf, registry: &mut crate::hooks::HookRegist
     }
 }
 
+/// Strip a trailing `# comment` from a value, leaving a `#` that falls inside a
+/// quoted string alone.
+///
+/// `auth_token = "s3cr#t"` is a bearer token containing a hash, not a token
+/// followed by a comment. Splitting on the first `#` truncated it silently: the
+/// relay would start with the wrong secret and 401 every client that sent the
+/// right one, with nothing pointing at the config file (#426).
+fn strip_inline_comment(value: &str) -> &str {
+    let mut quote: Option<u8> = None;
+    for (i, &b) in value.as_bytes().iter().enumerate() {
+        match b {
+            b'"' | b'\'' => match quote {
+                Some(open) if open == b => quote = None,
+                None => quote = Some(b),
+                // A different quote char inside a quoted string is literal.
+                Some(_) => {}
+            },
+            // Only an unquoted '#' starts a comment. Indexing is safe: the
+            // delimiters are ASCII, so `i` is always a char boundary.
+            b'#' if quote.is_none() => return &value[..i],
+            _ => {}
+        }
+    }
+    value
+}
+
 fn parse_bool(s: &str) -> Option<bool> {
     match s {
         "true" => Some(true),
@@ -1637,6 +1663,28 @@ enabled = true
     }
 
     #[test]
+    fn quoted_values_survive_a_hash_in_the_string() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[relay]
+auth_token = "s3cr#t"          # a '#' inside the quotes is data, not a comment
+"#
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        // A silently truncated bearer token is the worst failure shape here:
+        // the relay starts, every correct client gets a bare 401, and nothing
+        // points at the config file.
+        let raw = parse_config_file(&file.path().to_path_buf()).unwrap();
+        let raw_relay = raw.relay.as_ref().expect("relay section should parse");
+        assert_eq!(raw_relay.auth_token.as_deref(), Some("s3cr#t"));
+    }
+
+    #[test]
     fn relay_http_addr_is_a_known_config_key() {
         // Without this, `claudectl config set relay.http_addr …` would warn as
         // an unknown key even though the parser handles it.
@@ -1649,6 +1697,30 @@ enabled = true
         assert_eq!(parse_bool("true"), Some(true));
         assert_eq!(parse_bool("false"), Some(false));
         assert_eq!(parse_bool("yes"), None);
+    }
+
+    #[test]
+    fn test_strip_inline_comment() {
+        // Unquoted '#' still starts a comment.
+        assert_eq!(strip_inline_comment("1000  # poll interval").trim(), "1000");
+        assert_eq!(strip_inline_comment("true # yes").trim(), "true");
+        // A '#' inside quotes is part of the value.
+        assert_eq!(strip_inline_comment(r#""s3cr#t""#), r#""s3cr#t""#);
+        assert_eq!(strip_inline_comment("'a#b'"), "'a#b'");
+        // Quoted value followed by a real comment: keep one, drop the other.
+        assert_eq!(
+            strip_inline_comment(r#""s3cr#t"  # the token"#).trim(),
+            r#""s3cr#t""#
+        );
+        // Arrays keep their quoted elements.
+        assert_eq!(
+            strip_inline_comment(r#"["rm -rf #*"] # danger"#).trim(),
+            r#"["rm -rf #*"]"#
+        );
+        // An apostrophe in a comment must not re-open a quote and swallow it.
+        assert_eq!(strip_inline_comment("5 # don't do this").trim(), "5");
+        // Nothing to strip.
+        assert_eq!(strip_inline_comment("plain"), "plain");
     }
 
     #[test]

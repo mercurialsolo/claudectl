@@ -178,7 +178,13 @@ pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    diff_accumulator(a, b) == 0
+    // `black_box` is load-bearing, not a micro-optimisation guard. Without it
+    // the compiler can see that only `!= 0` is ever observed, and is then free
+    // to break out of the fold as soon as `diff` becomes non-zero — which is
+    // exactly the early exit this function exists to avoid. Forcing the
+    // accumulator to be materialised keeps the whole slice on the fast path.
+    // `subtle` does the same thing for the same reason.
+    std::hint::black_box(diff_accumulator(a, b)) == 0
 }
 
 // ────────────────────────────────────────────────────────────────────────────

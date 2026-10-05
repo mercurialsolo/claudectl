@@ -199,7 +199,7 @@ fn cmd_serve(
     if port == 9847 {
         port = relay_cfg.listen_port;
     }
-    let listen_addr = format!("{}:{port}", relay_cfg.listen_addr);
+    let listen_addr = join_host_port(&relay_cfg.listen_addr, port);
     let addr: SocketAddr = listen_addr
         .parse()
         .map_err(|e| io::Error::other(format!("invalid addr '{listen_addr}': {e}")))?;
@@ -232,6 +232,24 @@ fn cmd_serve(
     // transport is HMAC-authenticated and meant to be reachable; the HTTP API is
     // plaintext with a bearer token, so it defaults to loopback (#426).
     let http_host = http_addr.unwrap_or(&relay_cfg.http_addr);
+
+    // An empty token would bind a listener that rejects every request, so treat
+    // it as unconfigured rather than half-starting the API.
+    let auth_token_str = auth_token_str.filter(|t| !t.is_empty());
+
+    // The API needs both a port and a token. Saying so beats falling through
+    // silently and leaving the operator's dashboard on connection-refused.
+    match (http_port, &auth_token_str) {
+        (Some(_), None) => eprintln!(
+            "warning: --http-port was given without a non-empty --auth-token, \
+             so the HTTP API is not running."
+        ),
+        (None, Some(_)) => eprintln!(
+            "warning: an auth token is set but no --http-port, so the HTTP API \
+             is not running."
+        ),
+        _ => {}
+    }
 
     let _http_server = if let (Some(hp), Some(token)) = (http_port, &auth_token_str) {
         let http_bind = join_host_port(http_host, hp);
