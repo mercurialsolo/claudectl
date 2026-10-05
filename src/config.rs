@@ -1551,6 +1551,99 @@ fn ensure_agent<'a>(agents: &'a mut Vec<AgentConfig>, name: &str) -> &'a mut Age
 mod tests {
     use super::*;
 
+    // The coordinator HTTP API's bind address is a security default (#426), so
+    // pin it at every layer: the struct default, TOML parsing, the merge into
+    // Config, and the `config set` key allowlist.
+
+    #[test]
+    fn relay_http_addr_defaults_to_loopback() {
+        let relay = RelayConfig::default();
+        assert_eq!(relay.http_addr, "127.0.0.1");
+        // The peer transport is HMAC-authenticated and meant to be reachable;
+        // it must NOT have been narrowed along with the HTTP API.
+        assert_eq!(relay.listen_addr, "0.0.0.0");
+    }
+
+    #[test]
+    fn relay_http_addr_parses_from_toml() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[relay]
+listen_addr = "0.0.0.0"
+http_addr = "0.0.0.0"
+http_port = 9876
+auth_token = "s3cret"
+"#
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        let raw = parse_config_file(&file.path().to_path_buf()).unwrap();
+        let raw_relay = raw.relay.as_ref().expect("relay section should parse");
+        assert_eq!(raw_relay.http_addr.as_deref(), Some("0.0.0.0"));
+        assert_eq!(raw_relay.http_port, Some(9876));
+        assert_eq!(raw_relay.auth_token.as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn relay_http_addr_merges_over_the_default() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[relay]
+http_addr = "192.168.1.5"
+"#
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        let raw = parse_config_file(&file.path().to_path_buf()).unwrap();
+        let mut cfg = Config::default();
+        cfg.apply(raw);
+
+        let relay = cfg.relay.expect("relay config should exist after apply");
+        assert_eq!(relay.http_addr, "192.168.1.5");
+        // Unset keys keep their defaults rather than being blanked.
+        assert_eq!(relay.listen_addr, "0.0.0.0");
+        assert_eq!(relay.listen_port, 9847);
+    }
+
+    #[test]
+    fn relay_http_addr_absent_from_toml_stays_loopback() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[relay]
+enabled = true
+"#
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        let raw = parse_config_file(&file.path().to_path_buf()).unwrap();
+        let mut cfg = Config::default();
+        cfg.apply(raw);
+
+        let relay = cfg.relay.expect("relay config should exist after apply");
+        assert!(relay.enabled);
+        assert_eq!(relay.http_addr, "127.0.0.1");
+    }
+
+    #[test]
+    fn relay_http_addr_is_a_known_config_key() {
+        // Without this, `claudectl config set relay.http_addr …` would warn as
+        // an unknown key even though the parser handles it.
+        let keys = known_keys("relay").expect("relay section should have known keys");
+        assert!(keys.contains(&"http_addr"), "got {keys:?}");
+    }
+
     #[test]
     fn test_parse_bool() {
         assert_eq!(parse_bool("true"), Some(true));
