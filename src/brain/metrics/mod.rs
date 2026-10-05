@@ -380,7 +380,6 @@ fn print_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::accuracy::*;
     use super::*;
     use crate::brain::decisions::{DecisionRecord, DecisionType};
 

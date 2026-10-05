@@ -513,7 +513,7 @@ impl BrainEngine {
                 session.display_name(),
                 session.model,
                 session.cost_usd,
-                &ctx.recent_transcript,
+                ctx.recent_transcript,
             );
 
             // Save checkpoint
