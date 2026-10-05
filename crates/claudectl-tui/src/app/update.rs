@@ -869,19 +869,15 @@ impl App {
         // Prefer daily limit, fall back to per-session budget
         let (spent, limit) = if let Some(daily) = self.daily_limit {
             (self.weekly_summary.today_cost_usd + live_cost, daily)
-        } else if let Some(budget) = self.budget_usd {
+        } else {
+            let budget = self.budget_usd?;
             // For per-session budget, show the session closest to limit
-            if let Some(session) = self.sessions.iter().max_by(|a, b| {
+            let session = self.sessions.iter().max_by(|a, b| {
                 (a.cost_usd / budget)
                     .partial_cmp(&(b.cost_usd / budget))
                     .unwrap_or(std::cmp::Ordering::Equal)
-            }) {
-                (session.cost_usd, budget)
-            } else {
-                return None;
-            }
-        } else {
-            return None;
+            })?;
+            (session.cost_usd, budget)
         };
 
         let remaining = limit - spent;
