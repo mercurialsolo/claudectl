@@ -833,10 +833,10 @@ pub(crate) fn print_list(demo: bool, filters: &ViewFilters) -> io::Result<()> {
     }
 
     println!(
-        "{:<7} {:<16} {:<12} {:<8} {:<8} {:<9} {:<10} {:<6} {:<6} TOKENS",
+        "{:<7} {:<26} {:<12} {:<8} {:<8} {:<9} {:<10} {:<6} {:<6} TOKENS",
         "PID", "PROJECT", "STATUS", "CTX%", "COST", "$/HR", "ELAPSED", "CPU%", "MEM"
     );
-    println!("{}", "-".repeat(105));
+    println!("{}", "-".repeat(115));
 
     for s in visible_sessions {
         let status_text = if s.status == session::SessionStatus::Unknown {
@@ -845,9 +845,12 @@ pub(crate) fn print_list(demo: bool, filters: &ViewFilters) -> io::Result<()> {
             s.status.to_string()
         };
         println!(
-            "{:<7} {:<16} {:<12} {:<8} {:<8} {:<9} {:<10} {:<6.1} {:<6} {}",
+            "{:<7} {:<26} {:<12} {:<8} {:<8} {:<9} {:<10} {:<6.1} {:<6} {}",
             s.pid,
-            s.display_name(),
+            // Clamp to the column width: `{:<16}` pads short names but lets long
+            // ones push every later column out of line. Remote sessions carry a
+            // `[worker-id]` prefix and overflow routinely.
+            claudectl_core::helpers::truncate_cell(s.display_name(), 26),
             status_text,
             s.format_context(),
             s.format_cost(),
@@ -860,7 +863,7 @@ pub(crate) fn print_list(demo: bool, filters: &ViewFilters) -> io::Result<()> {
     }
 
     let total_cost: f64 = app.visible_sessions().iter().map(|s| s.cost_usd).sum();
-    println!("{}", "-".repeat(105));
+    println!("{}", "-".repeat(115));
     println!("Total cost: ${total_cost:.2}");
     if app.has_active_filters() {
         println!("{}", app.filter_summary());

@@ -327,9 +327,14 @@ claudectl relay invite                # Generate an invite code
 claudectl relay join YEK-AGA-YHK-QAA-BM       # Join from another machine
 claudectl relay discover              # Scan LAN for nearby instances
 
-# Start coordinator with HTTP API for multi-machine dashboard
+# Run a relay on each machine, then see every session on either one
+claudectl relay serve                 # leave running on both machines
+claudectl relay fleet                 # every session across the cluster
+claudectl relay delegate mac-mini "run the full test suite" --cwd ~/code/app
+
+# Remote sessions also appear in the TUI as [worker-id] project-name.
+# For a dashboard off-machine, expose the coordinator's HTTP API:
 claudectl relay serve --http-port 9876 --auth-token secret
-# Remote sessions appear in the TUI as [worker-id] project-name
 # GET /api/sessions returns the unified view across all workers
 ```
 

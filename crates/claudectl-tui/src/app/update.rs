@@ -443,6 +443,10 @@ impl App {
         // Append remote sessions from relay peers (if relay feature active)
         #[cfg(feature = "relay")]
         {
+            // Pick up the fleet snapshot `claudectl relay serve` publishes. An
+            // absent or stale file means no relay is running here, which leaves
+            // this empty — the ordinary single-machine case.
+            self.remote_sessions = claudectl_core::fleet::remote_sessions();
             for remote in &self.remote_sessions {
                 self.sessions.push(remote.clone());
             }

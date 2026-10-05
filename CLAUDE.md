@@ -50,6 +50,7 @@ src/                   # the binary crate `claudectl`
 - `monitor.rs` — Parses JSONL conversation logs for tokens, cost, status events
 - `process.rs` — Process introspection via native `ps` (not sysinfo crate)
 - `history.rs` — Session history persistence and cost analytics
+- `fleet.rs` — Cluster session view: the `~/.claudectl/relay/fleet.json` snapshot `relay serve` publishes (atomic write, staleness gates) plus a side-effect-free local session collector for advertising to peers
 - `health.rs` — Session health monitoring (cache ratio, cost spikes, loop detection, stalls, context saturation). Owns `HealthThresholds`.
 - `rules.rs` — Auto-rule engine: match sessions by status/tool/command/project/cost, then approve/deny/send/terminate/route/spawn/delegate
 - `models.rs` — Model pricing profiles (built-in + user overrides) for cost tracking
@@ -104,6 +105,7 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 
 **Relay** (`src/relay/`): Cross-machine TCP transport (feature-gated behind `relay`).
 - `mod.rs` — PeerId, RelayMessage, MessageType, identity persistence, peer PSK storage
+- `advertise.rs` — Collects this machine's sessions for the heartbeat (throttled to 5s) and publishes the fleet snapshot peers report; `relay fleet` and the TUI read it
 - `crypto.rs` — Inline SHA-256 + HMAC-SHA256, PSK generation/formatting
 - `protocol.rs` — NDJSON framing over TCP, HMAC challenge-response auth
 - `peer.rs` — PeerConnection: connect, send, reader thread, heartbeat, reconnect

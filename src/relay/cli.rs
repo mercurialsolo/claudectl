@@ -115,6 +115,9 @@ pub enum RelayCommand {
 
     /// Scan LAN for nearby claudectl instances
     Discover,
+
+    /// Show every session running across the cluster (local + all peers)
+    Fleet,
 }
 
 /// Dispatch a relay subcommand.
@@ -148,6 +151,7 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
         RelayCommand::Invite { qr, words } => cmd_invite(*qr, *words, json_mode),
         RelayCommand::Join { input } => cmd_join(input),
         RelayCommand::Discover => cmd_discover(json_mode),
+        RelayCommand::Fleet => cmd_fleet(json_mode),
     }
 }
 
@@ -247,8 +251,16 @@ fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io:
         r.store(false, std::sync::atomic::Ordering::Relaxed);
     });
 
+    // This machine's sessions, advertised to peers on every heartbeat.
+    let mut local_feed = super::advertise::LocalSessionFeed::new();
+
     while running.load(std::sync::atomic::Ordering::Relaxed) {
         std::thread::sleep(std::time::Duration::from_secs(1));
+
+        // Collect before taking the registry lock: enrichment shells out to
+        // `ps` and reads JSONL tails, and holding the lock across that would
+        // stall incoming messages.
+        let collected = local_feed.collect_if_due(std::time::Instant::now());
 
         // Process incoming messages and tick
         if let Ok(mut reg) = registry.lock() {
@@ -404,7 +416,7 @@ fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io:
                 }
             }
 
-            let events = reg.tick(identity.as_str(), None);
+            let events = reg.tick(identity.as_str(), Some(local_feed.sessions()));
             for event in events {
                 match event {
                     super::mesh::MeshEvent::PeerDisconnected(id) => {
@@ -432,6 +444,17 @@ fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io:
                 let registry_keys: std::collections::HashSet<&String> =
                     reg.all_worker_states().keys().collect();
                 cs.workers.retain(|k, _| registry_keys.contains(k));
+                if collected {
+                    // Without this the coordinator reported every peer's
+                    // sessions but none of its own.
+                    cs.local_sessions = local_feed.sessions().to_vec();
+                }
+            }
+
+            // Publish the fleet snapshot the local TUI reads. Same beat as
+            // collection, so a peer's heartbeat shows up within one interval.
+            if collected {
+                super::advertise::publish_snapshot(identity.as_str(), &reg);
             }
         }
     }
@@ -506,8 +529,13 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
     });
     let identity = super::PeerId(identity.to_string());
 
+    // A machine that only connects out still advertises its own sessions, so
+    // the fleet view is symmetric regardless of which side dialled.
+    let mut local_feed = super::advertise::LocalSessionFeed::new();
+
     while running.load(std::sync::atomic::Ordering::Relaxed) {
         std::thread::sleep(std::time::Duration::from_secs(1));
+        let collected = local_feed.collect_if_due(std::time::Instant::now());
         if let Ok(mut reg) = registry.lock() {
             let messages = reg.drain_messages();
             for (peer_id, msg) in &messages {
@@ -525,7 +553,7 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                     }
                 }
             }
-            let events = reg.tick(identity.as_str(), None);
+            let events = reg.tick(identity.as_str(), Some(local_feed.sessions()));
             for event in events {
                 match event {
                     super::mesh::MeshEvent::PeerDisconnected(id) => {
@@ -542,6 +570,11 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                         }
                     }
                 }
+            }
+
+            // Publish the fleet snapshot for the local TUI, same as `serve`.
+            if collected {
+                super::advertise::publish_snapshot(identity.as_str(), &reg);
             }
         }
     }
@@ -720,6 +753,115 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `claudectl relay fleet`
+/// Show every session running across the cluster — this machine plus every
+/// peer that has reported in. Reads the snapshot `relay serve` publishes, so it
+/// needs a relay running locally; without one it says so rather than printing
+/// an empty table that looks like an idle cluster.
+fn cmd_fleet(json_mode: bool) -> io::Result<()> {
+    use claudectl_core::fleet;
+    use claudectl_core::helpers::truncate_cell;
+
+    let identity = load_or_create_identity();
+    let snapshot = fleet::read_snapshot();
+    let local = fleet::collect_local_sessions();
+
+    if json_mode {
+        let mut workers = vec![serde_json::json!({
+            "worker_id": identity.as_str(),
+            "local": true,
+            "sessions": local,
+        })];
+        if let Some(snap) = &snapshot {
+            for w in snap.live_workers() {
+                workers.push(serde_json::json!({
+                    "worker_id": w.worker_id,
+                    "local": false,
+                    "sessions": w.sessions,
+                }));
+            }
+        }
+        let output = serde_json::json!({
+            "identity": identity.as_str(),
+            "relay_running": snapshot.is_some(),
+            "workers": workers,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return Ok(());
+    }
+
+    // Rows and counts both come from `live_workers`, so a peer that stopped
+    // reporting disappears from the table instead of inflating it.
+    let live: Vec<fleet::FleetWorker> = snapshot
+        .as_ref()
+        .map(|s| s.live_workers().into_iter().cloned().collect())
+        .unwrap_or_default();
+    let remote_count: usize = live.iter().map(|w| w.sessions.len()).sum();
+    let total = local.len() + remote_count;
+
+    println!(
+        "Fleet: {} session(s) across {} machine(s)",
+        total,
+        1 + live.len()
+    );
+    println!();
+    println!("{:<20} {:<28} {:<14} COST", "MACHINE", "PROJECT", "STATUS");
+    println!("{}", "─".repeat(72));
+
+    for value in &local {
+        // Peer ids are long enough that a trailing "(local)" would be the part
+        // the column truncates away, so mark this machine with a star instead.
+        print_fleet_row(&format!("{}*", truncate_cell(identity.as_str(), 18)), value);
+    }
+    for w in &live {
+        for value in &w.sessions {
+            print_fleet_row(&w.worker_id, value);
+        }
+    }
+
+    if total == 0 {
+        println!("(no sessions running)");
+    } else {
+        println!();
+        println!("* = this machine");
+    }
+
+    if snapshot.is_none() {
+        println!();
+        println!("No relay snapshot found — showing local sessions only.");
+        println!("Start a relay on each machine to see the whole cluster:");
+        println!("  claudectl relay serve");
+    }
+
+    Ok(())
+}
+
+/// One row of the fleet table, tolerant of a peer running an older build that
+/// omits a field.
+fn print_fleet_row(machine: &str, value: &serde_json::Value) {
+    use claudectl_core::helpers::truncate_cell;
+
+    let project = value
+        .get("project")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let status = value
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown");
+    let cost = match value.get("cost_usd").and_then(|v| v.as_f64()) {
+        Some(c) => format!("${c:.2}"),
+        None => "-".to_string(),
+    };
+    println!(
+        "{:<20} {:<28} {:<14} {}",
+        truncate_cell(machine, 19),
+        truncate_cell(project, 27),
+        status,
+        cost
+    );
 }
 
 /// `claudectl relay disconnect <peer_id>`

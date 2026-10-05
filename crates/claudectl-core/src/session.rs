@@ -465,7 +465,6 @@ impl ClaudeSession {
     }
 
     /// Build a ClaudeSession from remote JSON (as received via heartbeat/HTTP).
-    #[allow(dead_code)]
     pub fn from_remote_json(worker_id: &str, json: &serde_json::Value) -> Option<Self> {
         let pid = json.get("pid")?.as_u64()? as u32;
         let project = json.get("project")?.as_str()?;
