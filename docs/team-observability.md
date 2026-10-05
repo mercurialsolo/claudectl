@@ -23,11 +23,19 @@ scrapes.
 ## 1. Run the exporter
 
 ```bash
-claudectl supervisor metrics 0.0.0.0:9464
+claudectl supervisor metrics          # binds 127.0.0.1:9464
 ```
 
-- Binds `127.0.0.1:9464` by default; pass `0.0.0.0:9464` to expose it on the LAN
-  for a shared Prometheus.
+- `/metrics` has **no authentication** — no token, no TLS. Anything that can
+  reach the port reads your fleet's task and cost data, which is why the bind
+  defaults to loopback.
+- A Prometheus scraping from the exporter's own host needs nothing further. For
+  one on another host, forward the loopback port rather than widening the bind —
+  from the machine running Prometheus:
+  `ssh -L 9464:127.0.0.1:9464 user@fleet-host`. Cloudflare Tunnel and Tailscale
+  do the same job without SSH.
+- `claudectl supervisor metrics 0.0.0.0:9464` still binds every interface. It
+  works, and it prints a startup warning repeating what the first bullet says.
 - Each scrape opens the coord DB fresh (WAL), so this is safe to run **alongside**
   the reconciler — they don't contend for the connection.
 - Blocks until Ctrl-C. For a long-lived deployment, run it under systemd (see
@@ -48,7 +56,7 @@ scrape_configs:
   - job_name: claudectl
     scrape_interval: 15s
     static_configs:
-      - targets: ["localhost:9464"]   # or the host running the exporter
+      - targets: ["localhost:9464"]   # the exporter's own host, or a forwarded local port
         labels:
           fleet: primary
 ```
@@ -113,7 +121,7 @@ Description=claudectl fleet metrics exporter
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/claudectl supervisor metrics 0.0.0.0:9464
+ExecStart=/usr/local/bin/claudectl supervisor metrics 127.0.0.1:9464
 Restart=on-failure
 User=%i
 
@@ -131,6 +139,6 @@ sudo systemctl enable --now claudectl-metrics
   affect task execution.
 - `/metrics` is the only route; everything else returns 404. There's no auth —
   bind to `127.0.0.1` and scrape locally, or put it behind your existing
-  network controls before exposing it.
+  network controls before exposing it. A non-loopback bind warns at startup.
 - Metrics come from the coord DB, so they reflect supervisor-managed tasks. Ad
   hoc sessions that never became supervisor tasks won't appear here.

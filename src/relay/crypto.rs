@@ -144,6 +144,50 @@ pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Constant-time comparison
+// ────────────────────────────────────────────────────────────────────────────
+
+/// OR together the per-byte difference of two equal-length slices.
+///
+/// Reads every byte of both slices and never branches on their contents, so the
+/// returned value carries *all* differing bit positions rather than stopping at
+/// the first one. That is the property the comparison below depends on: a caller
+/// who can only observe how long the fold took learns nothing about where the
+/// first mismatch was.
+fn diff_accumulator(a: &[u8], b: &[u8]) -> u8 {
+    debug_assert_eq!(a.len(), b.len(), "diff_accumulator needs equal lengths");
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff
+}
+
+/// Compare two byte slices without short-circuiting on the first difference.
+///
+/// Use this for every secret: bearer tokens, HMAC proofs, and the grant MACs in
+/// #423. `a == b` on `String`/`&[u8]` early-exits as soon as two bytes differ,
+/// which lets an attacker who can time the response recover the expected value
+/// one byte at a time.
+///
+/// SECURITY NOTE: length is not treated as secret. Slices of different lengths
+/// return `false` immediately, which leaks the expected length — acceptable here
+/// because token and MAC lengths are fixed by their format and already public.
+/// Only the *contents* are protected.
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    // `black_box` is load-bearing, not a micro-optimisation guard. Without it
+    // the compiler can see that only `!= 0` is ever observed, and is then free
+    // to break out of the fold as soon as `diff` becomes non-zero — which is
+    // exactly the early exit this function exists to avoid. Forcing the
+    // accumulator to be materialised keeps the whole slice on the fast path.
+    // `subtle` does the same thing for the same reason.
+    std::hint::black_box(diff_accumulator(a, b)) == 0
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // PSK generation and formatting
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -249,6 +293,67 @@ pub fn random_hex(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ct_eq: the point of these is the *absence of a short circuit*, which
+    // plain equality assertions cannot observe. `diff_accumulator` is tested
+    // directly for that, since timing is not assertable in a unit test.
+
+    #[test]
+    fn diff_accumulator_visits_every_byte() {
+        // Differ at the first byte AND the last byte. A short-circuiting
+        // compare would stop at index 0 and never see the final difference, so
+        // the accumulator would come back as 0x01 alone. Getting both bits
+        // proves the whole slice was folded.
+        let a = [0x01u8, 0x00, 0x00, 0x00];
+        let b = [0x00u8, 0x00, 0x00, 0x80];
+        assert_eq!(diff_accumulator(&a, &b), 0x81);
+    }
+
+    #[test]
+    fn diff_accumulator_zero_only_when_equal() {
+        let a = [0xABu8; 32];
+        assert_eq!(diff_accumulator(&a, &[0xABu8; 32]), 0);
+        let mut b = a;
+        b[31] ^= 0x01;
+        assert_ne!(diff_accumulator(&a, &b), 0);
+    }
+
+    #[test]
+    fn ct_eq_matches_equality_semantics() {
+        assert!(ct_eq(b"", b""));
+        assert!(ct_eq(b"Bearer hunter2", b"Bearer hunter2"));
+        assert!(!ct_eq(b"Bearer hunter2", b"Bearer hunter3"));
+    }
+
+    #[test]
+    fn ct_eq_rejects_differences_at_either_end() {
+        let expected = b"0123456789abcdef";
+        let mut first = *expected;
+        first[0] ^= 0xFF;
+        let mut last = *expected;
+        last[15] ^= 0xFF;
+        assert!(!ct_eq(&first, expected));
+        assert!(!ct_eq(&last, expected));
+    }
+
+    #[test]
+    fn ct_eq_rejects_length_mismatch_including_prefixes() {
+        // A correct prefix must not pass, in either direction.
+        assert!(!ct_eq(b"token", b"token-extra"));
+        assert!(!ct_eq(b"token-extra", b"token"));
+        assert!(!ct_eq(b"", b"token"));
+    }
+
+    #[test]
+    fn ct_eq_accepts_an_hmac_against_itself() {
+        // The protocol.rs handshake path compares hex-encoded MACs.
+        let mac = hmac_sha256(&[0x0bu8; 20], b"Hi There");
+        let hex = hex_encode(&mac);
+        assert!(ct_eq(hex.as_bytes(), hex.as_bytes()));
+
+        let other = hex_encode(&hmac_sha256(&[0x0cu8; 20], b"Hi There"));
+        assert!(!ct_eq(hex.as_bytes(), other.as_bytes()));
+    }
 
     #[test]
     fn sha256_empty() {

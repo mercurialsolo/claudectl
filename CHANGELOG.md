@@ -4,6 +4,40 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Changed — coordinator HTTP API binds loopback by default (#426)
+- **`RelayConfig` gains `http_addr`, defaulting to `127.0.0.1`**, plus a
+  `claudectl relay serve --http-addr <ADDR>` flag. Resolution order is
+  `--http-addr` > `http_addr` in config > `127.0.0.1`.
+- **This breaks reaching the API from another machine.** The HTTP listener used
+  to inherit `relay.listen_addr`, which defaults to `0.0.0.0`, so
+  `claudectl relay serve --http-port 9876 --auth-token secret` put the
+  plaintext API on every interface. It now binds loopback. Pass
+  **`--http-addr 0.0.0.0`** (or set `http_addr` in `[relay]`) to opt back in.
+- `listen_addr` no longer governs the HTTP API. It still governs the PSK peer
+  transport and still defaults to `0.0.0.0`, which is that listener's intended
+  deployment — it is HMAC-authenticated and rate-limited per IP.
+- Phase 0 of the open-cluster RFC (#423) settles its open question Q3:
+  loopback by default, and an operator-provided tunnel (Cloudflare Tunnel,
+  Tailscale Funnel, `ssh -R`) for off-machine access. No `rustls`, no new
+  dependency — the sync core runs on 7 runtime crates and `Cargo.toml` has no
+  TLS crate, and a tunnel covers the same boundary. The API remains plaintext
+  HTTP/1.1. Written up in `docs/relay.md` §Security, which previously claimed
+  the peer transport's HMAC auth and rate limiting for the HTTP API as well.
+
+### Added — constant-time compare + non-loopback startup warnings (#426)
+- New **`relay::crypto::ct_eq(&[u8], &[u8]) -> bool`**: folds over every byte so
+  neither the time taken nor the result reveals where the first mismatch was. A
+  length mismatch returns `false` early; length is not treated as secret.
+- It replaced the two places that compared a secret with `!=`: the coordinator
+  API bearer token (`src/relay/http.rs`) and the HMAC-SHA256 handshake proof
+  (`src/relay/protocol.rs`).
+- **Startup warning on a non-loopback HTTP bind** — `0.0.0.0`, `::`, or a
+  specific LAN IP — for the relay coordinator API and for
+  `claudectl supervisor metrics`, whose `/metrics` endpoint has no
+  authentication at all. The metrics warning is an adjacent fix, not part of
+  #426; its bind still defaults to `127.0.0.1:9464`, so the warning fires only
+  when an operator asks for a wider one.
+
 ### Added — cluster session view: every machine's sessions in one place
 - **`claudectl relay fleet`** lists every session running across paired
   machines — local and remote — with project, status and cost per machine.
@@ -33,9 +67,12 @@ All notable changes to claudectl are documented here.
   bytes. Measured on 4 live sessions (one 54M-token, 10-hour transcript): 188ms
   for the first collection, 40ms for each one after, vs 158ms every time for a
   stateless collector. Honours the "never rereads full files" design rule.
-- `claudectl-core` gained a public `fleet` module and `helpers::truncate_cell`,
-  so it needs a version bump (and a matching path-dep `version` in the binary's
-  `Cargo.toml`) at release time.
+- `claudectl-core` gained a public `fleet` module, `helpers::truncate_cell` and
+  `helpers::is_exposed_bind`, so it needs a version bump (and a matching
+  path-dep `version` in the binary's `Cargo.toml`) at release time.
+- `is_exposed_bind` lives in core rather than in `relay` because both callers
+  need it and they sit behind different features — `relay` for the coordinator
+  API, `coord` for the metrics exporter.
 
 ## [0.64.0] - 2026-07-04
 

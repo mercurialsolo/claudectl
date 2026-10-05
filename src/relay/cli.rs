@@ -27,6 +27,10 @@ pub enum RelayCommand {
         /// HTTP API port for coordinator mode (enables /api/sessions, /api/workers, /api/heartbeat)
         #[arg(long)]
         http_port: Option<u16>,
+        /// Bind address for the HTTP API [default: 127.0.0.1]. The API is
+        /// plaintext — use a tunnel rather than binding 0.0.0.0.
+        #[arg(long)]
+        http_addr: Option<String>,
         /// Bearer token for HTTP API authentication
         #[arg(long)]
         auth_token: Option<String>,
@@ -126,8 +130,14 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
         RelayCommand::Serve {
             port,
             http_port,
+            http_addr,
             auth_token,
-        } => cmd_serve(*port, http_port.as_ref().copied(), auth_token.as_deref()),
+        } => cmd_serve(
+            *port,
+            http_port.as_ref().copied(),
+            http_addr.as_deref(),
+            auth_token.as_deref(),
+        ),
         RelayCommand::Pair => cmd_pair(json_mode),
         RelayCommand::Accept { code, peer_id } => cmd_accept(code, peer_id),
         RelayCommand::Connect { addr } => cmd_connect(addr),
@@ -155,9 +165,27 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
     }
 }
 
-/// `claudectl relay serve [--port PORT] [--http-port PORT] [--auth-token TOKEN]`
+/// Join a host and port into something `SocketAddr` will parse.
+///
+/// A bare IPv6 literal needs brackets: `::1` and `9876` make `[::1]:9876`, not
+/// `::1:9876`. `--http-addr ::1` is a plausible thing to type now that the HTTP
+/// API defaults to loopback, so handle it rather than failing to parse.
+fn join_host_port(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+/// `claudectl relay serve [--port PORT] [--http-port PORT] [--http-addr ADDR] [--auth-token TOKEN]`
 /// Start the relay listener in the foreground.
-fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io::Result<()> {
+fn cmd_serve(
+    port: u16,
+    http_port: Option<u16>,
+    http_addr: Option<&str>,
+    auth_token: Option<&str>,
+) -> io::Result<()> {
     let mut port = port;
 
     // Load config for relay/hive settings
@@ -171,7 +199,7 @@ fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io:
     if port == 9847 {
         port = relay_cfg.listen_port;
     }
-    let listen_addr = format!("{}:{port}", relay_cfg.listen_addr);
+    let listen_addr = join_host_port(&relay_cfg.listen_addr, port);
     let addr: SocketAddr = listen_addr
         .parse()
         .map_err(|e| io::Error::other(format!("invalid addr '{listen_addr}': {e}")))?;
@@ -200,13 +228,46 @@ fn cmd_serve(port: u16, http_port: Option<u16>, auth_token: Option<&str>) -> io:
         local_sessions: Vec::new(),
     }));
 
+    // The HTTP API binds its own address, not the peer transport's. The peer
+    // transport is HMAC-authenticated and meant to be reachable; the HTTP API is
+    // plaintext with a bearer token, so it defaults to loopback (#426).
+    let http_host = http_addr.unwrap_or(&relay_cfg.http_addr);
+
+    // An empty token would bind a listener that rejects every request, so treat
+    // it as unconfigured rather than half-starting the API.
+    let auth_token_str = auth_token_str.filter(|t| !t.is_empty());
+
+    // The API needs both a port and a token. Saying so beats falling through
+    // silently and leaving the operator's dashboard on connection-refused.
+    match (http_port, &auth_token_str) {
+        (Some(_), None) => eprintln!(
+            "warning: --http-port was given without a non-empty --auth-token, \
+             so the HTTP API is not running."
+        ),
+        (None, Some(_)) => eprintln!(
+            "warning: an auth token is set but no --http-port, so the HTTP API \
+             is not running."
+        ),
+        _ => {}
+    }
+
     let _http_server = if let (Some(hp), Some(token)) = (http_port, &auth_token_str) {
-        let http_addr: SocketAddr = format!("{}:{hp}", relay_cfg.listen_addr)
+        let http_bind = join_host_port(http_host, hp);
+        let http_sock: SocketAddr = http_bind
             .parse()
-            .map_err(|e| io::Error::other(format!("invalid http addr: {e}")))?;
+            .map_err(|e| io::Error::other(format!("invalid http addr '{http_bind}': {e}")))?;
         let server =
-            super::http::HttpServer::start(http_addr, token.to_string(), Arc::clone(&coord_state))?;
+            super::http::HttpServer::start(http_sock, token.to_string(), Arc::clone(&coord_state))?;
         println!("HTTP API on http://{}", server.addr);
+        if claudectl_core::helpers::is_exposed_bind(&server.addr) {
+            eprintln!(
+                "warning: HTTP API is reachable from the network on {}.",
+                server.addr
+            );
+            eprintln!("         It is plaintext HTTP with a bearer token and no rate limiting.");
+            eprintln!("         Prefer --http-addr 127.0.0.1 fronted by a tunnel (Cloudflare");
+            eprintln!("         Tunnel, Tailscale Funnel, ssh -R). See docs/relay.md.");
+        }
         Some(server)
     } else {
         None
@@ -1222,4 +1283,42 @@ fn detect_local_ip() -> Option<String> {
     socket.connect("8.8.8.8:80").ok()?;
     let local_addr = socket.local_addr().ok()?;
     Some(local_addr.ip().to_string())
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Tests
+// ────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::join_host_port;
+    use std::net::SocketAddr;
+
+    #[test]
+    fn ipv4_host_joins_plainly() {
+        assert_eq!(join_host_port("127.0.0.1", 9876), "127.0.0.1:9876");
+        assert_eq!(join_host_port("0.0.0.0", 9876), "0.0.0.0:9876");
+    }
+
+    #[test]
+    fn bare_ipv6_literal_gets_brackets() {
+        assert_eq!(join_host_port("::1", 9876), "[::1]:9876");
+        assert_eq!(join_host_port("::", 9876), "[::]:9876");
+    }
+
+    #[test]
+    fn already_bracketed_ipv6_is_left_alone() {
+        assert_eq!(join_host_port("[::1]", 9876), "[::1]:9876");
+    }
+
+    #[test]
+    fn every_form_parses_as_a_socket_addr() {
+        for host in ["127.0.0.1", "0.0.0.0", "::1", "::", "[::1]"] {
+            let joined = join_host_port(host, 9876);
+            assert!(
+                joined.parse::<SocketAddr>().is_ok(),
+                "{host} joined to {joined} should parse"
+            );
+        }
+    }
 }

@@ -93,7 +93,9 @@ pub enum SupervisorCommand {
     /// safe to run alongside the reconciler. This is the bridge from a solo
     /// tool to team observability — see `docs/team-observability.md`.
     Metrics {
-        /// Address to bind, e.g. `0.0.0.0:9464` to expose on the LAN.
+        /// Address to bind. `/metrics` is unauthenticated, so prefer the
+        /// loopback default and forward the port for a remote scrape;
+        /// `0.0.0.0:9464` exposes it on the LAN and warns at startup.
         #[arg(default_value = "127.0.0.1:9464")]
         bind: String,
     },
@@ -288,6 +290,17 @@ fn serve_metrics(bind: &str) -> io::Result<()> {
     let _handle = super::exporter::serve(bind).map_err(io::Error::other)?;
     println!("serving fleet metrics at http://{bind}/metrics");
     println!("point Grafana / Datadog here (see docs/team-observability.md); Ctrl-C to stop.");
+    // /metrics has no authentication at all, so an exposed bind is strictly
+    // worse than the relay API's — there is no token to fall back on (#426).
+    if let Ok(addr) = bind.parse::<std::net::SocketAddr>() {
+        if claudectl_core::helpers::is_exposed_bind(&addr) {
+            eprintln!("warning: /metrics is reachable from the network on {bind}.");
+            eprintln!("         This endpoint is unauthenticated — anything that can reach");
+            eprintln!("         the port can read your fleet's task and cost metrics. Prefer a");
+            eprintln!("         loopback bind, scraped from this host or through a forwarded");
+            eprintln!("         port. See docs/team-observability.md.");
+        }
+    }
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
     }

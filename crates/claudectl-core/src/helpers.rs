@@ -174,6 +174,45 @@ pub fn truncate_cell(value: &str, width: usize) -> String {
     format!("{}…", value.chars().take(keep).collect::<String>())
 }
 
+/// True when a listener's bind address is reachable from off the machine.
+///
+/// `0.0.0.0` and `::` are *unspecified*, not loopback, so a plain
+/// `is_loopback()` check correctly flags them along with any specific LAN
+/// address. Callers use this to warn at startup when a plaintext or
+/// unauthenticated HTTP surface has been exposed to the network (#426).
+pub fn is_exposed_bind(addr: &std::net::SocketAddr) -> bool {
+    !addr.ip().is_loopback()
+}
+
+#[cfg(test)]
+mod exposed_bind_tests {
+    use super::is_exposed_bind;
+    use std::net::SocketAddr;
+
+    fn addr(s: &str) -> SocketAddr {
+        s.parse().expect("test address should parse")
+    }
+
+    #[test]
+    fn loopback_is_not_exposed() {
+        assert!(!is_exposed_bind(&addr("127.0.0.1:9876")));
+        assert!(!is_exposed_bind(&addr("[::1]:9876")));
+    }
+
+    #[test]
+    fn unspecified_addresses_are_exposed() {
+        // The case that matters: 0.0.0.0 binds every interface but is not
+        // loopback, so it must be flagged.
+        assert!(is_exposed_bind(&addr("0.0.0.0:9876")));
+        assert!(is_exposed_bind(&addr("[::]:9876")));
+    }
+
+    #[test]
+    fn specific_lan_address_is_exposed() {
+        assert!(is_exposed_bind(&addr("192.168.1.5:9876")));
+    }
+}
+
 #[cfg(test)]
 mod truncate_tests {
     use super::truncate_cell;

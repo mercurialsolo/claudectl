@@ -230,11 +230,14 @@ Cross-machine collaboration. `relay` feature enables task delegation. `hive` fea
 [relay]
 enabled = true              # start relay with TUI/brain
 listen_port = 9847          # TCP port for peer connections
-listen_addr = "0.0.0.0"    # bind address
+listen_addr = "0.0.0.0"     # bind address — peer transport only, not the HTTP API
 max_peers = 8               # maximum connected peers
 heartbeat_interval_secs = 30
 reconnect_max_secs = 60
 auto_connect = []           # list of "host:port" to auto-connect on startup
+http_addr = "127.0.0.1"     # bind address for the coordinator HTTP API
+# http_port = 9876          # no default; unset means no HTTP API at all
+# auth_token = "…"          # no default; the API's bearer token
 
 [hive]
 enabled = true              # enable knowledge sharing (requires relay)
@@ -253,3 +256,5 @@ share_categories = []       # empty = all shareable. Options: best_practice, tec
 exclude_tools = []          # never share patterns for these tools (e.g., ["Write"])
 exclude_commands = []       # never share patterns matching these substrings
 ```
+
+`http_port` and `auth_token` have no defaults, and the coordinator HTTP API starts only when both resolve — leave either unset and there is no listener. The bind address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`. Loopback is the default because that API is plaintext HTTP/1.1 with a bearer token, so off-machine access belongs behind a tunnel rather than a wider bind (#426). `listen_addr` governs only the HMAC-authenticated peer transport, where `0.0.0.0` is the intended deployment. See [Security](relay.md#security).

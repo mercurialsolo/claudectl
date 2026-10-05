@@ -308,7 +308,7 @@ Three load-bearing properties from the design spec:
 - **Crash-safe by construction** — kill the headless daemon mid-tick, restart, and observed state re-converges from `~/.claudectl/coord/coord.db`. The ledger is the source of truth.
 - **Fail-closed verifiers** — a brain/agent verifier whose reply lacks the leading `PASS` / `FAIL:` marker is treated as FAIL. RFC §5 calls this the verifier-is-the-gradient principle: every FAIL output becomes the retry prompt the next attempt sees.
 
-Metrics (team observability): `claudectl supervisor metrics 0.0.0.0:9464` serves a Prometheus `/metrics` endpoint (`claudectl_tasks_by_state`, `claudectl_fleet_cost_usd_total`, `claudectl_retries_total`, `claudectl_verifier_pass_rate`) that Grafana or Datadog scrape with no claudectl-specific glue. Each scrape reads the coord DB fresh (WAL), so it runs safely alongside the reconciler. A ready dashboard and the full recipe live in [docs/team-observability.md](docs/team-observability.md).
+Metrics (team observability): `claudectl supervisor metrics` serves a Prometheus `/metrics` endpoint on `127.0.0.1:9464` (`claudectl_tasks_by_state`, `claudectl_fleet_cost_usd_total`, `claudectl_retries_total`, `claudectl_verifier_pass_rate`) that Grafana or Datadog scrape with no claudectl-specific glue. Each scrape reads the coord DB fresh (WAL), so it runs safely alongside the reconciler. A ready dashboard and the full recipe live in [docs/team-observability.md](docs/team-observability.md).
 
 Policy as code (team guardrails): commit a `.claudectl/policy.toml` to the repo and its `[deny]` commands/tools are enforced by the brain gate at the highest precedence — a developer can't soften them by editing local config. Scaffold with `claudectl --policy init`, inspect with `claudectl --policy`. See [docs/policy-as-code.md](docs/policy-as-code.md).
 
@@ -333,9 +333,10 @@ claudectl relay fleet                 # every session across the cluster
 claudectl relay delegate mac-mini "run the full test suite" --cwd ~/code/app
 
 # Remote sessions also appear in the TUI as [worker-id] project-name.
-# For a dashboard off-machine, expose the coordinator's HTTP API:
+# The coordinator's HTTP API serves the same unified view to a dashboard:
 claudectl relay serve --http-port 9876 --auth-token secret
-# GET /api/sessions returns the unified view across all workers
+# GET /api/sessions across all workers. Binds 127.0.0.1 — it is plaintext with
+# a bearer token, so forward the port for an off-machine dashboard.
 ```
 
 Knowledge categories (best practices, techniques, workflow patterns) propagate automatically. Personal patterns (time-of-day habits, cost tolerance) stay local. You control what's shared:

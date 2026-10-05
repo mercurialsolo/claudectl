@@ -14,15 +14,13 @@ Every instance stays sovereign. Your local preferences always override peer know
 
 ## Quick Start: Connect Two Machines
 
-### Step 1: Install with relay feature
-
-Hive (local knowledge) is included by default. For cross-machine networking, add the relay feature:
+### Step 1: Install
 
 ```bash
-cargo install claudectl --features relay
+cargo install claudectl
 ```
 
-Without relay, hive works locally — knowledge is distilled, archived, and used by the brain, but not synced to peers.
+`relay` and `hive` are both in the default feature set, so a plain install has cross-machine networking. A build with `--no-default-features --features hive` keeps hive local: knowledge is distilled, archived, and used by the brain, but never synced to peers.
 
 ### Step 2: Generate an invite
 
@@ -129,13 +127,29 @@ Consequences worth knowing:
 - **Remote rows carry what the heartbeat carried**: project, status, cost,
   tokens, elapsed. Live CPU and memory stay local-only.
 
-For a dashboard outside the machine, the coordinator's HTTP API serves the same
-unified view:
+The coordinator's HTTP API serves the same unified view to anything that can
+speak HTTP. It binds `127.0.0.1` and starts only when both `--http-port` and
+`--auth-token` are given:
 
 ```bash
 claudectl relay serve --http-port 9876 --auth-token secret
 curl -H "Authorization: Bearer secret" http://localhost:9876/api/sessions
 ```
+
+Reaching that API from a dashboard on *another* machine is a second, deliberate
+step, because the API is plaintext HTTP/1.1 and the bearer token crosses the
+wire in the clear. Forward the loopback port instead of widening the listener —
+from the machine running the dashboard:
+
+```bash
+ssh -L 9876:127.0.0.1:9876 user@machine-a
+curl -H "Authorization: Bearer secret" http://localhost:9876/api/sessions
+```
+
+Cloudflare Tunnel and Tailscale Funnel do the same job without SSH. You can
+bind the API to every interface with `--http-addr 0.0.0.0`; it works, it prints
+a warning at startup, and [Security](#security) says why you probably want the
+tunnel.
 
 ## Three Ways to Share a Code
 
@@ -336,11 +350,16 @@ Add to `.claudectl.toml` or `~/.config/claudectl/config.toml`:
 [relay]
 enabled = true                    # start relay with TUI/brain
 listen_port = 9847                # TCP port for peer connections
-listen_addr = "0.0.0.0"          # bind address
+listen_addr = "0.0.0.0"           # bind address — peer transport only, not the HTTP API
 max_peers = 8                     # maximum connected peers
 heartbeat_interval_secs = 30      # heartbeat frequency
 reconnect_max_secs = 60           # max reconnect backoff
 auto_connect = []                 # list of "host:port" to auto-connect
+http_addr = "127.0.0.1"           # bind address for the coordinator HTTP API.
+                                  # Deliberately loopback, and deliberately
+                                  # separate from listen_addr.
+# http_port = 9876                # no default; unset means no HTTP API at all
+# auth_token = "…"                # no default; the API's bearer token
 
 [hive]
 enabled = true                    # enable knowledge sharing
@@ -359,6 +378,10 @@ exclude_tools = []                # tools to never share (e.g., ["Write"])
 exclude_commands = []             # command patterns to never share
 ```
 
+`http_port` and `auth_token` have no defaults, and the HTTP API starts only
+when both resolve — leave either unset and there is no listener. The bind
+address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`.
+
 ## CLI Reference
 
 ### Relay commands
@@ -366,6 +389,7 @@ exclude_commands = []             # command patterns to never share
 | Command | Description |
 |---------|-------------|
 | `relay serve [--port N]` | Start the relay listener |
+| `relay serve --http-port N --auth-token T [--http-addr ADDR]` | Also start the coordinator HTTP API. `--http-addr` defaults to `127.0.0.1` |
 | `relay invite [--qr] [--words]` | Generate invite code/link/phrase |
 | `relay join <code>` | Join using any invite format |
 | `relay discover` | Scan LAN for nearby instances |
@@ -414,18 +438,64 @@ exclude_commands = []             # command patterns to never share
 
 ## Security
 
-- All connections are authenticated via HMAC-SHA256 challenge-response
+The relay runs two listeners whose authentication and defaults have nothing in
+common, so each claim below is scoped to one of them.
+
+### Peer transport (TCP, `listen_addr`:`listen_port`, default `0.0.0.0:9847`)
+
+- Every connection is authenticated via HMAC-SHA256 challenge-response, and the
+  handshake proof is compared in constant time (`relay::crypto::ct_eq`, #426)
 - PSK pairing requires explicit action on both sides
-- No data leaves your network (peer-to-peer only)
 - Auth rate limiting: 5 failed attempts = 60s cooldown per IP
 - Max concurrent auth threads capped at 16
-- Knowledge never overrides local preferences (deny-first)
+- Session state and knowledge go only to paired peers (LAN discovery still
+  broadcasts identity, port and version to the local segment)
 - For encryption, tunnel through SSH or WireGuard
+- Knowledge never overrides local preferences (deny-first)
+
+Non-loopback is this listener's intended deployment, which is why it still
+defaults to `0.0.0.0`.
+
+### Coordinator HTTP API (`http_addr`:`http_port`, default loopback)
+
+The bullets above describe the peer transport and do not hold here. This
+listener authenticates with the single `--auth-token` bearer token, compared in
+constant time as of #426. It has none of the rate limiting or connection caps
+the peer listener has, and the token carries no scope and no revocation short
+of restarting with a different one. A leaked token is full access to the API —
+every session on the cluster, plus the `POST /api/heartbeat` write — until the
+relay restarts.
+
+### Transport
+
+#426 settles [Q3 in the open-cluster RFC](open-cluster.md#q3-transport): the
+HTTP API **binds `127.0.0.1` by default** and off-machine access is the
+operator's tunnel to arrange — Cloudflare Tunnel, Tailscale Funnel, or
+`ssh -R`. There is no TLS anywhere in this path. The API speaks plaintext
+HTTP/1.1, so on any hop that is not tunnelled the bearer token and the session
+data both travel in the clear.
+
+`rustls` was the alternative, and it was rejected on the dependency rule: the
+sync core runs on 7 runtime crates and `Cargo.toml` carries no TLS crate at
+all. A tunnel covers the same boundary without one. The cost is operator setup,
+and fronting the API does move session data off your network — that is what a
+dashboard on another machine means, tunnel or not.
+
+Before #426 the HTTP API inherited `relay.listen_addr`, so
+`claudectl relay serve --http-port 9876 --auth-token secret` put the plaintext
+API on every interface. It binds loopback now. Pass `--http-addr 0.0.0.0` (or
+set `http_addr`) for the old behavior; `listen_addr` no longer governs the HTTP
+API either way.
+
+Both HTTP listeners warn at startup when the address they bind is not loopback
+— `0.0.0.0`, `::`, or a specific LAN IP. That covers the coordinator API and
+`claudectl supervisor metrics`, whose `/metrics` endpoint has no authentication
+at all and defaults to `127.0.0.1:9464`.
 
 ## FAQ
 
 **Do I need to build with `--features relay`?**
-Yes. The relay and hive modules are feature-gated to keep the default binary small. Without the feature flag, the binary is unchanged.
+No. `relay` has been in the default feature set for a while — `cargo install claudectl` and the Homebrew bottle both ship it. The feature still exists for the minimal sync-only build (`--no-default-features --features hive`), which drops the networking and leaves hive local.
 
 **Does it work across different networks?**
 Yes, if the machines can reach each other over TCP (port 9847). For machines behind NAT, use a VPN like Tailscale or WireGuard, or SSH port forwarding.

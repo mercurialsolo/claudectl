@@ -103,6 +103,10 @@ pub struct RelayConfig {
     pub reconnect_max_secs: u64,
     pub auto_connect: Vec<String>,
     pub http_port: Option<u16>,
+    /// Bind address for the coordinator HTTP API. Deliberately separate from
+    /// `listen_addr` and loopback by default: the HTTP API is plaintext with a
+    /// bearer token, so off-machine access belongs behind a tunnel (#426).
+    pub http_addr: String,
     pub auth_token: Option<String>,
 }
 
@@ -111,12 +115,14 @@ impl Default for RelayConfig {
         Self {
             enabled: false,
             listen_port: 9847,
+            // Peer transport: HMAC-authenticated, non-loopback is the point.
             listen_addr: "0.0.0.0".into(),
             max_peers: 8,
             heartbeat_interval_secs: 30,
             reconnect_max_secs: 60,
             auto_connect: Vec::new(),
             http_port: None,
+            http_addr: "127.0.0.1".into(),
             auth_token: None,
         }
     }
@@ -246,6 +252,7 @@ struct RawRelayConfig {
     reconnect_max_secs: Option<u64>,
     auto_connect: Option<Vec<String>>,
     http_port: Option<u16>,
+    http_addr: Option<String>,
     auth_token: Option<String>,
 }
 
@@ -435,6 +442,9 @@ impl Config {
             }
             if let Some(v) = raw_relay.http_port {
                 relay.http_port = Some(v);
+            }
+            if let Some(v) = raw_relay.http_addr {
+                relay.http_addr = v;
             }
             if let Some(v) = raw_relay.auth_token {
                 relay.auth_token = Some(v);
@@ -835,12 +845,16 @@ impl Config {
 #
 # [relay]
 # enabled = false
-# listen_addr = "0.0.0.0"
+# listen_addr = "0.0.0.0"       # peer transport only (HMAC-authenticated)
 # listen_port = 9847
 # max_peers = 8
 # heartbeat_interval_secs = 30
 # reconnect_max_secs = 60
 # auto_connect = []
+# http_port = 9876              # coordinator HTTP API; unset = not served
+# http_addr = "127.0.0.1"       # plaintext + bearer token: keep loopback,
+#                               # front with a tunnel for off-machine access
+# auth_token = "..."            # required alongside http_port
 #
 # [hive]
 # enabled = false
@@ -909,7 +923,7 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
         let value = value.trim();
 
         // Strip inline comments
-        let value = value.split('#').next().unwrap_or(value).trim();
+        let value = strip_inline_comment(value).trim();
 
         match (section.as_str(), key) {
             ("" | "defaults", "interval") => {
@@ -1134,6 +1148,7 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     "http_port" => {
                         relay.http_port = value.parse().ok();
                     }
+                    "http_addr" => relay.http_addr = Some(unquote(value)),
                     "auth_token" => {
                         relay.auth_token = Some(unquote(value));
                     }
@@ -1302,6 +1317,7 @@ fn known_keys(section: &str) -> Option<&'static [&'static str]> {
             "reconnect_max_secs",
             "auto_connect",
             "http_port",
+            "http_addr",
             "auth_token",
         ]),
         "hive" => Some(&[
@@ -1450,6 +1466,32 @@ fn parse_hooks_from_file(path: &PathBuf, registry: &mut crate::hooks::HookRegist
     }
 }
 
+/// Strip a trailing `# comment` from a value, leaving a `#` that falls inside a
+/// quoted string alone.
+///
+/// `auth_token = "s3cr#t"` is a bearer token containing a hash, not a token
+/// followed by a comment. Splitting on the first `#` truncated it silently: the
+/// relay would start with the wrong secret and 401 every client that sent the
+/// right one, with nothing pointing at the config file (#426).
+fn strip_inline_comment(value: &str) -> &str {
+    let mut quote: Option<u8> = None;
+    for (i, &b) in value.as_bytes().iter().enumerate() {
+        match b {
+            b'"' | b'\'' => match quote {
+                Some(open) if open == b => quote = None,
+                None => quote = Some(b),
+                // A different quote char inside a quoted string is literal.
+                Some(_) => {}
+            },
+            // Only an unquoted '#' starts a comment. Indexing is safe: the
+            // delimiters are ASCII, so `i` is always a char boundary.
+            b'#' if quote.is_none() => return &value[..i],
+            _ => {}
+        }
+    }
+    value
+}
+
 fn parse_bool(s: &str) -> Option<bool> {
     match s {
         "true" => Some(true),
@@ -1535,11 +1577,150 @@ fn ensure_agent<'a>(agents: &'a mut Vec<AgentConfig>, name: &str) -> &'a mut Age
 mod tests {
     use super::*;
 
+    // The coordinator HTTP API's bind address is a security default (#426), so
+    // pin it at every layer: the struct default, TOML parsing, the merge into
+    // Config, and the `config set` key allowlist.
+
+    #[test]
+    fn relay_http_addr_defaults_to_loopback() {
+        let relay = RelayConfig::default();
+        assert_eq!(relay.http_addr, "127.0.0.1");
+        // The peer transport is HMAC-authenticated and meant to be reachable;
+        // it must NOT have been narrowed along with the HTTP API.
+        assert_eq!(relay.listen_addr, "0.0.0.0");
+    }
+
+    #[test]
+    fn relay_http_addr_parses_from_toml() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[relay]
+listen_addr = "0.0.0.0"
+http_addr = "0.0.0.0"
+http_port = 9876
+auth_token = "s3cret"
+"#
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        let raw = parse_config_file(&file.path().to_path_buf()).unwrap();
+        let raw_relay = raw.relay.as_ref().expect("relay section should parse");
+        assert_eq!(raw_relay.http_addr.as_deref(), Some("0.0.0.0"));
+        assert_eq!(raw_relay.http_port, Some(9876));
+        assert_eq!(raw_relay.auth_token.as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn relay_http_addr_merges_over_the_default() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[relay]
+http_addr = "192.168.1.5"
+"#
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        let raw = parse_config_file(&file.path().to_path_buf()).unwrap();
+        let mut cfg = Config::default();
+        cfg.apply(raw);
+
+        let relay = cfg.relay.expect("relay config should exist after apply");
+        assert_eq!(relay.http_addr, "192.168.1.5");
+        // Unset keys keep their defaults rather than being blanked.
+        assert_eq!(relay.listen_addr, "0.0.0.0");
+        assert_eq!(relay.listen_port, 9847);
+    }
+
+    #[test]
+    fn relay_http_addr_absent_from_toml_stays_loopback() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[relay]
+enabled = true
+"#
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        let raw = parse_config_file(&file.path().to_path_buf()).unwrap();
+        let mut cfg = Config::default();
+        cfg.apply(raw);
+
+        let relay = cfg.relay.expect("relay config should exist after apply");
+        assert!(relay.enabled);
+        assert_eq!(relay.http_addr, "127.0.0.1");
+    }
+
+    #[test]
+    fn quoted_values_survive_a_hash_in_the_string() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[relay]
+auth_token = "s3cr#t"          # a '#' inside the quotes is data, not a comment
+"#
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        // A silently truncated bearer token is the worst failure shape here:
+        // the relay starts, every correct client gets a bare 401, and nothing
+        // points at the config file.
+        let raw = parse_config_file(&file.path().to_path_buf()).unwrap();
+        let raw_relay = raw.relay.as_ref().expect("relay section should parse");
+        assert_eq!(raw_relay.auth_token.as_deref(), Some("s3cr#t"));
+    }
+
+    #[test]
+    fn relay_http_addr_is_a_known_config_key() {
+        // Without this, `claudectl config set relay.http_addr …` would warn as
+        // an unknown key even though the parser handles it.
+        let keys = known_keys("relay").expect("relay section should have known keys");
+        assert!(keys.contains(&"http_addr"), "got {keys:?}");
+    }
+
     #[test]
     fn test_parse_bool() {
         assert_eq!(parse_bool("true"), Some(true));
         assert_eq!(parse_bool("false"), Some(false));
         assert_eq!(parse_bool("yes"), None);
+    }
+
+    #[test]
+    fn test_strip_inline_comment() {
+        // Unquoted '#' still starts a comment.
+        assert_eq!(strip_inline_comment("1000  # poll interval").trim(), "1000");
+        assert_eq!(strip_inline_comment("true # yes").trim(), "true");
+        // A '#' inside quotes is part of the value.
+        assert_eq!(strip_inline_comment(r#""s3cr#t""#), r#""s3cr#t""#);
+        assert_eq!(strip_inline_comment("'a#b'"), "'a#b'");
+        // Quoted value followed by a real comment: keep one, drop the other.
+        assert_eq!(
+            strip_inline_comment(r#""s3cr#t"  # the token"#).trim(),
+            r#""s3cr#t""#
+        );
+        // Arrays keep their quoted elements.
+        assert_eq!(
+            strip_inline_comment(r#"["rm -rf #*"] # danger"#).trim(),
+            r#"["rm -rf #*"]"#
+        );
+        // An apostrophe in a comment must not re-open a quote and swallow it.
+        assert_eq!(strip_inline_comment("5 # don't do this").trim(), "5");
+        // Nothing to strip.
+        assert_eq!(strip_inline_comment("plain"), "plain");
     }
 
     #[test]

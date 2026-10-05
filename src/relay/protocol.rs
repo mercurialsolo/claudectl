@@ -95,7 +95,10 @@ pub fn verify_handshake(msg: &RelayMessage, nonce: &str, psk: &[u8; 32]) -> Resu
     let expected = crypto::hmac_sha256(psk, nonce.as_bytes());
     let expected_hex = crypto::hex_encode(&expected);
 
-    if proof != expected_hex {
+    // Constant-time (#426): the nonce is fresh per connection, so an attacker
+    // cannot replay a fixed challenge to walk the MAC — but a short-circuiting
+    // compare still leaks the position of the first differing nibble.
+    if !crypto::ct_eq(proof.as_bytes(), expected_hex.as_bytes()) {
         return Err("HMAC verification failed".into());
     }
 
