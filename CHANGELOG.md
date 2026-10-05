@@ -4,6 +4,39 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — cluster session view: every machine's sessions in one place
+- **`claudectl relay fleet`** lists every session running across paired
+  machines — local and remote — with project, status and cost per machine.
+- Remote sessions now appear in the dashboard and `claudectl -l` as
+  `[worker-id] project`, folded into the total cost. The plumbing for this
+  existed on both ends but was never connected: heartbeats were sent with
+  `None` for sessions, so `App.remote_sessions` stayed empty outside demo mode
+  and `GET /api/sessions` returned only peers' sessions, never the
+  coordinator's own.
+- New `claudectl-core::fleet`: the snapshot `relay serve` publishes to
+  `~/.claudectl/relay/fleet.json`, and a side-effect-free local session
+  collector (no hooks, notifications or history writes, since the relay runs
+  alongside the TUI). New `relay::advertise` owns the write side.
+- A relay must be running on each machine for the cluster view; `relay fleet`
+  says so and falls back to local sessions when no snapshot is found. Peers
+  that stop reporting drop out after 90s; a snapshot older than 120s is
+  ignored rather than shown frozen.
+
+### Fixed
+- `claudectl -l` no longer misaligns every column after a project name longer
+  than the column width; the PROJECT column widened to fit `[worker-id] project`,
+  and cells clamp via the new `helpers::truncate_cell`.
+
+### Notes
+- `LocalSessionCollector` is stateful on purpose: it keeps each session's JSONL
+  offset and token totals across collections, so the relay re-reads only new
+  bytes. Measured on 4 live sessions (one 54M-token, 10-hour transcript): 188ms
+  for the first collection, 40ms for each one after, vs 158ms every time for a
+  stateless collector. Honours the "never rereads full files" design rule.
+- `claudectl-core` gained a public `fleet` module and `helpers::truncate_cell`,
+  so it needs a version bump (and a matching path-dep `version` in the binary's
+  `Cargo.toml`) at release time.
+
 ## [0.64.0] - 2026-07-04
 
 ### Added — guided-tour orientation tips in demo mode (#373)

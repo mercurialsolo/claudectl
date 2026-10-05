@@ -69,6 +69,74 @@ Machine B connects:
 claudectl relay connect 192.168.1.50:9847
 ```
 
+Leave both running. The relay is what carries session state between machines, so
+the cluster view below is only as live as the relays behind it.
+
+## Step 5: See the whole cluster
+
+Once relays are up on both machines, every session on either one shows up on both:
+
+```bash
+claudectl relay fleet
+```
+
+```
+Fleet: 5 session(s) across 2 machine(s)
+
+MACHINE              PROJECT                      STATUS         COST
+────────────────────────────────────────────────────────────────────────
+barrys-mac-74371c…*  cabal-1                      Waiting        $137.45
+barrys-mac-74371c…*  claudectl                    Processing     $31.95
+barrys-mac-74371c…*  staffai                      Waiting        $17.59
+mac-mini-9f2a1b      claudectl                    Processing     $4.21
+mac-mini-9f2a1b      nightly-bench                Needs Input    $0.87
+
+* = this machine
+```
+
+Remote sessions also appear in the dashboard (`claudectl`) and the plain list
+(`claudectl -l`), prefixed with the machine they're running on:
+
+```
+5101    [mac-mini-9f2a1b] claudec… Processing   -        $4.2
+```
+
+They're read-only from here — the keys that send input or terminate a session
+act on local sessions only. To put work on another machine, delegate it:
+
+```bash
+claudectl relay delegate mac-mini-9f2a1b "run the full test suite" --cwd ~/code/claudectl
+claudectl relay status                      # how delegated tasks are doing
+claudectl relay interrupt --peer mac-mini-9f2a1b task_123 stop
+```
+
+### How the cluster view works
+
+Each relay advertises its own sessions on every heartbeat (default 30s) and
+writes what its peers report to `~/.claudectl/relay/fleet.json`. The dashboard
+and `relay fleet` read that file, so no port or token is needed for the local
+view.
+
+Consequences worth knowing:
+
+- **A relay must be running on each machine.** `relay fleet` with no snapshot
+  falls back to local sessions and tells you so. Nothing keeps `relay serve`
+  alive across reboots — run it under `launchd`, `tmux`, or whatever you already
+  use for long-lived processes.
+- **A peer that stops reporting disappears** after 90s rather than lingering as
+  a stale row, and the whole snapshot is ignored after 120s (which is how a
+  stopped relay shows up as "no snapshot" instead of a frozen cluster).
+- **Remote rows carry what the heartbeat carried**: project, status, cost,
+  tokens, elapsed. Live CPU and memory stay local-only.
+
+For a dashboard outside the machine, the coordinator's HTTP API serves the same
+unified view:
+
+```bash
+claudectl relay serve --http-port 9876 --auth-token secret
+curl -H "Authorization: Bearer secret" http://localhost:9876/api/sessions
+```
+
 ## Three Ways to Share a Code
 
 Every invite generates three formats. Pick whichever fits the situation:

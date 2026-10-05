@@ -163,3 +163,36 @@ pub fn create_aggregate_session(total_cost: f64, limit: f64, period: &str) -> Cl
     s.model = format!("limit=${limit:.2}");
     s
 }
+
+/// Fit a value into a fixed-width table column, with an ellipsis when it has to
+/// be cut. Counts characters, so a multi-byte name can't split mid-codepoint.
+pub fn truncate_cell(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        return value.to_string();
+    }
+    let keep = width.saturating_sub(1);
+    format!("{}…", value.chars().take(keep).collect::<String>())
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_cell;
+
+    #[test]
+    fn short_values_pass_through() {
+        assert_eq!(truncate_cell("claudectl", 16), "claudectl");
+    }
+
+    #[test]
+    fn long_values_are_ellipsized_to_width() {
+        let out = truncate_cell("[mac-mini-9f2a1b] nightly-bench", 16);
+        assert_eq!(out.chars().count(), 16);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn multibyte_values_do_not_split_codepoints() {
+        let out = truncate_cell("日本語プロジェクト名前", 5);
+        assert_eq!(out.chars().count(), 5);
+    }
+}
