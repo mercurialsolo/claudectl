@@ -103,6 +103,10 @@ pub struct RelayConfig {
     pub reconnect_max_secs: u64,
     pub auto_connect: Vec<String>,
     pub http_port: Option<u16>,
+    /// Bind address for the coordinator HTTP API. Deliberately separate from
+    /// `listen_addr` and loopback by default: the HTTP API is plaintext with a
+    /// bearer token, so off-machine access belongs behind a tunnel (#426).
+    pub http_addr: String,
     pub auth_token: Option<String>,
 }
 
@@ -111,12 +115,14 @@ impl Default for RelayConfig {
         Self {
             enabled: false,
             listen_port: 9847,
+            // Peer transport: HMAC-authenticated, non-loopback is the point.
             listen_addr: "0.0.0.0".into(),
             max_peers: 8,
             heartbeat_interval_secs: 30,
             reconnect_max_secs: 60,
             auto_connect: Vec::new(),
             http_port: None,
+            http_addr: "127.0.0.1".into(),
             auth_token: None,
         }
     }
@@ -246,6 +252,7 @@ struct RawRelayConfig {
     reconnect_max_secs: Option<u64>,
     auto_connect: Option<Vec<String>>,
     http_port: Option<u16>,
+    http_addr: Option<String>,
     auth_token: Option<String>,
 }
 
@@ -435,6 +442,9 @@ impl Config {
             }
             if let Some(v) = raw_relay.http_port {
                 relay.http_port = Some(v);
+            }
+            if let Some(v) = raw_relay.http_addr {
+                relay.http_addr = v;
             }
             if let Some(v) = raw_relay.auth_token {
                 relay.auth_token = Some(v);
@@ -835,12 +845,16 @@ impl Config {
 #
 # [relay]
 # enabled = false
-# listen_addr = "0.0.0.0"
+# listen_addr = "0.0.0.0"       # peer transport only (HMAC-authenticated)
 # listen_port = 9847
 # max_peers = 8
 # heartbeat_interval_secs = 30
 # reconnect_max_secs = 60
 # auto_connect = []
+# http_port = 9876              # coordinator HTTP API; unset = not served
+# http_addr = "127.0.0.1"       # plaintext + bearer token: keep loopback,
+#                               # front with a tunnel for off-machine access
+# auth_token = "..."            # required alongside http_port
 #
 # [hive]
 # enabled = false
@@ -1134,6 +1148,7 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     "http_port" => {
                         relay.http_port = value.parse().ok();
                     }
+                    "http_addr" => relay.http_addr = Some(unquote(value)),
                     "auth_token" => {
                         relay.auth_token = Some(unquote(value));
                     }
@@ -1302,6 +1317,7 @@ fn known_keys(section: &str) -> Option<&'static [&'static str]> {
             "reconnect_max_secs",
             "auto_connect",
             "http_port",
+            "http_addr",
             "auth_token",
         ]),
         "hive" => Some(&[

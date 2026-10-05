@@ -288,6 +288,16 @@ fn serve_metrics(bind: &str) -> io::Result<()> {
     let _handle = super::exporter::serve(bind).map_err(io::Error::other)?;
     println!("serving fleet metrics at http://{bind}/metrics");
     println!("point Grafana / Datadog here (see docs/team-observability.md); Ctrl-C to stop.");
+    // /metrics has no authentication at all, so an exposed bind is strictly
+    // worse than the relay API's — there is no token to fall back on (#426).
+    if let Ok(addr) = bind.parse::<std::net::SocketAddr>() {
+        if claudectl_core::helpers::is_exposed_bind(&addr) {
+            eprintln!("warning: /metrics is reachable from the network on {bind}.");
+            eprintln!("         This endpoint is unauthenticated — anything that can reach");
+            eprintln!("         the port can read your fleet's task and cost metrics. Prefer");
+            eprintln!("         a loopback bind fronted by a tunnel or your Prometheus agent.");
+        }
+    }
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
     }

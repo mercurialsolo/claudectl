@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use super::crypto;
 use super::mesh::WorkerState;
 
 /// Maximum HTTP request body size (1 MB).
@@ -128,13 +129,14 @@ fn handle_connection(
         }
     }
 
-    // Check bearer token auth
+    // Check bearer token auth. Constant-time (#426) — a short-circuiting
+    // compare lets a caller who can time the 401 recover the token byte by byte.
     let auth_header = headers
         .get("authorization")
         .map(|s| s.as_str())
         .unwrap_or("");
     let expected = format!("Bearer {auth_token}");
-    if auth_header != expected {
+    if !crypto::ct_eq(auth_header.as_bytes(), expected.as_bytes()) {
         send_response(&mut stream, 401, r#"{"error":"unauthorized"}"#);
         return;
     }

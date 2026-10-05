@@ -1,13 +1,13 @@
 # claudectl Open Cluster — Design Specification
 
-**Status:** Proposed / RFC. Nothing in this document is implemented. Written against the code as of `871b26e5`.
+**Status:** Proposed / RFC. Phase 0 (#426) has shipped; nothing else here is implemented. Written against the code as of `871b26e5`.
 **Scope:** Let someone who is *not you* participate in your claudectl world at a reduced trust level — ask read-only questions about one of your projects, join a named hive, or run a node from a Mac app instead of a terminal.
 
 ## Implementation status
 
 | Phase (§10) | Status | Module / artifact |
 | --- | --- | --- |
-| 0. Prerequisite hardening (constant-time auth, transport decision) | **Not started** | `src/relay/http.rs` |
+| 0. Prerequisite hardening (constant-time auth, transport decision) | **Shipped** (#426) | `src/relay/crypto.rs`, `src/relay/http.rs`, `src/relay/protocol.rs` |
 | 1. Capability tokens + scopes | **Not started** | proposed `src/access/` |
 | 2. Context index (what a query can be answered from) | **Not started** | proposed `src/context/` |
 | 3. Jev query classification + routing | **Not started** | proposed `src/access/classify.rs` |
@@ -85,7 +85,7 @@ A **grant** is a named, scoped, expiring capability issued to one external party
 }
 ```
 
-The token handed out is `cctl_<grant_id>_<mac>`, where `mac` is `HMAC-SHA256(server_secret, grant_id || scopes || expires_ms)` truncated to 128 bits. `relay::crypto` already has SHA-256 and HMAC-SHA256 inline — **no new dependency, no JWT library, no asymmetric crypto.** Verification is: parse, recompute the MAC, constant-time compare, then load the grant file and check `revoked` and `expires_ms`.
+The token handed out is `cctl_<grant_id>_<mac>`, where `mac` is `HMAC-SHA256(server_secret, grant_id || scopes || expires_ms)` truncated to 128 bits. `relay::crypto` already has SHA-256 and HMAC-SHA256 inline — **no new dependency, no JWT library, no asymmetric crypto.** Verification is: parse, recompute the MAC, constant-time compare (`ct_eq`, §3.4), then load the grant file and check `revoked` and `expires_ms`.
 
 Signing the scopes into the MAC means a token cannot be edited to widen itself, and the grant file remains the authority for revocation and accounting. Revoking is a one-field write; nothing needs restarting.
 
@@ -103,10 +103,10 @@ Scopes are `<resource>.<verb>:<qualifier>`. Verbs are read-only across the board
 
 Absent a matching scope, the surface returns `404`, not `403` — an unauthorized caller should not be able to enumerate which projects exist.
 
-### 3.4 Prerequisites (§10 phase 0, do these first)
+### 3.4 Prerequisites (§10 phase 0, shipped in #426)
 
-- **`src/relay/http.rs` compares the bearer token with `!=` on a `String`.** That is not constant-time. It is defensible for a LAN coordinator and indefensible on anything a third party can reach. Add a constant-time compare and use it for both the existing token and grant MACs.
-- **Transport.** `http.rs` is plaintext HTTP/1.1. Exposing plaintext to a third party is a non-starter, and "minimal dependencies — 7 runtime crates" rules out casually adding `rustls`. Decide explicitly (see [open question Q3](#q3-transport)); the spec's default assumption is **bind to loopback and require the operator to front it with a tunnel** (Cloudflare Tunnel, Tailscale Funnel, `ssh -R`), documented rather than implied.
+- **Constant-time compare.** `src/relay/crypto.rs` now exports `ct_eq(&[u8], &[u8]) -> bool`, which folds over every byte so neither the time taken nor the result says where the first mismatch was. A length mismatch returns `false` immediately; length is not treated as secret. It replaced the two `!=` comparisons on secrets in the repo: the coordinator bearer token in `src/relay/http.rs` and the HMAC-SHA256 handshake proof in `src/relay/protocol.rs`. Grant MACs (§3.2) are to verify through the same function.
+- **Transport — loopback plus an operator tunnel.** `http.rs` is plaintext HTTP/1.1, exposing plaintext to a third party is a non-starter, and "minimal dependencies — 7 runtime crates" ruled out adding `rustls` (`Cargo.toml` carries no TLS crate at all). So `RelayConfig::http_addr` defaults to `127.0.0.1` — it no longer inherits `listen_addr`, which still defaults to `0.0.0.0` for the HMAC-authenticated peer transport — and off-machine access is the operator's tunnel to arrange (Cloudflare Tunnel, Tailscale Funnel, `ssh -R`). `--http-addr 0.0.0.0` opts back in and warns at startup, which is the answer to the foot-gun. See [Q3](#q3-transport) and `docs/relay.md` §Security.
 
 ## 4. Read-only project query access
 
@@ -416,7 +416,7 @@ The `launchd` piece is worth noting as a two-for-one: solving it for the app sol
 
 <a id="q2-synthesis"></a>**Q2 — Synthesis or spans only?** Spans-only has no hallucination surface but reads like a search engine. Local-brain synthesis answers better and keeps data on-machine, at the cost of a confabulation risk on a third-party-facing endpoint. Proposal: spans by default, synthesis per-grant opt-in, synthesized answers labelled as such.
 
-<a id="q3-transport"></a>**Q3 — Transport.** Add `rustls` (a real dependency against a stated minimalism rule), or require an operator-provided tunnel (zero deps, more setup, and a foot-gun if someone binds `0.0.0.0` anyway)? The spec assumes the tunnel. If `rustls` is acceptable, much of §3.4 gets simpler.
+<a id="q3-transport"></a>**Q3 — Transport. Resolved (#426): the tunnel.** The coordinator HTTP API binds `127.0.0.1` by default and the operator fronts it with a tunnel (Cloudflare Tunnel, Tailscale Funnel, `ssh -R`) for anything off-machine. `rustls` was rejected because a tunnel covers the same boundary with no new dependency, and the dependency rule is a stated one. The cost is operator setup; the foot-gun of binding `0.0.0.0` anyway is met with a startup warning rather than a prohibition.
 
 <a id="q4-secret-scanning"></a>**Q4 — Secret scanning before indexing?** The index trusts the git tree, so a repo with a committed key will index it. Worth a scan at index time, or is "don't commit secrets" the project's position?
 
@@ -434,7 +434,7 @@ Ordered so each phase is independently useful and the riskiest dependency comes 
 
 | Phase | Deliverable | Why here |
 | --- | --- | --- |
-| **0** | Constant-time auth compare; transport decision documented | Prerequisite for anything third-party-facing (§3.4) |
+| **0** | **Shipped (#426).** `relay::crypto::ct_eq` on both auth sites; HTTP API bound to loopback, tunnel documented | Prerequisite for anything third-party-facing (§3.4) |
 | **1** | Capability tokens, scopes, `access grant/list/revoke/audit` | The spine. Testable alone: issue, verify, expire, revoke |
 | **2** | Context index over tracked docs + module map + exposed hive units | Deterministic and unit-testable with no network |
 | **3** | Deterministic query surface (MCP + HTTP), **no Jev** | Proves the whole path end to end while the boundary is simple |
