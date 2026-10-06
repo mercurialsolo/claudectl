@@ -696,4 +696,46 @@ mod tests {
         let blob = serde_json::to_string(&index).unwrap();
         assert!(blob.contains("ROOT_DOC"), "should index from the repo root");
     }
+
+    /// Index this very repository and assert the result looks like
+    /// documentation rather than a filesystem dump.
+    ///
+    /// A self-index is the one fixture that cannot drift from reality: real
+    /// `.gitignore` rules, real source files, and whatever the working tree
+    /// happens to be carrying.
+    #[test]
+    fn indexing_this_repo_publishes_docs_and_no_secrets() {
+        let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let Ok(index) = ContextIndex::build_with(here, &IndexExposure::default(), ShareMode::Auto)
+        else {
+            eprintln!("skip: not a git work tree");
+            return;
+        };
+
+        assert!(!index.claude_md.is_empty(), "CLAUDE.md should be indexed");
+        assert!(!index.docs.is_empty(), "docs/ should be indexed");
+        assert!(!index.module_map.is_empty(), "module map should be built");
+
+        let blob = serde_json::to_string(&index).unwrap();
+        for forbidden in [
+            "ANTHROPIC_API_KEY",
+            "BEGIN RSA PRIVATE KEY",
+            "BEGIN OPENSSH PRIVATE KEY",
+            "sk-ant-",
+        ] {
+            assert!(
+                !blob.contains(forbidden),
+                "{forbidden:?} reached the index built from this repo"
+            );
+        }
+
+        eprintln!(
+            "self-index: {} tracked, {} denied, {} unreadable, {} doc sections, {} modules",
+            index.stats.tracked_files,
+            index.stats.denied,
+            index.stats.unreadable,
+            index.claude_md.len() + index.readme.len() + index.docs.len(),
+            index.module_map.len(),
+        );
+    }
 }
