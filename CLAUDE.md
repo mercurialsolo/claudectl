@@ -29,9 +29,9 @@ crates/
                        #   app.rs, ui/*, recorder.rs, session_recorder.rs, demo.rs
                        #   Depends on claudectl-core. Never on the binary.
 src/                   # the binary crate `claudectl`
-                       #   main.rs + access/ + brain/ + bus/ + coord/ + hive/ +
-                       #   relay/ + orchestrator + init + commands + config.rs +
-                       #   brain_screen.rs.
+                       #   main.rs + access/ + brain/ + bus/ + context/ +
+                       #   coord/ + hive/ + relay/ + orchestrator + init +
+                       #   commands + config.rs + brain_screen.rs.
                        #   Implements the runtime traits over the real
                        #   subsystems via `src/runtime/`.
 ```
@@ -157,6 +157,14 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 - `token.rs` — `cctl_<grant_id>_<mac>` mint/parse, canonical MAC payload, HMAC key at `access/secret` (fails closed, 0600 before first byte)
 - `grant.rs` — `Grant` records, atomic per-grant JSON store, `audit.jsonl`, `verify` (parse → load → MAC → revoked/expiry → scope)
 - `cli.rs` — `claudectl access` subcommand (grant / list / audit / revoke), all with `--json`
+
+**Context index** (`src/context/`): The substrate a read-only project query may be answered from — open-cluster phase 2 (#428, `docs/open-cluster.md` §4.2). Ungated, so it builds in every feature configuration; the hive-unit source is `#[cfg(feature = "hive")]` and yields nothing without it. No CLI and no caller yet — #429 adds the query surface.
+- `mod.rs` — `ContextIndex::build(&Path)` and `build_with(root, &IndexExposure, ShareMode)`; takes a path, not a project name. Routes markdown by name and location, collects skills and hive units, `fingerprint()` is FNV-1a (`"fnv1a:<hex>"`)
+- `git.rs` — `git ls-files -z --cached --full-name` is the only source of paths in the module; `repo_root`, `tracked_files` (sorted, deduped), `IndexError::{GitUnavailable, NotARepo, GitFailed}`. No git is an error, never a fallback
+- `deny.rs` — the "excluded" half of "tracked and not excluded": denied names and prefixes (`.env*`, `.netrc`, ssh keys, `credentials`), extensions (`jsonl`, keys/certs, `sqlite`/`db`), and path segments (`.claude`, `.claudectl`, `target`, `node_modules`, …) at any depth. `DenyReason::{Name, Extension, Directory}` for the build stats
+- `docs.rs` — splits markdown into `DocSection`s at ATX headings, each carrying its enclosing heading path; drops leading YAML frontmatter
+- `module_map.rs` — `//!` headers, `///` docs and public signatures, never bodies. Separate `skip_depth` (item bodies, emit nothing) and `container_depth` (`impl` / inline `mod`, descend); `pub(crate)` and private items are dropped name and all
+- `exposure.rs` — six categories (`claude_md`, `readme`, `docs`, `module_map`, `skills`, `hive_units`) persisted at `~/.claudectl/access/index-exposure.json`. Mirrors `hive::exposure` semantics with locally redefined types and identical wire values; mode comes from `Config.hive.share_mode`
 
 **Terminal backends** (`crates/claudectl-core/src/terminals/`): Ghostty, Kitty, tmux, WezTerm, Warp, iTerm2, Terminal.app, Gnome Terminal, Windows Terminal — auto-detected, used for tab switching and input sending.
 

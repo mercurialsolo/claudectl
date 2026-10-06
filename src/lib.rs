@@ -34,6 +34,7 @@ pub mod brain;
 pub mod brain_screen;
 #[cfg(feature = "bus")]
 pub mod bus;
+pub mod context;
 #[cfg(feature = "coord")]
 pub mod coord;
 pub mod doctor;
