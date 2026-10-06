@@ -11,7 +11,7 @@
 | 1. Capability tokens + scopes | **Shipped** (#427) | `src/access/{mod,scope,token,grant,cli}.rs` |
 | 2. Context index (what a query can be answered from) | **Shipped** (#428) | `src/context/{mod,git,deny,docs,module_map,exposure}.rs` |
 | 3. Read-only query surface (MCP + HTTP), deterministic | **Shipped** (#429) | `src/query/{mod,core,rank,http,mcp,cli}.rs` |
-| 4. Jev query classification + routing | **Not started** | proposed `src/query/classify.rs` |
+| 4. Jev query classification + routing | **Shipped** (#430), off unless `TYPESAFE_API_KEY` is set | `src/query/{jev,thresholds,classify,escalate,spend}.rs` |
 | 5. Query guardrails (rate limit, budget, audit) | **Shipped** (#431) | `src/rate_limit.rs`, `src/access/grant.rs`, `src/query/core.rs` |
 | 5. Named hives + advertise/discover | **Not started** | `src/hive/`, `src/relay/lan.rs`, `src/relay/invite.rs` |
 | 6. `claudectl.app` (macOS menu-bar shell) | **Not started** | separate artifact, separate toolchain |
@@ -283,6 +283,71 @@ Routing, with thresholds scaled by consequence as the [confidence guidance](http
 
 The sensitive and injection thresholds are deliberately paranoid at `0.15` — a false deny costs the third party one rephrase, a false allow costs you a leak. These are starting values to be tuned against real traffic, not constants; the docs are explicit that thresholds must be validated on your own data.
 
+#### What #430 implemented, and the three places it departs from §4.3–§4.6
+
+Shipped: the five-question request, the routing table, the escalation queue, the monthly spend ceiling, and grant flagging. Off unless `TYPESAFE_API_KEY` is set. Three departures, each with its reason:
+
+**1. "No key" is not the strict fallback.** §4.6 says "No `TYPESAFE_API_KEY`, no classification — the surface falls back to deterministic intent matching and a stricter default-deny", which reads as one fallback for two causes. The implementation splits them:
+
+| state | behaviour | audited as |
+| --- | --- | --- |
+| no key, or `jev_enabled = false` | exactly #429 — the deterministic baseline, unchanged | nothing; no classification ran |
+| configured but unavailable — unreachable, 401, 429, malformed, spend ceiling | **strict**: span limit capped at 3, spans scoring below 2 dropped | `jev.unreachable`, `jev.unauthorized`, `jev.rate_limited`, `jev.malformed`, `jev.spend_ceiling` |
+
+Tightening the unconfigured path would regress a shipped surface for every owner who never asked for classification, and §4.4 is explicit that the index holds nothing sensitive by construction, so extra strictness there buys little. What the strict mode *is* for is consistency: an owner who turned a gate on should not get a *more permissive* surface when the gate is down. The five audit details are separate because "you forgot the key" and "the API is down" need different responses.
+
+**2. Injection is evaluated before `seeks_sensitive`.** §4.3 gives the rows as a table rather than a sequence. Both deny, so the only difference is whether the grant is flagged — and a query that trips both warrants the flag. Evaluating injection first loses the least information. Full order: injection → sensitive → wrong project → out of scope → answer → escalate, with both denies ahead of both declines so a secret-seeking question about another codebase is denied rather than handed a helpful pointer.
+
+**3. A deny and a decline answer differently.** A deny is the same opaque `404` every other refusal gets: a caller who could tell "you look like an injection attempt" from "you look secret-seeking" would have a free oracle for tuning against the thresholds. A decline is `200` with `status: "declined"`, a reason and a fixed pointer at the five categories and `/topics` — the caller has already proved a valid in-scope token, so this is the same reasoning §4.8 uses for naming the limit in a `429`. The pointer is a constant string rather than an inlined topic list, because `topics` is metered and a decline must not become a free listing.
+
+Escalation answers `202 Accepted` with `{"status":"pending_review","escalation_id":"esc_…"}`, and the record is appended to `~/.claudectl/access/escalations.jsonl` with the **full** question — unlike `audit.jsonl`, which truncates at 512 bytes, because an escalation is read one at a time by a person deciding what to do about it. `claudectl access escalations` lists them.
+
+#### Append-only means one `write(2)`
+
+`escalations.jsonl` and `audit.jsonl` are appended without a lock, on the
+reasoning that `O_APPEND` places a write atomically. That reasoning only holds
+for **one** write: `writeln!` on an unbuffered file issues two — one for the
+content, one for the newline — and the surface is thread-per-connection, so two
+holders appending at once interleaved into `{..A}{..B}\n\n`. The reader skips
+the merged line, so *both* records vanished while both callers held an id that
+would never appear. Measured before the fix: 167 of 1000 escalations lost under
+four concurrent writers. Both appenders now build the line with its newline and
+issue a single write.
+
+#### Where classification sits
+
+`verify` → rate limit → daily budget → **classify** → retrieve.
+
+- After every code-enforced check, which is §4.4's requirement that "the grant's scopes are checked in code before classification runs."
+- After the budget charge, so a query Jev denies still costs a unit. That is §4.8's "denied queries count" applied to the one denial that actually proves intent — the second narrowing of that sentence, after #431 limited it to `missing_scope`.
+- On `ask` only. `topics` carries no free-text question, and `get_doc`'s path is matched against indexed paths rather than interpreted, so sending either off-machine would be cost and exposure with no decision to make. Tested.
+
+The ceiling is checked before the call and the spend charged after it, from `usage.input_tokens`, because a request cannot be un-sent and the response carries the only authoritative token count. Concurrent in-flight requests can all pass one ceiling check; at `$0.042`/M and ~600-token requests the overshoot is hundredths of a cent, so it is documented rather than engineered around — the same benign direction as #431's cross-process undercount. A ledger write that fails never softens a deny: the route is decided first, and only an *answer* is downgraded to the strict path.
+
+#### What is not shipped
+
+- **§4.5 step 2 — Jev reranking of candidate spans.** §4.5 itself calls it "a second, separable decision"; #429's deterministic ranker stays.
+- **Acting on an escalation.** Approve, deny, notify, and the resume path that turns an approved escalation into an answer are a notification system plus a state machine on a durable record. #430 asks for a queue and a "pending review" response and gets exactly those; the rest is #446.
+- **Branching retrieval on `intent`.** There is one retrieval strategy today, so a branch would be invention. The intent is recorded in the audit line instead.
+- **Any verification against the live API.** No request has been sent to `api.typesafe.ai` from this codebase; there is no key on the development machine. The client follows the published contract (request and response shapes verified against the vendor's API reference and model docs), every routing decision is fixture-tested, both degrade paths are tested, and the real `curl` invocation — stdin-fed credentials, status splitting, timeout, connection refusal — is tested against a local listener. What remains unverified is whether Jev accepts this request body.
+
+#### The API key never reaches `argv`
+
+`brain/client.rs` passes everything as `curl` arguments because a local Ollama endpoint has no auth. An `Authorization: Bearer <key>` in `argv` is readable by any local user through `ps`, so headers are fed on stdin via `-H @-`. The request body stays in `argv`: it carries the third party's question, which is already in `audit.jsonl`, and a paragraph of the project's own `CLAUDE.md`, which is published documentation. `curl_args` does not take the key as a parameter, so "the key is not an argument" is a property of the signature rather than of the body.
+
+`api.typesafe.ai` is a constant, not a config field. A redirectable classification endpoint is a way to send the question to a host the owner never approved.
+
+#### Thresholds, honestly
+
+The six numbers live alone in `src/query/thresholds.rs` with the reasoning for each, because §4.3 is explicit that they are "starting values to be tuned against real traffic, not constants". They have **not** been validated against real traffic.
+
+What has been measured is the **router**. `src/query/fixtures/adversarial.json` holds 24 adversarial cases — secret-seeking direct and indirect, instruction override, role-play, privilege escalation, wrong project, opinion, personal data — each paired with hand-authored Jev answers derived from the published criteria and the route it must take. The suite asserts every row of the table fires, that precedence holds where two rules fire at once, and that every comparison is strict — which cuts in opposite directions on the two halves of the table:
+
+- The refusal thresholds are strict, so **standing exactly on them does not refuse**. `seeks_sensitive` and `injection_attempt` at exactly `0.15` answer; `scope_match` at exactly `0.5` answers; an `out_of_scope` intent at exactly `0.6` confidence does not decline.
+- The answer thresholds are strict too, so **standing exactly on them does not answer**. `answerable_from_docs` at exactly `0.7` escalates, and so does an intent confidence of exactly `0.5`, however documentable the question looks.
+
+One step past each line flips it, and a fixture pins both sides of all five. That proves the table is wired the way §4.3 describes. It does not prove `0.15` is the right place to stand.
+
 ### 4.4 What Jev is, and what it is not
 
 **Jev is the router. Code is the boundary.** This distinction is the single most important thing in this document.
@@ -398,7 +463,7 @@ Reusing what `src/bus/policy.rs` and `src/bus/rate_limit.rs` already established
 | Query length | 8 KB cap, mirroring the bus body cap | **Shipped (#429)** |
 | Response size | 32 KB; spans truncated with an explicit marker | **Shipped (#429)** |
 | Audit | Every query and decision appended to `~/.claudectl/access/audit.jsonl`, with the question and the paths cited | **Shipped (#429, #431)** |
-| Spend ceiling | Monthly Jev cap; on breach, fall back to deterministic matching | Deferred to #430 — nothing to meter until Jev exists |
+| Spend ceiling | Monthly Jev cap, default `$5.00`; on breach, fall back to deterministic matching | **Shipped (#430)** — `src/query/spend.rs` |
 
 The query-length row said 2 KB, which contradicted its own justification: `bus::policy::DEFAULT_MAX_BODY_BYTES` is 8192. #429 took the stated reason over the stated number and capped at 8 KB.
 
@@ -414,6 +479,7 @@ Order is `verify` → rate limit → daily budget, and every placement is load-b
 
 - **The rate limit is checked after verification.** The bucket map has no eviction, so keying it on *claimed* grant ids would let someone walking 24-bit ids pin 16M buckets in memory. After verification the key has always presented a valid MAC, so the map is bounded by real grants. The cost is one HMAC per throttled request.
 - **A throttled request never reaches the budget.** It was not evaluated, so charging the day's allowance for it would spend what it was refused the use of.
+- **Every grant-file write takes one lock.** `charge_daily_budget` has had one since #431. #430 added two more read-modify-writes on the same file — `flag_grant`, and `record_query_use`, which #431 shipped *without* the lock — and the three-way interleaving erases a flag: B loads the grant, A flags it and writes, B writes back its stale copy. All three now take it. The spend ledger is a different file and carries its own lock, because this one must never be held across a 70–500ms network call.
 - **A store failure is a denial, not a `500`.** `charge_daily_budget` originally told "budget exhausted" from "could not read the grant" by comparing error strings, which meant a transient failure answered `500` *with the charge never applied* — unmetered requests for anyone who could induce one. It now returns a typed error and the store case fails closed: a surface that cannot meter does not answer.
 
 - **The rate limit covers the `missing_scope` denial too.** That arm returns before the answer path, and it originally returned before the limiter as well — so a holder with a wrong-scope token was unthrottled, each request costing an HMAC, a grant read, a grant write and two audit appends at wire speed. It has presented a valid MAC, which is the only condition the bucket-map argument above actually requires, so it is throttled on its own grant's limit. The refusal stays the opaque `404`: a `429` there would confirm that this project recognises the token, which is what §3.3 withholds. And the throttle bounds the grant-file writes, not the appends — `verify_detailed` has already written its line by then, so a flood still costs one append per attempt, the same disk-write vector an unauthenticated flood has.
@@ -429,7 +495,6 @@ Both hints come from a single `Instant`, read once before the acquire. Two separ
 `bus::rate_limit::RateLimiter` was reusable as-is — its key is an arbitrary `&str` — but it lived behind the `bus` feature while the HTTP surface is `relay`-only. #431 moved it to `src/rate_limit.rs` gated on `any(bus, relay)`, rather than forcing rmcp, Tokio and SQLite onto a surface with no use for them, and added per-key capacity because a grant brings its own limit where a bus role uses one default. A bucket keeps the capacity it was created with, so editing a grant file changes its limit on the next restart rather than mid-window.
 
 The daily counter needed persistence a token bucket does not provide, and lives on the grant as `budget_day` + `budget_used` — both unsigned, so editing them changes accounting rather than capability, and both omitted from the JSON while zero so a freshly minted grant still reads as §3.2 prints it.
-| Cost ceiling | Monthly Jev spend cap; on breach, fall back to deterministic matching rather than failing open or billing without limit |
 
 Audit is the thing that makes this operable: the owner can read exactly what was asked and what was returned, which is the only way to notice a grant being abused in a way no threshold caught.
 

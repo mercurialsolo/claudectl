@@ -256,12 +256,12 @@ fn handle_connection(mut stream: TcpStream, core: &Arc<QueryCore>) {
 
     let result = match route {
         Route::Query => serve_query(core, token, &body),
-        Route::Topics => core.topics(token).and_then(encode),
+        Route::Topics => core.topics(token).and_then(encode).map(|j| (200, j)),
         Route::Doc => serve_doc(core, token, &body),
     };
 
     match result {
-        Ok(json) => send(&mut stream, 200, &json),
+        Ok((status, json)) => send(&mut stream, status, &json),
         Err(QueryError::Denied) => send(&mut stream, 404, NOT_FOUND),
         Err(QueryError::BadRequest(msg)) => {
             send(
@@ -306,17 +306,23 @@ struct DocBody {
     path: String,
 }
 
-fn serve_query(core: &QueryCore, token: &str, body: &[u8]) -> Result<String, QueryError> {
+/// `(status, body)`, because an escalated query answers `202` and everything
+/// else answers `200`. The discriminant is in the envelope either way — see
+/// [`qcore::Answer::http_status`].
+fn serve_query(core: &QueryCore, token: &str, body: &[u8]) -> Result<(u16, String), QueryError> {
     let parsed: QueryBody = serde_json::from_slice(body)
         .map_err(|_| QueryError::BadRequest("expected {\"question\": \"...\"}".into()))?;
-    core.ask(token, &parsed.question, parsed.limit)
-        .and_then(encode)
+    let answer = core.ask(token, &parsed.question, parsed.limit)?;
+    let status = answer.http_status();
+    Ok((status, encode(answer)?))
 }
 
-fn serve_doc(core: &QueryCore, token: &str, body: &[u8]) -> Result<String, QueryError> {
+fn serve_doc(core: &QueryCore, token: &str, body: &[u8]) -> Result<(u16, String), QueryError> {
     let parsed: DocBody = serde_json::from_slice(body)
         .map_err(|_| QueryError::BadRequest("expected {\"path\": \"...\"}".into()))?;
-    core.get_doc(token, &parsed.path).and_then(encode)
+    core.get_doc(token, &parsed.path)
+        .and_then(encode)
+        .map(|j| (200, j))
 }
 
 fn encode<T: serde::Serialize>(value: T) -> Result<String, QueryError> {
@@ -358,6 +364,7 @@ fn send(stream: &mut TcpStream, status: u16, body: &str) {
 fn send_with_headers(stream: &mut TcpStream, status: u16, body: &str, extra: Option<&str>) {
     let reason = match status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
@@ -407,6 +414,22 @@ mod tests {
         scopes: Vec<Scope>,
         rate_limit_per_min: Option<u32>,
     ) -> Option<Fixture> {
+        fixture_full(scopes, rate_limit_per_min, None)
+    }
+
+    /// `fixture`, with a classifier wired in (#430).
+    fn fixture_classified(
+        scopes: Vec<Scope>,
+        classifier: crate::query::classify::Classifier,
+    ) -> Option<Fixture> {
+        fixture_full(scopes, None, Some(classifier))
+    }
+
+    fn fixture_full(
+        scopes: Vec<Scope>,
+        rate_limit_per_min: Option<u32>,
+        classifier: Option<crate::query::classify::Classifier>,
+    ) -> Option<Fixture> {
         let project = "fixture".to_string();
         let (repo, root) = crate::context::tests_support::git_fixture(&[
             (
@@ -437,11 +460,15 @@ mod tests {
         store.create(&grant).ok()?;
         let token = access::token::mint(&secret, &grant.grant_id, &grant.scopes, grant.expires_ms);
 
+        let classifier = classifier.unwrap_or_else(|| {
+            crate::query::classify::Classifier::inactive("no classifier in this test")
+        });
         let core = Arc::new(QueryCore::new(
             project.clone(),
             Arc::new(index),
             store,
             secret,
+            classifier,
         ));
         let server = QueryServer::start("127.0.0.1:0".parse().unwrap(), core).ok()?;
 
@@ -547,6 +574,71 @@ mod tests {
             response.contains("Config layering"),
             "expected the heading path, got: {response}"
         );
+    }
+
+    #[test]
+    fn an_escalated_question_answers_202_with_a_pending_id() {
+        // The one place the two transports differ: MCP has no status codes, so
+        // the envelope carries `status` and HTTP adds `202` on top of it.
+        let store_dir = tempfile::tempdir().expect("tempdir");
+        let classifier = crate::query::classify::Classifier::with_transport(
+            &crate::query::classify::JevSettings::default(),
+            store_dir.path(),
+            // Middle band: neither confidently answerable nor refusable.
+            Box::new(crate::query::classify::test_support::Fake::classifying(
+                "structure",
+                0.55,
+                0.52,
+                0.1,
+                0.02,
+                0.93,
+            )),
+        );
+        let Some(f) = fixture_classified(vec![Scope::ProjectQuery("fixture".into())], classifier)
+        else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let response = post(
+            f.server.addr.port(),
+            &format!("/api/v1/project/{}/query", f.project),
+            Some(&f.token),
+            r#"{"question":"how does retry work?"}"#,
+        );
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"), "{response}");
+        let json = response.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(parsed["status"], "pending_review");
+        assert!(
+            parsed["escalation_id"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("esc_")),
+            "{json}"
+        );
+        assert!(parsed["spans"].as_array().is_some_and(|a| a.is_empty()));
+    }
+
+    #[test]
+    fn an_answered_question_carries_the_status_discriminant_too() {
+        // Always emitted, including on #429's path: a discriminant that is
+        // sometimes absent is worse for a client than one extra field.
+        let Some(f) = fixture(vec![Scope::ProjectQuery("fixture".into())]) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let response = post(
+            f.server.addr.port(),
+            &format!("/api/v1/project/{}/query", f.project),
+            Some(&f.token),
+            r#"{"question":"how is config layering done?"}"#,
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        let json = response.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(parsed["status"], "answered");
+        // And the fields that only apply to the other outcomes stay absent.
+        assert!(parsed.get("declined").is_none());
+        assert!(parsed.get("escalation_id").is_none());
     }
 
     #[test]

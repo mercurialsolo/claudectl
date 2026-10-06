@@ -13,6 +13,8 @@
 //! secret                      HMAC key, 0600, never leaves the machine
 //! grants/<grant_id>.json      one record per grant
 //! audit.jsonl                 append-only, allowed and denied alike
+//! escalations.jsonl           queries classification queued for the owner (#430)
+//! jev-spend.json              this month's classification spend (#430)
 //! ```
 //!
 //! This module is the spine: mint, verify, list, audit, revoke. It opens no
@@ -20,7 +22,10 @@
 //! `src/query/` (#429), which injects a `GrantStore` and secret rather than
 //! opening the default store per request. #431 added the enforcement of
 //! `rate_limit_per_min` and `daily_query_budget` — `charge_daily_budget` and
-//! `verify_detailed` here, the ordering and the refusals in `query::core`.
+//! `verify_detailed` here, the ordering and the refusals in `query::core`. #430
+//! added two more files under this directory and two unsigned fields on a grant
+//! (`flagged_ms`, `flag_reason`) — written by `query::classify`'s routing, read
+//! by `access list`.
 //!
 //! Gated behind the `relay` feature because the MAC comes from
 //! `relay::crypto`, which keeps the "no new dependency, no JWT library, no
@@ -32,13 +37,49 @@ pub mod grant;
 pub mod scope;
 pub mod token;
 
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 pub use grant::{Grant, GrantStore, new_grant};
 pub use scope::Scope;
 // `grant::AuditEntry` stays reachable by its full path rather than re-exported
 // here. Two consumers now: `query::core` writes them and `cli::cmd_audit`
 // renders them, both by full path.
+
+/// Restrict a file to its owner. No-op off unix.
+///
+/// Shared rather than per-file: three files under `~/.claudectl/access` now
+/// need the same discipline — `audit.jsonl`, `escalations.jsonl` and
+/// `jev-spend.json` — and a fourth copy of it is a fourth chance to forget.
+pub(crate) fn set_owner_only(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("chmod {}: {e}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+/// Create a file owner-only *at creation*, so there is no window in which it
+/// exists with a wider mode.
+///
+/// `File::create` opens `0o666 & ~umask` — 0644 on a default umask — and a
+/// later `chmod` does not revoke descriptors another process already holds.
+/// Setting the mode in the `open(2)` call closes that race.
+pub(crate) fn create_private(path: &Path) -> Result<fs::File, String> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+        .map_err(|e| format!("create {}: {e}", path.display()))
+}
 
 /// Maximum grant-id length, matching `relay::is_valid_peer_id`'s shape.
 const MAX_GRANT_ID_LEN: usize = 64;
@@ -132,12 +173,34 @@ pub enum DenyReason {
     BudgetExhausted,
     /// A `get_doc` named a path the index does not carry.
     ///
-    /// Also written by the caller. The caller is told the same opaque `404` a
-    /// missing scope gets — what this reason exists for is the *owner's* side:
-    /// without it a holder enumerating doc paths spent the budget while
-    /// `access audit` showed nothing, so `access list` and `access audit`
-    /// disagreed and neither could be reconciled with the other.
+    /// The caller is told the same opaque `404` a missing scope gets — what
+    /// this reason exists for is the *owner's* side: without it a holder
+    /// enumerating doc paths spent the budget while `access audit` showed
+    /// nothing, so `access list` and `access audit` disagreed and neither
+    /// could be reconciled with the other.
     NotIndexed,
+    /// Classification judged the query to be seeking secrets (#430, §4.3).
+    ///
+    /// These four, like `RateLimited` and `NotIndexed`, are written by the
+    /// caller rather than by `verify` — classification runs after a token has
+    /// already verified, which is what keeps §4.4's "Jev never sees a query it
+    /// has no business seeing" true.
+    SeeksSensitive,
+    /// Classification judged the query to be an instruction-override attempt.
+    /// The only reason that also flags the grant.
+    InjectionAttempt,
+    /// Classification judged the query to be about another codebase.
+    WrongProject,
+    /// Classification judged the query not to be about this project's code or
+    /// practices at all.
+    OutOfScope,
+    /// An escalation could not be appended to the owner's queue.
+    ///
+    /// The budget has already been charged by the time the queue is written,
+    /// so without a line here an unwritable queue moved the counter and left
+    /// no record — the same `access list` / `access audit` disagreement
+    /// `NotIndexed` exists to prevent.
+    QueueUnwritable,
 }
 
 impl DenyReason {
@@ -153,6 +216,11 @@ impl DenyReason {
             DenyReason::RateLimited => "rate_limited",
             DenyReason::BudgetExhausted => "budget_exhausted",
             DenyReason::NotIndexed => "not_indexed",
+            DenyReason::SeeksSensitive => "seeks_sensitive",
+            DenyReason::InjectionAttempt => "injection_attempt",
+            DenyReason::WrongProject => "wrong_project",
+            DenyReason::OutOfScope => "out_of_scope",
+            DenyReason::QueueUnwritable => "queue_unwritable",
         }
     }
 }

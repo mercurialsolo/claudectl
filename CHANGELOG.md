@@ -4,6 +4,105 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — Jev query classification, confidence-gated routing, escalation queue (#430)
+- **Classification gates the query surface, and it is off unless you turn it
+  on.** Every `ask` is classified before retrieval by a single
+  `POST https://api.typesafe.ai/v1/systemone` carrying five independent
+  questions — intent, answerable-from-docs, seeks-sensitive, injection-attempt,
+  scope-match — which Jev evaluates in parallel. `seeks_sensitive > 0.15` or
+  `injection_attempt > 0.15` deny; `scope_match < 0.5` or a confident
+  `out_of_scope` decline with a pointer; `answerable_from_docs > 0.7` with a
+  confident intent answers; anything else escalates to the owner.
+- **Jev is the router; code is the boundary.** Classification runs *after* the
+  grant's scopes, rate limit and daily budget are checked, so it never sees a
+  query the caller was not already entitled to ask and never decides whether a
+  caller is authorized. Answers still come only from the pre-built index, so no
+  classification outcome and no prompt injection can widen what is readable.
+  Remove the classifier and the surface is blunter, not less safe.
+- **Only the question and one paragraph of `CLAUDE.md` leave the machine.** The
+  first exception to "brain decisions are local-only", and a deliberate one:
+  opt-in via `TYPESAFE_API_KEY`, hard off via `[query] jev_enabled = false`,
+  and both `query serve` and `query stdio` print the reminder to tell your grant
+  holders. A test over a real index captures the request body and asserts it
+  carries the question and the summary and nothing else — not `CLAUDE.md`
+  beyond that one paragraph, not `docs/`, not the module map, not the skill
+  list.
+- **The credential never reaches `argv`.** `brain/client.rs` passes everything
+  as `curl` arguments because a local Ollama endpoint has no auth; an
+  `Authorization: Bearer` there is readable by any local user through `ps`. The
+  header goes on stdin via `-H @-` instead, and `curl_args` does not take the
+  key as a parameter so that is a property of its signature. The endpoint is a
+  constant, not a config field.
+- **Two ways to have no classifier, and they behave differently.** No key (or
+  `jev_enabled = false`) is exactly the surface #429 shipped — unchanged, not a
+  degraded mode. A *configured but unavailable* classifier answers strictly: at
+  most 3 spans, and only spans scoring 2 or better. An owner who enabled a gate
+  should never get a more permissive surface when the gate is down; an owner who
+  never enabled one should not get a quiet regression.
+- `jev.unreachable`, `jev.unauthorized`, `jev.rate_limited`, `jev.malformed`
+  and `jev.spend_ceiling` are audited separately, because "you forgot the key"
+  and "the API is down" call for different responses. A missing `usage` block
+  is treated as malformed rather than as a free call — a schema change must not
+  uncap the spend the ceiling exists to bound.
+- **An escalation queue.** `~/.claudectl/access/escalations.jsonl`,
+  append-only and 0600, read by `claudectl access escalations`. HTTP answers
+  `202 Accepted` with `{"status":"pending_review","escalation_id":"esc_…"}`. The
+  record keeps the **full** question where `audit.jsonl` truncates at 512 bytes,
+  because an escalation is read one at a time by a person deciding on it.
+- **The monthly spend ceiling**, completing #431's deferred §4.8 row.
+  `jev-spend.json`, keyed by UTC month, default `$5.00` via
+  `[query] jev_monthly_usd`. Checked before the call because a request cannot be
+  un-sent, charged after it from `usage.input_tokens` because that is the only
+  authoritative count. On breach the surface degrades instead of billing on.
+- **An injection attempt flags the grant without revoking it.** `flagged_ms` and
+  `flag_reason` are unsigned fields on the grant, so flagging changes what the
+  owner is told rather than what the grant can do; `access list` shows
+  `flagged`, which outranks `active` precisely because a flagged grant still
+  works. First flag wins, so a flood cannot overwrite the evidence of the one
+  that started it. The threshold is admittedly paranoid, and a false positive
+  that killed a real holder's grant would be worse than one denied query.
+- **Fixed a lost-write window #431 left open.** `record_query_use` is load →
+  bump `use_count` → write, which was never under the lock `charge_daily_budget`
+  takes. On its own that could lose a budget charge between two concurrent
+  requests; with #430's `flag_grant` writing the same file it could also
+  *erase a flag* — "B loads, A flags and writes, B writes its stale copy" —
+  which would quietly undo the one thing `access list` is meant to surface. All
+  three recording paths now take `budget_lock`.
+- A new `classification` field on audit lines — one greppable line with all
+  five numbers. Absent when nothing was classified, so an owner who never opted
+  in sees exactly the log shape #431 shipped. `access audit` prints it under its
+  row rather than as a column, and `event` gained a third value, `escalated`.
+- `[query]` config section: `jev_enabled`, `jev_model`, `jev_monthly_usd`. TOML
+  only, no CLI flags — these are properties of a long-running server. The API
+  key is not among them; a secret in `.claudectl.toml` is a secret in the repo.
+- **Fixed in review:** concurrent appends to `escalations.jsonl` and
+  `audit.jsonl` could merge two records onto one line and lose **both** —
+  `writeln!` on an unbuffered file is two `write(2)` calls, and the surface is
+  thread-per-connection. Measured: 167 of 1000 escalations lost under four
+  concurrent writers. Now one write including the newline, which `O_APPEND`
+  places atomically.
+- **Fixed in review:** an escalation the queue could not accept charged the
+  budget and left no audit line anywhere — the same `access list` /
+  `access audit` disagreement the `get_doc` miss had. It now audits
+  `queue_unwritable` with the classification attached.
+- **Fixed in review:** a spend-ledger write failure is now marked on the audit
+  line of *every* route rather than only an answer, and no longer discards the
+  five probabilities. An unwritable ledger reads as zero spend, so the monthly
+  ceiling stops biting — and an adversarial holder produces denies and
+  declines, exactly where an answer-only marker would never appear.
+- **Fixed in review:** `query stdio` now makes §4.6's third-party disclosure on
+  stderr. Only `serve` printed it, so MCP mode with a key already in the
+  environment was a silent opt-in.
+- **Not shipped, and said rather than implied:** Jev reranking of candidate
+  spans (§4.5 step 2, which the RFC itself calls separable); approve/deny and
+  the resume path for an escalation (#446); and any verification against the live API.
+  No request has been sent to `api.typesafe.ai` from this codebase. The client
+  follows the published contract, the routing table is fixture-tested against
+  24 adversarial cases, both degrade paths are tested, and the real `curl`
+  invocation is tested against a local listener — but whether Jev accepts this
+  request body is unverified. Set `TYPESAFE_API_KEY` to opt in, and file an
+  issue with the first real response if the schema has drifted.
+
 ### Fixed — review follow-ups on the query guardrails (#431)
 
 Eight findings from a review of #444. All eight were real.

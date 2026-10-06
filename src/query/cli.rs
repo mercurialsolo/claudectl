@@ -11,6 +11,7 @@ use clap::Subcommand;
 use crate::access::{self, GrantStore, scope};
 use crate::context::{self, ContextIndex};
 
+use super::classify::{Classifier, JevSettings};
 use super::core::QueryCore;
 use super::http::QueryServer;
 
@@ -65,6 +66,20 @@ fn dispatch(command: &QueryCommand, json_mode: bool) -> Result<(), String> {
         #[cfg(feature = "bus")]
         QueryCommand::Stdio { token, project } => {
             let core = build_core(project.as_deref())?;
+            // On **stderr**, because stdout is the MCP channel. §4.6 asks that
+            // the third party be told their questions are classified by a
+            // hosted service, and `serve` says so in its banner — without
+            // this, an owner running MCP mode with `TYPESAFE_API_KEY` already
+            // in their environment got no indication that questions now leave
+            // the machine, which is the silent opt-in the banner exists to
+            // prevent.
+            eprintln!("classification: {}", core.classifier().describe());
+            if core.classifier().is_active() {
+                eprintln!(
+                    "  queries are sent to api.typesafe.ai for classification. \
+                     Tell your grant holders."
+                );
+            }
             super::mcp::run_stdio(Arc::new(core), token.clone())
         }
     }
@@ -111,7 +126,31 @@ fn build_core(project: Option<&str>) -> Result<QueryCore, String> {
     let index = ContextIndex::build(&cwd).map_err(|e| e.to_string())?;
     let store = GrantStore::open_default()?;
     let secret = access::token::load_or_create_secret(store.root())?;
-    Ok(QueryCore::new(project, Arc::new(index), store, secret))
+    // Read once, at startup. A surface whose credentials and ceiling can
+    // change under it mid-run is harder to reason about than one that is
+    // restarted — the same reason the index is built once here.
+    let classifier = Classifier::from_env(&jev_settings(), store.root());
+    Ok(QueryCore::new(
+        project,
+        Arc::new(index),
+        store,
+        secret,
+        classifier,
+    ))
+}
+
+/// The `[query]` section, mapped onto the classifier's own settings type.
+///
+/// Mapped rather than shared so `src/query/` does not depend on the binary's
+/// config layer — `classify::JevSettings` is what the module needs, and
+/// `config::QueryConfig` is how an owner writes it down.
+fn jev_settings() -> JevSettings {
+    let cfg = crate::config::Config::load();
+    JevSettings {
+        enabled: cfg.query.jev_enabled,
+        model: cfg.query.jev_model,
+        monthly_usd: cfg.query.jev_monthly_usd,
+    }
 }
 
 fn serve(addr: &str, port: u16, project: Option<&str>, json_mode: bool) -> Result<(), String> {
@@ -121,6 +160,8 @@ fn serve(addr: &str, port: u16, project: Option<&str>, json_mode: bool) -> Resul
     let fingerprint = core.index().fingerprint();
     let empty = core.index().is_empty();
     let mode = context::exposure::mode_from_config();
+    let classification = core.classifier().describe();
+    let classifying = core.classifier().is_active();
 
     let bind: SocketAddr = format!("{addr}:{port}")
         .parse()
@@ -147,6 +188,8 @@ fn serve(addr: &str, port: u16, project: Option<&str>, json_mode: bool) -> Resul
             "addr": listening.to_string(),
             "fingerprint": fingerprint,
             "share_mode": mode.label(),
+            "classification": classification,
+            "classifying": classifying,
             "empty": empty,
             "tracked_files": stats.tracked_files,
             "denied": stats.denied,
@@ -162,6 +205,21 @@ fn serve(addr: &str, port: u16, project: Option<&str>, json_mode: bool) -> Resul
             stats.tracked_files, stats.denied, stats.unreadable
         );
         println!("  share mode: {}", mode.label());
+        // Said once, here, rather than on every audit line: whether a
+        // classifier is running is a static fact about this process, and an
+        // owner who thinks Jev is on because they set it in config needs to
+        // see "TYPESAFE_API_KEY is not set" at startup, not in a log a week
+        // later.
+        println!("  classification: {classification}");
+        if classifying {
+            // §4.6: "The third party's queries are their text, not yours — but
+            // they should be told it is classified by a third-party service."
+            // The reminder belongs where the decision is visible.
+            println!(
+                "    queries are sent to api.typesafe.ai for classification. \
+                 Tell your grant holders."
+            );
+        }
         if !stats.categories_hidden.is_empty() {
             println!(
                 "  hidden by exposure: {}",

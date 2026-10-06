@@ -109,10 +109,13 @@ impl QueryMcpServer {
 #[tool_router]
 impl QueryMcpServer {
     #[tool(
-        description = "Ask a natural-language question about the project. Returns verbatim spans \
-                       from its published documentation and module map, each with its source path \
-                       and heading. Nothing is generated: a span is either in the project's index \
-                       or it is not returned."
+        description = "Ask a natural-language question about the project. Nothing is generated: a \
+                       span is either in the project's index or it is not returned. Check `status` \
+                       before reading `spans` — `answered` carries verbatim spans from the \
+                       published documentation and module map, each with its source path and \
+                       heading; `declined` carries a reason and a pointer at what is answerable \
+                       instead; `pending_review` means the question was queued for the project \
+                       owner and `escalation_id` identifies it."
     )]
     async fn ask_project(
         &self,

@@ -1,15 +1,18 @@
-//! Read-only project query surface (#429, open-cluster RFC §4.7).
+//! Read-only project query surface (#429, #430, open-cluster RFC §4.3–§4.8).
 //!
-//! Phase 3 of the open-cluster RFC: the whole path wired end to end —
-//! authorize → retrieve → select → respond — with **deterministic term
-//! matching** where §4.3 will eventually put Jev.
+//! The whole path wired end to end — authorize → classify → retrieve → select
+//! → respond.
 //!
-//! That ordering is deliberate (spec §10). A deterministic surface that works
-//! is the thing a classifier can then be *measured* against, and it means Jev
+//! #429 shipped it with **deterministic term matching** where §4.3 puts Jev,
+//! and that ordering was deliberate (spec §10). A deterministic surface that
+//! works is the thing a classifier can be *measured* against, and it means Jev
 //! arrives as an improvement to a working system rather than being
 //! load-bearing on day one — which is what keeps §4.4's "Jev is the router,
-//! code is the boundary" true in practice rather than only on paper. Nothing
-//! here calls out to a classifier, and nothing here needs `TYPESAFE_API_KEY`.
+//! code is the boundary" true in practice rather than only on paper.
+//!
+//! #430 added the classifier on top, **off unless `TYPESAFE_API_KEY` is set**.
+//! With no key the surface behaves exactly as #429 shipped it; the
+//! deterministic path is not a degraded mode, it is the default one.
 //!
 //! ## What the boundary actually is
 //!
@@ -30,8 +33,16 @@
 //!
 //! ## Layout
 //!
-//! - [`core`] — the single authorize → retrieve → select path. All the policy.
+//! - [`core`] — the single authorize → classify → retrieve → select path. All
+//!   the policy that is not a threshold.
 //! - [`rank`] — the deterministic ranker. Integers, total orders, no floats.
+//! - [`jev`] — the Jev wire contract. Request, response, `curl`. No policy.
+//! - [`thresholds`] — the six numbers §4.3 expects to be tuned, alone in a
+//!   file so a tuning pass is one diff.
+//! - [`classify`] — §4.3's routing table as a pure function, plus the two ways
+//!   to have no classifier.
+//! - [`escalate`] — the owner's queue for §4.3's "anything else" row.
+//! - [`spend`] — the monthly Jev spend ceiling (#431's deferred §4.8 row).
 //! - `http` — `POST /query`, `GET /topics`, `POST /doc`, bearer-authenticated.
 //! - `mcp` — the same three operations as MCP tools over stdio.
 //! - [`cli`] — `claudectl query serve` and `claudectl query stdio`.
@@ -44,12 +55,17 @@
 //! `JsonSchema` only under `bus`, since that is the only configuration in
 //! which the crate exists.
 
+pub mod classify;
 pub mod cli;
 pub mod core;
+pub mod escalate;
 pub mod http;
+pub mod jev;
 #[cfg(feature = "bus")]
 pub mod mcp;
 pub mod rank;
+pub mod spend;
+pub mod thresholds;
 
 // No re-exports: `core` is the surface and naming it at the call site is
 // what makes "every policy decision lives in one file" visible from the
