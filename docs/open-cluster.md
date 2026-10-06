@@ -1,6 +1,6 @@
 # claudectl Open Cluster — Design Specification
 
-**Status:** Proposed / RFC. Phase 0 (#426) has shipped; nothing else here is implemented. Written against the code as of `871b26e5`.
+**Status:** Proposed / RFC. Phases 0 (#426) and 1 (#427) have shipped; nothing else here is implemented. Written against the code as of `5bc72d60`.
 **Scope:** Let someone who is *not you* participate in your claudectl world at a reduced trust level — ask read-only questions about one of your projects, join a named hive, or run a node from a Mac app instead of a terminal.
 
 ## Implementation status
@@ -8,7 +8,7 @@
 | Phase (§10) | Status | Module / artifact |
 | --- | --- | --- |
 | 0. Prerequisite hardening (constant-time auth, transport decision) | **Shipped** (#426) | `src/relay/crypto.rs`, `src/relay/http.rs`, `src/relay/protocol.rs` |
-| 1. Capability tokens + scopes | **Not started** | proposed `src/access/` |
+| 1. Capability tokens + scopes | **Shipped** (#427) | `src/access/mod.rs`, `src/access/scope.rs`, `src/access/token.rs`, `src/access/grant.rs`, `src/access/cli.rs` |
 | 2. Context index (what a query can be answered from) | **Not started** | proposed `src/context/` |
 | 3. Jev query classification + routing | **Not started** | proposed `src/access/classify.rs` |
 | 4. Read-only query surface (MCP + HTTP) | **Not started** | proposed `src/access/query.rs` |
@@ -67,7 +67,9 @@ The hive already has the right *shape* for the answer: `ExposureStore` decides p
 A **grant** is a named, scoped, expiring capability issued to one external party.
 
 ```
-~/.claudectl/access/grants/<grant_id>.json
+~/.claudectl/access/secret                    HMAC key, never leaves the machine
+~/.claudectl/access/grants/<grant_id>.json    one record per grant
+~/.claudectl/access/audit.jsonl               append-only, allowed and denied alike
 ```
 
 ```json
@@ -85,9 +87,17 @@ A **grant** is a named, scoped, expiring capability issued to one external party
 }
 ```
 
-The token handed out is `cctl_<grant_id>_<mac>`, where `mac` is `HMAC-SHA256(server_secret, grant_id || scopes || expires_ms)` truncated to 128 bits. `relay::crypto` already has SHA-256 and HMAC-SHA256 inline — **no new dependency, no JWT library, no asymmetric crypto.** Verification is: parse, recompute the MAC, constant-time compare (`ct_eq`, §3.4), then load the grant file and check `revoked` and `expires_ms`.
+The token handed out is `cctl_<grant_id>_<mac>` — `cctl_gr_7f2a1b_<32 hex chars>` in practice, since the grant id carries its own `gr_` prefix — where `mac` is `HMAC-SHA256(server_secret, grant_id || scopes || expires_ms)` truncated to 128 bits. `relay::crypto` already has SHA-256 and HMAC-SHA256 inline — **no new dependency, no JWT library, no asymmetric crypto.** That reuse is also why `src/access/` sits behind the `relay` feature; the minimal `--no-default-features --features hive` build has no access surface at all.
 
-Signing the scopes into the MAC means a token cannot be edited to widen itself, and the grant file remains the authority for revocation and accounting. Revoking is a one-field write; nothing needs restarting.
+Verification is: parse → load the grant → recompute the MAC → constant-time compare (`ct_eq`, §3.4) → check `revoked` and `expires_ms`, then the required scope when the caller names one. The load has to come first, because the MAC covers `scopes` and `expires_ms` and those exist only in the grant file. (This section previously specified the MAC check before the load, which cannot work.) Loading first costs nothing, because every failure along that chain returns the same opaque `denied` — unknown grant, bad MAC, revoked, expired and missing scope are indistinguishable from outside, and the specific reason goes to `audit.jsonl` and nowhere else. That is §3.3's 404-not-403 rule applied one layer down: telling "no such grant" from "revoked" would leak which grant ids exist. Denied attempts are audited too, so probing and hammering are visible to the owner.
+
+The MAC covers `grant_id`, `scopes` and `expires_ms`. It does not cover `revoked`, `last_used_ms` or `use_count`. Revoking is therefore a one-field write that takes effect immediately with nothing to restart, while any edit to `scopes` or `expires_ms` invalidates the issued token and forces a re-grant. Signing the scopes in is also what stops a token being edited to widen itself; the grant file remains the authority for revocation and accounting.
+
+The `secret` fails closed. It comes from `relay::crypto::try_generate_psk`, which errors instead of falling back to `generate_psk`'s timestamp/pid/thread-id hash when `/dev/urandom` cannot be read — defensible for a short-lived LAN pairing code, not for the root key every third-party grant MAC derives from. A corrupt or wrong-length secret is an error rather than a silent re-mint, because re-minting would invalidate every live grant without saying so.
+
+All three paths are written `0600`, with the mode set on the temp file before any bytes land rather than chmodded afterwards (`relay::save_peer_psk` writes first and chmods after, leaving a readable instant). The grant files are owner-only too, not just the secret: a grant file carries every field the MAC covers, so leaving them at a default umask would make `secret` the only barrier between an unprivileged local user and every token on the machine.
+
+#427 ships the spine only — mint, verify, list, audit, revoke — and no network surface. `access grant` opens no port. The read-only query surface is #429, and enforcement of the `rate_limit_per_min` and `daily_query_budget` fields the grant file already carries is #431.
 
 ### 3.3 Scopes
 
@@ -103,9 +113,11 @@ Scopes are `<resource>.<verb>:<qualifier>`. Verbs are read-only across the board
 
 Absent a matching scope, the surface returns `404`, not `403` — an unauthorized caller should not be able to enumerate which projects exist.
 
+As of #427, `access grant` issues `project.query` and `project.docs` only. `fleet.read` is refused with Q8's reasoning (§9) — the scope stays defined and is issued to nobody, because a third party reviewing your project should not see your live session costs. The two hive scopes are refused until named-hive identity lands in #424. All five verbs still parse, so a grant file written by a later version loads on today's binary.
+
 ### 3.4 Prerequisites (§10 phase 0, shipped in #426)
 
-- **Constant-time compare.** `src/relay/crypto.rs` now exports `ct_eq(&[u8], &[u8]) -> bool`, which folds over every byte so neither the time taken nor the result says where the first mismatch was. A length mismatch returns `false` immediately; length is not treated as secret. It replaced the two `!=` comparisons on secrets in the repo: the coordinator bearer token in `src/relay/http.rs` and the HMAC-SHA256 handshake proof in `src/relay/protocol.rs`. Grant MACs (§3.2) are to verify through the same function.
+- **Constant-time compare.** `src/relay/crypto.rs` now exports `ct_eq(&[u8], &[u8]) -> bool`, which folds over every byte so neither the time taken nor the result says where the first mismatch was. A length mismatch returns `false` immediately; length is not treated as secret. It replaced the two `!=` comparisons on secrets in the repo: the coordinator bearer token in `src/relay/http.rs` and the HMAC-SHA256 handshake proof in `src/relay/protocol.rs`. Grant MACs (§3.2) verify through the same function as of #427.
 - **Transport — loopback plus an operator tunnel.** `http.rs` is plaintext HTTP/1.1, exposing plaintext to a third party is a non-starter, and "minimal dependencies — 7 runtime crates" ruled out adding `rustls` (`Cargo.toml` carries no TLS crate at all). So `RelayConfig::http_addr` defaults to `127.0.0.1` — it no longer inherits `listen_addr`, which still defaults to `0.0.0.0` for the HMAC-authenticated peer transport — and off-machine access is the operator's tunnel to arrange (Cloudflare Tunnel, Tailscale Funnel, `ssh -R`). `--http-addr 0.0.0.0` opts back in and warns at startup, which is the answer to the foot-gun. See [Q3](#q3-transport) and `docs/relay.md` §Security.
 
 ## 4. Read-only project query access
@@ -261,7 +273,7 @@ Two consumers, one core:
 **MCP** — for their Claude. Mirrors how `src/bus/mcp.rs` already exposes tools:
 
 ```
-claudectl query stdio --token cctl_7f2a1b_<mac> --endpoint <url>
+claudectl query stdio --token cctl_gr_7f2a1b_<mac> --endpoint <url>
   tools: ask_project(question)  ·  list_topics()  ·  get_doc(path)
 ```
 
@@ -297,18 +309,22 @@ claudectl access grant --project claudectl \
   --label "acme integration review" \
   --scopes project.query,project.docs \
   --expires 30d
-# → cctl_7f2a1b_9e3c…  (shown once)
+# → cctl_gr_7f2a1b_9e3c…  (shown once)
 
 claudectl access list                 # grants, last used, counts
 claudectl access audit gr_7f2a1b      # what they actually asked
 claudectl access revoke gr_7f2a1b     # immediate
 
 # Third party
-claudectl query connect cctl_7f2a1b_9e3c… --endpoint https://…
+claudectl query connect cctl_gr_7f2a1b_9e3c… --endpoint https://…
 claudectl query ask "how is the brain's decision logging structured?"
 ```
 
+The owner half shipped in #427. `--project` and `--label` are required; `--scopes` defaults to `project.query` and `--expires` to `30d`. All four subcommands take `--json`, which is a global flag and so goes *before* the subcommand (`claudectl --json access list`). The third-party half is #429 and does not exist yet.
+
 Shown once, like `relay pair`. `access list` surfaces `last_used_ms` and `use_count` so a dormant or hammering grant is visible without reading the audit log.
+
+Operator-facing walkthrough: [docs/access.md](access.md).
 
 ## 6. Threat model
 
@@ -435,7 +451,7 @@ Ordered so each phase is independently useful and the riskiest dependency comes 
 | Phase | Deliverable | Why here |
 | --- | --- | --- |
 | **0** | **Shipped (#426).** `relay::crypto::ct_eq` on both auth sites; HTTP API bound to loopback, tunnel documented | Prerequisite for anything third-party-facing (§3.4) |
-| **1** | Capability tokens, scopes, `access grant/list/revoke/audit` | The spine. Testable alone: issue, verify, expire, revoke |
+| **1** | **Shipped (#427).** Capability tokens, scopes, `access grant/list/audit/revoke` in `src/access/` | The spine. Testable alone: issue, verify, expire, revoke |
 | **2** | Context index over tracked docs + module map + exposed hive units | Deterministic and unit-testable with no network |
 | **3** | Deterministic query surface (MCP + HTTP), **no Jev** | Proves the whole path end to end while the boundary is simple |
 | **4** | Jev classification + confidence routing + escalation queue | Added once there is real traffic to tune thresholds against — the docs are explicit that thresholds need your own data |

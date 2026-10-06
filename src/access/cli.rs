@@ -64,9 +64,9 @@ pub fn dispatch_command(command: &AccessCommand, json_mode: bool) -> io::Result<
 
 /// Parse `--expires`, rejecting what the shared parser lets through.
 ///
-/// `history::parse_duration` accepts `0d` and multiplies without an overflow
-/// guard. A zero-length grant is almost certainly a typo, and a grant that
-/// wraps past the epoch is worse than an error.
+/// `history::parse_duration` accepts `0d`, and a zero-length grant is almost
+/// certainly a typo rather than a request. (It used to overflow on absurd
+/// values too; that is now `checked_mul` in core.)
 fn parse_expires(expr: &str) -> Result<u64, String> {
     let secs = crate::history::parse_duration(expr).ok_or_else(|| {
         format!("invalid --expires '{expr}' (expected a value like 30d, 24h, 90m or 1w)")
@@ -314,12 +314,14 @@ fn truncate(s: &str, width: usize) -> String {
     claudectl_core::helpers::truncate_cell(s, width)
 }
 
-/// Render an epoch-ms timestamp relative to now — `3d ago`, `in 29d`.
+/// Render an epoch-ms timestamp relative to now — `3d ago`, `in 30d`.
 ///
 /// Core has no epoch-ms formatter and `chrono_now_iso` only renders the
 /// current instant, so rather than hand-rolling a calendar this answers the
 /// question the operator actually has: is this grant stale, and when does it
-/// lapse. Granularity is deliberately coarse.
+/// lapse. Granularity is deliberately coarse, and rounds to nearest rather
+/// than truncating — a grant issued with `--expires 30d` should not read back
+/// as `in 29d` a millisecond later.
 fn fmt_ms(ms: u64) -> String {
     fmt_ms_at(ms, super::epoch_ms())
 }
@@ -331,15 +333,15 @@ fn fmt_ms_at(ms: u64, now_ms: u64) -> String {
         (now_ms - ms, false)
     };
     let secs = delta_ms / 1000;
+    // Round to nearest unit rather than truncating.
+    let nearest = |unit: u64| (secs + unit / 2) / unit;
     let span = match secs {
-        0..=59 => "just now".to_string(),
-        60..=3599 => format!("{}m", secs / 60),
-        3600..=86_399 => format!("{}h", secs / 3600),
-        _ => format!("{}d", secs / 86_400),
+        0..=59 => return "just now".into(),
+        60..=3599 => format!("{}m", nearest(60)),
+        3600..=86_399 => format!("{}h", nearest(3600)),
+        _ => format!("{}d", nearest(86_400)),
     };
-    if span == "just now" {
-        span
-    } else if future {
+    if future {
         format!("in {span}")
     } else {
         format!("{span} ago")
@@ -414,6 +416,26 @@ mod tests {
     #[test]
     fn scopes_refuse_a_write_verb() {
         assert!(parse_scopes("project.write", "p").is_err());
+    }
+
+    #[test]
+    fn a_thirty_day_grant_reads_back_as_thirty_days() {
+        // Truncating would say "in 29d" a millisecond after issuing, which
+        // reads like the grant was mis-issued.
+        let now = 1_000_000_000_000;
+        let thirty_days = 30 * 86_400 * 1000;
+        assert_eq!(fmt_ms_at(now + thirty_days - 5, now), "in 30d");
+    }
+
+    #[test]
+    fn relative_times_pick_a_sensible_unit_and_direction() {
+        let now = 1_000_000_000_000;
+        assert_eq!(fmt_ms_at(now, now), "just now");
+        assert_eq!(fmt_ms_at(now - 30_000, now), "just now");
+        assert_eq!(fmt_ms_at(now - 600_000, now), "10m ago");
+        assert_eq!(fmt_ms_at(now - 7_200_000, now), "2h ago");
+        assert_eq!(fmt_ms_at(now - 3 * 86_400_000, now), "3d ago");
+        assert_eq!(fmt_ms_at(now + 600_000, now), "in 10m");
     }
 
     #[test]

@@ -168,6 +168,11 @@ impl GrantStore {
         let body = serde_json::to_vec_pretty(grant).map_err(|e| format!("encode grant: {e}"))?;
         {
             let mut f = fs::File::create(&tmp).map_err(|e| format!("create temp grant: {e}"))?;
+            // 0600 before the bytes land, same as the secret. A grant file
+            // holds every field the MAC covers, so anyone who can read both it
+            // and the secret can recompute the live token. Default-umask 0644
+            // would make the secret the only barrier.
+            set_owner_only(&tmp)?;
             f.write_all(&body)
                 .map_err(|e| format!("write temp grant: {e}"))?;
             f.sync_data().map_err(|e| format!("sync grant: {e}"))?;
@@ -326,11 +331,18 @@ impl GrantStore {
     pub fn append_audit(&self, entry: &AuditEntry) -> Result<(), String> {
         fs::create_dir_all(&self.root).map_err(|e| format!("create access dir: {e}"))?;
         let line = serde_json::to_string(entry).map_err(|e| format!("encode audit entry: {e}"))?;
+        let path = self.audit_path();
+        let existed = path.exists();
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.audit_path())
+            .open(&path)
             .map_err(|e| format!("open audit log: {e}"))?;
+        if !existed {
+            // Owner-only from the first line. #429 appends query text here, so
+            // this log gets more sensitive over time, not less.
+            set_owner_only(&path)?;
+        }
         writeln!(f, "{line}").map_err(|e| format!("write audit entry: {e}"))
     }
 
@@ -344,6 +356,19 @@ impl GrantStore {
             .filter(|e| grant_id.is_none_or(|want| e.grant_id == want))
             .collect()
     }
+}
+
+/// Restrict a file to its owner. No-op off unix.
+fn set_owner_only(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("chmod {}: {e}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// Build a new grant with defaults filled in. Does not persist.
@@ -665,6 +690,20 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
             .collect();
         assert!(leftovers.is_empty(), "found {leftovers:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn grant_files_and_the_audit_log_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, store, _g, _t) = fixture();
+        store.record_use("gr_7f2a1b", Some("x"), NOW).unwrap();
+
+        let mode = |p: std::path::PathBuf| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        // A grant file carries every field the MAC covers, so default-umask
+        // 0644 would leave the secret as the only barrier.
+        assert_eq!(mode(store.grants_dir().join("gr_7f2a1b.json")), 0o600);
+        assert_eq!(mode(store.audit_path()), 0o600);
     }
 
     #[test]
