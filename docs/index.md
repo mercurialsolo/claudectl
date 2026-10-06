@@ -182,6 +182,8 @@ Run `claudectl doctor` to verify your install + terminal support in one command.
 
 claudectl reads Claude Code's local data - no API keys, no network access, no modifications to Claude Code:
 
+> One exception, opt-in and off by default: the read-only query surface can send a third party's question and one paragraph of `CLAUDE.md` to a hosted classifier. It needs `TYPESAFE_API_KEY` to be set, and `[query] jev_enabled = false` is the hard off. Nothing else in claudectl requires an API key, and no index content, file body or session data is ever sent. See [Capability Grants](access.md).
+
 - **`~/.claude/sessions/*.json`** - session metadata
 - **`~/.claude/projects/{slug}/*.jsonl`** - conversation logs with token usage
 - **`ps`** - CPU%, memory, TTY for each process

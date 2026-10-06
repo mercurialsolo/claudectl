@@ -351,6 +351,34 @@ max_prompt_units = 20
 
 See the [full Relay & Hive Mind guide](docs/relay.md).
 
+## Open Cluster — let someone ask about your project
+
+A relay peer is symmetric: it reads your sessions, delegates to you, interrupts you. A **capability grant** is the opposite — scoped, expiring, revocable, read-only. Someone outside your trust boundary (or their Claude) can ask *"how is auth structured?"* and get cited answers, with no way to write, execute, delegate or interrupt.
+
+```bash
+# Mint a token for a third party — prints once, store it then
+claudectl access grant --project claudectl \
+  --label "acme integration review" \
+  --scopes project.query \
+  --expires 30d
+
+claudectl access list                 # every grant, its state, uses, last use
+claudectl access audit gr_a38487      # what that grant actually asked for
+claudectl access revoke gr_a38487     # immediate, nothing to restart
+
+# Serve the repo you're in — one process, one project
+claudectl query serve                 # 127.0.0.1:8787 by default
+claudectl query stdio                 # same surface over MCP
+```
+
+Answers are **verbatim doc spans with citations**, never generated prose. They come only from a pre-built index of what git tracks, minus a deny-list covering `.env*`, ssh keys, transcripts, `.claudectl/`, databases and more. Source bodies are never indexed — only `//!` headers, `///` docs and public signatures. There is no code path from a query to an unindexed file, and no write verb anywhere in the surface.
+
+A token for one project returns an opaque `404` for every other. Each grant carries its own rate limit and daily budget, so one noisy caller can't spend another's.
+
+Classification is optional and off unless you set `TYPESAFE_API_KEY`. When on, it routes questions — deny, decline, answer, or escalate to you — but it is never the boundary: it runs *after* scopes and budgets, and answers still come only from the index. Remove it and the surface is blunter, not less safe. It is the one thing in claudectl that sends anything off-machine: the question and one paragraph of `CLAUDE.md`, never index contents or session data.
+
+See [Capability Grants](docs/access.md) and the [Open Cluster spec](docs/open-cluster.md).
+
 ## Orchestrate Sessions
 
 Run coordinated tasks with dependency ordering, retries, and cross-session data routing:
@@ -444,6 +472,8 @@ Press `R` on any session for a highlight reel GIF (edits, commands, errors — i
 | [Reference](docs/reference.md) | All flags, keybindings, modes |
 | [Configuration](docs/configuration.md) | Config files, hooks, rules |
 | [Relay & Hive Mind](docs/relay.md) | Connect instances, share knowledge |
+| [Capability Grants](docs/access.md) | Scoped read-only access for a third party |
+| [Open Cluster](docs/open-cluster.md) | Query surface design spec |
 | [Terminal Support](docs/terminal-support.md) | Compatibility matrix |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and FAQ |
 | [Contributing](docs/contributing.md) | Setup and guidelines |

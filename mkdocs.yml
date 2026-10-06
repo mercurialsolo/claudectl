@@ -49,7 +49,7 @@ nav:
   - Capability Grants: access.md
   - Policy as Code: policy-as-code.md
   - Team Observability: team-observability.md
-  - Open Cluster (RFC): open-cluster.md
+  - Open Cluster: open-cluster.md
   - Terminal Support: terminal-support.md
   - Troubleshooting: troubleshooting.md
   - Contributing: contributing.md

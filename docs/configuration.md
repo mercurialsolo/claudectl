@@ -258,3 +258,21 @@ exclude_commands = []       # never share patterns matching these substrings
 ```
 
 `http_port` and `auth_token` have no defaults, and the coordinator HTTP API starts only when both resolve — leave either unset and there is no listener. The bind address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`. Loopback is the default because that API is plaintext HTTP/1.1 with a bearer token, so off-machine access belongs behind a tunnel rather than a wider bind (#426). `listen_addr` governs only the HMAC-authenticated peer transport, where `0.0.0.0` is the intended deployment. See [Security](relay.md#security).
+
+## Query Surface Configuration (--features relay)
+
+Settings for the read-only project query surface. Only `jev_*` is configurable — the grant's own rate limit and daily budget live in the grant record, not here, so tightening one caller never loosens another. See [Capability Grants](access.md).
+
+```toml
+[query]
+jev_enabled = true          # allow classification at all; false is the hard off
+jev_model = "jev-latest"    # or jev-preview, or a pinned jev-1.x.y
+jev_monthly_usd = 5.00      # monthly ceiling; past it, classification degrades
+                            # to deterministic matching rather than billing on
+```
+
+`jev_enabled` defaults to `true`, but it is not the on switch — a present `TYPESAFE_API_KEY` is. With no key the surface behaves exactly as it did before classification existed: deterministic ranking over the index, no network call, nothing leaving the machine. `jev_enabled = false` exists so an owner who has that key in their environment for unrelated reasons can still keep the surface local.
+
+A *configured but unavailable* classifier is not the same as an absent one. If the key is set and the endpoint cannot be reached, queries answer strictly — at most 3 spans, and only spans scoring 2 or better — because an owner who enabled a gate should never get a more permissive surface when the gate is down.
+
+The endpoint is a compile-time constant, not a config field: a redirectable classification endpoint would be a way to send a third party's question to a host the owner never approved.
