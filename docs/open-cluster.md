@@ -1,6 +1,6 @@
 # claudectl Open Cluster — Design Specification
 
-**Status:** Proposed / RFC. Phases 0 (#426), 1 (#427), 2 (#428) and 3 (#429) have shipped; nothing else here is implemented. Written against the code as of `b37aef14`.
+**Status:** Proposed / RFC. Phases 0 (#426), 1 (#427), 2 (#428), 3 (#429) and 5 (#431) have shipped; nothing else here is implemented. Written against the code as of `b37aef14`.
 **Scope:** Let someone who is *not you* participate in your claudectl world at a reduced trust level — ask read-only questions about one of your projects, join a named hive, or run a node from a Mac app instead of a terminal.
 
 ## Implementation status
@@ -12,6 +12,7 @@
 | 2. Context index (what a query can be answered from) | **Shipped** (#428) | `src/context/{mod,git,deny,docs,module_map,exposure}.rs` |
 | 3. Read-only query surface (MCP + HTTP), deterministic | **Shipped** (#429) | `src/query/{mod,core,rank,http,mcp,cli}.rs` |
 | 4. Jev query classification + routing | **Not started** | proposed `src/query/classify.rs` |
+| 5. Query guardrails (rate limit, budget, audit) | **Shipped** (#431) | `src/rate_limit.rs`, `src/access/grant.rs`, `src/query/core.rs` |
 | 5. Named hives + advertise/discover | **Not started** | `src/hive/`, `src/relay/lan.rs`, `src/relay/invite.rs` |
 | 6. `claudectl.app` (macOS menu-bar shell) | **Not started** | separate artifact, separate toolchain |
 
@@ -392,15 +393,36 @@ Reusing what `src/bus/policy.rs` and `src/bus/rate_limit.rs` already established
 
 | Guard | Value | Status |
 | --- | --- | --- |
-| Rate limit | Per-grant token bucket, default 20/min (bus uses 60/min per role) | #431 |
-| Daily budget | Per-grant query cap; denied queries count, so probing is self-limiting | #431 |
+| Rate limit | Per-grant token bucket, default 20/min (bus uses 60/min per role) | **Shipped (#431)** |
+| Daily budget | Per-grant query cap; a `missing_scope` denial counts, so probing is self-limiting | **Shipped (#431)** |
 | Query length | 8 KB cap, mirroring the bus body cap | **Shipped (#429)** |
 | Response size | 32 KB; spans truncated with an explicit marker | **Shipped (#429)** |
-| Audit | Every query, classification result and decision appended to `~/.claudectl/access/audit.jsonl` | **Shipped (#429)** — `allowed` carries the operation, `denied` carries the `DenyReason` |
+| Audit | Every query and decision appended to `~/.claudectl/access/audit.jsonl`, with the question and the paths cited | **Shipped (#429, #431)** |
+| Spend ceiling | Monthly Jev cap; on breach, fall back to deterministic matching | Deferred to #430 — nothing to meter until Jev exists |
 
 The query-length row said 2 KB, which contradicted its own justification: `bus::policy::DEFAULT_MAX_BODY_BYTES` is 8192. #429 took the stated reason over the stated number and capped at 8 KB.
 
-`bus::rate_limit::RateLimiter` is reusable as-is — its key is an arbitrary `&str`, so a grant id works today — but it lives behind the `bus` feature while the HTTP surface is `relay`-only, and it is in-process with no eviction. #431 is where that gets decided, along with the daily budget, which needs persistence a token bucket does not provide.
+#### Which denials count against the budget
+
+"Denied queries count, so probing is self-limiting" cannot be read literally, and #431 narrowed it. A grant id is 24 bits. If *every* denial charged the budget, anyone who guessed an id could send bad-MAC requests until the legitimate holder's daily allowance was gone — a denial-of-service against the person the guardrail protects, dressed as a defence against probing.
+
+So exactly one denial charges: **`missing_scope`**. It is the only one that proves the caller holds a valid, unexpired, unrevoked token and is probing verbs or projects it was not granted. `bad_mac` and `unknown_grant` are not the holder; `revoked` and `expired` are already dead. A probe past an exhausted budget writes two lines — the missing scope and the exhausted budget — because both happened.
+
+#### Where each check sits, and why
+
+Order is `verify` → rate limit → daily budget, and every placement is load-bearing rather than incidental:
+
+- **The rate limit is checked after verification.** The bucket map has no eviction, so keying it on *claimed* grant ids would let someone walking 24-bit ids pin 16M buckets in memory. After verification the key has always presented a valid MAC, so the map is bounded by real grants. The cost is one HMAC per throttled request.
+- **A throttled request never reaches the budget.** It was not evaluated, so charging the day's allowance for it would spend what it was refused the use of.
+- **A store failure is a denial, not a `500`.** `charge_daily_budget` originally told "budget exhausted" from "could not read the grant" by comparing error strings, which meant a transient failure answered `500` *with the charge never applied* — unmetered requests for anyone who could induce one. It now returns a typed error and the store case fails closed: a surface that cannot meter does not answer.
+
+#### Why 429 says which limit
+
+Both guardrails answer `429` with distinguishable bodies and a `Retry-After` — from the bucket's refill rate for the rate limit, from the time to UTC midnight for the budget. That is a deliberate exception to §3.3's opacity. §3.3 exists so an *unauthorized* caller cannot enumerate what exists; a throttled caller has already proved they hold a valid in-scope token for this project, so naming their own limit tells them nothing new. A working grant that goes silently quiet is hostile to the holder and generates a support question for the owner.
+
+`bus::rate_limit::RateLimiter` was reusable as-is — its key is an arbitrary `&str` — but it lived behind the `bus` feature while the HTTP surface is `relay`-only. #431 moved it to `src/rate_limit.rs` gated on `any(bus, relay)`, rather than forcing rmcp, Tokio and SQLite onto a surface with no use for them, and added per-key capacity because a grant brings its own limit where a bus role uses one default. A bucket keeps the capacity it was created with, so editing a grant file changes its limit on the next restart rather than mid-window.
+
+The daily counter needed persistence a token bucket does not provide, and lives on the grant as `budget_day` + `budget_used` — both unsigned, so editing them changes accounting rather than capability, and both omitted from the JSON while zero so a freshly minted grant still reads as §3.2 prints it.
 | Cost ceiling | Monthly Jev spend cap; on breach, fall back to deterministic matching rather than failing open or billing without limit |
 
 Audit is the thing that makes this operable: the owner can read exactly what was asked and what was returned, which is the only way to notice a grant being abused in a way no threshold caught.
@@ -559,7 +581,8 @@ Ordered so each phase is independently useful and the riskiest dependency comes 
 | **2** | **Shipped (#428).** `src/context/` — index over tracked docs + module map + tracked skills + locally-originated exposed hive units | Deterministic and unit-testable with no network |
 | **3** | **Shipped (#429).** `src/query/` — deterministic query surface (MCP + HTTP), **no Jev** | Proves the whole path end to end while the boundary is simple |
 | **4** | Jev classification + confidence routing + escalation queue | Added once there is real traffic to tune thresholds against — the docs are explicit that thresholds need your own data |
-| **5** | Hive naming, LAN advertisement, hive invite links | Independent of §4; dep-free; unblocks discovery |
+| **5** | **Shipped (#431).** Query guardrails — per-grant rate limit, daily budget, audited questions | Enforces what #427 persisted; the spend ceiling waits on #430 |
+| **5b** | Hive naming, LAN advertisement, hive invite links (#424) | Independent of §4; dep-free; unblocks discovery |
 | **6** | `claudectl.app` | Different toolchain, separate artifact; consumes 1–5 rather than extending them |
 
 Phase 3 before 4 is deliberate. A deterministic surface that works is the thing you can then *measure* Jev against, and it means the classifier is an improvement to a working system rather than load-bearing from day one — which is also what keeps §4.4 true in practice and not just on paper.

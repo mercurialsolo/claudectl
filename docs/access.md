@@ -16,9 +16,10 @@ command.
 `claudectl access grant` opens no port and starts no listener — it mints a
 credential. The surface that credential is presented *to* is
 `claudectl query serve` (#429), a separate process you start deliberately; see
-[Serving queries](#serving-queries) below. Enforcement of the per-grant rate
-limit and daily budget is still #431: both fields are persisted and neither is
-checked yet. The design behind all of this is
+[Serving queries](#serving-queries) below. The per-grant rate limit and daily
+budget are enforced as of #431 — see
+[Rate limits and budgets](#rate-limits-and-budgets). The design behind all of
+this is
 [docs/open-cluster.md](open-cluster.md) §3; transport is
 [docs/relay.md](relay.md#security).
 
@@ -120,8 +121,14 @@ One JSON file per grant at `~/.claudectl/access/grants/<grant_id>.json`:
 
 Writes are atomic: temp file in the same directory, `sync_data`, rename. A
 crash mid-write leaves either the old grant or a dotfile `access list` skips,
-never a truncated record. `rate_limit_per_min` and `daily_query_budget` are
-persisted but not yet enforced — that's #431.
+never a truncated record.
+
+`rate_limit_per_min` and `daily_query_budget` are enforced by
+`claudectl query serve` (#431). Two further counters appear once the grant has
+been used — `budget_day` (the UTC day the count belongs to) and `budget_used`.
+Both are omitted while zero, so a freshly minted grant reads exactly as above.
+Like `revoked`, neither is signed: editing them changes accounting, not
+capability, so it cannot invalidate a token already in someone's hands.
 
 ### Scopes
 
@@ -393,3 +400,81 @@ hammered is visible without reading the log at all.
 
 That `use_count` and that audit line are the only writes the query surface
 performs anywhere. No route touches the project.
+
+## Rate limits and budgets
+
+Two per-grant guardrails, both enforced by `claudectl query serve` and both
+set on the grant file:
+
+| Field | Default | What it bounds |
+| --- | --- | --- |
+| `rate_limit_per_min` | 20 | A token bucket. Bursts up to the limit, then held to steady refill. |
+| `daily_query_budget` | 500 | Queries per UTC day. Resets on the day boundary with nothing to run. |
+
+Both answer `429`, with a `Retry-After` and a body naming which one was hit:
+
+```
+$ curl -i -X POST http://127.0.0.1:8787/api/v1/project/claudectl/query \
+    -H "Authorization: Bearer cctl_gr_7f2a1b_<mac>" -d '{"question":"..."}'
+HTTP/1.1 429 Too Many Requests
+Retry-After: 20
+{"error":"rate limited"}
+```
+
+Telling the holder which limit they hit is deliberate, and it is the one
+exception to the opacity everywhere else in this document. The `404`-not-`403`
+rule exists so an *unauthorized* caller cannot enumerate what you have; a
+throttled caller has already proved they hold a valid, in-scope token for this
+project, so naming their own ceiling tells them nothing new — and a working
+grant that goes silently quiet is hostile to them and a support question for
+you.
+
+**Editing a limit takes effect on restart.** A bucket keeps the capacity it was
+created with for the life of the process, so raising `rate_limit_per_min` in
+the file does not move a ceiling mid-window. The daily budget is read from the
+file on every request, so lowering it applies immediately.
+
+### Which denials cost a query
+
+Only one: a **missing scope**. That is the single denial proving the caller
+holds a valid, unexpired, unrevoked token and is probing verbs or projects it
+was not granted — exactly the probing a budget should discourage.
+
+A bad MAC or an unknown grant costs nothing, and that is not an oversight. A
+grant id is 24 bits. If every denial charged, anyone who guessed an id could
+send garbage until your grant holder's day was spent — a denial-of-service
+against the person the budget protects.
+
+### Reading the log afterwards
+
+```
+$ claudectl access audit gr_7f2a1b
+GRANT        WHEN       EVENT    REASON            DETAIL           QUESTION
+gr_7f2a1b    3m ago     allowed  -                 query.ask        how does config layering work?
+gr_7f2a1b    3m ago     allowed  -                 query.ask        where do terminal backends live?
+gr_7f2a1b    3m ago     denied   rate_limited      3/min            how is the brain structured?
+gr_7f2a1b    2m ago     denied   budget_exhausted  5/5 used today   what is in the hive?
+```
+
+The QUESTION column is the point. Caps stop the abuse you anticipated; the log
+is the only way the abuse nobody anticipated becomes visible, and a log of
+counts alone cannot show what a grant was fishing for. Questions are truncated
+to 512 bytes.
+
+`--json` adds `cited` — the distinct paths that answered each query, so you can
+see what actually left the machine without replaying the question against a
+since-changed index:
+
+```json
+{"ts_ms":1791263678947,"grant_id":"gr_7f2a1b","event":"allowed",
+ "detail":"query.ask","question":"how does config layering work?",
+ "cited":["CLAUDE.md","docs/configuration.md"]}
+```
+
+### What these cannot do
+
+Per-grant limits bound an *authenticated* caller. An unauthenticated flood
+still appends a denial line per attempt, which is a disk-write vector that no
+per-grant cap can address — that is the TLS terminator's or reverse proxy's
+job, and it is the same reason `query serve` warns when you bind an address
+reachable off the machine.

@@ -4,6 +4,43 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — query guardrails: rate limit, daily budget, audited questions (#431)
+- **The per-grant limits #427 persisted are now enforced.** `rate_limit_per_min`
+  is a token bucket, `daily_query_budget` a UTC-day counter on the grant file.
+  Both answer `429` with a `Retry-After` and distinguishable bodies — the
+  caller has already proved they hold a valid in-scope token, so naming their
+  own limit reveals nothing §3.3 protects, and a working grant that goes
+  silently quiet is hostile.
+- **Only a `MissingScope` denial charges the budget.** §4.8 says "denied
+  queries count, so probing is self-limiting", and that is the one denial
+  proving the caller holds a *valid* token and is probing other verbs. Read
+  literally — charging every denial — anyone who guessed a 24-bit grant id
+  could drain the real holder's allowance, turning a defence against probing
+  into a denial-of-service against the person it protects.
+- **A throttled request never reaches the budget**, because it was never
+  evaluated; and the rate limit is checked *after* verification, so the bucket
+  map is only ever keyed on an id that has presented a valid MAC. Keyed on
+  claimed ids instead, walking 24-bit ids could pin 16M buckets.
+- **`audit.jsonl` now records what was asked and what came back** — `question`
+  (truncated to 512 bytes on a char boundary) and `cited` (the distinct paths
+  that answered, sorted). This is the issue's load-bearing claim made real:
+  caps stop the abuse you anticipated, and the log is the only way the abuse
+  nobody anticipated becomes visible. `access audit` grows a QUESTION column;
+  `cited` stays in `--json`.
+- **`src/bus/rate_limit.rs` moved to `src/rate_limit.rs`** (gated on
+  `any(bus, relay)`), because the query surface is `relay`-gated and the
+  alternative was forcing rmcp, Tokio and SQLite onto an HTTP surface with no
+  use for them. `try_acquire_with_capacity` is new, since a grant brings its
+  own limit where a bus role uses one global default.
+
+### Fixed — a budget charge that failed open (#431)
+- **A transient store failure returned `500` with the charge never applied**,
+  so anyone able to induce one got unmetered requests. `charge_daily_budget`
+  distinguished "budget exhausted" from "could not read the grant" by
+  comparing error *strings*; it now returns a typed `ChargeError`, and a store
+  failure is the same opaque denial as everything else — a surface that cannot
+  meter does not answer. The failure is audited so the operator sees it.
+
 ### Added — read-only query surface, deterministic (#429)
 - **`claudectl query serve` and `claudectl query stdio`.** Phase 3 of the
   open-cluster RFC (#423): grant holders ask natural-language questions about
