@@ -45,13 +45,15 @@ Status inference uses multiple signals: waiting_for_task events, CPU thresholds,
 
 ## Architecture
 
-~1 MB binary, sub-50ms startup, 7 runtime crates, no async runtime.
+~6.3 MB binary with default features (bus+coord+relay+hive), ~3.5 MB sync-only. Sub-50ms startup, 7 runtime crates in the sync core, no async runtime except the two MCP stdio servers (claudectl bus stdio, claudectl query stdio), which each build their own current-thread Tokio runtime.
 
 Core: main.rs, app.rs, session.rs, discovery.rs, monitor.rs, process.rs, config.rs, history.rs, hooks.rs, orchestrator.rs, health.rs, rules.rs, launch.rs, models.rs
 Brain: engine.rs, client.rs, context.rs, decisions.rs, agents.rs, mailbox.rs, prompts.rs, evals.rs, insights.rs
 Relay: mod.rs, cli.rs, crypto.rs, protocol.rs, peer.rs, listener.rs, mesh.rs, delegation.rs, worker.rs, invite.rs, lan.rs
 Hive: mod.rs, cli.rs, store.rs, distiller.rs, merger.rs, gossip.rs, trust.rs, injection.rs
 Access: mod.rs, cli.rs, scope.rs, token.rs, grant.rs
+Context index: mod.rs, git.rs, deny.rs, docs.rs, module_map.rs, exposure.rs
+Query: mod.rs, core.rs, rank.rs, http.rs, mcp.rs, cli.rs, jev.rs, classify.rs, thresholds.rs, escalate.rs, spend.rs
 TUI: table.rs, detail.rs, help.rs, status_bar.rs
 Terminals: ghostty, kitty, tmux, wezterm, warp, iterm2, terminal_app, gnome_terminal, windows_terminal
 
@@ -64,6 +66,7 @@ Terminals: ghostty, kitty, tmux, wezterm, warp, iterm2, terminal_app, gnome_term
 - [Troubleshooting](https://mercurialsolo.github.io/claudectl/troubleshooting/)
 - [Relay & Hive Mind](https://mercurialsolo.github.io/claudectl/relay/)
 - [Capability Grants](https://mercurialsolo.github.io/claudectl/access/)
+- [Open Cluster](https://mercurialsolo.github.io/claudectl/open-cluster/)
 - [Contributing](https://mercurialsolo.github.io/claudectl/contributing/)
 
 ## Links
