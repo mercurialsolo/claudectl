@@ -302,6 +302,18 @@ Tightening the unconfigured path would regress a shipped surface for every owner
 
 Escalation answers `202 Accepted` with `{"status":"pending_review","escalation_id":"esc_…"}`, and the record is appended to `~/.claudectl/access/escalations.jsonl` with the **full** question — unlike `audit.jsonl`, which truncates at 512 bytes, because an escalation is read one at a time by a person deciding what to do about it. `claudectl access escalations` lists them.
 
+#### Append-only means one `write(2)`
+
+`escalations.jsonl` and `audit.jsonl` are appended without a lock, on the
+reasoning that `O_APPEND` places a write atomically. That reasoning only holds
+for **one** write: `writeln!` on an unbuffered file issues two — one for the
+content, one for the newline — and the surface is thread-per-connection, so two
+holders appending at once interleaved into `{..A}{..B}\n\n`. The reader skips
+the merged line, so *both* records vanished while both callers held an id that
+would never appear. Measured before the fix: 167 of 1000 escalations lost under
+four concurrent writers. Both appenders now build the line with its newline and
+issue a single write.
+
 #### Where classification sits
 
 `verify` → rate limit → daily budget → **classify** → retrieve.

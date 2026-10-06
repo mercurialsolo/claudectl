@@ -522,6 +522,11 @@ gr_07e548    just now       allowed    -                 query.ask          how 
              jev.spend_ceiling
 ```
 
+A `jev.unmetered` marker means the call happened but the spend ledger could not
+record it — so the monthly ceiling has stopped accumulating. It appears on every
+kind of outcome, not just answers, because a holder who trips the deny
+thresholds never produces an answer for a marker to ride on.
+
 On a successful classification that line carries all five numbers instead:
 
 ```

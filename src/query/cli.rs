@@ -66,6 +66,20 @@ fn dispatch(command: &QueryCommand, json_mode: bool) -> Result<(), String> {
         #[cfg(feature = "bus")]
         QueryCommand::Stdio { token, project } => {
             let core = build_core(project.as_deref())?;
+            // On **stderr**, because stdout is the MCP channel. §4.6 asks that
+            // the third party be told their questions are classified by a
+            // hosted service, and `serve` says so in its banner — without
+            // this, an owner running MCP mode with `TYPESAFE_API_KEY` already
+            // in their environment got no indication that questions now leave
+            // the machine, which is the silent opt-in the banner exists to
+            // prevent.
+            eprintln!("classification: {}", core.classifier().describe());
+            if core.classifier().is_active() {
+                eprintln!(
+                    "  queries are sent to api.typesafe.ai for classification. \
+                     Tell your grant holders."
+                );
+            }
             super::mcp::run_stdio(Arc::new(core), token.clone())
         }
     }

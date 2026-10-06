@@ -608,10 +608,12 @@ impl QueryCore {
         // costs a unit. That is §4.8's "denied queries count" applied to the
         // one denial that actually proves intent — the second narrowing of
         // that sentence, after #431 limited it to `missing_scope`.
-        let route = self
+        let outcome = self
             .classifier
             .classify(&self.project, &self.summary, question, now_ms);
-        let classification = route.audit_classification();
+        let classification = outcome.audit_classification();
+        let strict = outcome.answer_strictly();
+        let route = outcome.route;
         let terms = rank::terms(question);
 
         match route {
@@ -673,16 +675,36 @@ impl QueryCore {
                 // A queue write that fails is an internal error rather than a
                 // silent answer: "pending review" with nothing pending would
                 // strand the caller waiting on a row that does not exist.
-                self.escalations
-                    .push(&Escalation {
-                        id: id.clone(),
-                        ts_ms: now_ms,
-                        grant_id: grant.grant_id.clone(),
-                        project: self.project.clone(),
-                        question: question.to_string(),
-                        classification: c,
-                    })
-                    .map_err(QueryError::Internal)?;
+                if let Err(e) = self.escalations.push(&Escalation {
+                    id: id.clone(),
+                    ts_ms: now_ms,
+                    grant_id: grant.grant_id.clone(),
+                    project: self.project.clone(),
+                    question: question.to_string(),
+                    classification: c,
+                }) {
+                    // Audited before returning, or this is the same hole the
+                    // `get_doc` miss had: `authorize` has already charged the
+                    // budget, and `charge_daily_budget` only logs on failure
+                    // — so an unwritable queue moved `budget_used` and left
+                    // *no* line anywhere, with the caller holding a `500`
+                    // whose message the transport discards.
+                    //
+                    // Audited *after* the attempt rather than before it, so
+                    // the log never claims an escalation that was not queued.
+                    self.store.audit_denied_outside_verify(
+                        &grant.grant_id,
+                        DenyReason::QueueUnwritable,
+                        QueryAudit {
+                            detail: Some("query.escalated"),
+                            question: Some(question),
+                            classification,
+                            ..Default::default()
+                        },
+                        now_ms,
+                    );
+                    return Err(QueryError::Internal(e));
+                }
                 self.store.audit_escalated(
                     &grant.grant_id,
                     QueryAudit {
@@ -704,22 +726,24 @@ impl QueryCore {
                     escalation_id: Some(id),
                 })
             }
-            Route::Answer { degraded, .. } => {
-                // A configured classifier that could not be reached answers
-                // strictly: fewer spans, and only spans that matched more than
-                // one body term once. See `classify`'s module note on why the
-                // *unconfigured* path is not treated this way.
-                let (limit, min_score) = match degraded {
-                    Some(_) => (
+            Route::Answer { .. } => {
+                // A configured classifier that could not be reached — or a
+                // call that could not be metered — answers strictly: fewer
+                // spans, and only spans that matched more than one body term
+                // once. See `classify`'s module note on why the *unconfigured*
+                // path is not treated this way.
+                let (limit, min_score) = if strict {
+                    (
                         limit
                             .unwrap_or(DEFAULT_SPAN_LIMIT)
                             .clamp(1, th::DEGRADED_SPAN_LIMIT),
                         th::DEGRADED_MIN_SCORE,
-                    ),
-                    None => (
+                    )
+                } else {
+                    (
                         limit.unwrap_or(DEFAULT_SPAN_LIMIT).clamp(1, MAX_SPAN_LIMIT),
                         1,
-                    ),
+                    )
                 };
                 let (spans, truncated) = self.select(&terms, limit, min_score);
 
@@ -1991,6 +2015,88 @@ mod tests {
     }
 
     #[test]
+    fn a_classification_request_cannot_carry_index_content() {
+        // §4.6's privacy claim, tested where the index actually exists.
+        //
+        // The equivalent assertion inside `classify`'s own tests cannot fail —
+        // `Classifier::classify` takes `project`, `summary` and `question` and
+        // holds no `ContextIndex`, so "the body does not contain this doc
+        // body" is true of any implementation. Here the core owns a real index
+        // built from a real fixture repo, so the sentinels below are genuinely
+        // reachable and the assertion has something to catch.
+        let store_dir = tempfile::tempdir().expect("tempdir");
+        let fake = Fake::classifying("structure", 0.9, 0.95, 0.01, 0.01, 0.99);
+        let classifier = Classifier::with_transport(
+            &crate::query::classify::JevSettings::default(),
+            store_dir.path(),
+            Box::new(fake.clone()),
+        );
+        let Some(h) = harness_classified(vec![Scope::ProjectQuery("fixture".into())], classifier)
+        else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+
+        // Everything the fixture index actually holds, straight off the index
+        // rather than retyped — so this cannot drift from what was indexed.
+        //
+        // The project summary is excluded, because §4.6 permits exactly that
+        // one paragraph to leave. Finding it in the body is the *intended*
+        // behaviour, and the first run of this test caught precisely that: the
+        // fixture's `CLAUDE.md` opens with an empty preamble section, so
+        // `project_summary` falls back to the README and the README's first
+        // body is the sanctioned summary rather than a leak.
+        let index = h.core.index();
+        let summary = crate::query::classify::project_summary(index);
+        assert!(!summary.is_empty(), "the fixture must produce a summary");
+        let mut sentinels: Vec<String> = Vec::new();
+        // `claude_md` is in here deliberately. Only its *first* non-empty
+        // section is the permitted summary; every other section of the file
+        // §4.6 names by name is ordinary index content, and leaving the whole
+        // file out would have let a leak of exactly that file pass.
+        for section in index
+            .claude_md
+            .iter()
+            .chain(index.docs.iter())
+            .chain(index.readme.iter())
+        {
+            if section.body.trim() == summary.trim() {
+                continue;
+            }
+            sentinels.push(section.body.clone());
+        }
+        for module in &index.module_map {
+            for item in &module.items {
+                sentinels.push(item.signature.clone());
+            }
+        }
+        assert!(
+            sentinels.iter().any(|t| !t.trim().is_empty()),
+            "the fixture must index something for this test to mean anything"
+        );
+
+        h.core
+            .ask(&h.token, "how is config layering done?", None)
+            .expect("answered");
+
+        let sent = fake.sent();
+        assert_eq!(sent.len(), 1, "one classification request");
+        let body = &sent[0];
+        for s in &sentinels {
+            let s = s.trim();
+            if s.len() < 12 {
+                // Too short to be a meaningful sentinel — a fragment that
+                // brief could coincide with the fixed question definitions.
+                continue;
+            }
+            assert!(!body.contains(s), "index content left the machine:\n{s}");
+        }
+        // And the question and the summary did go, so this is not passing by
+        // sending nothing at all.
+        assert!(body.contains("how is config layering done?"), "{body}");
+    }
+
+    #[test]
     fn a_secret_seeking_question_is_denied_opaquely_without_flagging_the_grant() {
         let Some(h) = classified("operations", 0.7, 0.05, 0.96, 0.05, 0.9) else {
             eprintln!("skipping: git unavailable");
@@ -2136,6 +2242,47 @@ mod tests {
         let g = grant_of(&h);
         assert_eq!(g.budget_used, 1);
         assert_eq!(g.use_count, 0);
+    }
+
+    #[test]
+    fn an_escalation_that_cannot_be_queued_is_still_audited() {
+        // `authorize` charges the budget before the queue is written, and
+        // `charge_daily_budget` only logs on *failure* — so an unwritable
+        // queue moved `budget_used` and left no line anywhere, with the caller
+        // holding a 500 whose message the transport discards. That is the same
+        // `access list` / `access audit` disagreement the `get_doc` miss had.
+        let Some(h) = classified("structure", 0.55, 0.52, 0.1, 0.02, 0.93) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+
+        // Make the queue unwritable by putting a directory where the file goes.
+        let queue = h.core.store.root().join("escalations.jsonl");
+        std::fs::create_dir_all(&queue).expect("block the queue path");
+
+        match h.core.ask(&h.token, "how does retry work?", None) {
+            Err(QueryError::Internal(_)) => {}
+            other => panic!("expected an internal error, got {other:?}"),
+        }
+
+        let audit = h.core.store.read_audit(Some("gr_test01"));
+        let last = audit.last().expect("a line");
+        assert_eq!(last.event, "denied");
+        assert_eq!(last.reason.as_deref(), Some("queue_unwritable"));
+        assert_eq!(last.detail.as_deref(), Some("query.escalated"));
+        // And the five numbers are on it, so the owner can see what was lost.
+        assert!(
+            last.classification
+                .as_deref()
+                .is_some_and(|c| c.contains("escalate")),
+            "{:?}",
+            last.classification
+        );
+        // The budget did move, which is why the line has to exist.
+        let g = grant_of(&h);
+        assert_eq!(g.budget_used, 1);
+
+        std::fs::remove_dir_all(&queue).ok();
     }
 
     #[test]

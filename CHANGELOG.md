@@ -73,6 +73,24 @@ All notable changes to claudectl are documented here.
 - `[query]` config section: `jev_enabled`, `jev_model`, `jev_monthly_usd`. TOML
   only, no CLI flags — these are properties of a long-running server. The API
   key is not among them; a secret in `.claudectl.toml` is a secret in the repo.
+- **Fixed in review:** concurrent appends to `escalations.jsonl` and
+  `audit.jsonl` could merge two records onto one line and lose **both** —
+  `writeln!` on an unbuffered file is two `write(2)` calls, and the surface is
+  thread-per-connection. Measured: 167 of 1000 escalations lost under four
+  concurrent writers. Now one write including the newline, which `O_APPEND`
+  places atomically.
+- **Fixed in review:** an escalation the queue could not accept charged the
+  budget and left no audit line anywhere — the same `access list` /
+  `access audit` disagreement the `get_doc` miss had. It now audits
+  `queue_unwritable` with the classification attached.
+- **Fixed in review:** a spend-ledger write failure is now marked on the audit
+  line of *every* route rather than only an answer, and no longer discards the
+  five probabilities. An unwritable ledger reads as zero spend, so the monthly
+  ceiling stops biting — and an adversarial holder produces denies and
+  declines, exactly where an answer-only marker would never appear.
+- **Fixed in review:** `query stdio` now makes §4.6's third-party disclosure on
+  stderr. Only `serve` printed it, so MCP mode with a key already in the
+  environment was a silent opt-in.
 - **Not shipped, and said rather than implied:** Jev reranking of candidate
   spans (§4.5 step 2, which the RFC itself calls separable); approve/deny and
   the resume path for an escalation (#446); and any verification against the live API.

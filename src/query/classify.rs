@@ -210,6 +210,69 @@ impl Route {
     }
 }
 
+/// What [`Classifier::classify`] decided, plus whether the call was metered.
+///
+/// Separate from [`Route`] because the two are independent: a failed meter
+/// must never change the routing decision, and the routing decision must
+/// never hide a failed meter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outcome {
+    pub route: Route,
+    /// `Some("jev.unmetered")` when the monthly ledger could not record this
+    /// call's cost.
+    ///
+    /// Surfaced on **every** route, not just an answer. An unwritable ledger
+    /// reads as zero spend, so the monthly ceiling silently stops biting — and
+    /// an adversarial holder produces denies and declines, which is exactly
+    /// where a marker attached only to answers would never appear.
+    pub unmetered: Option<&'static str>,
+}
+
+impl Outcome {
+    fn metered(route: Route) -> Self {
+        Outcome {
+            route,
+            unmetered: None,
+        }
+    }
+
+    /// The `classification` field for the audit line.
+    ///
+    /// Combines the route's own summary with the metering marker, so a failed
+    /// meter never costs the five numbers an owner needs to tune thresholds —
+    /// the request was classified and paid for either way.
+    pub fn audit_classification(&self) -> Option<String> {
+        match (self.route.audit_classification(), self.unmetered) {
+            (Some(c), Some(note)) => Some(format!("{c} {note}")),
+            (Some(c), None) => Some(c),
+            (None, Some(note)) => Some(note.to_string()),
+            (None, None) => None,
+        }
+    }
+
+    /// The route's label, for tests that do not care about metering.
+    #[cfg(test)]
+    pub fn label(&self) -> String {
+        self.route.label()
+    }
+
+    /// Whether the answer path should be the strict one.
+    ///
+    /// A configured classifier that could not be reached, or a call that could
+    /// not be metered: either way the owner's configuration is not fully in
+    /// force, so the surface answers less rather than the same.
+    pub fn answer_strictly(&self) -> bool {
+        self.unmetered.is_some()
+            || matches!(
+                self.route,
+                Route::Answer {
+                    degraded: Some(_),
+                    ..
+                }
+            )
+    }
+}
+
 /// §4.3's routing table, as a pure function.
 ///
 /// Evaluation order is load-bearing and tested:
@@ -373,7 +436,7 @@ impl Classifier {
     /// cannot be written can never weaken a deny. A failed charge is recorded
     /// in the audit string rather than swallowed — it means the month is
     /// under-counted, which the owner should see.
-    pub fn classify(&self, project: &str, summary: &str, question: &str, now_ms: u64) -> Route {
+    pub fn classify(&self, project: &str, summary: &str, question: &str, now_ms: u64) -> Outcome {
         let State::Active {
             model,
             monthly_usd,
@@ -381,11 +444,11 @@ impl Classifier {
             spend,
         } = &self.state
         else {
-            return baseline();
+            return Outcome::metered(baseline());
         };
 
         if spend.exceeded(*monthly_usd, now_ms) {
-            return degraded("jev.spend_ceiling");
+            return Outcome::metered(degraded("jev.spend_ceiling"));
         }
 
         let classification = match jev::call(transport.as_ref(), model, project, summary, question)
@@ -395,29 +458,21 @@ impl Classifier {
             // difference, because "you forgot the key" and "the API is
             // down" need different responses from the owner. The mapping
             // lives on `JevError` so there is one copy of it.
-            Err(e) => return degraded(e.audit_detail()),
+            Err(e) => return Outcome::metered(degraded(e.audit_detail())),
         };
 
         let routed = route(classification);
         if spend.charge(classification.input_tokens, now_ms).is_err() {
-            return annotate_unmetered(routed);
+            // The decision stands — it was already paid for, and discarding a
+            // deny because a ledger write failed would be the fail-open #431
+            // removed from `charge_daily_budget`. What changes is that the
+            // audit line says so on every route, and the answer path tightens.
+            return Outcome {
+                route: routed,
+                unmetered: Some("jev.unmetered"),
+            };
         }
-        routed
-    }
-}
-
-/// Mark a route whose cost could not be recorded.
-///
-/// The decision stands — it was already paid for, and discarding a deny
-/// because a ledger write failed would be a fail-open of exactly the kind #431
-/// removed from `charge_daily_budget`.
-fn annotate_unmetered(route: Route) -> Route {
-    match route {
-        Route::Answer {
-            classification: Some(_),
-            ..
-        } => degraded("jev.unmetered"),
-        other => other,
+        Outcome::metered(routed)
     }
 }
 
@@ -758,31 +813,29 @@ mod tests {
         let fake = Fake::classifying("structure", 0.9, 0.95, 0.01, 0.01, 0.99);
         let c = Classifier::with_transport(&JevSettings::default(), &dir, Box::new(fake.clone()));
 
-        let secret_doc_body = "THE-INDEXED-DOC-BODY-THAT-MUST-NOT-LEAVE";
-        let secret_signature = "pub fn must_not_leave_signature()";
-        let secret_skill = "a skill description that must not leave";
-
-        let route = c.classify(
+        let outcome = c.classify(
             "claudectl",
             "claudectl orchestrates a swarm of Claude Code agents.",
             "where does config layering live?",
             NOW,
         );
-        assert_eq!(route.label(), "answer");
+        assert_eq!(outcome.route.label(), "answer");
 
         let bodies = fake.sent();
         assert_eq!(bodies.len(), 1, "one request, five answers");
         let sent = &bodies[0];
         assert!(sent.contains("where does config layering live?"));
         assert!(sent.contains("claudectl orchestrates a swarm"));
-        for leak in [secret_doc_body, secret_signature, secret_skill] {
-            assert!(
-                !sent.contains(leak),
-                "index content left the machine: {leak}"
-            );
-        }
-        // And structurally: the only local strings in the payload are the two
-        // §4.6 permits. Everything else is the fixed question definitions.
+
+        // The structural half, and the one with teeth at this level: `state`
+        // carries exactly the two local strings §4.6 permits plus the fixed
+        // category list, so a new field cannot be added without failing here.
+        //
+        // Asserting that specific index strings are *absent* would be vacuous
+        // here — `classify` takes `project`, `summary` and `question` and has
+        // no `ContextIndex` to leak from. That claim is tested one layer up,
+        // where the index exists, by
+        // `query::core::tests::a_classification_request_cannot_carry_index_content`.
         let json: serde_json::Value = serde_json::from_str(sent).unwrap();
         let state = json["state"].as_object().unwrap();
         let mut keys: Vec<&str> = state.keys().map(|k| k.as_str()).collect();
@@ -932,26 +985,58 @@ mod tests {
     }
 
     #[test]
-    fn an_unmetered_deny_is_still_a_deny() {
+    fn a_failed_meter_never_changes_the_route_and_is_audited_on_all_of_them() {
         // A ledger that cannot be written must never soften a refusal — that
-        // is the fail-open #431 removed from `charge_daily_budget`.
-        let denied = Route::Deny {
-            kind: DenyKind::SeeksSensitive,
-            classification: clean(Intent::Structure),
+        // is the fail-open #431 removed from `charge_daily_budget`. It must
+        // also never go unnoticed: an unwritable ledger reads as zero spend,
+        // so the monthly ceiling stops biting, and an adversarial holder
+        // produces denies and declines rather than answers. A marker attached
+        // only to the answer path would never appear for them.
+        let mut sensitive = clean(Intent::Structure);
+        sensitive.seeks_sensitive = 0.9;
+        let mut wrong_project = clean(Intent::Structure);
+        wrong_project.scope_match = 0.1;
+        let mut vague = clean(Intent::Structure);
+        vague.answerable_from_docs = 0.4;
+
+        for (c, expected_route) in [
+            (sensitive, "deny:seeks_sensitive"),
+            (wrong_project, "decline:wrong_project"),
+            (vague, "escalate"),
+            (clean(Intent::Structure), "answer"),
+        ] {
+            let outcome = Outcome {
+                route: route(c),
+                unmetered: Some("jev.unmetered"),
+            };
+            assert_eq!(
+                outcome.route.label(),
+                expected_route,
+                "the route must be untouched"
+            );
+            let line = outcome
+                .audit_classification()
+                .expect("a classified request always has a line");
+            assert!(
+                line.ends_with("jev.unmetered"),
+                "the metering failure must be visible on {expected_route}: {line}"
+            );
+            // And the five numbers survive, which is the whole reason the
+            // audit line exists — the request was classified and paid for.
+            assert!(line.contains("intent=structure/"), "{line}");
+            assert!(outcome.answer_strictly(), "an unmetered answer tightens");
+        }
+    }
+
+    #[test]
+    fn a_metered_answer_carries_only_the_numbers() {
+        let outcome = Outcome {
+            route: route(clean(Intent::Structure)),
+            unmetered: None,
         };
-        assert_eq!(annotate_unmetered(denied).label(), "deny:seeks_sensitive");
-        let escalated = Route::Escalate(clean(Intent::Structure));
-        assert_eq!(annotate_unmetered(escalated).label(), "escalate");
-        // Only an answer is downgraded, because only an answer can be made
-        // more conservative without losing a decision.
-        let answered = Route::Answer {
-            classification: Some(clean(Intent::Structure)),
-            degraded: None,
-        };
-        assert_eq!(
-            annotate_unmetered(answered).label(),
-            "degraded:jev.unmetered"
-        );
+        let line = outcome.audit_classification().unwrap();
+        assert!(!line.contains("jev.unmetered"), "{line}");
+        assert!(!outcome.answer_strictly());
     }
 
     #[test]

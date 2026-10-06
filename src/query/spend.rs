@@ -86,8 +86,16 @@ impl SpendLedger {
     }
 
     /// This month's spend. A missing, unreadable or stale-month file reads as
-    /// zero — an unreadable ledger must not become an infinite ceiling, which
-    /// is why [`Self::charge`] reports its write failures instead.
+    /// zero.
+    ///
+    /// Reading as zero means a *corrupt* ledger is self-healing: the next
+    /// [`Self::charge`] rewrites it and metering resumes. It also means an
+    /// **unwritable** ledger would silently remove the ceiling — reads say
+    /// zero, charges fail, and nothing accumulates. That is why `charge`
+    /// reports its failures and why `classify` carries the result through as
+    /// `Outcome::unmetered`, which lands a `jev.unmetered` marker on the audit
+    /// line of **every** route. The ceiling can stop working; it cannot stop
+    /// working quietly.
     pub fn read(&self, now_ms: u64) -> Spend {
         let month = utc_month(now_ms);
         let stored: Spend = fs::read_to_string(&self.path)

@@ -194,6 +194,13 @@ pub enum DenyReason {
     /// Classification judged the query not to be about this project's code or
     /// practices at all.
     OutOfScope,
+    /// An escalation could not be appended to the owner's queue.
+    ///
+    /// The budget has already been charged by the time the queue is written,
+    /// so without a line here an unwritable queue moved the counter and left
+    /// no record — the same `access list` / `access audit` disagreement
+    /// `NotIndexed` exists to prevent.
+    QueueUnwritable,
 }
 
 impl DenyReason {
@@ -213,6 +220,7 @@ impl DenyReason {
             DenyReason::InjectionAttempt => "injection_attempt",
             DenyReason::WrongProject => "wrong_project",
             DenyReason::OutOfScope => "out_of_scope",
+            DenyReason::QueueUnwritable => "queue_unwritable",
         }
     }
 }

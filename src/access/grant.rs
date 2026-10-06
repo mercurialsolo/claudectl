@@ -817,7 +817,14 @@ impl GrantStore {
         // that check could never notice a log already sitting at 0644, so it
         // would stay 0644 forever.
         set_owner_only(&path)?;
-        writeln!(f, "{line}").map_err(|e| format!("write audit entry: {e}"))
+        // One `write(2)`, newline included — see the note in
+        // `query::escalate::EscalationQueue::push`. `writeln!` is two writes,
+        // and two concurrent requests appending under `O_APPEND` interleaved
+        // their fragments into a line `read_audit` then skipped. This log is
+        // the only record of what a grant asked, so losing a pair of entries
+        // to a race is the one failure it cannot have.
+        f.write_all(format!("{line}\n").as_bytes())
+            .map_err(|e| format!("write audit entry: {e}"))
     }
 
     /// Audit entries, oldest first. `grant_id` filters to one grant.
