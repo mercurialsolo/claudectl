@@ -23,6 +23,7 @@ mod brain_screen;
 mod bus;
 mod commands;
 mod config;
+mod context;
 #[cfg(feature = "coord")]
 mod coord;
 mod doctor;
