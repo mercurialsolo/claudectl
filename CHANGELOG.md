@@ -22,9 +22,11 @@ All notable changes to claudectl are documented here.
 - **Only the question and one paragraph of `CLAUDE.md` leave the machine.** The
   first exception to "brain decisions are local-only", and a deliberate one:
   opt-in via `TYPESAFE_API_KEY`, hard off via `[query] jev_enabled = false`,
-  and `query serve` prints the reminder to tell your grant holders. A test
-  captures the request body and asserts it carries the question and the summary
-  and nothing from `docs/`, the module map or the skill list.
+  and both `query serve` and `query stdio` print the reminder to tell your grant
+  holders. A test over a real index captures the request body and asserts it
+  carries the question and the summary and nothing else — not `CLAUDE.md`
+  beyond that one paragraph, not `docs/`, not the module map, not the skill
+  list.
 - **The credential never reaches `argv`.** `brain/client.rs` passes everything
   as `curl` arguments because a local Ollama endpoint has no auth; an
   `Authorization: Bearer` there is readable by any local user through `ps`. The
