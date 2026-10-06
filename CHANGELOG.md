@@ -4,6 +4,67 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — read-only query surface, deterministic (#429)
+- **`claudectl query serve` and `claudectl query stdio`.** Phase 3 of the
+  open-cluster RFC (#423): grant holders ask natural-language questions about
+  one project and get **verbatim spans with citations** back — over HTTP for a
+  human or a script, over MCP for their Claude. There is no generation step, so
+  selection cannot invent a fact the index does not contain. Deterministic term
+  matching stands where Jev will go (#430), which is deliberate: a surface that
+  works is what a classifier can then be measured against.
+- **One server, one project.** The RFC routes on
+  `/api/v1/project/<project>/…`, which reads as though a name resolves to a
+  directory. Nothing in claudectl can do that — `session.project_name` is a cwd
+  basename, so the mapping is many-to-one, and `~/.claude/projects/<slug>` is a
+  lossy `/`→`-` substitution that cannot be inverted. A process serves the
+  repository it was started in; the `<project>` segment is *compared* against
+  that one name and never resolved, joined to a path, or passed to `verify`.
+  `--project` names it when the directory name cannot be a scope qualifier,
+  which is every worktree with a `+` in its name.
+- **The required scope comes from the served project, not the request.** Built
+  from the request's `<project>` segment instead, a token minted for
+  `project.query:other` presented at `/project/other/query` would satisfy
+  `verify` on a server serving something else. `project.query` covers `ask` and
+  `topics`; `project.docs` covers `get_doc`, the verb that returns verbatim
+  bodies.
+- **Every refusal is the same opaque `404`.** Wrong project, missing scope,
+  unknown route and bad MAC are one answer, byte for byte, with the real
+  `DenyReason` going to `audit.jsonl` and nowhere else (RFC §3.3). A missing
+  bearer header is the one `401`, decided before anything project-specific so
+  it says nothing about what exists. No route mutates the project; the only
+  write anywhere is the grant's own `use_count` and audit line.
+- **`get_doc` is a lookup, not a read.** A caller's path is matched against
+  paths already in the index — never joined, canonicalized or opened. It is the
+  one input that looks like a path, and treating it as a key is what keeps the
+  resemblance harmless.
+
+### Fixed — citations, found by serving this repo (#429)
+- **A fenced code block's `#` comment was published as a heading.** `#` starts
+  a comment in TOML, shell, Python and YAML, so `docs/configuration.md` was
+  publishing a section titled ``# `escalation_model`. Unset = no routing.`` and
+  splitting a code block in half to do it. #428 skipped fences as "harmless for
+  a publishable-text decision"; sections are also the citation unit, which is
+  what made it matter. `docs::sections` now tracks fences, including `~~~` and
+  longer-backtick nesting.
+- **Ancestor headings counted at full weight.** `docs/AGENT_BUS.md` is titled
+  "claudectl Agent Bus — Design Specification", so all of its subsections
+  inherited both words of "agent bus" and tied — handing the top of the results
+  to whichever was shortest. An ancestor now scores 1 against its own heading's
+  3.
+- **A module item cited only its `impl` block**, so three different functions
+  in `impl Config` came back as three identical citations. The signature is now
+  part of the heading path.
+
+### Changed
+- **`src/context` is gated on `relay`**, matching its only consumer. It was
+  ungated in #428 because nothing consumed it; left that way, the minimal
+  `--no-default-features --features hive` build carried the whole module as
+  dead code.
+- **`src/access` and `src/context` no longer carry `#![allow(dead_code)]`** —
+  the lid came off as part of wiring their first consumer, which is the real
+  check on whether the surface is complete. `Scope::is_issuable` turned out to
+  be a second, uncalled copy of `unissuable_reason`'s list and was removed.
+
 ### Added — project context index: the query surface's boundary (#428)
 - **Tracked symlinks are refused, not followed.** A link is the one tracked
   path whose contents live where no rule in the module reaches: a tracked

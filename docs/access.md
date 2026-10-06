@@ -13,14 +13,20 @@ grant can let someone read and never write. Grants live under
 the minimal `--no-default-features --features hive` build has no `access`
 command.
 
-**There is no query surface yet.** #427 shipped the spine: mint a token, verify
-one, list grants, read the audit log, revoke. `claudectl access grant` opens no
-port and starts no listener. The read-only query surface a third party would
-actually call is #429, and enforcement of the per-grant rate limit and daily
-budget is #431. Until then a grant is a credential with nothing to present it
-to. The design behind all of this is
+`claudectl access grant` opens no port and starts no listener — it mints a
+credential. The surface that credential is presented *to* is
+`claudectl query serve` (#429), a separate process you start deliberately; see
+[Serving queries](#serving-queries) below. Enforcement of the per-grant rate
+limit and daily budget is still #431: both fields are persisted and neither is
+checked yet. The design behind all of this is
 [docs/open-cluster.md](open-cluster.md) §3; transport is
 [docs/relay.md](relay.md#security).
+
+**`--project` has to match what the server serves.** A grant's scope qualifier
+is compared for equality against the one project name a `query serve` process
+answers to, which defaults to its repository directory's basename. Nothing in
+claudectl resolves a project name to a directory, so a mismatch comes back as a
+`404` rather than a diagnosable error.
 
 ## Quick start
 
@@ -289,3 +295,101 @@ aside to mint a new one (every existing token stops verifying)
 
 That error is deliberate. A silent re-mint would invalidate every live grant
 without telling you.
+
+## Serving queries
+
+A grant is only useful once something will answer it. That is `claudectl query
+serve`, which serves **one** project — the repository it is started in:
+
+```bash
+cd ~/code/claudectl
+claudectl query serve --project claudectl --port 8787
+```
+
+```
+query surface for "claudectl" listening on http://127.0.0.1:8787
+  index: fnv1a:bfe0770758ce5672
+  266 tracked files, 0 denied, 0 unreadable
+  share mode: auto
+  POST /api/v1/project/claudectl/query
+  GET  /api/v1/project/claudectl/topics
+  POST /api/v1/project/claudectl/doc
+The index is a startup snapshot; restart to pick up new commits.
+```
+
+`--project` names the project this process answers to. It defaults to the
+repository directory's basename, and `query serve` refuses to start when that
+cannot be a scope qualifier — a worktree called `feat+readonly-query-surface`
+has a `+` in it, and sanitizing the name silently would produce a server
+answering to a name no grant was ever minted for.
+
+The grant holder presents the token as a bearer header:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/api/v1/project/claudectl/query \
+  -H "Authorization: Bearer cctl_gr_7f2a1b_<mac>" \
+  -d '{"question":"how does config layering work?","limit":3}'
+```
+
+Answers are verbatim spans with citations — the path, the enclosing heading
+path, and the text exactly as the index holds it. Nothing is generated, so an
+answer cannot contain a claim your documentation does not already make. The
+response also carries `matched_terms`, so the ranking can be checked rather
+than taken on faith.
+
+Or they point their Claude at the MCP form, which exposes `ask_project`,
+`list_topics` and `get_doc` as tools over stdio:
+
+```bash
+claudectl query stdio --project claudectl --token cctl_gr_7f2a1b_<mac>
+```
+
+`project.query` buys `ask_project` and `list_topics`. `get_doc` needs
+`project.docs`, because that is the verb that returns whole document sections
+verbatim. A path handed to `get_doc` is matched against paths already in the
+index — never opened from disk — so an unpublished path and a nonexistent one
+are the same `404`.
+
+Two things to know before exposing it:
+
+- **It binds loopback by default, and it is plaintext HTTP.** A bearer token on
+  an unencrypted connection has no transport confidentiality, and there is no
+  rate limiting until #431. Anything reachable off this machine belongs behind
+  a TLS terminator or a tunnel; `query serve` warns when the bind address says
+  otherwise.
+- **The index is a startup snapshot.** Restart to publish new commits.
+  Rebuilding per request would mean running `ls-files` per query, which is a
+  denial-of-service vector on a third-party-facing endpoint.
+
+### What a refusal looks like
+
+Every refusal is the same opaque `404` with the same body — wrong project,
+missing scope, revoked grant, expired grant, unknown route and bad MAC are
+indistinguishable from outside. That is deliberate (RFC §3.3): telling them
+apart would let an unauthorized caller enumerate which projects and grants
+exist. The one exception is a missing `Authorization` header, which is a `401`,
+decided before anything project-specific and so saying nothing about what
+exists.
+
+The real reason goes to the audit log and nowhere else.
+
+### What the audit log shows
+
+Every answered query appends an `allowed` line naming the operation; every
+refusal appends a `denied` line naming the reason the caller never saw:
+
+```bash
+claudectl access audit --grant gr_7f2a1b
+```
+
+```
+{"ts_ms":1791258445314,"grant_id":"gr_7f2a1b","event":"allowed","detail":"query.ask"}
+{"ts_ms":1791258445388,"grant_id":"gr_7f2a1b","event":"allowed","detail":"query.get_doc"}
+{"ts_ms":1791258517469,"grant_id":"gr_7f2a1b","event":"denied","reason":"bad_mac"}
+```
+
+`claudectl access list` shows `USES` and `LAST USED` per grant, so a grant being
+hammered is visible without reading the log at all.
+
+That `use_count` and that audit line are the only writes the query surface
+performs anywhere. No route touches the project.

@@ -1,6 +1,6 @@
 # claudectl Open Cluster — Design Specification
 
-**Status:** Proposed / RFC. Phases 0 (#426), 1 (#427) and 2 (#428) have shipped; nothing else here is implemented. Written against the code as of `b37aef14`.
+**Status:** Proposed / RFC. Phases 0 (#426), 1 (#427), 2 (#428) and 3 (#429) have shipped; nothing else here is implemented. Written against the code as of `b37aef14`.
 **Scope:** Let someone who is *not you* participate in your claudectl world at a reduced trust level — ask read-only questions about one of your projects, join a named hive, or run a node from a Mac app instead of a terminal.
 
 ## Implementation status
@@ -10,8 +10,8 @@
 | 0. Prerequisite hardening (constant-time auth, transport decision) | **Shipped** (#426) | `src/relay/crypto.rs`, `src/relay/http.rs`, `src/relay/protocol.rs` |
 | 1. Capability tokens + scopes | **Shipped** (#427) | `src/access/{mod,scope,token,grant,cli}.rs` |
 | 2. Context index (what a query can be answered from) | **Shipped** (#428) | `src/context/{mod,git,deny,docs,module_map,exposure}.rs` |
-| 3. Jev query classification + routing | **Not started** | proposed `src/access/classify.rs` |
-| 4. Read-only query surface (MCP + HTTP) | **Not started** | proposed `src/access/query.rs` |
+| 3. Read-only query surface (MCP + HTTP), deterministic | **Shipped** (#429) | `src/query/{mod,core,rank,http,mcp,cli}.rs` |
+| 4. Jev query classification + routing | **Not started** | proposed `src/query/classify.rs` |
 | 5. Named hives + advertise/discover | **Not started** | `src/hive/`, `src/relay/lan.rs`, `src/relay/invite.rs` |
 | 6. `claudectl.app` (macOS menu-bar shell) | **Not started** | separate artifact, separate toolchain |
 
@@ -135,7 +135,7 @@ The deliverable is an answer grounded in the project's own published context, pl
 
 ### 4.2 The context substrate
 
-**Shipped in #428 as `src/context/`.** This section now describes the built thing. There is no query surface over it yet — the module has no CLI and no caller, which is why it carries `#![allow(dead_code)]`; retrieval and the surface are #429, caps and budgets #431.
+**Shipped in #428 as `src/context/`.** This section now describes the built thing. The surface over it shipped in #429 as `src/query/` (§4.7); caps and budgets are #431. The module carried `#![allow(dead_code)]` while it had no caller — #429 removed the lid, which is what surfaced an uncalled duplicate of `Scope::unissuable_reason`'s list and the two accessors `query serve` now reports.
 
 #### The two structural rules
 
@@ -318,35 +318,89 @@ Optional synthesis via the local brain stays behind a per-grant flag, default of
 
 ### 4.7 Surface
 
-Two consumers, one core:
+**Shipped in #429 as `src/query/`.** This section now describes the built thing, and it departs from what was sketched here in three places — each noted below.
 
-**MCP** — for their Claude. Mirrors how `src/bus/mcp.rs` already exposes tools:
+Two consumers, one core. `src/query/core.rs` owns every policy decision and the two transports own none, so "one core" is structural rather than a convention two files have to keep agreeing on.
+
+**MCP** — for their Claude:
 
 ```
-claudectl query stdio --token cctl_gr_7f2a1b_<mac> --endpoint <url>
-  tools: ask_project(question)  ·  list_topics()  ·  get_doc(path)
+claudectl query stdio --token cctl_gr_7f2a1b_<mac> [--project <name>]
+  tools: ask_project(question, limit?)  ·  list_topics()  ·  get_doc(path)
 ```
 
 **HTTP** — for a human or a script:
 
 ```
 POST /api/v1/project/<project>/query     Authorization: Bearer cctl_…
+                                         {"question": "...", "limit": 5}
 GET  /api/v1/project/<project>/topics
+POST /api/v1/project/<project>/doc       {"path": "docs/x.md"}
 ```
 
-Both run through the same classify → authorize → retrieve → select path. Neither has a mutating route.
+Both run through the same authorize → retrieve → select path. Neither has a mutating route; the only write anywhere in the module is the grant's own `use_count` and audit line, which is what makes a hammering grant visible.
+
+#### One server, one project
+
+This section's route shape reads as though a project *name* can be resolved to a directory. It cannot. A session's `project_name` is its cwd basename (`claudectl_core::session`), so the mapping is many-to-one — every worktree of a repo gets a different name, two unrelated repos sharing a basename get the same one — and `~/.claude/projects/<slug>` is a lossy `/`→`-` substitution that cannot be inverted. Nothing else in the codebase keeps a name→directory map; the nearest thing is `bus::roles`, which maps a role name to a cwd *selector* and has an explicit `Ambiguous` outcome because the general case has one.
+
+So a process serves exactly one project: the repository `query serve` was started in. The `<project>` segment is **compared** against that one name — never resolved, never joined to a path, never passed to `verify`. A request naming anything else is a `404` indistinguishable from an unmatched route. Serving a second project means a second process on a second port, and a registry is a later decision if it is ever wanted.
+
+The name defaults to the repository directory's basename and `--project` overrides it. The default can legitimately fail: a scope qualifier is `[A-Za-z0-9._-]` and real directory names are not, so `query serve` refuses to start in a worktree called `feat+readonly-query-surface` and says to pass `--project`. Silently sanitizing would produce a server answering to a name no grant was minted for.
+
+#### The required scope comes from the served project
+
+`authorize` builds the `Scope` it checks from the *served* project, not from the request. Built from the request's segment instead, a token minted for `project.query:other` presented at `/project/other/query` would satisfy `verify` on a server serving something else, and correctness would rest on remembering to compare the segment separately. Deriving it from the server makes that class of mistake unrepresentable.
+
+The scope split follows §3.3's own wording. `project.query` covers `ask_project` and `list_topics` — topics is the discovery half of asking, and `--scopes` defaults to `project.query` alone, so a grant that can ask but cannot see what is answerable cannot ask anything useful. `project.docs` covers `get_doc`, which is the verb that returns verbatim bodies.
+
+`get_doc` matches a caller's string against paths **already in the index**. It never joins, canonicalizes or opens anything. This is the one input that looks like a path, and treating it as a lookup key is what keeps the resemblance harmless; an unindexed path is the same `404` as one the owner is withholding.
+
+#### `POST …/doc` is a third route
+
+This section listed two HTTP routes and three MCP tools. The third route exists so the two surfaces match — without it the remote MCP client below would have nothing to forward `get_doc` to. It is a `POST` because its argument is a caller-supplied path-shaped string, and carrying that in a JSON body avoids percent-decoding and query-string parsing on exactly the input that most wants neither.
+
+#### The MCP half shipped as a server, not a client
+
+`--token … --endpoint <url>` describes a *client*: a shim on the third party's machine forwarding to the owner's HTTP server, holding no index and no grant store because the owner's server authorizes. That is a separate artifact needing an outbound HTTP client, and `rmcp`'s `client` feature is not in the build.
+
+What shipped is the other half of that pair: the three tools served locally against the owner's own index, authenticated by the same capability token. The `--endpoint` client is a follow-up, and the three HTTP routes above are what it will forward to.
+
+A local stdio server could skip authorization — whoever runs the binary can read the repository anyway. It does not, for two reasons: the scope check is where `project.docs` is told from `project.query`, so skipping it would make MCP strictly more permissive than HTTP for the same grant; and the audit trail is the owner's record of what a grant asked.
+
+#### Answering, without Jev
+
+Phase 3 ships the deterministic path §4.6 already sanctions as the no-`TYPESAFE_API_KEY` fallback, and ships it *first* — which is what keeps §4.4 ("Jev is the router, code is the boundary") true in practice rather than only on paper.
+
+The ranker is term overlap with headings weighted: a term in the span's own heading scores 3, in an enclosing heading 1, in the body 1. Integers end to end with a total-order sort, because the index already guarantees a byte-identical build and an `f64` comparator would put platform-dependent ordering back into a surface whose whole claim is determinism. A term scores once per zone rather than once per occurrence, which bounds a span's score by the question's own term count — so a 2,000-word section cannot win on volume, with no length normalizer and therefore no floats.
+
+The response publishes `matched_terms`, so a caller can see what the ranking matched on. A deterministic ranking that cannot be inspected is only repeatable, not auditable.
+
+Three things only a real corpus showed, all found by serving this repo:
+
+- **Ancestor headings cannot count at full weight.** `docs/AGENT_BUS.md` is titled "claudectl Agent Bus — Design Specification", so every subsection inherited both words of "agent bus" and tied — handing the top of the results to whichever happened to be shortest.
+- **A module item's citation must name the item.** Citing only the enclosing `impl` block returned three different functions in `impl Config` as three identical citations. The signature is now part of the heading path.
+- **A fenced code block's `#` comment was being published as a heading.** §4.2 skipped fences as harmless for a publishability decision; sections are also the *citation* unit, so `docs/configuration.md` was naming a section after a TOML comment and splitting a code block to do it. Fixed in `context::docs`.
+
+And one tuning note worth recording: `work`, `works` and `working` are stopwords. "How does X work?" is three of §4.1's four example questions, and the term prefix-matched `workspace`, `work-bearing` and the agent-bus examples' `/work/proj` paths — which put "Workspace layout" at the top of a question about config layering. Someone who means the git feature types "worktree".
+
+These are the honest limits of a section-granularity deterministic ranker, and they are the baseline phase 4 gets measured against.
 
 ### 4.8 Guardrails
 
 Reusing what `src/bus/policy.rs` and `src/bus/rate_limit.rs` already established:
 
-| Guard | Value |
-| --- | --- |
-| Rate limit | Per-grant token bucket, default 20/min (bus uses 60/min per role) |
-| Daily budget | Per-grant query cap; denied queries count, so probing is self-limiting |
-| Query length | 2 KB cap, mirroring the bus body cap |
-| Response size | 32 KB; spans truncated with an explicit marker |
-| Audit | Every query, classification result and decision appended to `~/.claudectl/access/audit.jsonl` |
+| Guard | Value | Status |
+| --- | --- | --- |
+| Rate limit | Per-grant token bucket, default 20/min (bus uses 60/min per role) | #431 |
+| Daily budget | Per-grant query cap; denied queries count, so probing is self-limiting | #431 |
+| Query length | 8 KB cap, mirroring the bus body cap | **Shipped (#429)** |
+| Response size | 32 KB; spans truncated with an explicit marker | **Shipped (#429)** |
+| Audit | Every query, classification result and decision appended to `~/.claudectl/access/audit.jsonl` | **Shipped (#429)** — `allowed` carries the operation, `denied` carries the `DenyReason` |
+
+The query-length row said 2 KB, which contradicted its own justification: `bus::policy::DEFAULT_MAX_BODY_BYTES` is 8192. #429 took the stated reason over the stated number and capped at 8 KB.
+
+`bus::rate_limit::RateLimiter` is reusable as-is — its key is an arbitrary `&str`, so a grant id works today — but it lives behind the `bus` feature while the HTTP surface is `relay`-only, and it is in-process with no eviction. #431 is where that gets decided, along with the daily budget, which needs persistence a token bucket does not provide.
 | Cost ceiling | Monthly Jev spend cap; on breach, fall back to deterministic matching rather than failing open or billing without limit |
 
 Audit is the thing that makes this operable: the owner can read exactly what was asked and what was returned, which is the only way to notice a grant being abused in a way no threshold caught.
@@ -503,7 +557,7 @@ Ordered so each phase is independently useful and the riskiest dependency comes 
 | **0** | **Shipped (#426).** `relay::crypto::ct_eq` on both auth sites; HTTP API bound to loopback, tunnel documented | Prerequisite for anything third-party-facing (§3.4) |
 | **1** | **Shipped (#427).** Capability tokens, scopes, `access grant/list/audit/revoke` in `src/access/` | The spine. Testable alone: issue, verify, expire, revoke |
 | **2** | **Shipped (#428).** `src/context/` — index over tracked docs + module map + tracked skills + locally-originated exposed hive units | Deterministic and unit-testable with no network |
-| **3** | Deterministic query surface (MCP + HTTP), **no Jev** | Proves the whole path end to end while the boundary is simple |
+| **3** | **Shipped (#429).** `src/query/` — deterministic query surface (MCP + HTTP), **no Jev** | Proves the whole path end to end while the boundary is simple |
 | **4** | Jev classification + confidence routing + escalation queue | Added once there is real traffic to tune thresholds against — the docs are explicit that thresholds need your own data |
 | **5** | Hive naming, LAN advertisement, hive invite links | Independent of §4; dep-free; unblocks discovery |
 | **6** | `claudectl.app` | Different toolchain, separate artifact; consumes 1–5 rather than extending them |
