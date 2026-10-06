@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.65.0] - 2026-10-06
+
 ### Added — Jev query classification, confidence-gated routing, escalation queue (#430)
 - **Classification gates the query surface, and it is off unless you turn it
   on.** Every `ask` is classified before retrieval by a single
@@ -515,6 +517,8 @@ Eight findings from a review of #444. All eight were real.
 - `is_exposed_bind` lives in core rather than in `relay` because both callers
   need it and they sit behind different features — `relay` for the coordinator
   API, `coord` for the metrics exporter.
+
+Workspace crates bumped: `claudectl-core` → 0.59.0 (new `fleet` module, `helpers` additions), `claudectl-tui` → 0.60.0 (`app` split into a module tree with new public surfaces).
 
 ## [0.64.0] - 2026-07-04
 
