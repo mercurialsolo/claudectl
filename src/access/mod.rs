@@ -81,6 +81,30 @@ pub(crate) fn create_private(path: &Path) -> Result<fs::File, String> {
         .map_err(|e| format!("create {}: {e}", path.display()))
 }
 
+/// Create a file that must not already exist, 0600 from its first byte.
+///
+/// [`create_private`] truncates, which is right for a marker whose content is
+/// irrelevant and wrong for a record that carries one. `create_new` makes
+/// `EEXIST` the filesystem's answer to a second write, so "decided twice" is a
+/// refusal rather than a clobber — the property an escalation verdict needs and
+/// a revocation tombstone does not.
+pub(crate) fn create_new_private(path: &Path) -> Result<fs::File, String> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!("already exists: {}", path.display())
+        } else {
+            format!("create {}: {e}", path.display())
+        }
+    })
+}
+
 /// Maximum grant-id length, matching `relay::is_valid_peer_id`'s shape.
 const MAX_GRANT_ID_LEN: usize = 64;
 

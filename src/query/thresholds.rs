@@ -80,3 +80,15 @@ pub const DEGRADED_SPAN_LIMIT: usize = 3;
 /// either match a heading or match twice, which is the cheapest available
 /// proxy for "this is actually about the question".
 pub const DEGRADED_MIN_SCORE: u32 = 2;
+
+/// How long a pending escalation stays answerable, in milliseconds (7 days).
+///
+/// An escalation the owner never drains has to end somewhere, or a caller polls
+/// an id forever and the queue grows without bound. Seven days is long enough
+/// that a week of leave does not silently discard a question, and short enough
+/// that a stale queue is visibly stale.
+///
+/// Expiry is derived from this and the row's timestamp, never written: storing
+/// it would need a sweeper process, or a write-on-read that turns the caller's
+/// poll into a mutation of the owner's queue.
+pub const ESCALATION_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;

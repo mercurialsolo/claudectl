@@ -88,10 +88,16 @@ run = "echo '[{project}] {old_status} -> {new_status}' >> ~/claude-activity.log"
 | `on_idle` | Session went idle (>10 min) |
 | `on_context_high` | Context window usage crossed threshold (default 75%) |
 | `on_conflict_detected` | 2+ sessions share the same working directory |
+| `on_escalation` | A third-party query was queued for your review (#446) |
 
 ### Template Variables
 
 `{pid}`, `{project}`, `{status}`, `{cost}`, `{model}`, `{cwd}`, `{tokens_in}`, `{tokens_out}`, `{elapsed}`, `{session_id}`, `{old_status}`, `{new_status}`, `{context_pct}`
+
+`on_escalation` is the exception: it has no session behind it, so it expands no
+placeholders and passes context as environment variables instead —
+`CLAUDECTL_ESCALATION_ID`, `_GRANT`, `_PROJECT`, and `_QUESTION` truncated to 240
+characters. See [Capability Grants](access.md).
 
 Use `claudectl --hooks` to verify your configured hooks.
 

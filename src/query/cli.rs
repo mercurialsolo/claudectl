@@ -130,13 +130,11 @@ fn build_core(project: Option<&str>) -> Result<QueryCore, String> {
     // change under it mid-run is harder to reason about than one that is
     // restarted — the same reason the index is built once here.
     let classifier = Classifier::from_env(&jev_settings(), store.root());
-    Ok(QueryCore::new(
-        project,
-        Arc::new(index),
-        store,
-        secret,
-        classifier,
-    ))
+    // Read once at startup for the same reason, and the registry is almost
+    // always empty — an owner who sets no `hooks.on_escalation` pays one map
+    // lookup per escalation and nothing else.
+    let hooks = crate::config::load_hooks();
+    Ok(QueryCore::new(project, Arc::new(index), store, secret, classifier).with_hooks(hooks))
 }
 
 /// The `[query]` section, mapped onto the classifier's own settings type.
@@ -238,6 +236,7 @@ fn serve(addr: &str, port: u16, project: Option<&str>, json_mode: bool) -> Resul
         println!("  POST /api/v1/project/{project}/query");
         println!("  GET  /api/v1/project/{project}/topics");
         println!("  POST /api/v1/project/{project}/doc");
+        println!("  GET  /api/v1/project/{project}/escalation/<esc_id>");
         println!("The index is a startup snapshot; restart to pick up new commits.");
     }
 

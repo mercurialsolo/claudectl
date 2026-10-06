@@ -61,7 +61,7 @@ The token is printed once and stored nowhere. It is deterministic — anyone wit
 the secret and the grant file can recompute it — but no CLI command does, so in
 practice losing the token means issuing a new grant and revoking the old one.
 
-## The five commands
+## The commands
 
 ```bash
 claudectl access grant …              # issue one, print the token once
@@ -69,10 +69,12 @@ claudectl access list                 # every grant, its state, uses, last use
 claudectl access audit gr_a38487      # what that grant actually asked for
 claudectl access audit                # the whole log, every grant
 claudectl access escalations          # questions classification queued for you
+claudectl access escalations approve esc_4f1c8a0b2d3e   # let the caller have an answer
+claudectl access escalations deny esc_4f1c8a0b2d3e      # refuse it
 claudectl access revoke gr_a38487     # immediate, nothing to restart
 ```
 
-All five take `--json`. It's a global flag, so it goes **before** the
+All of them take `--json`. It's a global flag, so it goes **before** the
 subcommand — `claudectl --json access list`. `claudectl access list --json`
 fails with `unexpected argument '--json' found`.
 
@@ -542,16 +544,59 @@ claudectl access escalations
 ```
 
 ```
-ESCALATION        GRANT        WHEN       QUESTION
-esc_4f1c8a0b2d3e  gr_07e548    5m ago     how does the supervisor decide to retry a verification?
+ESCALATION        GRANT        WHEN       STATE          QUESTION
+esc_4f1c8a0b2d3e  gr_07e548    5m ago     pending_review how does the supervisor decide to retry a verification?
                   intent=structure/0.55 docs=0.52 sens=0.10 inj=0.02 scope=0.93
+
+1 awaiting you. Decide with: claudectl access escalations approve <id>  (or deny)
 ```
 
-The caller already has the id and a `pending_review` response. **There is no
-approve command yet** — answering an escalation means reaching the caller after
-their request has returned, which needs a notification path this does not have.
-For now the queue is a record of the questions worth a human answer, and you
-reply however you already talk to that person. Tracked as #446.
+Decide one either way, with an optional note the caller sees:
+
+```bash
+claudectl access escalations approve esc_4f1c8a0b2d3e --note "fair question"
+claudectl access escalations deny esc_4f1c8a0b2d3e --note "ask me directly"
+```
+
+The caller polls the id they were given, with the token they already hold:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8787/api/v1/project/claudectl/escalation/esc_4f1c8a0b2d3e
+```
+
+Approved, they get spans; denied, the refusal and your note; neither yet,
+`pending_review`. **Polling does not spend their daily budget** — it is the tail
+of a question that was already charged — though it is still rate limited, so a
+caller cannot spin on it for free.
+
+Three things worth knowing:
+
+- **Approving retrieves at poll time, not at approval time.** You are saying
+  "this question may be answered", not freezing an answer. The response reports
+  both the fingerprint the question was *classified* against and the index's
+  fingerprint *now*, so a caller can see the project moved underneath them.
+  This is also what lets you decide from any directory — `approve` needs no
+  index, so it never has to work out which project you are in.
+- **A decision is final.** Deciding twice is refused by the filesystem, not by a
+  check that could race: the verdict is a create-only file, and `approve` runs
+  in your shell while `query serve` answers the poll. There is no un-approve;
+  revoke the grant if you change your mind.
+- **A queue nobody drains expires.** A pending escalation stops being
+  answerable after seven days, which is derived from its timestamp rather than
+  swept by a process. Expired rows still list, so an unanswered question stays
+  visible rather than vanishing.
+
+To be told rather than having to look, add a hook:
+
+```toml
+[hooks.on_escalation]
+run = "osascript -e 'display notification \"$CLAUDECTL_ESCALATION_QUESTION\"'"
+```
+
+It receives `CLAUDECTL_ESCALATION_ID`, `_GRANT`, `_PROJECT` and a truncated
+`_QUESTION`, and is spawned without being waited on — a slow notifier cannot
+hold the caller's response open.
 
 ### Flagged grants
 
