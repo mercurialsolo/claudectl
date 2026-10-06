@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Capability grants — scoped, expiring, revocable read-only access for a
 //! third party (#427, open-cluster RFC §3.2, §3.3, §5).
 //!
@@ -16,10 +15,12 @@
 //! audit.jsonl                 append-only, allowed and denied alike
 //! ```
 //!
-//! This phase is the spine only: mint, verify, list, audit, revoke. There is
-//! no network surface — #429 adds the read-only query surface, and #431 adds
-//! enforcement of the `rate_limit_per_min` / `daily_query_budget` fields this
-//! module already persists.
+//! This module is the spine: mint, verify, list, audit, revoke. It opens no
+//! port of its own — the surface that presents these credentials is
+//! `src/query/` (#429), which injects a `GrantStore` and secret rather than
+//! opening the default store per request. #431 adds enforcement of the
+//! `rate_limit_per_min` / `daily_query_budget` fields this module already
+//! persists; both are written and neither is checked.
 //!
 //! Gated behind the `relay` feature because the MAC comes from
 //! `relay::crypto`, which keeps the "no new dependency, no JWT library, no
@@ -36,7 +37,7 @@ use std::path::PathBuf;
 pub use grant::{Grant, GrantStore, new_grant};
 pub use scope::Scope;
 // `grant::AuditEntry` stays reachable by its full path rather than re-exported
-// here — nothing in this phase names the type, and #429 will.
+// here — `query::core` reaches it by full path, which is the only consumer.
 
 /// Maximum grant-id length, matching `relay::is_valid_peer_id`'s shape.
 const MAX_GRANT_ID_LEN: usize = 64;

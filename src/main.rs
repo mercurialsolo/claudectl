@@ -25,6 +25,7 @@ mod brain_screen;
 mod bus;
 mod commands;
 mod config;
+#[cfg(feature = "relay")]
 mod context;
 #[cfg(feature = "coord")]
 mod coord;
@@ -35,6 +36,8 @@ mod hive;
 mod ingest;
 mod init;
 mod orchestrator;
+#[cfg(feature = "relay")]
+mod query;
 #[cfg(feature = "relay")]
 mod relay;
 mod runtime;
@@ -118,6 +121,14 @@ pub(crate) enum Command {
     Access {
         #[command(subcommand)]
         command: access::cli::AccessCommand,
+    },
+
+    #[cfg(feature = "relay")]
+    /// Read-only project queries (#429, open-cluster RFC §4). Serve verbatim
+    /// cited spans from the context index to grant holders, over HTTP or MCP.
+    Query {
+        #[command(subcommand)]
+        command: query::cli::QueryCommand,
     },
 
     /// Guided first-value tour over fake sessions (#373). Launches the
@@ -887,6 +898,11 @@ fn run_main(cli: Cli) -> io::Result<()> {
             #[cfg(feature = "relay")]
             Command::Access { command } => {
                 return access::cli::dispatch_command(command, cli.json);
+            }
+
+            #[cfg(feature = "relay")]
+            Command::Query { command } => {
+                return query::cli::dispatch_command(command, cli.json);
             }
 
             // Fall through to the TUI launch below with demo + tour enabled.

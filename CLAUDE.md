@@ -30,8 +30,8 @@ crates/
                        #   Depends on claudectl-core. Never on the binary.
 src/                   # the binary crate `claudectl`
                        #   main.rs + access/ + brain/ + bus/ + context/ +
-                       #   coord/ + hive/ + relay/ + orchestrator + init +
-                       #   commands + config.rs + brain_screen.rs.
+                       #   coord/ + hive/ + query/ + relay/ + orchestrator +
+                       #   init + commands + config.rs + brain_screen.rs.
                        #   Implements the runtime traits over the real
                        #   subsystems via `src/runtime/`.
 ```
@@ -153,18 +153,25 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 
 **Access** (`src/access/`): Capability grants — scoped, expiring, revocable read-only access for a third party (#427, phase 1 of the open-cluster RFC #423; feature-gated behind `relay` because the MAC comes from `relay::crypto`). See `docs/access.md`.
 - `mod.rs` — `~/.claudectl/access` layout, grant-id validation/minting, opaque `AccessError::Denied`, audit-only `DenyReason`
-- `scope.rs` — `<resource>.<verb>:<qualifier>` grammar; read-only verbs, qualifier validation that keeps the MAC payload unambiguous, `is_issuable` gate
+- `scope.rs` — `<resource>.<verb>:<qualifier>` grammar; read-only verbs, `validate_qualifier` (keeps the MAC payload unambiguous, and the gate `query::http` runs a route's project segment through), `unissuable_reason` as the single list of what `access grant` will mint
 - `token.rs` — `cctl_<grant_id>_<mac>` mint/parse, canonical MAC payload, HMAC key at `access/secret` (fails closed, 0600 before first byte)
 - `grant.rs` — `Grant` records, atomic per-grant JSON store, `audit.jsonl`, `verify` (parse → load → MAC → revoked/expiry → scope)
 - `cli.rs` — `claudectl access` subcommand (grant / list / audit / revoke), all with `--json`
 
-**Context index** (`src/context/`): The substrate a read-only project query may be answered from — open-cluster phase 2 (#428, `docs/open-cluster.md` §4.2). Ungated, so it builds in every feature configuration; the hive-unit source is `#[cfg(feature = "hive")]` and yields nothing without it. No CLI and no caller yet — #429 adds the query surface.
+**Context index** (`src/context/`): The substrate a read-only project query may be answered from — open-cluster phase 2 (#428, `docs/open-cluster.md` §4.2). Gated behind `relay`, matching `src/query/`, its only consumer; the hive-unit source is additionally `#[cfg(feature = "hive")]` and yields nothing without it. There is no CLI here — the surface over it is `src/query/`.
 - `mod.rs` — `ContextIndex::build(&Path)` and `build_with(root, &IndexExposure, ShareMode)`; takes a path, not a project name. Routes markdown by name and location, collects skills and hive units, `fingerprint()` is FNV-1a (`"fnv1a:<hex>"`)
 - `git.rs` — `git ls-files -z --cached --full-name` is the only source of paths in the module; `repo_root`, `tracked_files` (sorted, deduped), `IndexError::{GitUnavailable, NotARepo, GitFailed}`. No git is an error, never a fallback
 - `deny.rs` — the "excluded" half of "tracked and not excluded": denied names and prefixes (`.env*`, `.netrc`, ssh keys, `credentials`), extensions (`jsonl`, keys/certs, `sqlite`/`db`), and path segments (`.claude`, `.claudectl`, `target`, `node_modules`, …) at any depth. `DenyReason::{Name, Extension, Directory}` for the build stats
-- `docs.rs` — splits markdown into `DocSection`s at ATX headings, each carrying its enclosing heading path; drops leading YAML frontmatter
+- `docs.rs` — splits markdown into `DocSection`s at ATX headings, each carrying its enclosing heading path; drops leading YAML frontmatter; tracks fenced code blocks, because `#` starts a comment in TOML/shell/Python and a section is the citation unit
 - `module_map.rs` — `//!` headers, `///` docs and public signatures, never bodies. Separate `skip_depth` (item bodies, emit nothing) and `container_depth` (`impl` / inline `mod`, descend); `pub(crate)` and private items are dropped name and all
 - `exposure.rs` — six categories (`claude_md`, `readme`, `docs`, `module_map`, `skills`, `hive_units`) persisted at `~/.claudectl/access/index-exposure.json`. Mirrors `hive::exposure` semantics with locally redefined types and identical wire values; mode comes from `Config.hive.share_mode`
+
+**Query surface** (`src/query/`): Read-only project queries for grant holders — open-cluster phase 3 (#429, `docs/open-cluster.md` §4.5, §4.7). Verbatim spans with citations, no generation; deterministic term matching where §4.3 will put Jev. Gated behind `relay` (it needs `access`); `mcp.rs` additionally behind `bus`, which is what carries `rmcp`/Tokio/`schemars`.
+- `core.rs` — `QueryCore::{ask, topics, get_doc}`. Every policy decision lives here; `http.rs` and `mcp.rs` have none of their own. **One server, one project:** the process serves the repo it started in, and a request's `<project>` is compared against that name, never resolved to a directory. The required `Scope` is derived from the *served* project, so another project's token cannot pass. Refusals are one opaque `404`; a missing bearer is the one `401`
+- `rank.rs` — term overlap, integers end to end, total-order sort. Own heading ×3, ancestor heading ×1, body ×1; a term scores once per zone, not per occurrence, which bounds a span's score by the question's term count and needs no length normalizer
+- `http.rs` — hand-rolled HTTP/1.1 like `relay/http.rs` and `coord/exporter.rs`. `POST …/query`, `GET …/topics`, `POST …/doc`. Auth is placed *after* route parsing, unlike relay's single global token, because which scope a request needs depends on the operation
+- `mcp.rs` — `ask_project` / `list_topics` / `get_doc` over rmcp stdio, mirroring `bus/mcp.rs`, in its own current-thread Tokio runtime. This is the server half; the `--endpoint <url>` client §4.7 sketches runs on the third party's machine and is a follow-up
+- `cli.rs` — `query serve` (HTTP, index built once at startup) and `query stdio` (MCP). `resolve_project` defaults to the repo directory's name and refuses to start when that cannot be a scope qualifier — every worktree with a `+` in its name
 
 **Terminal backends** (`crates/claudectl-core/src/terminals/`): Ghostty, Kitty, tmux, WezTerm, Warp, iTerm2, Terminal.app, Gnome Terminal, Windows Terminal — auto-detected, used for tab switching and input sending.
 
@@ -174,7 +181,7 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 - **Native `ps`** over `sysinfo` crate to keep binary small.
 - **Multi-signal status inference** — combines CPU usage, JSONL events, and timestamps (not just one signal).
 - **Incremental JSONL parsing** — tracks file offsets, never rereads full files.
-- **No async runtime** — synchronous with polling. Keeps complexity low. **Exception:** the `bus` MCP server (`src/bus/mcp.rs`) runs inside a current-thread Tokio runtime when invoked as `claudectl bus stdio`. The TUI and every other code path remain sync.
+- **No async runtime** — synchronous with polling. Keeps complexity low. **Exception:** the two MCP servers — `src/bus/mcp.rs` under `claudectl bus stdio` and `src/query/mcp.rs` under `claudectl query stdio` — each build their own current-thread Tokio runtime inside their `run_stdio`. Tokio carries no `rt-multi-thread`, so a multi-thread runtime would not compile; the TUI and every other code path remain sync.
 - **Deny-first rule evaluation** — deny rules always override approve/brain suggestions, regardless of config order.
 - **Brain decisions are local-only** — all decision logs and few-shot examples stay on the user's machine.
 - **Brain gate mode** — `~/.claudectl/brain/gate-mode` controls on/off/auto. File absent = on (default). The plugin hook and `--brain-query` both check this before querying the LLM.

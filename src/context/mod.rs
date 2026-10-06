@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Project context index — what a read-only query can be answered from
 //! (#428, open-cluster RFC §4.2).
 //!
@@ -21,8 +20,8 @@
 //! `module_map.rs` emits signatures and doc comments but never function bodies.
 //!
 //! Scope note: this module builds the substrate and nothing more. Retrieval,
-//! ranking and the query surface itself are #429; rate limits and budgets are
-//! #431. There is deliberately no CLI here.
+//! ranking and the surface over it are `src/query/` (#429); rate limits and
+//! budgets are #431. There is deliberately no CLI here.
 
 pub mod deny;
 pub mod docs;
@@ -99,8 +98,9 @@ impl ContextIndex {
     ///
     /// Takes a path, not a project name: project names are many-to-one onto
     /// directories (every worktree of a repo shares a basename), so resolving a
-    /// grant's `project.query:<name>` to a directory is #429's problem, not
-    /// this module's.
+    /// grant's `project.query:<name>` to a directory is not this module's
+    /// problem — and `query::core` does not solve it either. It serves one
+    /// project and compares the name rather than resolving it.
     pub fn build(root: &Path) -> Result<Self, IndexError> {
         let mode = exposure::mode_from_config();
         let gate = IndexExposure::load();
@@ -425,6 +425,13 @@ pub(crate) mod tests_support {
     /// after the fixture's initial commit.
     pub fn stage_all(root: &Path) -> bool {
         git(root, &["add", "-A"])
+    }
+
+    /// `git init` an existing directory, for a test that needs the repo at a
+    /// path it chose rather than at the tempdir root — the directory's *name*
+    /// is the thing under test in `query::cli::resolve_project`.
+    pub fn git_init(root: &Path) -> bool {
+        git(root, &["init", "-q"])
     }
 
     pub fn git_fixture(files: &[(&str, &str)]) -> Option<(tempfile::TempDir, PathBuf)> {
