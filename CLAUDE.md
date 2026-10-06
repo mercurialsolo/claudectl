@@ -122,7 +122,6 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 - `store.rs` — SQLite (WAL) at `~/.claudectl/bus/bus.db`: roles + messages tables (with `hop_count` column), drain + peek semantics
 - `roles.rs` — Role addressing, cwd-inference, ambiguity/unbound resolution. Caller may override with `CLAUDECTL_BUS_ROLE` or `--role`
 - `policy.rs` — Guardrails: subject grammar, type allowlist, body cap, leading-`/` neutralization (§9), hop cap (default 8), reserved-role guard (`supervisor`/`operator` cannot be bound)
-- (rate limiting moved to `src/rate_limit.rs` in #431 — the query surface is `relay`-gated and could not reach it behind `bus`)
 - `mcp.rs` — rmcp stdio server exposing `whoami`, `list_agents`, `publish` (with `parent_hop`), `read_inbox` (with `peek`), plus supervisor tools `submit_task` / `list_tasks` / `task_status`
 - `cli.rs` — `claudectl bus` subcommand (stdio, role bind/list, send, inbox + `--peek`, whoami, stop-hook driver, prune)
 

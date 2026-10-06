@@ -18,9 +18,9 @@
 //! This module is the spine: mint, verify, list, audit, revoke. It opens no
 //! port of its own — the surface that presents these credentials is
 //! `src/query/` (#429), which injects a `GrantStore` and secret rather than
-//! opening the default store per request. #431 adds enforcement of the
-//! `rate_limit_per_min` / `daily_query_budget` fields this module already
-//! persists; both are written and neither is checked.
+//! opening the default store per request. #431 added the enforcement of
+//! `rate_limit_per_min` and `daily_query_budget` — `charge_daily_budget` and
+//! `verify_detailed` here, the ordering and the refusals in `query::core`.
 //!
 //! Gated behind the `relay` feature because the MAC comes from
 //! `relay::crypto`, which keeps the "no new dependency, no JWT library, no
@@ -37,7 +37,8 @@ use std::path::PathBuf;
 pub use grant::{Grant, GrantStore, new_grant};
 pub use scope::Scope;
 // `grant::AuditEntry` stays reachable by its full path rather than re-exported
-// here — `query::core` reaches it by full path, which is the only consumer.
+// here. Two consumers now: `query::core` writes them and `cli::cmd_audit`
+// renders them, both by full path.
 
 /// Maximum grant-id length, matching `relay::is_valid_peer_id`'s shape.
 const MAX_GRANT_ID_LEN: usize = 64;

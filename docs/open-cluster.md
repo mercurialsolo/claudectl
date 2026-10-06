@@ -98,7 +98,7 @@ The `secret` fails closed. It comes from `relay::crypto::try_generate_psk`, whic
 
 All three paths are written `0600`, with the mode set on the temp file before any bytes land rather than chmodded afterwards (`relay::save_peer_psk` writes first and chmods after, leaving a readable instant). The grant files are owner-only too, not just the secret: a grant file carries every field the MAC covers, so leaving them at a default umask would make `secret` the only barrier between an unprivileged local user and every token on the machine.
 
-#427 ships the spine — mint, verify, list, audit, revoke — and opens no port. The read-only query surface that presents these credentials shipped in #429 as `src/query/` (§4.7), and enforcement of the `rate_limit_per_min` and `daily_query_budget` fields the grant file already carries is #431.
+#427 ships the spine — mint, verify, list, audit, revoke — and opens no port. The read-only query surface that presents these credentials shipped in #429 as `src/query/` (§4.7), and enforcement of the `rate_limit_per_min` and `daily_query_budget` fields the grant file carries shipped in #431 (§4.8).
 
 ### 3.3 Scopes
 
@@ -586,6 +586,8 @@ Ordered so each phase is independently useful and the riskiest dependency comes 
 | **6** | `claudectl.app` | Different toolchain, separate artifact; consumes 1–5 rather than extending them |
 
 Phase 3 before 4 is deliberate. A deterministic surface that works is the thing you can then *measure* Jev against, and it means the classifier is an improvement to a working system rather than load-bearing from day one — which is also what keeps §4.4 true in practice and not just on paper.
+
+Phase 5 is independent of 4 and shipped before it: it enforces fields #427 already persisted, and needed only a surface to enforce them on. Its one row that does depend on Jev — the monthly spend ceiling — is deferred to #430, because there is nothing to meter until there is an outbound call to meter.
 
 ---
 

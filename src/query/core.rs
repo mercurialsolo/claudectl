@@ -32,6 +32,13 @@
 //! satisfy `verify` on a server serving `claudectl`, and correctness would
 //! then rest on remembering to compare the segment separately. Deriving the
 //! scope from the served project makes that class of mistake unrepresentable.
+//!
+//! ## Guardrail order
+//!
+//! `authorize` runs `verify` → rate limit → daily budget, and each placement
+//! is load-bearing rather than incidental — the bucket map's key space, what a
+//! throttled request is allowed to spend, and which denials charge at all all
+//! depend on it. The reasoning is on `authorize` itself (#431, RFC §4.8).
 
 use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
@@ -340,7 +347,11 @@ impl QueryCore {
         {
             Ok(g) => g,
             Err((DenyReason::MissingScope, Some(grant_id))) => {
-                // Audited by `verify_detailed` already; this only charges.
+                // Audited by `verify_detailed` already; this only charges. The
+                // result is discarded on purpose: the response is `Denied`
+                // whether the charge landed, was already exhausted, or failed
+                // against the store — and each of those wrote its own audit
+                // line on the way through.
                 let _ = self.charge_budget(&grant_id, question, now_ms);
                 return Err(QueryError::Denied);
             }
@@ -1225,6 +1236,53 @@ mod tests {
     /// request — the missing scope *and* the exhausted budget. Both happened,
     /// so both are logged; pinned here so the double write reads as intended
     /// rather than being rediscovered as a bug.
+    /// Each grant is throttled on its own limit, not a server-wide default.
+    ///
+    /// This is the test that catches someone later "simplifying"
+    /// `try_acquire_with_capacity` back to `try_acquire` — which would
+    /// silently give every grant the limiter's default and make
+    /// `rate_limit_per_min` decorative.
+    #[test]
+    fn two_grants_on_one_server_are_throttled_on_their_own_limits() {
+        let Some(h) = harness_with_limits(query_scope(), Some(1000), None) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        // A second grant into the same store, allowed one query a minute.
+        let mut tight = access::new_grant(
+            "gr_test02".into(),
+            "tight".into(),
+            query_scope(),
+            access::epoch_ms(),
+            access::epoch_ms() + 60_000,
+        );
+        tight.rate_limit_per_min = 1;
+        h.core.store.create(&tight).unwrap();
+        let tight_token = access::token::mint(
+            &h.core.secret,
+            &tight.grant_id,
+            &tight.scopes,
+            tight.expires_ms,
+        );
+
+        assert!(h.core.ask_at(&tight_token, "config", None, NOON).is_ok());
+        assert!(
+            matches!(
+                h.core.ask_at(&tight_token, "config", None, NOON),
+                Err(QueryError::Throttled { .. })
+            ),
+            "gr_test02 allows one per minute"
+        );
+
+        // The generous grant is untouched by its neighbour's exhausted bucket.
+        for _ in 0..5 {
+            assert!(
+                h.core.ask_at(&h.token, "config", None, NOON).is_ok(),
+                "gr_test01's 1000/min must not be capped by gr_test02's 1/min"
+            );
+        }
+    }
+
     #[test]
     fn a_missing_scope_probe_past_the_budget_audits_both_facts() {
         let Some(h) = harness_with_limits(query_scope(), Some(1000), Some(1)) else {
