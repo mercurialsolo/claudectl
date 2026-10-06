@@ -18,9 +18,9 @@
 //! This module is the spine: mint, verify, list, audit, revoke. It opens no
 //! port of its own — the surface that presents these credentials is
 //! `src/query/` (#429), which injects a `GrantStore` and secret rather than
-//! opening the default store per request. #431 adds enforcement of the
-//! `rate_limit_per_min` / `daily_query_budget` fields this module already
-//! persists; both are written and neither is checked.
+//! opening the default store per request. #431 added the enforcement of
+//! `rate_limit_per_min` and `daily_query_budget` — `charge_daily_budget` and
+//! `verify_detailed` here, the ordering and the refusals in `query::core`.
 //!
 //! Gated behind the `relay` feature because the MAC comes from
 //! `relay::crypto`, which keeps the "no new dependency, no JWT library, no
@@ -37,7 +37,8 @@ use std::path::PathBuf;
 pub use grant::{Grant, GrantStore, new_grant};
 pub use scope::Scope;
 // `grant::AuditEntry` stays reachable by its full path rather than re-exported
-// here — `query::core` reaches it by full path, which is the only consumer.
+// here. Two consumers now: `query::core` writes them and `cli::cmd_audit`
+// renders them, both by full path.
 
 /// Maximum grant-id length, matching `relay::is_valid_peer_id`'s shape.
 const MAX_GRANT_ID_LEN: usize = 64;
@@ -96,6 +97,7 @@ pub fn epoch_ms() -> u64 {
 /// enumerate which projects exist; the same reasoning applies to telling
 /// "no such grant" apart from "revoked" or "expired".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Returned by `GrantStore::verify`; see the note there.
 pub enum AccessError {
     Denied,
 }
@@ -119,6 +121,23 @@ pub enum DenyReason {
     Revoked,
     Expired,
     MissingScope,
+    /// The grant's per-minute token bucket was empty (#431, RFC §4.8).
+    ///
+    /// Unlike every reason above, this one is written by the *caller* rather
+    /// than by `verify` — the limit is checked after verification, so that a
+    /// bucket is only ever created for a grant id that has already proved it
+    /// holds a valid token.
+    RateLimited,
+    /// The grant's `daily_query_budget` was spent for the current UTC day.
+    BudgetExhausted,
+    /// A `get_doc` named a path the index does not carry.
+    ///
+    /// Also written by the caller. The caller is told the same opaque `404` a
+    /// missing scope gets — what this reason exists for is the *owner's* side:
+    /// without it a holder enumerating doc paths spent the budget while
+    /// `access audit` showed nothing, so `access list` and `access audit`
+    /// disagreed and neither could be reconciled with the other.
+    NotIndexed,
 }
 
 impl DenyReason {
@@ -131,8 +150,23 @@ impl DenyReason {
             DenyReason::Revoked => "revoked",
             DenyReason::Expired => "expired",
             DenyReason::MissingScope => "missing_scope",
+            DenyReason::RateLimited => "rate_limited",
+            DenyReason::BudgetExhausted => "budget_exhausted",
+            DenyReason::NotIndexed => "not_indexed",
         }
     }
+}
+
+/// Milliseconds in a UTC day, for the daily-budget rollover.
+pub const MS_PER_DAY: u64 = 86_400_000;
+
+/// Which UTC day `now_ms` falls in.
+///
+/// Days rather than a rolling 24-hour window: "500 queries a day" is what an
+/// owner setting `daily_query_budget` means, and a rolling window would need
+/// per-request timestamps rather than one counter.
+pub fn utc_day(now_ms: u64) -> u64 {
+    now_ms / MS_PER_DAY
 }
 
 // ────────────────────────────────────────────────────────────────────────────

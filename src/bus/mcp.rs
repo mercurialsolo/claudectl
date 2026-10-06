@@ -30,9 +30,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::policy::{self, DEFAULT_MAX_BODY_BYTES, DEFAULT_MAX_HOPS};
-use super::rate_limit::RateLimiter;
 use super::roles::{self, RoleResolution};
 use super::store::{self, MessageRow};
+use crate::rate_limit::RateLimiter;
 
 // -------------------- Tool argument & result types ---------------------------
 

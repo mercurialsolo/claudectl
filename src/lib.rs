@@ -45,6 +45,8 @@ pub mod init;
 pub mod orchestrator;
 #[cfg(feature = "relay")]
 pub mod query;
+#[cfg(any(feature = "bus", feature = "relay"))]
+pub mod rate_limit;
 #[cfg(feature = "relay")]
 pub mod relay;
 pub mod runtime;

@@ -245,7 +245,7 @@ fn cmd_list(json_mode: bool) -> io::Result<()> {
             "{:<11} {:<9} {:<26} {:>6}  {:<12} {}",
             g.grant_id,
             state_label(g, now),
-            truncate(&g.label, 26),
+            truncate(&visible(&g.label), 26),
             g.use_count,
             g.last_used_ms.map(fmt_ms).unwrap_or_else(|| "never".into()),
             scopes.join(",")
@@ -288,18 +288,25 @@ fn cmd_audit(grant_id: Option<&str>, json_mode: bool) -> io::Result<()> {
         return Ok(());
     }
 
+    // QUESTION is the column #431 exists for: caps stop the abuse you
+    // anticipated, and this is how the abuse nobody anticipated becomes
+    // visible. `cited` is deliberately not a column — it is a list, it belongs
+    // in `--json`, and the table has to stay readable at 120 columns.
     println!(
-        "{:<12} {:<14} {:<8} {:<16} DETAIL",
-        "GRANT", "WHEN", "EVENT", "REASON"
+        "{:<12} {:<14} {:<8} {:<17} {:<18} QUESTION",
+        "GRANT", "WHEN", "EVENT", "REASON", "DETAIL"
     );
     for e in &entries {
         println!(
-            "{:<12} {:<14} {:<8} {:<16} {}",
+            "{:<12} {:<14} {:<8} {:<17} {:<18} {}",
             truncate(&e.grant_id, 12),
             fmt_ms(e.ts_ms),
             e.event,
             e.reason.as_deref().unwrap_or("-"),
-            e.detail.as_deref().unwrap_or("")
+            // `detail` is operator-generated today, but it is a free-form
+            // field #429 onward appends to, so it gets the same treatment.
+            truncate(&visible(e.detail.as_deref().unwrap_or("-")), 18),
+            truncate(&visible(e.question.as_deref().unwrap_or("")), 44),
         );
     }
     Ok(())
@@ -340,6 +347,29 @@ fn state_label(grant: &Grant, now_ms: u64) -> &'static str {
 
 fn truncate(s: &str, width: usize) -> String {
     claudectl_core::helpers::truncate_cell(s, width)
+}
+
+/// Replace every control character with a visible marker.
+///
+/// `question` in an audit line is **third-party text**. `truncate_for_audit`
+/// bounds its bytes and strips nothing, and `truncate_cell` trims by character
+/// count, so without this a question containing a newline forges a plausible
+/// extra row in `access audit` — and an ANSI escape can clear the operator's
+/// screen or rewrite their terminal title. The 44-character ceiling is no
+/// defence: a newline inside the first 44 characters survives it.
+///
+/// Sanitised at **render**, never on the way into `audit.jsonl`. The log's
+/// whole purpose is to record what was actually asked, and scrubbing on write
+/// would destroy the evidence it exists to keep. `--json` needs no help here:
+/// `serde_json` escapes control characters itself.
+///
+/// Replaced rather than deleted, because an owner should be able to see that
+/// *something* was there. `is_control` covers C0, DEL and the C1 range, which
+/// is where every escape-sequence introducer lives.
+fn visible(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { '\u{fffd}' } else { c })
+        .collect()
 }
 
 /// Render an epoch-ms timestamp relative to now — `3d ago`, `in 30d`.
@@ -464,6 +494,30 @@ mod tests {
         assert_eq!(fmt_ms_at(now - 7_200_000, now), "2h ago");
         assert_eq!(fmt_ms_at(now - 3 * 86_400_000, now), "3d ago");
         assert_eq!(fmt_ms_at(now + 600_000, now), "in 10m");
+    }
+
+    #[test]
+    fn a_question_cannot_forge_a_row_or_drive_the_terminal() {
+        // `question` is third-party text and goes straight to stdout. A
+        // newline inside the first 44 characters survives the truncation and
+        // forges a plausible extra audit row; an ANSI escape can clear the
+        // screen or rewrite the terminal title.
+        let forged = "probe\ngr_other     1m ago     allowed  -       query.ask   benign";
+        let out = visible(forged);
+        assert!(!out.contains('\n'), "{out}");
+        assert!(out.starts_with("probe\u{fffd}gr_other"), "{out}");
+
+        let escape = "\u{1b}[2Jcleared\u{7}";
+        let out = visible(escape);
+        assert!(!out.contains('\u{1b}'), "{out}");
+        assert!(!out.contains('\u{7}'), "{out}");
+        // Replaced, not deleted: the owner should see that something was
+        // there rather than read a sentence that silently lost characters.
+        assert!(out.contains("cleared"), "{out}");
+        assert!(out.starts_with('\u{fffd}'), "{out}");
+
+        // Ordinary text, including multi-byte, passes through untouched.
+        assert_eq!(visible("héllo — ok"), "héllo — ok");
     }
 
     #[test]

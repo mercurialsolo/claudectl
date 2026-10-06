@@ -122,7 +122,6 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 - `store.rs` — SQLite (WAL) at `~/.claudectl/bus/bus.db`: roles + messages tables (with `hop_count` column), drain + peek semantics
 - `roles.rs` — Role addressing, cwd-inference, ambiguity/unbound resolution. Caller may override with `CLAUDECTL_BUS_ROLE` or `--role`
 - `policy.rs` — Guardrails: subject grammar, type allowlist, body cap, leading-`/` neutralization (§9), hop cap (default 8), reserved-role guard (`supervisor`/`operator` cannot be bound)
-- `rate_limit.rs` — In-process token bucket per `sender_role`; default 60 messages/min, refills continuously without a background timer
 - `mcp.rs` — rmcp stdio server exposing `whoami`, `list_agents`, `publish` (with `parent_hop`), `read_inbox` (with `peek`), plus supervisor tools `submit_task` / `list_tasks` / `task_status`
 - `cli.rs` — `claudectl bus` subcommand (stdio, role bind/list, send, inbox + `--peek`, whoami, stop-hook driver, prune)
 
@@ -156,7 +155,8 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 - `scope.rs` — `<resource>.<verb>:<qualifier>` grammar; read-only verbs, `validate_qualifier` (keeps the MAC payload unambiguous, and the gate `query::http` runs a route's project segment through), `unissuable_reason` as the single list of what `access grant` will mint
 - `token.rs` — `cctl_<grant_id>_<mac>` mint/parse, canonical MAC payload, HMAC key at `access/secret` (fails closed, 0600 before first byte)
 - `grant.rs` — `Grant` records, atomic per-grant JSON store, `audit.jsonl`, `verify` (parse → load → MAC → revoked/expiry → scope)
-- `cli.rs` — `claudectl access` subcommand (grant / list / audit / revoke), all with `--json`
+- `grant.rs` also owns the #431 accounting: `charge_daily_budget` (UTC-day rollover, typed `ChargeError` so a store failure fails closed instead of answering unmetered), `verify_detailed` (`pub(crate)`; exposes `DenyReason` so only a `missing_scope` denial charges the budget), `record_query_use` (audits the question and the cited paths)
+- `cli.rs` — `claudectl access` subcommand (grant / list / audit / revoke), all with `--json`. `audit` renders a QUESTION column; `cited` is `--json`-only
 
 **Context index** (`src/context/`): The substrate a read-only project query may be answered from — open-cluster phase 2 (#428, `docs/open-cluster.md` §4.2). Gated behind `relay`, matching `src/query/`, its only consumer; the hive-unit source is additionally `#[cfg(feature = "hive")]` and yields nothing without it. There is no CLI here — the surface over it is `src/query/`.
 - `mod.rs` — `ContextIndex::build(&Path)` and `build_with(root, &IndexExposure, ShareMode)`; takes a path, not a project name. Routes markdown by name and location, collects skills and hive units, `fingerprint()` is FNV-1a (`"fnv1a:<hex>"`)
@@ -168,10 +168,13 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 
 **Query surface** (`src/query/`): Read-only project queries for grant holders — open-cluster phase 3 (#429, `docs/open-cluster.md` §4.5, §4.7). Verbatim spans with citations, no generation; deterministic term matching where §4.3 will put Jev. Gated behind `relay` (it needs `access`); `mcp.rs` additionally behind `bus`, which is what carries `rmcp`/Tokio/`schemars`.
 - `core.rs` — `QueryCore::{ask, topics, get_doc}`. Every policy decision lives here; `http.rs` and `mcp.rs` have none of their own. **One server, one project:** the process serves the repo it started in, and a request's `<project>` is compared against that name, never resolved to a directory. The required `Scope` is derived from the *served* project, so another project's token cannot pass. Refusals are one opaque `404`; a missing bearer is the one `401`
+- `core.rs` also enforces #431's guardrails: `verify` → rate limit → daily budget, in that order. The limit is checked *after* verification so the bucket map is only keyed on ids that presented a valid MAC; a throttled request never reaches the budget; both refuse with `429` + `Retry-After` rather than the usual opaque `404`, because the holder has already proved the token and a silent grant is hostile
 - `rank.rs` — term overlap, integers end to end, total-order sort. Own heading ×3, ancestor heading ×1, body ×1; a term scores once per zone, not per occurrence, which bounds a span's score by the question's term count and needs no length normalizer
 - `http.rs` — hand-rolled HTTP/1.1 like `relay/http.rs` and `coord/exporter.rs`. `POST …/query`, `GET …/topics`, `POST …/doc`. Auth is placed *after* route parsing, unlike relay's single global token, because which scope a request needs depends on the operation
 - `mcp.rs` — `ask_project` / `list_topics` / `get_doc` over rmcp stdio, mirroring `bus/mcp.rs`, in its own current-thread Tokio runtime. This is the server half; the `--endpoint <url>` client §4.7 sketches runs on the third party's machine and is a follow-up
 - `cli.rs` — `query serve` (HTTP, index built once at startup) and `query stdio` (MCP). `resolve_project` defaults to the repo directory's name and refuses to start when that cannot be a scope qualifier — every worktree with a `+` in its name
+
+**Rate limiter** (`src/rate_limit.rs`): In-process token bucket, shared by two callers and gated on `any(bus, relay)`. `bus/mcp.rs` keys on `sender_role` at one global capacity (60/min); `query/core.rs` keys on a *verified* grant id and passes that grant's own `rate_limit_per_min` via `try_acquire_with_capacity`. A bucket keeps the capacity it was created with, so editing a grant file moves its ceiling on the next restart, not mid-window. No eviction, deliberately — both key spaces are bounded (bound roles; grants that have presented a valid MAC). `retry_after_secs` is read-only, for the `Retry-After` header.
 
 **Terminal backends** (`crates/claudectl-core/src/terminals/`): Ghostty, Kitty, tmux, WezTerm, Warp, iTerm2, Terminal.app, Gnome Terminal, Windows Terminal — auto-detected, used for tab switching and input sending.
 

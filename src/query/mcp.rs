@@ -73,6 +73,19 @@ fn to_mcp(err: QueryError) -> McpError {
         QueryError::Denied => McpError::invalid_params("not found".to_string(), None),
         QueryError::BadRequest(msg) => McpError::invalid_params(msg, None),
         QueryError::Internal(msg) => McpError::internal_error(msg, None),
+        // Same shape `bus::mcp` uses for its own rate limit: MCP has no status
+        // code, so the refusal has to be legible in the message. The retry
+        // hint is included because the holder can act on it.
+        QueryError::Throttled {
+            message,
+            retry_after_secs,
+        } => McpError::invalid_params(
+            match retry_after_secs {
+                Some(s) => format!("{message}; retry in {s}s"),
+                None => message.to_string(),
+            },
+            None,
+        ),
     }
 }
 
