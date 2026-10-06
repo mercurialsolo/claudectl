@@ -42,6 +42,13 @@ pub enum AccessCommand {
         grant_id: Option<String>,
     },
 
+    /// Show queries classification escalated for your review
+    ///
+    /// §4.3's "anything else" row: a query that was neither answerable with
+    /// confidence nor clearly refusable is queued instead of guessed at. The
+    /// caller got `pending_review` and an id.
+    Escalations,
+
     /// Revoke a grant immediately
     Revoke {
         /// Grant id, e.g. gr_7f2a1b
@@ -59,6 +66,7 @@ pub fn dispatch_command(command: &AccessCommand, json_mode: bool) -> io::Result<
         } => cmd_grant(project, label, scopes, expires, json_mode),
         AccessCommand::List => cmd_list(json_mode),
         AccessCommand::Audit { grant_id } => cmd_audit(grant_id.as_deref(), json_mode),
+        AccessCommand::Escalations => cmd_escalations(json_mode),
         AccessCommand::Revoke { grant_id } => cmd_revoke(grant_id, json_mode),
     }
 }
@@ -219,6 +227,11 @@ fn cmd_list(json_mode: bool) -> io::Result<()> {
                     "expires_ms": g.expires_ms,
                     "last_used_ms": g.last_used_ms,
                     "use_count": g.use_count,
+                    // Separate fields rather than folded into `state`, which
+                    // is one cell: a flagged grant is still active, and a
+                    // script should be able to see both facts.
+                    "flagged_ms": g.flagged_ms,
+                    "flag_reason": g.flag_reason,
                 })
             })
             .collect();
@@ -292,13 +305,15 @@ fn cmd_audit(grant_id: Option<&str>, json_mode: bool) -> io::Result<()> {
     // anticipated, and this is how the abuse nobody anticipated becomes
     // visible. `cited` is deliberately not a column — it is a list, it belongs
     // in `--json`, and the table has to stay readable at 120 columns.
+    // EVENT is 10 wide because #430 added `escalated`, which is 9 characters
+    // and would otherwise shunt every later column one place right.
     println!(
-        "{:<12} {:<14} {:<8} {:<17} {:<18} QUESTION",
+        "{:<12} {:<14} {:<10} {:<17} {:<18} QUESTION",
         "GRANT", "WHEN", "EVENT", "REASON", "DETAIL"
     );
     for e in &entries {
         println!(
-            "{:<12} {:<14} {:<8} {:<17} {:<18} {}",
+            "{:<12} {:<14} {:<10} {:<17} {:<18} {}",
             truncate(&e.grant_id, 12),
             fmt_ms(e.ts_ms),
             e.event,
@@ -308,6 +323,58 @@ fn cmd_audit(grant_id: Option<&str>, json_mode: bool) -> io::Result<()> {
             truncate(&visible(e.detail.as_deref().unwrap_or("-")), 18),
             truncate(&visible(e.question.as_deref().unwrap_or("")), 44),
         );
+        // Indented under its own row rather than a column: five numbers do not
+        // fit a table, and an owner tuning thresholds is reading them one line
+        // at a time anyway. Absent for every request on an unclassified
+        // surface, so #431's output is unchanged there.
+        if let Some(c) = &e.classification {
+            println!("{:<12} {c}", "");
+        }
+    }
+    Ok(())
+}
+
+/// Render the escalation queue (#430, RFC §4.3).
+///
+/// Read-only. There is no approve/deny here, and that is stated rather than
+/// implied: acting on an escalation means notifying the owner and resuming a
+/// query that has already returned, which is a state machine of its own and
+/// filed as a follow-up.
+fn cmd_escalations(json_mode: bool) -> io::Result<()> {
+    let root = super::access_dir().map_err(io::Error::other)?;
+    let queue = crate::query::escalate::EscalationQueue::in_access_dir(&root);
+    let rows = queue.read();
+
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_default()
+        );
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!("No escalations.");
+        println!("Queue: {}", queue.path().display());
+        return Ok(());
+    }
+
+    println!(
+        "{:<17} {:<12} {:<10} QUESTION",
+        "ESCALATION", "GRANT", "WHEN"
+    );
+    let now = super::epoch_ms();
+    for e in &rows {
+        println!(
+            "{:<17} {:<12} {:<10} {}",
+            e.id,
+            truncate(&e.grant_id, 12),
+            fmt_ms_at(e.ts_ms, now),
+            truncate(&e.question, 60)
+        );
+        // The five numbers are why it is here, so they are not hidden behind
+        // `--json`.
+        println!("                  {}", e.classification.audit_summary());
     }
     Ok(())
 }
@@ -335,11 +402,20 @@ fn cmd_revoke(grant_id: &str, json_mode: bool) -> io::Result<()> {
     Ok(())
 }
 
+/// One cell, so the states are ordered by what the owner most needs to see.
+///
+/// `revoked` and `expired` come first because they say the grant cannot be
+/// used. `flagged` comes next: a flagged grant *is* still active, which is
+/// exactly why the flag has to win the cell — "active" would hide the one
+/// thing asking for attention. `--json` carries `flagged_ms` and
+/// `flag_reason` as their own fields, so nothing is lost.
 fn state_label(grant: &Grant, now_ms: u64) -> &'static str {
     if grant.revoked {
         "revoked"
     } else if grant.is_expired_at(now_ms) {
         "expired"
+    } else if grant.flagged_ms.is_some() {
+        "flagged"
     } else {
         "active"
     }
@@ -535,5 +611,23 @@ mod tests {
         assert_eq!(state_label(&g, 0), "revoked");
         // A grant that is both should read as revoked — that was the deliberate act.
         assert_eq!(state_label(&g, 2000), "revoked");
+    }
+
+    #[test]
+    fn a_flagged_grant_reads_as_flagged_but_revoking_still_wins() {
+        let mut g = new_grant(
+            "gr_2aaaaa".into(),
+            "l".into(),
+            vec!["project.query:p".parse().unwrap()],
+            0,
+            1000,
+        );
+        g.flagged_ms = Some(500);
+        // Still usable, which is the point — flagging does not revoke.
+        assert_eq!(state_label(&g, 0), "flagged");
+        // But a state that says the grant cannot be used outranks it.
+        assert_eq!(state_label(&g, 2000), "expired");
+        g.revoked = true;
+        assert_eq!(state_label(&g, 0), "revoked");
     }
 }

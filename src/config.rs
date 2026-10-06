@@ -30,6 +30,7 @@ pub struct Config {
     pub brain: Option<BrainConfig>,
     pub relay: Option<RelayConfig>,
     pub hive: Option<HiveConfig>,
+    pub query: QueryConfig,
     pub lifecycle: LifecycleConfig,
     pub idle: IdleConfig,
     pub agents: Vec<AgentConfig>,
@@ -128,6 +129,37 @@ impl Default for RelayConfig {
     }
 }
 
+/// `[query]` — the read-only query surface's owner-set knobs (#430).
+///
+/// TOML only, with no CLI flags, which is what most of `[hive]` already does:
+/// these are properties of a long-running server, not of a dashboard
+/// invocation, and `claudectl` is mostly the latter.
+///
+/// The Jev API key is **not** here. It comes from `TYPESAFE_API_KEY` only — a
+/// secret in `.claudectl.toml` is a secret in the repository.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryConfig {
+    /// Hard off switch for classification. A present `TYPESAFE_API_KEY` is the
+    /// opt-in; this exists so an owner who has one in their environment for
+    /// other reasons can still keep the surface local.
+    pub jev_enabled: bool,
+    /// `jev-latest`, `jev-preview`, or a pinned `jev-1.x.y`.
+    pub jev_model: String,
+    /// Monthly spend ceiling in US dollars. Past it, classification degrades
+    /// to deterministic matching rather than billing without limit.
+    pub jev_monthly_usd: f64,
+}
+
+impl Default for QueryConfig {
+    fn default() -> Self {
+        QueryConfig {
+            jev_enabled: true,
+            jev_model: "jev-latest".to_string(),
+            jev_monthly_usd: 5.00,
+        }
+    }
+}
+
 /// Configuration for hive mind knowledge sharing.
 #[derive(Debug, Clone)]
 pub struct HiveConfig {
@@ -206,6 +238,7 @@ impl Default for Config {
             brain: None,
             relay: None,
             hive: None,
+            query: QueryConfig::default(),
             lifecycle: LifecycleConfig::default(),
             idle: IdleConfig::default(),
             agents: Vec::new(),
@@ -237,9 +270,17 @@ struct RawConfig {
     brain: Option<BrainConfig>,
     relay: Option<RawRelayConfig>,
     hive: Option<RawHiveConfig>,
+    query: Option<RawQueryConfig>,
     lifecycle: Option<RawLifecycleConfig>,
     idle: Option<RawIdleConfig>,
     agents: Vec<AgentConfig>,
+}
+
+#[derive(Debug, Default)]
+struct RawQueryConfig {
+    jev_enabled: Option<bool>,
+    jev_model: Option<String>,
+    jev_monthly_usd: Option<f64>,
 }
 
 #[derive(Debug, Default)]
@@ -448,6 +489,26 @@ impl Config {
             }
             if let Some(v) = raw_relay.auth_token {
                 relay.auth_token = Some(v);
+            }
+        }
+        if let Some(raw_query) = raw.query {
+            if let Some(v) = raw_query.jev_enabled {
+                self.query.jev_enabled = v;
+            }
+            if let Some(v) = raw_query.jev_model {
+                let v = v.trim().to_string();
+                if !v.is_empty() {
+                    self.query.jev_model = v;
+                }
+            }
+            if let Some(v) = raw_query.jev_monthly_usd {
+                // Negative or NaN would make `exceeded` nonsense in opposite
+                // directions — one never bites, one always does. Clamp to a
+                // non-negative finite value and let `0.0` mean "no Jev spend",
+                // which is a legitimate thing to configure.
+                if v.is_finite() {
+                    self.query.jev_monthly_usd = v.max(0.0);
+                }
             }
         }
         if let Some(raw_hive) = raw.hive {
@@ -1155,6 +1216,21 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     _ => {}
                 }
             }
+            ("query", _) => {
+                let query = raw.query.get_or_insert_with(RawQueryConfig::default);
+                match key {
+                    "jev_enabled" => {
+                        query.jev_enabled = parse_bool(value);
+                    }
+                    "jev_model" => {
+                        query.jev_model = Some(unquote(value));
+                    }
+                    "jev_monthly_usd" => {
+                        query.jev_monthly_usd = value.parse().ok();
+                    }
+                    _ => {}
+                }
+            }
             ("hive", _) => {
                 let hive = raw.hive.get_or_insert_with(RawHiveConfig::default);
                 match key {
@@ -1337,6 +1413,7 @@ fn known_keys(section: &str) -> Option<&'static [&'static str]> {
             "stale_peer_days",
             "share_mode",
         ]),
+        "query" => Some(&["jev_enabled", "jev_model", "jev_monthly_usd"]),
         _ => None,
     }
 }

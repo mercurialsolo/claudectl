@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::scope::Scope;
-use super::{AccessError, DenyReason};
+use super::{AccessError, DenyReason, create_private, set_owner_only};
 
 /// Default per-grant rate limit (RFC §4.8; the bus uses 60/min per role).
 const DEFAULT_RATE_LIMIT_PER_MIN: u32 = 20;
@@ -73,6 +73,19 @@ pub struct Grant {
     /// Queries charged against `daily_query_budget` on `budget_day`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub budget_used: u32,
+    /// When classification first judged a query from this grant to be an
+    /// instruction-override attempt (#430, RFC §4.3).
+    ///
+    /// Unsigned, like `revoked` and the budget counters: it changes what the
+    /// owner is told, not what the grant can do, so it must not invalidate a
+    /// live token. Flagging deliberately does **not** revoke — the injection
+    /// threshold is paranoid at `0.15`, and a false positive that kills a real
+    /// holder's grant is worse than one query being denied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flagged_ms: Option<u64>,
+    /// Why it was flagged, for `access list --json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag_reason: Option<String>,
 }
 
 impl Grant {
@@ -96,7 +109,11 @@ pub struct AuditEntry {
     /// The grant the caller claimed. Recorded even when it does not exist, so
     /// probing for valid ids shows up.
     pub grant_id: String,
-    /// `"allowed"` or `"denied"`.
+    /// `"allowed"`, `"denied"`, or `"escalated"`.
+    ///
+    /// #430 added the third. An escalated query was neither answered nor
+    /// refused — it is waiting for the owner — and collapsing it into either
+    /// of the other two would make the log lie about what happened.
     pub event: String,
     /// Machine-readable deny reason; `None` when allowed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,6 +134,29 @@ pub struct AuditEntry {
     /// only what went in. Empty on a denial.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cited: Option<Vec<String>>,
+    /// The classification outcome (#430, RFC §4.3), when one happened.
+    ///
+    /// A compact string rather than a nested object — `intent=structure/0.82
+    /// docs=0.91 sens=0.02 inj=0.01 scope=0.97` — because the owner tuning
+    /// thresholds wants all five numbers greppable on one line, and `access
+    /// audit` renders a table where a nested object has nowhere to go.
+    ///
+    /// `None` when no classification ran, which is every request on a surface
+    /// without `TYPESAFE_API_KEY`. So an owner who never opted in sees exactly
+    /// the log shape #431 shipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<String>,
+}
+
+/// The query-surface fields of an audit line, gathered so the two writers do
+/// not grow a sixth and seventh positional argument each.
+#[derive(Debug, Default, Clone)]
+pub struct QueryAudit<'a> {
+    /// Which operation ran, or which limit refused — `query.ask`, `3/min`.
+    pub detail: Option<&'a str>,
+    pub question: Option<&'a str>,
+    pub cited: Option<Vec<String>>,
+    pub classification: Option<String>,
 }
 
 /// Why a daily-budget charge did not go through.
@@ -540,8 +580,11 @@ impl GrantStore {
                 self.audit_denied_outside_verify(
                     grant_id,
                     DenyReason::UnknownGrant,
-                    Some("vanished between verify and charge".into()),
-                    question,
+                    QueryAudit {
+                        detail: Some("vanished between verify and charge"),
+                        question,
+                        ..Default::default()
+                    },
                     now_ms,
                 );
                 return Err(ChargeError::Store(format!("no such grant: {grant_id}")));
@@ -550,8 +593,11 @@ impl GrantStore {
                 self.audit_denied_outside_verify(
                     grant_id,
                     DenyReason::UnreadableGrant,
-                    Some("could not be read to charge the budget".into()),
-                    question,
+                    QueryAudit {
+                        detail: Some("could not be read to charge the budget"),
+                        question,
+                        ..Default::default()
+                    },
                     now_ms,
                 );
                 return Err(ChargeError::Store(e));
@@ -577,11 +623,15 @@ impl GrantStore {
         // reading alone. Read-time only: the file is not rewritten.
         let budget = grant.daily_query_budget.max(1);
         if grant.budget_used >= budget {
+            let detail = format!("{}/{} used today", grant.budget_used, budget);
             self.audit_denied_outside_verify(
                 grant_id,
                 DenyReason::BudgetExhausted,
-                Some(format!("{}/{} used today", grant.budget_used, budget)),
-                question,
+                QueryAudit {
+                    detail: Some(&detail),
+                    question,
+                    ..Default::default()
+                },
                 now_ms,
             );
             return Err(ChargeError::Exhausted);
@@ -592,8 +642,11 @@ impl GrantStore {
             self.audit_denied_outside_verify(
                 grant_id,
                 DenyReason::UnreadableGrant,
-                Some("the charge could not be persisted".into()),
-                question,
+                QueryAudit {
+                    detail: Some("the charge could not be persisted"),
+                    question,
+                    ..Default::default()
+                },
                 now_ms,
             );
             return Err(ChargeError::Store(e));
@@ -613,7 +666,14 @@ impl GrantStore {
         detail: Option<&str>,
         now_ms: u64,
     ) -> Result<(), String> {
-        self.record_query_use(grant_id, detail, None, None, now_ms)
+        self.record_query_use(
+            grant_id,
+            QueryAudit {
+                detail,
+                ..Default::default()
+            },
+            now_ms,
+        )
     }
 
     /// [`Self::record_use`] with the question and the paths that answered it.
@@ -627,9 +687,7 @@ impl GrantStore {
     pub fn record_query_use(
         &self,
         grant_id: &str,
-        detail: Option<&str>,
-        question: Option<&str>,
-        cited: Option<Vec<String>>,
+        audit: QueryAudit<'_>,
         now_ms: u64,
     ) -> Result<(), String> {
         // Refuse rather than log a use of nothing. Callers reach here only
@@ -646,10 +704,31 @@ impl GrantStore {
             grant_id: grant_id.to_string(),
             event: "allowed".into(),
             reason: None,
-            detail: detail.map(str::to_string),
-            question: question.map(truncate_for_audit),
-            cited,
+            detail: audit.detail.map(str::to_string),
+            question: audit.question.map(truncate_for_audit),
+            cited: audit.cited,
+            classification: audit.classification,
         })
+    }
+
+    /// Mark a grant for the owner's attention, without touching what it can do.
+    ///
+    /// **First flag wins.** A later attempt leaves the record alone, so a flood
+    /// of injection attempts cannot overwrite the evidence of the one that
+    /// started it, and the timestamp stays the moment it was first seen.
+    ///
+    /// This is a read-modify-write on the same file `charge_daily_budget`
+    /// writes, so the caller must hold the same lock — `query::core` does.
+    pub fn flag_grant(&self, grant_id: &str, reason: &str, now_ms: u64) -> Result<(), String> {
+        let mut grant = self
+            .load(grant_id)?
+            .ok_or_else(|| format!("no such grant: {grant_id}"))?;
+        if grant.flagged_ms.is_some() {
+            return Ok(());
+        }
+        grant.flagged_ms = Some(now_ms);
+        grant.flag_reason = Some(reason.to_string());
+        self.update(&grant)
     }
 
     /// Append a `denied` line for a refusal decided outside [`Self::verify`] —
@@ -662,8 +741,7 @@ impl GrantStore {
         &self,
         grant_id: &str,
         reason: DenyReason,
-        detail: Option<String>,
-        question: Option<&str>,
+        audit: QueryAudit<'_>,
         now_ms: u64,
     ) {
         let _ = self.append_audit(&AuditEntry {
@@ -671,9 +749,28 @@ impl GrantStore {
             grant_id: grant_id.to_string(),
             event: "denied".into(),
             reason: Some(reason.as_str().to_string()),
-            detail,
-            question: question.map(truncate_for_audit),
+            detail: audit.detail.map(str::to_string),
+            question: audit.question.map(truncate_for_audit),
             cited: None,
+            classification: audit.classification,
+        });
+    }
+
+    /// Append an `escalated` line.
+    ///
+    /// Deliberately does **not** bump `use_count`. #431 made `use_count` mean
+    /// "queries actually answered", and an escalation has not been answered —
+    /// the budget was already charged, which is the counter that should move.
+    pub(crate) fn audit_escalated(&self, grant_id: &str, audit: QueryAudit<'_>, now_ms: u64) {
+        let _ = self.append_audit(&AuditEntry {
+            ts_ms: now_ms,
+            grant_id: grant_id.to_string(),
+            event: "escalated".into(),
+            reason: None,
+            detail: audit.detail.map(str::to_string),
+            question: audit.question.map(truncate_for_audit),
+            cited: None,
+            classification: audit.classification,
         });
     }
 
@@ -694,6 +791,7 @@ impl GrantStore {
             detail,
             question: None,
             cited: None,
+            classification: None,
         });
     }
 
@@ -734,37 +832,6 @@ impl GrantStore {
     }
 }
 
-/// Restrict a file to its owner. No-op off unix.
-fn set_owner_only(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("chmod {}: {e}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-/// Create a file owner-only *at creation*, so there is no window in which it
-/// exists with a wider mode.
-///
-/// `File::create` opens `0o666 & ~umask` — 0644 on a default umask — and a
-/// later `chmod` does not revoke descriptors another process already holds.
-/// Setting the mode in the `open(2)` call closes that race.
-fn create_private(path: &Path) -> Result<fs::File, String> {
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts.open(path)
-        .map_err(|e| format!("create {}: {e}", path.display()))
-}
-
 /// Build a new grant with defaults filled in. Does not persist.
 pub fn new_grant(
     grant_id: String,
@@ -786,6 +853,8 @@ pub fn new_grant(
         use_count: 0,
         budget_day: 0,
         budget_used: 0,
+        flagged_ms: None,
+        flag_reason: None,
     }
 }
 
@@ -1298,10 +1367,11 @@ mod tests {
             detail: Some("query.ask".into()),
             question: Some("how is auth structured?".into()),
             cited: Some(vec!["docs/auth.md".into()]),
+            classification: Some("intent=structure/0.82 docs=0.91".into()),
         };
         assert_eq!(
             serde_json::to_string(&allowed).unwrap(),
-            r#"{"ts_ms":1791072975409,"grant_id":"gr_cd2630","event":"allowed","detail":"query.ask","question":"how is auth structured?","cited":["docs/auth.md"]}"#
+            r#"{"ts_ms":1791072975409,"grant_id":"gr_cd2630","event":"allowed","detail":"query.ask","question":"how is auth structured?","cited":["docs/auth.md"],"classification":"intent=structure/0.82 docs=0.91"}"#
         );
 
         let denied = AuditEntry {
@@ -1312,6 +1382,7 @@ mod tests {
             detail: None,
             question: None,
             cited: None,
+            classification: None,
         };
         assert_eq!(
             serde_json::to_string(&denied).unwrap(),

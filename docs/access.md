@@ -61,17 +61,18 @@ The token is printed once and stored nowhere. It is deterministic — anyone wit
 the secret and the grant file can recompute it — but no CLI command does, so in
 practice losing the token means issuing a new grant and revoking the old one.
 
-## The four commands
+## The five commands
 
 ```bash
 claudectl access grant …              # issue one, print the token once
 claudectl access list                 # every grant, its state, uses, last use
 claudectl access audit gr_a38487      # what that grant actually asked for
 claudectl access audit                # the whole log, every grant
+claudectl access escalations          # questions classification queued for you
 claudectl access revoke gr_a38487     # immediate, nothing to restart
 ```
 
-All four take `--json`. It's a global flag, so it goes **before** the
+All five take `--json`. It's a global flag, so it goes **before** the
 subcommand — `claudectl --json access list`. `claudectl access list --json`
 fails with `unexpected argument '--json' found`.
 
@@ -81,8 +82,11 @@ GRANT       STATE     LABEL                        USES  LAST USED    SCOPES
 gr_a38487   active    acme integration review         0  never        project.query:claudectl,project.docs:claudectl
 ```
 
-`STATE` is `active`, `expired`, or `revoked`; a grant that is both expired and
-revoked reads as `revoked`, since revoking was the explicit action. Timestamps
+`STATE` is `active`, `flagged`, `expired`, or `revoked`, in increasing order of
+precedence from the bottom: a grant that is both expired and revoked reads as
+`revoked`, since revoking was the explicit action. `flagged` means
+classification caught an injection attempt from that grant and left it working
+— see [Flagged grants](#flagged-grants). Timestamps
 render relative and coarse, rounded to the nearest unit — `3h ago`, `in 30d`,
 `never`. Coarse on purpose: the useful questions are whether a grant has gone
 stale and when it lapses.
@@ -323,7 +327,8 @@ a pair:
   `expires_ms`. There is nothing to rotate short of deleting the secret and
   re-issuing every grant.
 
-File modes: `secret`, `grants/*.json` and `audit.jsonl` are all `0600`, each set
+File modes: `secret`, `grants/*.json`, `audit.jsonl`, `escalations.jsonl` and
+`jev-spend.json` are all `0600`, each set
 on the temp file or at creation rather than chmodded afterwards. The grant files
 are owner-only because they carry every field the MAC covers — left at a default
 umask, `secret` would be the only thing between an unprivileged local user and
@@ -357,6 +362,7 @@ query surface for "claudectl" listening on http://127.0.0.1:8787
   index: fnv1a:bfe0770758ce5672
   266 tracked files, 0 denied, 0 unreadable
   share mode: auto
+  classification: off (TYPESAFE_API_KEY is not set) — deterministic term matching
   POST /api/v1/project/claudectl/query
   GET  /api/v1/project/claudectl/topics
   POST /api/v1/project/claudectl/doc
@@ -439,6 +445,145 @@ hammered is visible without reading the log at all.
 
 That `use_count` and that audit line are the only writes the query surface
 performs anywhere. No route touches the project.
+
+## Classification (optional, off by default)
+
+By default the query surface matches terms deterministically and answers with
+the best-scoring spans. That is the whole surface, and it works without any
+network access.
+
+If you set `TYPESAFE_API_KEY`, every question is also classified by
+[Jev](https://typesafe.ai) before anything touches the index, and the surface
+starts denying, declining and escalating instead of answering everything it can
+score:
+
+| Jev says | The caller gets |
+| --- | --- |
+| seeks secrets (`> 0.15`) | the same opaque `404` every refusal gets, and the attempt is logged |
+| instruction-override framing (`> 0.15`) | the same `404`, **and the grant is flagged** for your review |
+| about another codebase (`scope_match < 0.5`) | `200` with `status: "declined"` and a pointer at what *is* answerable |
+| confidently not a project question | the same decline |
+| answerable from docs, with a confident intent | the answer, as before |
+| anything else | `202` with `status: "pending_review"` and an escalation id |
+
+`query serve` says which state it is in, every time:
+
+```
+  classification: off (TYPESAFE_API_KEY is not set) — deterministic term matching
+```
+
+```
+  classification: Jev jev-latest, ceiling $5.00/month
+    queries are sent to api.typesafe.ai for classification. Tell your grant holders.
+```
+
+### What leaves your machine
+
+Only two things: **the question** and **one paragraph of your `CLAUDE.md`** (or
+`README.md`, if you have no `CLAUDE.md`), truncated to 512 bytes. Never index
+contents, never retrieved spans, never session data, never anything about your
+other projects. A test captures the outbound request body and asserts exactly
+that, so it is a checked property rather than a promise.
+
+The API key is read from `TYPESAFE_API_KEY` only. It is deliberately not a
+config field — a secret in `.claudectl.toml` is a secret in your repository —
+and it travels to `curl` on stdin rather than as an argument, because command
+lines are readable by every local user through `ps`.
+
+### Settings
+
+```toml
+[query]
+jev_enabled     = true         # hard off switch; the key's presence is the opt-in
+jev_model       = "jev-latest"  # or jev-preview, or a pinned jev-1.x.y
+jev_monthly_usd = 5.00         # spend ceiling; on breach, degrade rather than bill on
+```
+
+### When classification is unavailable
+
+Two different situations, treated differently:
+
+- **No key, or `jev_enabled = false`.** No classification happens and the
+  surface behaves exactly as it does without this feature. This is the default
+  and it is not a degraded mode.
+- **A key is set but the service cannot be used** — unreachable, a bad key, Jev
+  throttling you, an unrecognised response, or your monthly ceiling reached. The
+  surface still answers, but *strictly*: at most 3 spans, and only spans that
+  matched more than one body term. You turned a gate on; it being down should
+  not make your surface more permissive than you configured.
+
+The audit log says which, so you can tell "I forgot the key" from "the API is
+down":
+
+```
+claudectl access audit
+GRANT        WHEN           EVENT      REASON            DETAIL             QUESTION
+gr_07e548    just now       allowed    -                 query.ask          how does config layering work?
+             jev.spend_ceiling
+```
+
+On a successful classification that line carries all five numbers instead:
+
+```
+             intent=structure/0.91 docs=0.94 sens=0.01 inj=0.01 scope=0.98
+```
+
+### Escalations
+
+A question Jev is unsure about is queued rather than guessed at:
+
+```bash
+claudectl access escalations
+```
+
+```
+ESCALATION        GRANT        WHEN       QUESTION
+esc_4f1c8a0b2d3e  gr_07e548    5m ago     how does the supervisor decide to retry a verification?
+                  intent=structure/0.55 docs=0.52 sens=0.10 inj=0.02 scope=0.93
+```
+
+The caller already has the id and a `pending_review` response. **There is no
+approve command yet** — answering an escalation means reaching the caller after
+their request has returned, which needs a notification path this does not have.
+For now the queue is a record of the questions worth a human answer, and you
+reply however you already talk to that person.
+
+### Flagged grants
+
+An injection attempt marks the grant and leaves it working:
+
+```
+claudectl access list
+GRANT       STATE     LABEL                        USES  LAST USED
+gr_07e548   flagged   acme security review            12  2m ago       project.query:claudectl
+```
+
+`flagged` outranks `active` in that column precisely because the grant still
+works — if it read `active` you would never notice. It is not a revocation: the
+injection threshold is deliberately paranoid, and a false positive that killed a
+real reviewer's grant would be worse than one denied question. Revoke it
+yourself if the record warrants it:
+
+```bash
+claudectl access revoke gr_07e548
+```
+
+`--json` carries `flagged_ms` and `flag_reason` as their own fields, so a script
+can see both that the grant is live and that it is flagged.
+
+### Thresholds
+
+The six numbers live in `src/query/thresholds.rs` with the reasoning for each.
+They are the spec's starting values and have **not** been tuned against real
+traffic — the vendor's own guidance is that thresholds must be validated on your
+own data. The routing table is tested against 24 adversarial fixtures, which
+proves the table is wired correctly; it does not prove `0.15` is the right place
+to stand. If you run this against real traffic, the audit log's `classification`
+lines are the data you need to move them.
+
+No request has been sent to `api.typesafe.ai` from this codebase, so the live
+path is unverified. If you set a key and the first response does not parse,
+that is schema drift — please file an issue with what came back.
 
 ## Rate limits and budgets
 
