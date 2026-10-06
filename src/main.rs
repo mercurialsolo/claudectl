@@ -38,6 +38,8 @@ mod init;
 mod orchestrator;
 #[cfg(feature = "relay")]
 mod query;
+#[cfg(any(feature = "bus", feature = "relay"))]
+mod rate_limit;
 #[cfg(feature = "relay")]
 mod relay;
 mod runtime;

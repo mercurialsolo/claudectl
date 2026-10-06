@@ -15,7 +15,7 @@
 //!   `operator` names. Anyone can still *address* those roles (escalation
 //!   must work from any sender); only binding is locked down.
 //!
-//! Rate limiting lives in its sibling `rate_limit.rs` because it carries
+//! Rate limiting lives in `crate::rate_limit` because it carries
 //! per-process state.
 
 /// Default body-size ceiling matching the spec's example policy (§10).

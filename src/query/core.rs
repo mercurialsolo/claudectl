@@ -34,14 +34,22 @@
 //! scope from the served project makes that class of mistake unrepresentable.
 
 use std::cmp::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::access::{self, AccessError, GrantStore, Scope};
+use crate::access::grant::ChargeError;
+use crate::access::{self, DenyReason, GrantStore, Scope};
 use crate::context::{ContextIndex, docs::DocSection};
+use crate::rate_limit::RateLimiter;
 
 use super::rank;
+
+/// Window the per-grant rate limit is measured over.
+///
+/// A grant's `rate_limit_per_min` is the capacity; this is the "per minute".
+pub const RATE_LIMIT_WINDOW_SECS: u32 = 60;
 
 /// Largest question this surface will consider.
 ///
@@ -174,6 +182,18 @@ pub enum QueryError {
     BadRequest(String),
     /// The server failed. Never carries anything index-derived.
     Internal(String),
+    /// A guardrail refused an otherwise-valid request (#431, RFC §4.8).
+    ///
+    /// Distinct from `Denied`, and told apart in the response on purpose. The
+    /// caller here has already proved they hold a valid, in-scope token — so
+    /// telling them they are over their own rate limit leaks nothing §3.3
+    /// protects, and leaving them to guess why a working grant went quiet
+    /// would be hostile.
+    Throttled {
+        message: &'static str,
+        /// Seconds until the request would succeed, for `Retry-After`.
+        retry_after_secs: Option<u64>,
+    },
 }
 
 impl std::fmt::Display for QueryError {
@@ -182,6 +202,7 @@ impl std::fmt::Display for QueryError {
             QueryError::Denied => write!(f, "not found"),
             QueryError::BadRequest(m) => write!(f, "{m}"),
             QueryError::Internal(m) => write!(f, "{m}"),
+            QueryError::Throttled { message, .. } => write!(f, "{message}"),
         }
     }
 }
@@ -219,6 +240,16 @@ pub struct QueryCore {
     index: Arc<ContextIndex>,
     store: GrantStore,
     secret: [u8; 32],
+    /// Per-grant token buckets (#431, RFC §4.8). Keyed on *verified* grant
+    /// ids — see the eviction note in `crate::rate_limit`.
+    limiter: RateLimiter,
+    /// Serialises the daily budget's load → check → increment → write.
+    ///
+    /// `charge_daily_budget` is a read-modify-write on a file and two
+    /// concurrent requests could otherwise both read the same `budget_used`
+    /// and both write `+1`, losing a charge. One server process serves one
+    /// project, so a process-local lock closes the window that matters.
+    budget_lock: Mutex<()>,
 }
 
 impl QueryCore {
@@ -239,6 +270,13 @@ impl QueryCore {
             index,
             store,
             secret,
+            limiter: RateLimiter::new(
+                // Unused by this caller: every acquisition passes the grant's
+                // own `rate_limit_per_min`. Only the window matters here.
+                crate::rate_limit::DEFAULT_CAPACITY,
+                RATE_LIMIT_WINDOW_SECS,
+            ),
+            budget_lock: Mutex::new(()),
         }
     }
 
@@ -259,28 +297,107 @@ impl QueryCore {
         requested == self.project
     }
 
-    /// Verify `token` for `op` against the *served* project, then record the
-    /// use.
+    /// Verify `token` for `op` against the *served* project, then spend one
+    /// unit of the grant's rate limit and daily budget.
     ///
-    /// `verify` audits its own denials and does not mutate the grant;
-    /// `record_use` is the separate bookkeeping call #427 split out for
-    /// exactly this caller. It runs only on success, and its failure is
-    /// reported rather than swallowed — a surface that cannot write its audit
-    /// trail should not quietly keep answering.
-    fn authorize(&self, token: &str, op: Operation) -> Result<access::Grant, QueryError> {
+    /// Order is `verify` → rate limit → daily budget, and each step is placed
+    /// where it is for a reason:
+    ///
+    /// - **Rate limit after `verify`.** Checking it first would mean a bucket
+    ///   per *claimed* grant id, and the map has no eviction — someone walking
+    ///   24-bit ids could pin 16M buckets. After verification the key is
+    ///   always an id that has presented a valid MAC, so the map is bounded by
+    ///   real grants. The cost is one HMAC per throttled request, which is
+    ///   microseconds.
+    /// - **Rate-limited requests do not reach the budget.** They were never
+    ///   evaluated, so charging the day's allowance for them would let a burst
+    ///   consume a budget it was refused the use of.
+    /// - **A `MissingScope` denial charges the budget; no other denial does.**
+    ///   §4.8 says "denied queries count, so probing is self-limiting", and
+    ///   `MissingScope` is the one denial that proves the caller holds a valid
+    ///   token and is probing other verbs or projects. Charging `BadMac` or
+    ///   `UnknownGrant` would let anyone who guesses a grant id drain the real
+    ///   holder's budget — turning a defence against probing into a
+    ///   denial-of-service against the person it protects.
+    ///
+    /// Returns the grant on success. The caller records the use *after* the
+    /// work succeeds, so the audit line can carry what came back.
+    fn authorize(
+        &self,
+        token: &str,
+        op: Operation,
+        question: Option<&str>,
+        now_ms: u64,
+    ) -> Result<access::Grant, QueryError> {
         let want = match op {
             Operation::Ask | Operation::Topics => Scope::ProjectQuery(self.project.clone()),
             Operation::GetDoc => Scope::ProjectDocs(self.project.clone()),
         };
-        let now = access::epoch_ms();
-        let grant = match self.store.verify(&self.secret, token, Some(&want), now) {
+
+        let grant = match self
+            .store
+            .verify_detailed(&self.secret, token, Some(&want), now_ms)
+        {
             Ok(g) => g,
-            Err(AccessError::Denied) => return Err(QueryError::Denied),
+            Err((DenyReason::MissingScope, Some(grant_id))) => {
+                // Audited by `verify_detailed` already; this only charges.
+                let _ = self.charge_budget(&grant_id, question, now_ms);
+                return Err(QueryError::Denied);
+            }
+            Err(_) => return Err(QueryError::Denied),
         };
-        self.store
-            .record_use(&grant.grant_id, Some(op.audit_detail()), now)
-            .map_err(QueryError::Internal)?;
+
+        if !self.limiter.try_acquire_with_capacity(
+            &grant.grant_id,
+            grant.rate_limit_per_min,
+            Instant::now(),
+        ) {
+            let retry_after = self
+                .limiter
+                .retry_after_secs(&grant.grant_id, Instant::now());
+            self.store.audit_denied_outside_verify(
+                &grant.grant_id,
+                DenyReason::RateLimited,
+                Some(format!("{}/min", grant.rate_limit_per_min)),
+                question,
+                now_ms,
+            );
+            return Err(QueryError::Throttled {
+                message: "rate limited",
+                retry_after_secs: retry_after,
+            });
+        }
+
+        self.charge_budget(&grant.grant_id, question, now_ms)?;
         Ok(grant)
+    }
+
+    /// Spend one unit of the grant's daily budget, under the process lock.
+    fn charge_budget(
+        &self,
+        grant_id: &str,
+        question: Option<&str>,
+        now_ms: u64,
+    ) -> Result<(), QueryError> {
+        let _guard = self
+            .budget_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match self.store.charge_daily_budget(grant_id, question, now_ms) {
+            Ok(_) => Ok(()),
+            // `charge_daily_budget` already wrote the audit line, question
+            // included, so this only shapes the refusal.
+            Err(ChargeError::Exhausted) => Err(QueryError::Throttled {
+                message: "daily budget exhausted",
+                retry_after_secs: Some(seconds_until_utc_midnight(now_ms)),
+            }),
+            // Fail closed. A store that cannot be read or written means the
+            // surface cannot meter, and a `500` here would hand out
+            // *unmetered* requests to anyone who can induce a transient
+            // failure — so this is the same opaque denial as everything else.
+            // The real reason is already in the audit log.
+            Err(ChargeError::Store(_)) => Err(QueryError::Denied),
+        }
     }
 
     /// Answer a question with ranked verbatim spans.
@@ -290,6 +407,22 @@ impl QueryCore {
         question: &str,
         limit: Option<usize>,
     ) -> Result<Answer, QueryError> {
+        self.ask_at(token, question, limit, access::epoch_ms())
+    }
+
+    /// [`Self::ask`] with the clock injected.
+    ///
+    /// The daily budget rolls over on a UTC day boundary, so testing it means
+    /// controlling the clock. Same convention `GrantStore::verify` already
+    /// uses: the `_at` form is the real implementation and the bare form
+    /// supplies `epoch_ms()`.
+    pub fn ask_at(
+        &self,
+        token: &str,
+        question: &str,
+        limit: Option<usize>,
+        now_ms: u64,
+    ) -> Result<Answer, QueryError> {
         if question.trim().is_empty() {
             return Err(QueryError::BadRequest("question is empty".into()));
         }
@@ -298,11 +431,23 @@ impl QueryCore {
                 "question exceeds {MAX_QUESTION_BYTES} bytes"
             )));
         }
-        self.authorize(token, Operation::Ask)?;
+        let grant = self.authorize(token, Operation::Ask, Some(question), now_ms)?;
 
         let terms = rank::terms(question);
         let limit = limit.unwrap_or(DEFAULT_SPAN_LIMIT).clamp(1, MAX_SPAN_LIMIT);
         let (spans, truncated) = self.select(&terms, limit);
+
+        // Record after the work, so the line says what actually came back.
+        self.store
+            .record_query_use(
+                &grant.grant_id,
+                Some(Operation::Ask.audit_detail()),
+                Some(question),
+                Some(cited_paths(&spans)),
+                now_ms,
+            )
+            .map_err(QueryError::Internal)?;
+
         Ok(Answer {
             project: self.project.clone(),
             fingerprint: self.index.fingerprint(),
@@ -314,7 +459,21 @@ impl QueryCore {
 
     /// List what is answerable, with no bodies.
     pub fn topics(&self, token: &str) -> Result<Topics, QueryError> {
-        self.authorize(token, Operation::Topics)?;
+        self.topics_at(token, access::epoch_ms())
+    }
+
+    /// [`Self::topics`] with the clock injected.
+    pub fn topics_at(&self, token: &str, now_ms: u64) -> Result<Topics, QueryError> {
+        let grant = self.authorize(token, Operation::Topics, None, now_ms)?;
+        self.store
+            .record_query_use(
+                &grant.grant_id,
+                Some(Operation::Topics.audit_detail()),
+                None,
+                None,
+                now_ms,
+            )
+            .map_err(QueryError::Internal)?;
         let mut topics = Vec::new();
         for (source, sections) in self.doc_channels() {
             for section in sections {
@@ -362,10 +521,17 @@ impl QueryCore {
     /// path is what keeps that resemblance harmless. An unmatched path is the
     /// same `404` as a path the owner is withholding.
     pub fn get_doc(&self, token: &str, path: &str) -> Result<Document, QueryError> {
+        self.get_doc_at(token, path, access::epoch_ms())
+    }
+
+    /// [`Self::get_doc`] with the clock injected.
+    pub fn get_doc_at(&self, token: &str, path: &str, now_ms: u64) -> Result<Document, QueryError> {
         if path.trim().is_empty() {
             return Err(QueryError::BadRequest("path is empty".into()));
         }
-        self.authorize(token, Operation::GetDoc)?;
+        // The requested path is the question here: it is what the caller asked
+        // for, and the only thing worth auditing about a doc fetch.
+        let grant = self.authorize(token, Operation::GetDoc, Some(path), now_ms)?;
 
         let mut sections = Vec::new();
         for (source, channel) in self.doc_channels() {
@@ -384,6 +550,15 @@ impl QueryCore {
         if sections.is_empty() {
             return Err(QueryError::Denied);
         }
+        self.store
+            .record_query_use(
+                &grant.grant_id,
+                Some(Operation::GetDoc.audit_detail()),
+                Some(path),
+                Some(vec![path.to_string()]),
+                now_ms,
+            )
+            .map_err(QueryError::Internal)?;
         Ok(Document {
             project: self.project.clone(),
             fingerprint: self.index.fingerprint(),
@@ -502,6 +677,29 @@ impl QueryCore {
     }
 }
 
+/// The distinct, non-empty paths a set of spans cited, for the audit line.
+///
+/// Deduplicated and sorted: several spans from one file are one citation as
+/// far as "what left the machine" is concerned, and a stable order keeps the
+/// log diffable. Skills and hive units carry no path and are skipped — the
+/// `detail` field already says which operation ran.
+fn cited_paths(spans: &[Span]) -> Vec<String> {
+    let mut paths: Vec<String> = spans
+        .iter()
+        .filter(|s| !s.path.is_empty())
+        .map(|s| s.path.clone())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Seconds from `now_ms` to the next UTC midnight, when a daily budget resets.
+fn seconds_until_utc_midnight(now_ms: u64) -> u64 {
+    let into_day = now_ms % access::MS_PER_DAY;
+    (access::MS_PER_DAY - into_day).div_ceil(1000)
+}
+
 /// Last-resort tiebreak, so the sort is a total order even for two spans
 /// identical in every published field.
 fn cmp_source(a: SpanSource, b: SpanSource) -> Ordering {
@@ -559,6 +757,15 @@ mod tests {
     }
 
     fn harness(scopes: Vec<Scope>) -> Option<Harness> {
+        harness_with_limits(scopes, None, None)
+    }
+
+    /// `harness`, with the grant's guardrails overridden.
+    fn harness_with_limits(
+        scopes: Vec<Scope>,
+        rate_limit_per_min: Option<u32>,
+        daily_query_budget: Option<u32>,
+    ) -> Option<Harness> {
         let files = [
             (
                 "CLAUDE.md",
@@ -593,13 +800,19 @@ mod tests {
         let secret = access::token::load_or_create_secret(store.root()).ok()?;
         let project = "fixture".to_string();
         let expires = access::epoch_ms() + 60_000;
-        let grant = access::new_grant(
+        let mut grant = access::new_grant(
             "gr_test01".into(),
             "test".into(),
             scopes,
             access::epoch_ms(),
             expires,
         );
+        if let Some(r) = rate_limit_per_min {
+            grant.rate_limit_per_min = r;
+        }
+        if let Some(b) = daily_query_budget {
+            grant.daily_query_budget = b;
+        }
         store.create(&grant).ok()?;
         let token = access::token::mint(&secret, &grant.grant_id, &grant.scopes, grant.expires_ms);
 
@@ -881,5 +1094,327 @@ mod tests {
                 .any(|e| e.detail.as_deref() == Some("query.ask")),
             "an allowed query must be auditable, got {audit:?}"
         );
+    }
+
+    // ── #431: guardrails ────────────────────────────────────────────────────
+
+    /// A day's worth of milliseconds into a known UTC day, so `budget_day`
+    /// arithmetic is readable in the tests below.
+    const DAY: u64 = access::MS_PER_DAY;
+    const NOON: u64 = DAY * 20_000 + DAY / 2;
+
+    fn query_scope() -> Vec<Scope> {
+        vec![Scope::ProjectQuery("fixture".into())]
+    }
+
+    #[test]
+    fn the_rate_limit_is_enforced_per_grant_and_reports_a_retry_hint() {
+        let Some(h) = harness_with_limits(query_scope(), Some(2), None) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        assert!(h.core.ask_at(&h.token, "config", None, NOON).is_ok());
+        assert!(h.core.ask_at(&h.token, "config", None, NOON).is_ok());
+        match h.core.ask_at(&h.token, "config", None, NOON) {
+            Err(QueryError::Throttled {
+                message,
+                retry_after_secs,
+            }) => {
+                assert_eq!(message, "rate limited");
+                assert!(
+                    retry_after_secs.is_some_and(|s| s > 0),
+                    "a throttled caller needs to know when to come back, got {retry_after_secs:?}"
+                );
+            }
+            other => panic!("expected Throttled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_rate_limited_request_is_audited_and_does_not_spend_the_daily_budget() {
+        let Some(h) = harness_with_limits(query_scope(), Some(1), Some(10)) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        h.core.ask_at(&h.token, "config", None, NOON).unwrap();
+        assert!(h.core.ask_at(&h.token, "config", None, NOON).is_err());
+
+        let grant = h.core.store.load("gr_test01").unwrap().unwrap();
+        assert_eq!(
+            grant.budget_used, 1,
+            "the throttled request was never evaluated, so it must not be charged"
+        );
+        assert_eq!(
+            grant.use_count, 1,
+            "`record_query_use` runs only after the work succeeds"
+        );
+        let audit = h.core.store.read_audit(None);
+        assert!(
+            audit
+                .iter()
+                .any(|e| e.reason.as_deref() == Some("rate_limited")),
+            "got {audit:?}"
+        );
+    }
+
+    #[test]
+    fn the_daily_budget_is_enforced_and_rolls_over_the_next_day() {
+        let Some(h) = harness_with_limits(query_scope(), Some(1000), Some(2)) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        assert!(h.core.ask_at(&h.token, "config", None, NOON).is_ok());
+        assert!(h.core.ask_at(&h.token, "config", None, NOON).is_ok());
+        match h.core.ask_at(&h.token, "config", None, NOON) {
+            Err(QueryError::Throttled {
+                message,
+                retry_after_secs,
+            }) => {
+                assert_eq!(message, "daily budget exhausted");
+                // Noon, so roughly half a day to the reset.
+                let s = retry_after_secs.expect("a budget refusal knows when it resets");
+                assert!((43_000..=43_300).contains(&s), "got {s}s");
+            }
+            other => panic!("expected Throttled, got {other:?}"),
+        }
+
+        // Tomorrow the counter resets without anything having run in between.
+        assert!(
+            h.core.ask_at(&h.token, "config", None, NOON + DAY).is_ok(),
+            "the budget must roll over on the UTC day boundary"
+        );
+        let grant = h.core.store.load("gr_test01").unwrap().unwrap();
+        assert_eq!(grant.budget_used, 1, "a fresh day starts from one");
+        assert_eq!(grant.budget_day, access::utc_day(NOON + DAY));
+    }
+
+    /// §4.8's "denied queries count, so probing is self-limiting", read in the
+    /// one way that does not hand an attacker a denial-of-service.
+    #[test]
+    fn a_missing_scope_denial_charges_the_budget_but_a_bad_mac_does_not() {
+        let Some(h) = harness_with_limits(query_scope(), Some(1000), Some(10)) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        // Holds a valid token, probing a verb it was not granted.
+        assert_eq!(
+            h.core.get_doc_at(&h.token, "docs/terminals.md", NOON),
+            Err(QueryError::Denied)
+        );
+        let after_probe = h.core.store.load("gr_test01").unwrap().unwrap();
+        assert_eq!(
+            after_probe.budget_used, 1,
+            "a valid token probing another scope is exactly what the budget is for"
+        );
+
+        // Does not hold the token. Charging this would let anyone who guesses a
+        // 24-bit grant id drain the real holder's allowance.
+        let forged = "cctl_gr_test01_00000000000000000000000000000000";
+        assert_eq!(
+            h.core.ask_at(forged, "config", None, NOON),
+            Err(QueryError::Denied)
+        );
+        let after_forgery = h.core.store.load("gr_test01").unwrap().unwrap();
+        assert_eq!(
+            after_forgery.budget_used, 1,
+            "a bad MAC must not spend the legitimate holder's budget"
+        );
+    }
+
+    /// Probing past an exhausted budget writes two denial lines for one
+    /// request — the missing scope *and* the exhausted budget. Both happened,
+    /// so both are logged; pinned here so the double write reads as intended
+    /// rather than being rediscovered as a bug.
+    #[test]
+    fn a_missing_scope_probe_past_the_budget_audits_both_facts() {
+        let Some(h) = harness_with_limits(query_scope(), Some(1000), Some(1)) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        // Spend the single unit on a legitimate query.
+        h.core.ask_at(&h.token, "config", None, NOON).unwrap();
+        // Now probe a scope this grant lacks, with nothing left to charge.
+        assert_eq!(
+            h.core.get_doc_at(&h.token, "docs/terminals.md", NOON),
+            Err(QueryError::Denied)
+        );
+
+        let audit = h.core.store.read_audit(Some("gr_test01"));
+        let count = |reason: &str| {
+            audit
+                .iter()
+                .filter(|e| e.reason.as_deref() == Some(reason))
+                .count()
+        };
+        assert_eq!(count("missing_scope"), 1, "got {audit:?}");
+        assert_eq!(count("budget_exhausted"), 1, "got {audit:?}");
+    }
+
+    /// A store that cannot be metered must refuse, not answer.
+    ///
+    /// Returning `Internal` (a `500`) here would hand out *unmetered* requests
+    /// to anyone able to induce a transient store failure, because the charge
+    /// never lands. The refusal is the same opaque denial as everything else.
+    #[test]
+    fn a_store_that_cannot_record_the_charge_denies_rather_than_answering() {
+        let Some(h) = harness_with_limits(query_scope(), Some(1000), Some(100)) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        assert!(h.core.ask_at(&h.token, "config", None, NOON).is_ok());
+
+        // The grant vanishes between verification and the charge — what a
+        // concurrent `access revoke` or a half-finished rename looks like.
+        // `verify` reads it, so remove it after a successful read by pointing
+        // the store at a grant file we then delete.
+        let path = h.core.store.grants_dir().join("gr_test01.json");
+        let saved = std::fs::read(&path).expect("grant file");
+        std::fs::remove_file(&path).expect("remove");
+        assert_eq!(
+            h.core.ask_at(&h.token, "config", None, NOON),
+            Err(QueryError::Denied),
+            "an unverifiable grant is a denial, and never an answer"
+        );
+
+        // Restore and confirm the surface recovers rather than latching.
+        std::fs::write(&path, saved).expect("restore");
+        assert!(h.core.ask_at(&h.token, "config", None, NOON).is_ok());
+    }
+
+    #[test]
+    fn a_freshly_minted_grant_serializes_without_accounting_noise() {
+        // `docs/access.md` prints a grant file verbatim. #431 added two
+        // counters, and a brand-new grant must not start showing them.
+        let grant = access::new_grant(
+            "gr_fresh1".into(),
+            "fresh".into(),
+            vec![Scope::ProjectQuery("p".into())],
+            1,
+            2,
+        );
+        let json = serde_json::to_string(&grant).unwrap();
+        assert!(!json.contains("budget_day"), "got {json}");
+        assert!(!json.contains("budget_used"), "got {json}");
+
+        // And they round-trip once they are non-zero.
+        let mut used = grant.clone();
+        used.budget_day = 20_000;
+        used.budget_used = 7;
+        let back: access::Grant =
+            serde_json::from_str(&serde_json::to_string(&used).unwrap()).expect("round trip");
+        assert_eq!(back, used);
+    }
+
+    #[test]
+    fn an_unknown_grant_does_not_charge_anything() {
+        let Some(h) = harness_with_limits(query_scope(), Some(1000), Some(10)) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let _ = h
+            .core
+            .ask_at("cctl_gr_nope00_0123456789abcdef", "config", None, NOON);
+        let grant = h.core.store.load("gr_test01").unwrap().unwrap();
+        assert_eq!(grant.budget_used, 0);
+    }
+
+    #[test]
+    fn the_audit_line_records_the_question_and_what_was_cited() {
+        let Some(h) = harness(query_scope()) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let answer = h
+            .core
+            .ask_at(&h.token, "how is config layering done?", None, NOON)
+            .unwrap();
+        assert!(!answer.spans.is_empty());
+
+        let audit = h.core.store.read_audit(Some("gr_test01"));
+        let entry = audit
+            .iter()
+            .find(|e| e.detail.as_deref() == Some("query.ask"))
+            .expect("an allowed ask must be audited");
+        assert_eq!(
+            entry.question.as_deref(),
+            Some("how is config layering done?"),
+            "the log has to say what was asked, not only how often"
+        );
+        let cited = entry.cited.as_ref().expect("cited paths");
+        assert!(cited.contains(&"CLAUDE.md".to_string()), "got {cited:?}");
+        // Deduplicated and sorted, so several spans from one file read as one
+        // citation and the log stays diffable.
+        let mut sorted = cited.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(*cited, sorted);
+    }
+
+    #[test]
+    fn a_doc_fetch_audits_the_path_it_was_asked_for() {
+        let Some(h) = harness(vec![Scope::ProjectDocs("fixture".into())]) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        h.core
+            .get_doc_at(&h.token, "docs/terminals.md", NOON)
+            .unwrap();
+        let audit = h.core.store.read_audit(Some("gr_test01"));
+        let entry = audit
+            .iter()
+            .find(|e| e.detail.as_deref() == Some("query.get_doc"))
+            .expect("audited");
+        assert_eq!(entry.question.as_deref(), Some("docs/terminals.md"));
+        assert_eq!(
+            entry.cited.as_deref(),
+            Some(&["docs/terminals.md".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn topics_spends_the_budget_like_any_other_query() {
+        let Some(h) = harness_with_limits(query_scope(), Some(1000), Some(1)) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        assert!(h.core.topics_at(&h.token, NOON).is_ok());
+        assert!(
+            matches!(
+                h.core.topics_at(&h.token, NOON),
+                Err(QueryError::Throttled { .. })
+            ),
+            "listing topics is a query — it costs a unit like the rest"
+        );
+    }
+
+    #[test]
+    fn cited_paths_drops_pathless_spans_and_deduplicates() {
+        let span = |source, path: &str| Span {
+            source,
+            path: path.to_string(),
+            heading_path: Vec::new(),
+            text: "t".into(),
+            score: 1,
+        };
+        let spans = vec![
+            span(SpanSource::Docs, "docs/b.md"),
+            span(SpanSource::Docs, "docs/a.md"),
+            span(SpanSource::Docs, "docs/b.md"),
+            // Skills and hive units carry no path.
+            span(SpanSource::Skill, ""),
+        ];
+        assert_eq!(cited_paths(&spans), vec!["docs/a.md", "docs/b.md"]);
+    }
+
+    #[test]
+    fn seconds_until_midnight_spans_the_day() {
+        assert_eq!(seconds_until_utc_midnight(DAY * 7), 86_400);
+        assert_eq!(seconds_until_utc_midnight(DAY * 7 + DAY / 2), 43_200);
+        // One millisecond before midnight still rounds up to a whole second,
+        // so a `Retry-After: 0` can never tell a caller to retry immediately
+        // into the same refusal.
+        assert_eq!(seconds_until_utc_midnight(DAY * 8 - 1), 1);
+        // Exactly midnight: a whole day ahead, not zero.
+        assert_eq!(seconds_until_utc_midnight(DAY * 8), 86_400);
     }
 }

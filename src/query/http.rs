@@ -275,6 +275,22 @@ fn handle_connection(mut stream: TcpStream, core: &Arc<QueryCore>) {
             // name a path or a grant id, and this is a third-party endpoint.
             send(&mut stream, 500, r#"{"error":"internal error"}"#);
         }
+        Err(QueryError::Throttled {
+            message,
+            retry_after_secs,
+        }) => {
+            // 429, and the two causes are distinguishable. The caller has
+            // already proved they hold a valid in-scope token, so naming their
+            // own limit leaks nothing §3.3 protects — and a grant that goes
+            // silently quiet is worse for the holder than one that says why.
+            let headers = retry_after_secs.map(|s| format!("Retry-After: {s}\r\n"));
+            send_with_headers(
+                &mut stream,
+                429,
+                &format!(r#"{{"error":"{}"}}"#, escape(message)),
+                headers.as_deref(),
+            );
+        }
     }
 }
 
@@ -331,19 +347,30 @@ fn escape(msg: &str) -> String {
 }
 
 fn send(stream: &mut TcpStream, status: u16, body: &str) {
+    send_with_headers(stream, status, body, None);
+}
+
+/// [`send`] plus `extra` — already-CRLF-terminated header lines.
+///
+/// Only `Retry-After` uses it. A separate entry point so the common path stays
+/// a three-argument call, and so headers are appended after `Content-Length`
+/// rather than spliced near the status line.
+fn send_with_headers(stream: &mut TcpStream, status: u16, body: &str, extra: Option<&str>) {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        429 => "Too Many Requests",
         500 => "Internal Server Error",
         _ => "Error",
     };
     let response = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
         status,
         reason,
         body.len(),
+        extra.unwrap_or(""),
         body
     );
     let _ = stream.write_all(response.as_bytes());
@@ -372,6 +399,14 @@ mod tests {
     }
 
     fn fixture(scopes: Vec<Scope>) -> Option<Fixture> {
+        fixture_with_rate_limit(scopes, None)
+    }
+
+    /// `fixture`, with the grant's per-minute rate limit overridden.
+    fn fixture_with_rate_limit(
+        scopes: Vec<Scope>,
+        rate_limit_per_min: Option<u32>,
+    ) -> Option<Fixture> {
         let project = "fixture".to_string();
         let (repo, root) = crate::context::tests_support::git_fixture(&[
             (
@@ -389,13 +424,16 @@ mod tests {
         let store_dir = tempfile::tempdir().ok()?;
         let store = GrantStore::new(store_dir.path());
         let secret = access::token::load_or_create_secret(store.root()).ok()?;
-        let grant = access::new_grant(
+        let mut grant = access::new_grant(
             "gr_http01".into(),
             "http test".into(),
             scopes,
             access::epoch_ms(),
             access::epoch_ms() + 60_000,
         );
+        if let Some(r) = rate_limit_per_min {
+            grant.rate_limit_per_min = r;
+        }
         store.create(&grant).ok()?;
         let token = access::token::mint(&secret, &grant.grant_id, &grant.scopes, grant.expires_ms);
 
@@ -677,6 +715,62 @@ mod tests {
             parsed["error"], "expected {\"question\": \"...\"}",
             "got {body}"
         );
+    }
+
+    /// #431: the two guardrails are `429`, distinguishable, and carry a
+    /// `Retry-After`. The caller has already proved they hold a valid in-scope
+    /// token, so naming their own limit leaks nothing §3.3 protects.
+    #[test]
+    fn exceeding_the_rate_limit_is_429_with_a_retry_after_header() {
+        let Some(f) = fixture_with_rate_limit(vec![Scope::ProjectQuery("fixture".into())], Some(1))
+        else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let port = f.server.addr.port();
+        let path = format!("/api/v1/project/{}/query", f.project);
+        let body = r#"{"question":"config layering"}"#;
+
+        let first = post(port, &path, Some(&f.token), body);
+        assert!(first.contains("200 OK"), "got: {first}");
+
+        let second = post(port, &path, Some(&f.token), body);
+        assert!(
+            second.contains("429 Too Many Requests"),
+            "a throttled request must be 429, not 404 — got: {second}"
+        );
+        assert!(
+            second.contains("Retry-After:"),
+            "expected a Retry-After header, got: {second}"
+        );
+        assert!(
+            second.contains("rate limited"),
+            "the holder should be told which limit they hit, got: {second}"
+        );
+    }
+
+    #[test]
+    fn a_throttled_response_is_still_well_formed_json() {
+        let Some(f) = fixture_with_rate_limit(vec![Scope::ProjectQuery("fixture".into())], Some(1))
+        else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let port = f.server.addr.port();
+        let path = format!("/api/v1/project/{}/query", f.project);
+        let body = r#"{"question":"config"}"#;
+        let _ = post(port, &path, Some(&f.token), body);
+        let throttled = post(port, &path, Some(&f.token), body);
+
+        // Adding a header must not corrupt the framing — Content-Length still
+        // has to describe the body, and the body still has to parse.
+        let json = throttled
+            .split("\r\n\r\n")
+            .nth(1)
+            .expect("a body after the headers");
+        let parsed: serde_json::Value =
+            serde_json::from_str(json).unwrap_or_else(|e| panic!("{e} in {json:?}"));
+        assert_eq!(parsed["error"], "rate limited");
     }
 
     #[test]

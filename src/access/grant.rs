@@ -61,6 +61,18 @@ pub struct Grant {
     pub last_used_ms: Option<u64>,
     #[serde(default)]
     pub use_count: u64,
+    /// The UTC day the `budget_used` counter belongs to, as
+    /// `now_ms / 86_400_000`.
+    ///
+    /// Stored rather than derived so the rollover is a comparison instead of a
+    /// scan: when the current day differs, the counter is stale and resets.
+    /// Unsigned, like `revoked` — editing it changes accounting, not
+    /// capability, so it must not invalidate a live token.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub budget_day: u64,
+    /// Queries charged against `daily_query_budget` on `budget_day`.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub budget_used: u32,
 }
 
 impl Grant {
@@ -93,6 +105,78 @@ pub struct AuditEntry {
     /// #429 and #431 can append richer detail without a schema change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The question text, truncated to [`MAX_AUDIT_QUESTION_BYTES`].
+    ///
+    /// #431's load-bearing field. Thresholds and caps stop the abuse you
+    /// anticipated; this is how the owner sees the abuse nobody anticipated —
+    /// it is the only record of what a grant actually *asked*, as opposed to
+    /// how often.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    /// The paths cited in the answer, so the log says what came back and not
+    /// only what went in. Empty on a denial.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cited: Option<Vec<String>>,
+}
+
+/// Why a daily-budget charge did not go through.
+///
+/// Typed rather than a `String`, because the two cases must produce different
+/// answers and string-comparing them was a fail-open: "budget exhausted" is a
+/// refusal the caller earned, while "the store could not be read or written"
+/// means the surface cannot meter at all. Returning the latter as a `500`
+/// would hand out *unmetered* requests to anyone able to induce a transient
+/// store failure, so `query::core` maps it to the same opaque denial.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChargeError {
+    /// The day's allowance is spent. Audited as `budget_exhausted`.
+    Exhausted,
+    /// The grant could not be read or the charge could not be persisted.
+    Store(String),
+}
+
+impl std::fmt::Display for ChargeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChargeError::Exhausted => write!(f, "daily query budget exhausted"),
+            ChargeError::Store(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Whether a counter is still at zero, so a freshly minted grant serializes
+/// without accounting noise and `docs/access.md`'s verbatim grant stays true.
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+/// Cap on the question text kept in one audit line.
+///
+/// The question is attacker-supplied and the log is append-only, so it needs a
+/// bound. 512 bytes keeps a real question whole while making the log's growth
+/// a function of request count rather than of request size.
+pub const MAX_AUDIT_QUESTION_BYTES: usize = 512;
+
+/// Truncate `text` to at most `MAX_AUDIT_QUESTION_BYTES`, on a char boundary.
+///
+/// Byte-slicing attacker-supplied UTF-8 is how `parse_duration` panicked in
+/// #427 review; `char_indices` is the fix that generalises.
+pub fn truncate_for_audit(text: &str) -> String {
+    if text.len() <= MAX_AUDIT_QUESTION_BYTES {
+        return text.to_string();
+    }
+    // Walk back to the nearest char boundary. `is_char_boundary` rather than
+    // arithmetic on `char_indices`, because slicing mid-codepoint panics and a
+    // question is attacker-supplied text.
+    let mut cut = MAX_AUDIT_QUESTION_BYTES;
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}…", &text[..cut])
 }
 
 /// Grants plus the audit log, rooted at an explicit directory.
@@ -244,6 +328,14 @@ impl GrantStore {
     /// distinguishing "no such grant" from "revoked" would leak which grant
     /// ids exist, which is the 404-not-403 rule from RFC §3.3 applied one
     /// layer down.
+    // The opaque form, and the one a third-party-facing caller should reach
+    // for: `AccessError` carries no detail, so a response built from it cannot
+    // leak which grants exist. #431 moved the one production caller
+    // (`query::core`) to `verify_detailed`, which it needs to tell a
+    // `MissingScope` denial apart from the rest for budget accounting. Kept
+    // because the safe default is worth keeping available — and this module's
+    // own tests exercise the verification contract through it.
+    #[allow(dead_code)]
     pub fn verify(
         &self,
         secret: &[u8; 32],
@@ -251,11 +343,37 @@ impl GrantStore {
         required: Option<&Scope>,
         now_ms: u64,
     ) -> Result<Grant, AccessError> {
+        self.verify_detailed(secret, token, required, now_ms)
+            .map_err(|_| AccessError::Denied)
+    }
+
+    /// [`Self::verify`], but telling the caller *why* it failed and which
+    /// grant id was claimed.
+    ///
+    /// This exists for one caller and one reason. #431 charges a denied query
+    /// against the grant's daily budget so that probing is self-limiting — but
+    /// only for `MissingScope`, the single denial that proves the caller holds
+    /// a *valid* token and is probing other verbs or projects. Charging
+    /// `BadMac` or `UnknownGrant` would let anyone who guesses a 24-bit grant
+    /// id exhaust the legitimate holder's budget, turning a probing defence
+    /// into a denial-of-service against the person being protected.
+    ///
+    /// The reason stays internal. [`Self::verify`] is the surface every
+    /// third-party-facing caller should use, and both map to the same opaque
+    /// `404` (RFC §3.3) — this returns a `DenyReason` so the *owner's* own
+    /// accounting can branch on it, not so a response can.
+    pub(crate) fn verify_detailed(
+        &self,
+        secret: &[u8; 32],
+        token: &str,
+        required: Option<&Scope>,
+        now_ms: u64,
+    ) -> Result<Grant, (DenyReason, Option<String>)> {
         let parsed = match super::token::parse(token) {
             Ok(p) => p,
             Err(_) => {
                 self.audit_denied("<unparseable>", DenyReason::MalformedToken, None, now_ms);
-                return Err(AccessError::Denied);
+                return Err((DenyReason::MalformedToken, None));
             }
         };
 
@@ -263,11 +381,11 @@ impl GrantStore {
             Ok(Some(g)) => g,
             Ok(None) => {
                 self.audit_denied(&parsed.grant_id, DenyReason::UnknownGrant, None, now_ms);
-                return Err(AccessError::Denied);
+                return Err((DenyReason::UnknownGrant, None));
             }
             Err(_) => {
                 self.audit_denied(&parsed.grant_id, DenyReason::UnreadableGrant, None, now_ms);
-                return Err(AccessError::Denied);
+                return Err((DenyReason::UnreadableGrant, None));
             }
         };
 
@@ -279,24 +397,24 @@ impl GrantStore {
         // quietly turn an alias into a bypass.
         if grant.grant_id != parsed.grant_id {
             self.audit_denied(&parsed.grant_id, DenyReason::UnknownGrant, None, now_ms);
-            return Err(AccessError::Denied);
+            return Err((DenyReason::UnknownGrant, None));
         }
 
         let expected =
             super::token::compute_mac(secret, &grant.grant_id, &grant.scopes, grant.expires_ms);
         if !super::token::mac_matches(&parsed.mac, &expected) {
             self.audit_denied(&parsed.grant_id, DenyReason::BadMac, None, now_ms);
-            return Err(AccessError::Denied);
+            return Err((DenyReason::BadMac, None));
         }
 
         if grant.revoked {
             self.audit_denied(&parsed.grant_id, DenyReason::Revoked, None, now_ms);
-            return Err(AccessError::Denied);
+            return Err((DenyReason::Revoked, Some(grant.grant_id)));
         }
 
         if grant.is_expired_at(now_ms) {
             self.audit_denied(&parsed.grant_id, DenyReason::Expired, None, now_ms);
-            return Err(AccessError::Denied);
+            return Err((DenyReason::Expired, Some(grant.grant_id)));
         }
 
         if let Some(want) = required
@@ -308,10 +426,87 @@ impl GrantStore {
                 Some(want.to_string()),
                 now_ms,
             );
-            return Err(AccessError::Denied);
+            return Err((DenyReason::MissingScope, Some(grant.grant_id)));
         }
 
         Ok(grant)
+    }
+
+    /// Charge one query against `grant_id`'s daily budget.
+    ///
+    /// Returns `Ok(remaining)` when the charge went through, or
+    /// `Err(DenyReason::BudgetExhausted)` when the day's allowance is already
+    /// spent. Rolls the counter over when `now_ms` falls in a later UTC day
+    /// than the one recorded, so no background job is needed to reset it.
+    ///
+    /// Load-check-increment-write is not atomic against a concurrent caller.
+    /// `QueryCore` serialises it behind a process-local mutex, which is
+    /// sufficient because one server process serves one project; a second
+    /// process sharing the same access dir could lose a charge, and the
+    /// failure mode is undercounting rather than over-serving a grant past
+    /// its expiry or scope. Making it atomic would mean file locking the
+    /// grant, and a cap on query volume is not worth that.
+    pub fn charge_daily_budget(
+        &self,
+        grant_id: &str,
+        question: Option<&str>,
+        now_ms: u64,
+    ) -> Result<u32, ChargeError> {
+        let mut grant = match self.load(grant_id) {
+            Ok(Some(g)) => g,
+            Ok(None) => {
+                self.audit_denied_outside_verify(
+                    grant_id,
+                    DenyReason::UnknownGrant,
+                    Some("vanished between verify and charge".into()),
+                    question,
+                    now_ms,
+                );
+                return Err(ChargeError::Store(format!("no such grant: {grant_id}")));
+            }
+            Err(e) => {
+                self.audit_denied_outside_verify(
+                    grant_id,
+                    DenyReason::UnreadableGrant,
+                    Some("could not be read to charge the budget".into()),
+                    question,
+                    now_ms,
+                );
+                return Err(ChargeError::Store(e));
+            }
+        };
+
+        let today = super::utc_day(now_ms);
+        if grant.budget_day != today {
+            grant.budget_day = today;
+            grant.budget_used = 0;
+        }
+        if grant.budget_used >= grant.daily_query_budget {
+            self.audit_denied_outside_verify(
+                grant_id,
+                DenyReason::BudgetExhausted,
+                Some(format!(
+                    "{}/{} used today",
+                    grant.budget_used, grant.daily_query_budget
+                )),
+                question,
+                now_ms,
+            );
+            return Err(ChargeError::Exhausted);
+        }
+        grant.budget_used = grant.budget_used.saturating_add(1);
+        let remaining = grant.daily_query_budget.saturating_sub(grant.budget_used);
+        if let Err(e) = self.update(&grant) {
+            self.audit_denied_outside_verify(
+                grant_id,
+                DenyReason::UnreadableGrant,
+                Some("the charge could not be persisted".into()),
+                question,
+                now_ms,
+            );
+            return Err(ChargeError::Store(e));
+        }
+        Ok(remaining)
     }
 
     /// Record a successful use: bump accounting and append an audit line.
@@ -319,10 +514,30 @@ impl GrantStore {
     /// Deliberately separate from [`Self::verify`], which never touches the
     /// grant. A caller that only needs to check a capability should not bump
     /// its counters.
+    #[allow(dead_code)] // The question-free form. `query::core` uses `record_query_use`.
     pub fn record_use(
         &self,
         grant_id: &str,
         detail: Option<&str>,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        self.record_query_use(grant_id, detail, None, None, now_ms)
+    }
+
+    /// [`Self::record_use`] with the question and the paths that answered it.
+    ///
+    /// #431 §"Why audit is the load-bearing one": caps stop anticipated abuse,
+    /// the log is how unanticipated abuse becomes visible — and a log of
+    /// counts alone cannot show what a grant was actually fishing for. The
+    /// question is truncated by [`truncate_for_audit`]; `cited` is the span
+    /// paths, so a reader can see what left the machine without replaying the
+    /// query against a since-changed index.
+    pub fn record_query_use(
+        &self,
+        grant_id: &str,
+        detail: Option<&str>,
+        question: Option<&str>,
+        cited: Option<Vec<String>>,
         now_ms: u64,
     ) -> Result<(), String> {
         // Refuse rather than log a use of nothing. Callers reach here only
@@ -340,7 +555,34 @@ impl GrantStore {
             event: "allowed".into(),
             reason: None,
             detail: detail.map(str::to_string),
+            question: question.map(truncate_for_audit),
+            cited,
         })
+    }
+
+    /// Append a `denied` line for a refusal decided outside [`Self::verify`] —
+    /// the rate limit and the daily budget, which are checked only after a
+    /// token has verified.
+    ///
+    /// `pub(crate)` for the same reason as [`Self::verify_detailed`]: it is a
+    /// hook for `query::core`, not part of the access surface.
+    pub(crate) fn audit_denied_outside_verify(
+        &self,
+        grant_id: &str,
+        reason: DenyReason,
+        detail: Option<String>,
+        question: Option<&str>,
+        now_ms: u64,
+    ) {
+        let _ = self.append_audit(&AuditEntry {
+            ts_ms: now_ms,
+            grant_id: grant_id.to_string(),
+            event: "denied".into(),
+            reason: Some(reason.as_str().to_string()),
+            detail,
+            question: question.map(truncate_for_audit),
+            cited: None,
+        });
     }
 
     fn audit_denied(
@@ -358,6 +600,8 @@ impl GrantStore {
             event: "denied".into(),
             reason: Some(reason.as_str().to_string()),
             detail,
+            question: None,
+            cited: None,
         });
     }
 
@@ -448,6 +692,8 @@ pub fn new_grant(
         daily_query_budget: DEFAULT_DAILY_QUERY_BUDGET,
         last_used_ms: None,
         use_count: 0,
+        budget_day: 0,
+        budget_used: 0,
     }
 }
 
@@ -849,6 +1095,47 @@ mod tests {
     }
 
     #[test]
+    fn a_short_question_is_kept_whole() {
+        assert_eq!(
+            truncate_for_audit("how is auth structured?"),
+            "how is auth structured?"
+        );
+        let exact = "x".repeat(MAX_AUDIT_QUESTION_BYTES);
+        assert_eq!(truncate_for_audit(&exact), exact, "the cap is inclusive");
+    }
+
+    #[test]
+    fn a_long_question_is_capped_and_marked() {
+        let long = "x".repeat(MAX_AUDIT_QUESTION_BYTES + 100);
+        let got = truncate_for_audit(&long);
+        assert!(got.ends_with('…'));
+        assert_eq!(
+            got.chars().filter(|c| *c == 'x').count(),
+            MAX_AUDIT_QUESTION_BYTES
+        );
+    }
+
+    /// The question is attacker-supplied, so the cut must never land
+    /// mid-codepoint. This is the same class of bug as `parse_duration`'s
+    /// `split_at(len-1)` panic found in #427 review.
+    #[test]
+    fn truncating_multibyte_text_never_panics_or_splits_a_codepoint() {
+        // 3 bytes each, so the 512-byte cap lands inside a character.
+        let padded = "あ".repeat(MAX_AUDIT_QUESTION_BYTES);
+        let got = truncate_for_audit(&padded);
+        assert!(got.len() <= MAX_AUDIT_QUESTION_BYTES + "…".len());
+        assert!(got.ends_with('…'));
+        // Round-trips as valid UTF-8 through serde, which is where it goes.
+        let encoded = serde_json::to_string(&got).unwrap();
+        let back: String = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(back, got);
+
+        // A 4-byte codepoint at the boundary too.
+        let emoji = "🔒".repeat(MAX_AUDIT_QUESTION_BYTES);
+        assert!(truncate_for_audit(&emoji).ends_with('…'));
+    }
+
+    #[test]
     fn audit_lines_serialize_the_shape_the_docs_promise() {
         // docs/access.md documents audit.jsonl verbatim, so pin the field
         // order and the omit-when-absent behaviour.
@@ -857,11 +1144,13 @@ mod tests {
             grant_id: "gr_cd2630".into(),
             event: "allowed".into(),
             reason: None,
-            detail: Some("how is auth structured?".into()),
+            detail: Some("query.ask".into()),
+            question: Some("how is auth structured?".into()),
+            cited: Some(vec!["docs/auth.md".into()]),
         };
         assert_eq!(
             serde_json::to_string(&allowed).unwrap(),
-            r#"{"ts_ms":1791072975409,"grant_id":"gr_cd2630","event":"allowed","detail":"how is auth structured?"}"#
+            r#"{"ts_ms":1791072975409,"grant_id":"gr_cd2630","event":"allowed","detail":"query.ask","question":"how is auth structured?","cited":["docs/auth.md"]}"#
         );
 
         let denied = AuditEntry {
@@ -870,6 +1159,8 @@ mod tests {
             event: "denied".into(),
             reason: Some(DenyReason::BadMac.as_str().into()),
             detail: None,
+            question: None,
+            cited: None,
         };
         assert_eq!(
             serde_json::to_string(&denied).unwrap(),

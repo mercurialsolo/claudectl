@@ -96,6 +96,7 @@ pub fn epoch_ms() -> u64 {
 /// enumerate which projects exist; the same reasoning applies to telling
 /// "no such grant" apart from "revoked" or "expired".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Returned by `GrantStore::verify`; see the note there.
 pub enum AccessError {
     Denied,
 }
@@ -119,6 +120,15 @@ pub enum DenyReason {
     Revoked,
     Expired,
     MissingScope,
+    /// The grant's per-minute token bucket was empty (#431, RFC §4.8).
+    ///
+    /// Unlike every reason above, this one is written by the *caller* rather
+    /// than by `verify` — the limit is checked after verification, so that a
+    /// bucket is only ever created for a grant id that has already proved it
+    /// holds a valid token.
+    RateLimited,
+    /// The grant's `daily_query_budget` was spent for the current UTC day.
+    BudgetExhausted,
 }
 
 impl DenyReason {
@@ -131,8 +141,22 @@ impl DenyReason {
             DenyReason::Revoked => "revoked",
             DenyReason::Expired => "expired",
             DenyReason::MissingScope => "missing_scope",
+            DenyReason::RateLimited => "rate_limited",
+            DenyReason::BudgetExhausted => "budget_exhausted",
         }
     }
+}
+
+/// Milliseconds in a UTC day, for the daily-budget rollover.
+pub const MS_PER_DAY: u64 = 86_400_000;
+
+/// Which UTC day `now_ms` falls in.
+///
+/// Days rather than a rolling 24-hour window: "500 queries a day" is what an
+/// owner setting `daily_query_budget` means, and a rolling window would need
+/// per-request timestamps rather than one counter.
+pub fn utc_day(now_ms: u64) -> u64 {
+    now_ms / MS_PER_DAY
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -288,18 +288,23 @@ fn cmd_audit(grant_id: Option<&str>, json_mode: bool) -> io::Result<()> {
         return Ok(());
     }
 
+    // QUESTION is the column #431 exists for: caps stop the abuse you
+    // anticipated, and this is how the abuse nobody anticipated becomes
+    // visible. `cited` is deliberately not a column — it is a list, it belongs
+    // in `--json`, and the table has to stay readable at 120 columns.
     println!(
-        "{:<12} {:<14} {:<8} {:<16} DETAIL",
-        "GRANT", "WHEN", "EVENT", "REASON"
+        "{:<12} {:<14} {:<8} {:<17} {:<18} QUESTION",
+        "GRANT", "WHEN", "EVENT", "REASON", "DETAIL"
     );
     for e in &entries {
         println!(
-            "{:<12} {:<14} {:<8} {:<16} {}",
+            "{:<12} {:<14} {:<8} {:<17} {:<18} {}",
             truncate(&e.grant_id, 12),
             fmt_ms(e.ts_ms),
             e.event,
             e.reason.as_deref().unwrap_or("-"),
-            e.detail.as_deref().unwrap_or("")
+            truncate(e.detail.as_deref().unwrap_or("-"), 18),
+            truncate(e.question.as_deref().unwrap_or(""), 44),
         );
     }
     Ok(())
