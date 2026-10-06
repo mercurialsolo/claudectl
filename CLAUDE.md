@@ -153,7 +153,7 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 
 **Access** (`src/access/`): Capability grants — scoped, expiring, revocable read-only access for a third party (#427, phase 1 of the open-cluster RFC #423; feature-gated behind `relay` because the MAC comes from `relay::crypto`). See `docs/access.md`.
 - `mod.rs` — `~/.claudectl/access` layout, grant-id validation/minting, opaque `AccessError::Denied`, audit-only `DenyReason`
-- `scope.rs` — `<resource>.<verb>:<qualifier>` grammar; read-only verbs, qualifier validation that keeps the MAC payload unambiguous, `is_issuable` gate
+- `scope.rs` — `<resource>.<verb>:<qualifier>` grammar; read-only verbs, `validate_qualifier` (keeps the MAC payload unambiguous, and the gate `query::http` runs a route's project segment through), `unissuable_reason` as the single list of what `access grant` will mint
 - `token.rs` — `cctl_<grant_id>_<mac>` mint/parse, canonical MAC payload, HMAC key at `access/secret` (fails closed, 0600 before first byte)
 - `grant.rs` — `Grant` records, atomic per-grant JSON store, `audit.jsonl`, `verify` (parse → load → MAC → revoked/expiry → scope)
 - `cli.rs` — `claudectl access` subcommand (grant / list / audit / revoke), all with `--json`
