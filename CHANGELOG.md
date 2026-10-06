@@ -5,6 +5,45 @@ All notable changes to claudectl are documented here.
 ## [Unreleased]
 
 ### Added — project context index: the query surface's boundary (#428)
+- **Tracked symlinks are refused, not followed.** A link is the one tracked
+  path whose contents live where no rule in the module reaches: a tracked
+  `docs/notes.md -> ../../.env` classifies as documentation, and both
+  `Path::is_file()` and `fs::read` follow it. `symlink_metadata` now gates
+  every read. Declined rather than resolved — deciding whether a target is
+  "inside" the repo is a canonicalization problem with `..`, mount points and
+  TOCTOU in it.
+- **Per-category exposure fails closed on a corrupt file.** A missing file
+  means nothing was decided and the mode decides; a file that will not parse
+  hides everything. `auto` is the default mode, so discarding the map would
+  have republished whatever the operator had hidden, and hand-editing is
+  currently the only way to write it.
+- **The skills channel's `.claude/skills/` carve-out is now explicit.**
+  `deny.rs` excludes `.claude` at any depth and project skills live inside it,
+  so the code and the RFC table disagreed. The channel requires a tracked path
+  whose first two segments are exactly `.claude/skills/`;
+  `.claude/settings.json` and `.claude/agents/` stay unreachable by every
+  channel.
+- **`const` and `static` initializers are cut at the `=`.** A one-line
+  `pub const TOKEN: &str = "sk-live-…"` is a body by another name, which is
+  what the no-bodies rule exists to prevent. The name and type survive.
+- **The module-map extractor works on logical statements, not physical lines.**
+  rustfmt wraps signatures at 100 columns and puts a generic `impl`'s `where`
+  clause on its own line; reading either line-at-a-time lost the whole block —
+  every method of a `where`-bounded impl, in that case. Block comments are also
+  stripped with state carried across lines, since one unbalanced `{` inside
+  `/* … */` desynced the brace counter and silently dropped a file's entire
+  public surface.
+- `ContextIndex::root` is no longer serialized: it is an absolute local path,
+  and this struct is "everything a query may be answered from". Leaving it out
+  also makes `fingerprint()` depend on content alone, so the same tree checked
+  out at two paths agrees.
+- Building an index no longer mints a peer identity. `local_identity` reads
+  `~/.claudectl/relay/identity` rather than calling
+  `relay::load_or_create_identity`, which *writes* when absent; with no
+  identity, no hive units publish, since none could be attributed.
+- A nonexistent root reports `NotARepo` rather than `GitUnavailable` —
+  `Command::output` fails identically for both, and "git is not available"
+  sends the operator somewhere useless.
 - New ungated **`src/context/`** — the substrate a read-only project query may
   be answered from, phase 2 of the open-cluster RFC (#423).
   `ContextIndex::build(&Path)` / `build_with(root, &IndexExposure, ShareMode)`

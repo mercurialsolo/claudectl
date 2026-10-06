@@ -134,13 +134,43 @@ impl IndexExposure {
         Self::load_from(&exposure_path())
     }
 
-    /// Load from an explicit path. Unreadable or malformed means "no explicit
-    /// decisions", which leaves every category on its mode default.
+    /// Load from an explicit path.
+    ///
+    /// A *missing* file means "no explicit decisions", so every category falls
+    /// to its mode default. A file that exists but will not parse is a
+    /// different thing and fails **closed**: `auto` is the default mode, so
+    /// discarding the map would silently republish everything the operator had
+    /// hidden. With no CLI yet, hand-editing is the only way this file gets
+    /// written, which makes a typo the likely case rather than a rare one.
+    ///
+    /// A single unparseable *value* likewise reads as `Hide` rather than being
+    /// dropped, so one bad entry cannot expose its own category.
     pub fn load_from(path: &Path) -> Self {
         let Ok(body) = std::fs::read_to_string(path) else {
             return Self::default();
         };
-        let entries = serde_json::from_str(&body).unwrap_or_default();
+
+        let Ok(raw) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body) else {
+            return Self::all_hidden();
+        };
+
+        let entries = raw
+            .into_iter()
+            .map(|(key, value)| {
+                let state =
+                    serde_json::from_value::<ExposureState>(value).unwrap_or(ExposureState::Hide);
+                (key, state)
+            })
+            .collect();
+        Self { entries }
+    }
+
+    /// Every known category explicitly hidden — the fail-closed position.
+    pub fn all_hidden() -> Self {
+        let entries = Category::ALL
+            .iter()
+            .map(|c| (c.label().to_string(), ExposureState::Hide))
+            .collect();
         Self { entries }
     }
 
@@ -258,18 +288,47 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_corrupt_file_leaves_every_category_on_its_default() {
+    fn a_missing_file_leaves_every_category_on_its_mode_default() {
+        // Absent is not the same as broken: nothing has been decided, so the
+        // mode decides.
         let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("nope.json");
-        assert_eq!(IndexExposure::load_from(&missing), IndexExposure::default());
-
-        let corrupt = dir.path().join("corrupt.json");
-        std::fs::write(&corrupt, "{ not json").unwrap();
-        let store = IndexExposure::load_from(&corrupt);
-        // Falling back to defaults is right here: an unreadable preferences
-        // file must not silently flip manual mode into exposing everything,
-        // and it does not — the mode still decides.
+        let store = IndexExposure::load_from(&dir.path().join("nope.json"));
+        assert_eq!(store, IndexExposure::default());
+        assert!(store.is_exposed(Category::Docs, ShareMode::Auto));
         assert!(!store.is_exposed(Category::Docs, ShareMode::Manual));
+    }
+
+    #[test]
+    fn a_corrupt_file_fails_closed_rather_than_republishing_everything() {
+        // `auto` is the default mode, so discarding the map on a parse error
+        // would expose every category the operator had hidden — the worst
+        // direction for a typo in a hand-edited file.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.json");
+        std::fs::write(&path, "{ not json").unwrap();
+
+        let store = IndexExposure::load_from(&path);
+        for c in Category::ALL {
+            assert!(
+                !store.is_exposed(*c, ShareMode::Auto),
+                "{} should be hidden when the file will not parse",
+                c.label()
+            );
+        }
+    }
+
+    #[test]
+    fn one_bad_value_hides_only_its_own_category() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partial.json");
+        std::fs::write(&path, r#"{"docs":"hide","module_map":"bogus"}"#).unwrap();
+
+        let store = IndexExposure::load_from(&path);
+        assert!(!store.is_exposed(Category::Docs, ShareMode::Auto));
+        // The unparseable value reads as hide, not as absent-so-exposed.
+        assert!(!store.is_exposed(Category::ModuleMap, ShareMode::Auto));
+        // A category the file never mentioned keeps its mode default.
+        assert!(store.is_exposed(Category::Readme, ShareMode::Auto));
     }
 
     #[test]

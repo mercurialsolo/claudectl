@@ -55,6 +55,16 @@ impl std::error::Error for IndexError {}
 /// `core.quotePath=false` keeps non-ASCII paths literal instead of
 /// `"\303\251"`-escaped. stderr is discarded — the exit status is the signal.
 fn run_git(root: &Path, args: &[&str]) -> Result<Vec<u8>, IndexError> {
+    // `Command::output` fails with the same error kind whether git is absent or
+    // the working directory does not exist, and reporting "git is not
+    // available" for a bad path sends the operator somewhere useless. The whole
+    // point of the enum is that #429 can say something precise.
+    if !root.is_dir() {
+        return Err(IndexError::NotARepo {
+            root: root.to_path_buf(),
+        });
+    }
+
     let out = Command::new("git")
         .arg("-c")
         .arg("core.quotePath=false")
@@ -117,13 +127,27 @@ pub fn tracked_files(root: &Path) -> Result<Vec<PathBuf>, IndexError> {
     Ok(out)
 }
 
-/// Whether a tracked path is a regular readable file.
+/// Whether a tracked path is a *regular* file — not a directory, and not a
+/// symlink.
 ///
-/// A submodule appears in `ls-files` as a single gitlink entry that resolves to
-/// a directory. Skipping non-files keeps the indexer from trying to read one.
+/// `symlink_metadata`, not `is_file()`, and the distinction is the whole point.
+/// `Path::is_file()` follows symlinks and so does `fs::read`, while `deny.rs`
+/// only ever sees the link's own path. A tracked `docs/notes.md -> ../../.env`
+/// is therefore a `.md` path that classifies as documentation and publishes the
+/// target's contents — including a target outside the work tree, where no rule
+/// in this module applies at all.
+///
+/// Symlinks are refused rather than resolved-and-rechecked. Resolving would
+/// mean deciding whether the target is "inside" the repo, which is a
+/// canonicalization problem with `..`, mount points and TOCTOU in it; git
+/// tracks the link, so the link is what we decline to read.
+///
+/// This also covers submodules, which appear in `ls-files` as a single gitlink
+/// entry resolving to a directory.
 pub fn is_readable_file(root: &Path, rel: &Path) -> bool {
-    let full = root.join(rel);
-    full.is_file()
+    std::fs::symlink_metadata(root.join(rel))
+        .map(|m| m.file_type().is_file())
+        .unwrap_or(false)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

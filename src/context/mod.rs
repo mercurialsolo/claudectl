@@ -73,7 +73,14 @@ pub struct IndexStats {
 /// The built index. Everything a read-only query may be answered from.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextIndex {
-    /// Canonicalized work-tree root this was built from.
+    /// The work-tree root this was built from.
+    ///
+    /// Not serialized. It is an absolute local path — `/Users/<name>/…` — and
+    /// this struct is "everything a read-only query may be answered from", so
+    /// publishing the operator's directory layout in it would be a small leak
+    /// for no benefit. Keeping it out also makes `fingerprint()` depend on
+    /// content alone, so the same tree checked out at two paths agrees.
+    #[serde(skip)]
     pub root: String,
     pub claude_md: Vec<docs::DocSection>,
     pub readme: Vec<docs::DocSection>,
@@ -217,6 +224,19 @@ impl ContextIndex {
     }
 }
 
+/// Whether a work-tree-relative path is inside the project's skills directory.
+///
+/// The one carve-out from `deny.rs`'s `.claude` exclusion, and deliberately
+/// narrow: the segments must be exactly `.claude/skills/…`, so a sibling like
+/// `.claude/settings.json` or `.claude/agents/x.md` is still unreachable.
+fn is_project_skill_path(rel: &Path) -> bool {
+    let segs: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+        .collect();
+    segs.len() > 2 && segs[0] == ".claude" && segs[1] == "skills"
+}
+
 /// Which documentation category a markdown path belongs to.
 ///
 /// Anything outside `docs/` that is not `CLAUDE.md` or `README.md` is skipped:
@@ -259,13 +279,22 @@ fn read_text(path: &Path) -> Option<String> {
 /// Intersecting with the tracked set fixes both at once: a skill outside the
 /// repo is not in that set, so user-level and plugin skills fall away without
 /// needing a source filter.
+///
+/// The second filter resolves a genuine conflict between two rules this module
+/// holds. `deny.rs` excludes `.claude` as a directory segment at any depth, and
+/// project skills live at `.claude/skills/` — so applying the denylist as-is
+/// would make the skills category permanently empty, while skipping it entirely
+/// would let any tracked file under `.claude` publish through this channel.
+/// Neither is right, so the skills channel gets an explicit allowlist: a
+/// tracked file under `.claude/skills/`, and nothing else. `.claude/settings.json`
+/// and anything else in that tree stay unreachable by every channel.
 fn collect_skills(repo: &Path, tracked: &std::collections::HashSet<PathBuf>) -> Vec<SkillEntry> {
     let mut out: Vec<SkillEntry> = claudectl_core::skills::discover(Some(repo))
         .into_iter()
         .filter(|s| {
             s.path
                 .strip_prefix(repo)
-                .map(|rel| tracked.contains(rel))
+                .map(|rel| tracked.contains(rel) && is_project_skill_path(rel))
                 .unwrap_or(false)
         })
         .map(|s| SkillEntry {
@@ -304,7 +333,11 @@ fn collect_hive_units(repo: &Path) -> Vec<UnitEntry> {
         // Only knowledge this machine originated. A unit that arrived by
         // gossip is a peer's, and republishing it onward to a third party
         // would pass along something they never consented to share.
-        let local_id = local_identity();
+        // No identity means nothing can be attributed to this machine, so
+        // publish no units rather than guessing.
+        let Some(local_id) = local_identity() else {
+            return Vec::new();
+        };
 
         let mut out: Vec<UnitEntry> = store
             .all_units()
@@ -341,20 +374,24 @@ fn collect_hive_units(repo: &Path) -> Vec<UnitEntry> {
     }
 }
 
-/// This machine's peer identity, for the locally-originated filter.
+/// This machine's peer identity, for the locally-originated filter — read
+/// without creating one.
 ///
-/// Mirrors the cfg pair the rest of the codebase uses for this: relay owns the
-/// real identity, and hive has a hostname-derived fallback when relay is off.
+/// `relay::load_or_create_identity` *writes* `~/.claudectl/relay/identity` when
+/// it is absent, and building an index has no business minting a peer
+/// credential as a side effect. Reading the file directly means a machine that
+/// has never run the relay returns `None`, and the caller then publishes no
+/// hive units at all — which is the right way to fail here, since every unit
+/// would be unattributable.
 #[cfg(feature = "hive")]
-fn local_identity() -> String {
-    #[cfg(feature = "relay")]
-    {
-        crate::relay::load_or_create_identity().0
-    }
-    #[cfg(not(feature = "relay"))]
-    {
-        crate::hive::local_identity()
-    }
+fn local_identity() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = Path::new(&home)
+        .join(".claudectl")
+        .join("relay")
+        .join("identity");
+    let id = std::fs::read_to_string(path).ok()?.trim().to_string();
+    if id.is_empty() { None } else { Some(id) }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -384,6 +421,12 @@ pub(crate) mod tests_support {
     /// the `-c` flags keep it independent of whatever global git config CI has
     /// (or lacks) — an unset `user.email` makes `git commit` fail outright, and
     /// a configured signing key would prompt.
+    /// Stage everything currently in the work tree, for a test that adds files
+    /// after the fixture's initial commit.
+    pub fn stage_all(root: &Path) -> bool {
+        git(root, &["add", "-A"])
+    }
+
     pub fn git_fixture(files: &[(&str, &str)]) -> Option<(tempfile::TempDir, PathBuf)> {
         let dir = tempfile::tempdir().ok()?;
         let root = dir.path().to_path_buf();
@@ -656,6 +699,78 @@ mod tests {
         let index = ContextIndex::build_with(&root, &gate, ShareMode::Auto).unwrap();
         assert!(index.is_empty(), "{index:?}");
         assert_eq!(index.stats.tracked_files, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tracked_symlink_cannot_publish_its_target() {
+        // `is_file()` and `fs::read` both follow symlinks, and deny.rs only
+        // ever sees the link's own path. A tracked `docs/x.md -> ../../.env` is
+        // a .md path that classifies as Docs, so without an explicit check it
+        // publishes the target — which defeats "no code path from a query to an
+        // unindexed file" outright.
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("outside-secret");
+        std::fs::write(&secret, "OUTSIDE_SENTINEL").unwrap();
+
+        let Some((_dir, root)) = tests_support::git_fixture(&[("README.md", "# r\n\nok\n")]) else {
+            eprintln!("skip: git unavailable");
+            return;
+        };
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::os::unix::fs::symlink(&secret, root.join("docs/leak.md")).unwrap();
+        assert!(tests_support::stage_all(&root), "staging the symlink");
+
+        let (gate, mode) = auto();
+        let index = ContextIndex::build_with(&root, &gate, mode).unwrap();
+        let blob = serde_json::to_string(&index).unwrap();
+        assert!(
+            !blob.contains("OUTSIDE_SENTINEL"),
+            "a tracked symlink published a file outside the work tree"
+        );
+    }
+
+    #[test]
+    fn the_skills_carve_out_is_only_the_skills_directory() {
+        // deny.rs excludes `.claude` wholesale, and project skills live inside
+        // it — so the skills channel gets a narrow allowlist. Anything else in
+        // that tree must stay unreachable by every channel.
+        assert!(is_project_skill_path(Path::new(
+            ".claude/skills/a/SKILL.md"
+        )));
+        assert!(is_project_skill_path(Path::new(".claude/skills/flat.md")));
+        assert!(!is_project_skill_path(Path::new(".claude/settings.json")));
+        assert!(!is_project_skill_path(Path::new(".claude/agents/x.md")));
+        assert!(!is_project_skill_path(Path::new(".claude/skills")));
+        // Not a nested-anywhere rule: it has to be the project's own.
+        assert!(!is_project_skill_path(Path::new(
+            "apps/.claude/skills/a.md"
+        )));
+    }
+
+    #[test]
+    fn tracked_agent_state_outside_the_skills_dir_never_publishes() {
+        let Some((_dir, root)) = tests_support::git_fixture(&[
+            ("README.md", "# r\n\nok\n"),
+            (".claude/settings.json", "{\"SETTINGS_SENTINEL\":1}"),
+            (".claude/agents/helper.md", "# h\n\nAGENT_SENTINEL\n"),
+            (
+                ".claude/skills/real/SKILL.md",
+                "---\nname: real-skill\ndescription: SKILL_OK_SENTINEL\n---\n\nbody\n",
+            ),
+        ]) else {
+            eprintln!("skip: git unavailable");
+            return;
+        };
+
+        let (gate, mode) = auto();
+        let index = ContextIndex::build_with(&root, &gate, mode).unwrap();
+        let blob = serde_json::to_string(&index).unwrap();
+
+        assert!(!blob.contains("SETTINGS_SENTINEL"), "{blob}");
+        assert!(!blob.contains("AGENT_SENTINEL"), "{blob}");
+        // The tracked project skill is a declared source, so it does publish.
+        assert!(blob.contains("SKILL_OK_SENTINEL"), "{blob}");
     }
 
     #[test]
