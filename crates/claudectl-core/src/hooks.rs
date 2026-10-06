@@ -15,6 +15,8 @@ pub enum HookEvent {
     Idle,
     ContextHigh,
     ConflictDetected,
+    /// A third-party query was queued for the owner's review (#446).
+    Escalation,
 }
 
 impl HookEvent {
@@ -29,6 +31,7 @@ impl HookEvent {
             "hooks.on_idle" => Some(Self::Idle),
             "hooks.on_context_high" => Some(Self::ContextHigh),
             "hooks.on_conflict_detected" => Some(Self::ConflictDetected),
+            "hooks.on_escalation" => Some(Self::Escalation),
             _ => None,
         }
     }
@@ -44,6 +47,7 @@ impl HookEvent {
             Self::Idle => "on_idle",
             Self::ContextHigh => "on_context_high",
             Self::ConflictDetected => "on_conflict_detected",
+            Self::Escalation => "on_escalation",
         }
     }
 }
@@ -114,6 +118,37 @@ impl HookRegistry {
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn();
+        }
+    }
+
+    /// Fire hooks for an event that has no session behind it.
+    ///
+    /// `fire` and `fire_with_status` both expand a `ClaudeSession` into the
+    /// command template. Some events are not about a session at all — a
+    /// third-party query queued for review (#446) belongs to a grant, not a
+    /// PID — so this passes context as environment variables instead and
+    /// expands no template placeholders.
+    ///
+    /// Spawned and dropped, never waited on, exactly as `fire` does: the
+    /// caller here is a `query serve` connection thread answering a request,
+    /// and a slow hook must not hold the response open.
+    pub fn fire_env(&self, event: HookEvent, vars: &[(&str, &str)]) {
+        let Some(commands) = self.hooks.get(&event) else {
+            return;
+        };
+
+        for cmd in commands {
+            crate::logger::log("DEBUG", &format!("hook {}: {}", event.name(), cmd));
+
+            let mut c = Command::new("sh");
+            c.args(["-c", cmd])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            for (k, v) in vars {
+                c.env(k, v);
+            }
+            let _ = c.spawn();
         }
     }
 
@@ -241,5 +276,75 @@ mod tests {
         s.context_max = 200_000;
         let result = expand_template("context at {context_pct}%", &s);
         assert_eq!(result, "context at 75%");
+    }
+
+    #[test]
+    fn fire_env_passes_the_variables_and_expands_no_placeholders() {
+        // `on_escalation` has no session behind it, so the contract is
+        // environment variables rather than `{placeholder}` expansion. This is
+        // the documented interface in docs/access.md, so it is tested rather
+        // than asserted.
+        let dir = std::env::temp_dir().join(format!(
+            "claudectl-hookenv-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("fired.txt");
+
+        let mut r = HookRegistry::new();
+        r.add(
+            HookEvent::Escalation,
+            format!(
+                "printf '%s|%s|%s' \"$CLAUDECTL_ESCALATION_ID\" \"$CLAUDECTL_ESCALATION_GRANT\" \"{{project}}\" > {}",
+                out.display()
+            ),
+        );
+        r.fire_env(
+            HookEvent::Escalation,
+            &[
+                ("CLAUDECTL_ESCALATION_ID", "esc_abcdef123456"),
+                ("CLAUDECTL_ESCALATION_GRANT", "gr_test01"),
+            ],
+        );
+
+        // Spawned and not waited on, which is the point — so poll briefly.
+        let mut body = String::new();
+        for _ in 0..200 {
+            if let Ok(b) = std::fs::read_to_string(&out) {
+                if !b.is_empty() {
+                    body = b;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(
+            body, "esc_abcdef123456|gr_test01|{project}",
+            "env vars did not arrive, or a placeholder was expanded"
+        );
+    }
+
+    #[test]
+    fn fire_env_on_an_unconfigured_event_runs_nothing() {
+        // The common case: an owner who configured no `on_escalation` pays one
+        // map lookup.
+        let r = HookRegistry::new();
+        r.fire_env(HookEvent::Escalation, &[("X", "y")]);
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn the_escalation_event_round_trips_through_its_section_name() {
+        assert_eq!(
+            HookEvent::from_section("hooks.on_escalation"),
+            Some(HookEvent::Escalation)
+        );
+        assert_eq!(HookEvent::Escalation.name(), "on_escalation");
     }
 }

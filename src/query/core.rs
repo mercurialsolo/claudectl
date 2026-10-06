@@ -189,6 +189,46 @@ pub struct Answer {
     pub escalation_id: Option<String>,
 }
 
+/// Where one escalation stands, answered to the caller who created it (#446).
+///
+/// Separate from [`Answer`] rather than another `AnswerStatus` variant: this is
+/// a different question ("what happened to my request?") and conflating them
+/// would put `escalation_id`, `state` and `spans` in one envelope where two of
+/// the three are always absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bus", derive(schemars::JsonSchema))]
+pub struct EscalationStatus {
+    pub escalation_id: String,
+    /// `pending_review`, `approved`, `denied`, or `expired`.
+    pub state: String,
+    pub project: String,
+    /// The index fingerprint **now**. Compared against `classified_against`,
+    /// this is how a caller sees that the project moved while they waited.
+    pub fingerprint: String,
+    /// The fingerprint the question was originally classified against. Empty
+    /// for a row queued before #446 added the field.
+    pub classified_against: String,
+    /// The owner's own words, when they left any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Spans, present only once approved. Retrieved from the live index at poll
+    /// time, not stored at approval time — see [`QueryCore::poll_escalation_at`].
+    pub spans: Vec<Span>,
+    pub matched_terms: Vec<String>,
+    pub truncated: bool,
+}
+
+impl EscalationStatus {
+    /// `200` throughout, including while pending.
+    ///
+    /// Unlike `ask`'s `202`, this request *was* fully served: the caller asked
+    /// what the state is and got it. A `202` here would imply the poll itself
+    /// was queued.
+    pub fn http_status(&self) -> u16 {
+        200
+    }
+}
+
 impl Answer {
     /// The HTTP status this envelope should be sent with.
     ///
@@ -294,6 +334,12 @@ pub enum Operation {
     Ask,
     Topics,
     GetDoc,
+    /// A caller checking their own escalation (#446).
+    ///
+    /// Carries `project.query` like `Ask`, because it is the continuation of a
+    /// question that scope already paid for — and it is the one operation that
+    /// does **not** charge the daily budget. See [`QueryCore::authorize`].
+    PollEscalation,
 }
 
 impl Operation {
@@ -302,6 +348,7 @@ impl Operation {
             Operation::Ask => "query.ask",
             Operation::Topics => "query.topics",
             Operation::GetDoc => "query.get_doc",
+            Operation::PollEscalation => "query.escalation",
         }
     }
 }
@@ -344,6 +391,9 @@ pub struct QueryCore {
     classifier: Classifier,
     /// The owner's queue for §4.3's "anything else" row.
     escalations: EscalationQueue,
+    /// Owner notification for a queued escalation (#446). Empty by default, so
+    /// an owner who configures no `hooks.on_escalation` pays nothing.
+    hooks: crate::hooks::HookRegistry,
     /// The one paragraph of local prose allowed to leave the machine (§4.6).
     ///
     /// Computed once at startup from the index, not per request: it is a
@@ -389,7 +439,18 @@ impl QueryCore {
             classifier,
             escalations,
             summary,
+            hooks: crate::hooks::HookRegistry::new(),
         }
+    }
+
+    /// Attach the owner's hook registry, so a queued escalation notifies them.
+    ///
+    /// Opt-in rather than a constructor parameter: the registry is a `query
+    /// serve` concern, and every other caller — the MCP server, the tests —
+    /// wants the empty one, which fires nothing.
+    pub fn with_hooks(mut self, hooks: crate::hooks::HookRegistry) -> Self {
+        self.hooks = hooks;
+        self
     }
 
     pub fn classifier(&self) -> &Classifier {
@@ -446,7 +507,9 @@ impl QueryCore {
         now_ms: u64,
     ) -> Result<access::Grant, QueryError> {
         let want = match op {
-            Operation::Ask | Operation::Topics => Scope::ProjectQuery(self.project.clone()),
+            Operation::Ask | Operation::Topics | Operation::PollEscalation => {
+                Scope::ProjectQuery(self.project.clone())
+            }
             Operation::GetDoc => Scope::ProjectDocs(self.project.clone()),
         };
 
@@ -515,7 +578,14 @@ impl QueryCore {
             });
         }
 
-        self.charge_budget(&grant.grant_id, question, now_ms)?;
+        // The rate limit still applies above — polling is a request and a
+        // caller can spin on it — but the daily budget does not. A poll is the
+        // tail of a question whose charge already landed when it was
+        // classified, and charging again would let a caller exhaust their own
+        // day by waiting for an answer the owner had not yet given.
+        if op != Operation::PollEscalation {
+            self.charge_budget(&grant.grant_id, question, now_ms)?;
+        }
         Ok(grant)
     }
 
@@ -682,6 +752,11 @@ impl QueryCore {
                     project: self.project.clone(),
                     question: question.to_string(),
                     classification: c,
+                    // Pinned so the record says what the question was judged
+                    // against. The poll answers from the *live* index and
+                    // reports its current fingerprint, so a caller can tell
+                    // that the tree moved between queueing and approval.
+                    fingerprint: self.index.fingerprint(),
                 }) {
                     // Audited before returning, or this is the same hole the
                     // `get_doc` miss had: `authorize` has already charged the
@@ -714,6 +789,26 @@ impl QueryCore {
                         ..Default::default()
                     },
                     now_ms,
+                );
+                // Fired after the queue write and the audit, so a hook never
+                // announces a row that is not there. Spawned and dropped by
+                // `fire_env`, so a slow notifier cannot hold this response
+                // open — the caller is waiting on a `202`.
+                //
+                // Truncated because this becomes an environment variable, and a
+                // 4 KB question in `argv`-adjacent space is a way to make a
+                // hook fail for reasons the owner cannot see.
+                self.hooks.fire_env(
+                    crate::hooks::HookEvent::Escalation,
+                    &[
+                        ("CLAUDECTL_ESCALATION_ID", id.as_str()),
+                        ("CLAUDECTL_ESCALATION_GRANT", grant.grant_id.as_str()),
+                        ("CLAUDECTL_ESCALATION_PROJECT", self.project.as_str()),
+                        (
+                            "CLAUDECTL_ESCALATION_QUESTION",
+                            &question.chars().take(240).collect::<String>(),
+                        ),
+                    ],
                 );
                 Ok(Answer {
                     status: AnswerStatus::PendingReview,
@@ -813,6 +908,102 @@ impl QueryCore {
     /// List what is answerable, with no bodies.
     pub fn topics(&self, token: &str) -> Result<Topics, QueryError> {
         self.topics_at(token, access::epoch_ms())
+    }
+
+    /// Check one escalation the caller raised (#446).
+    pub fn poll_escalation(&self, token: &str, id: &str) -> Result<EscalationStatus, QueryError> {
+        self.poll_escalation_at(token, id, access::epoch_ms())
+    }
+
+    /// [`Self::poll_escalation`] with the clock injected.
+    ///
+    /// # Why the spans are retrieved here and not at approval
+    ///
+    /// The issue asks whether approving means *answering* or *re-running*.
+    /// This re-runs, deterministically, at poll time — the #429 path, never the
+    /// classifier. Three reasons:
+    ///
+    /// - `access escalations approve` runs in the owner's shell, which may not
+    ///   be in the repository at all. `query serve` resolved the project once
+    ///   at startup and holds the index; making the CLI build one would
+    ///   reintroduce the "directory basename is not the project name" problem
+    ///   `resolve_project` exists to refuse.
+    /// - An answer frozen at approval time goes stale silently. Retrieving live
+    ///   and reporting both fingerprints lets the caller *see* that the tree
+    ///   moved, which is strictly more information than a pinned answer.
+    /// - Approval is then a one-line write with no index dependency, which is
+    ///   what makes it safe to do from a hook or a second machine later.
+    ///
+    /// The cost is bounded: the rate limit applies, retrieval is term overlap
+    /// over an in-memory index, and the budget is deliberately not charged.
+    pub fn poll_escalation_at(
+        &self,
+        token: &str,
+        id: &str,
+        now_ms: u64,
+    ) -> Result<EscalationStatus, QueryError> {
+        // Shape-checked before the queue is touched. An id arriving from a URL
+        // path is interpolated into a filename downstream, and a malformed one
+        // is indistinguishable from an absent one to the caller either way.
+        if !super::escalate::is_valid_escalation_id(id) {
+            return Err(QueryError::Denied);
+        }
+        let grant = self.authorize(token, Operation::PollEscalation, None, now_ms)?;
+
+        // Every miss below is the same opaque `Denied`, which the transport
+        // renders as the same `404` an unmatched route gets. A caller must not
+        // be able to tell "no such escalation" from "someone else's
+        // escalation" — that would turn the 48-bit id space into an oracle for
+        // enumerating other holders' questions.
+        let Some(record) = self.escalations.find(id) else {
+            return Err(QueryError::Denied);
+        };
+        if record.grant_id != grant.grant_id || record.project != self.project {
+            return Err(QueryError::Denied);
+        }
+
+        let state = self
+            .escalations
+            .state(&record, now_ms, th::ESCALATION_TTL_MS);
+
+        let (note, spans, terms, truncated) = match &state {
+            super::escalate::EscalationState::Approved { note, .. } => {
+                let terms = rank::terms(&record.question);
+                let (spans, truncated) = self.select(&terms, DEFAULT_SPAN_LIMIT, 1);
+                (note.clone(), spans, terms, truncated)
+            }
+            super::escalate::EscalationState::Denied { note, .. } => {
+                (note.clone(), Vec::new(), Vec::new(), false)
+            }
+            // Pending and expired carry nothing: no spans, and no note, because
+            // there is no decision to quote.
+            _ => (None, Vec::new(), Vec::new(), false),
+        };
+
+        // Audited like any other served request, and `record_use` is what bumps
+        // the use count — the budget stays untouched by `authorize` above.
+        self.record_use(
+            &grant.grant_id,
+            QueryAudit {
+                detail: Some(Operation::PollEscalation.audit_detail()),
+                question: None,
+                cited: Some(cited_paths(&spans)),
+                classification: None,
+            },
+            now_ms,
+        )?;
+
+        Ok(EscalationStatus {
+            escalation_id: record.id,
+            state: state.as_str().to_string(),
+            project: self.project.clone(),
+            fingerprint: self.index.fingerprint(),
+            classified_against: record.fingerprint,
+            note,
+            spans,
+            matched_terms: terms,
+            truncated,
+        })
     }
 
     /// [`Self::topics`] with the clock injected.
@@ -1215,6 +1406,254 @@ mod tests {
             _repo: repo,
             _store: store_dir,
         })
+    }
+
+    // ---- #446: acting on an escalation -------------------------------------
+
+    /// Queue a row directly against the harness's grant, bypassing `ask`.
+    ///
+    /// Reaching `Route::Escalate` needs a classifier in the middle band; these
+    /// tests are about the *poll*, so the row is written straight to the queue.
+    fn queue_row(
+        h: &Harness,
+        id: &str,
+        question: &str,
+        ts_ms: u64,
+    ) -> crate::query::escalate::Escalation {
+        let e = crate::query::escalate::Escalation {
+            id: id.into(),
+            ts_ms,
+            grant_id: "gr_test01".into(),
+            project: "fixture".into(),
+            question: question.into(),
+            classification: crate::query::jev::Classification {
+                intent: crate::query::jev::Intent::Structure,
+                intent_confidence: 0.44,
+                answerable_from_docs: 0.55,
+                seeks_sensitive: 0.02,
+                injection_attempt: 0.01,
+                scope_match: 0.9,
+                input_tokens: 100,
+            },
+            fingerprint: "fnv1a:old".into(),
+        };
+        h.core.escalations.push(&e).expect("queue the row");
+        e
+    }
+
+    #[test]
+    fn polling_a_pending_escalation_reports_pending_and_no_spans() {
+        let Some(h) = harness(vec![Scope::ProjectQuery("fixture".into())]) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let now = access::epoch_ms();
+        let e = queue_row(&h, "esc_aaaaaaaaaaaa", "adding a terminal backend", now);
+
+        let s = h
+            .core
+            .poll_escalation_at(&h.token, &e.id, now)
+            .expect("the owner's own grant may poll");
+        assert_eq!(s.state, "pending_review");
+        assert!(s.spans.is_empty(), "a pending row leaked spans");
+        assert!(s.note.is_none());
+        // The caller can see the project moved: pinned vs live.
+        assert_eq!(s.classified_against, "fnv1a:old");
+        assert_ne!(s.fingerprint, s.classified_against);
+    }
+
+    #[test]
+    fn approving_turns_the_next_poll_into_spans() {
+        let Some(h) = harness(vec![Scope::ProjectQuery("fixture".into())]) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let now = access::epoch_ms();
+        let e = queue_row(&h, "esc_bbbbbbbbbbbb", "adding a terminal backend", now);
+
+        h.core
+            .escalations
+            .decide(
+                &e,
+                crate::query::escalate::VerdictState::Approved,
+                Some("fine by me".into()),
+                now,
+                th::ESCALATION_TTL_MS,
+            )
+            .expect("decide");
+
+        let s = h.core.poll_escalation_at(&h.token, &e.id, now).unwrap();
+        assert_eq!(s.state, "approved");
+        assert_eq!(s.note.as_deref(), Some("fine by me"));
+        assert!(
+            !s.spans.is_empty(),
+            "an approved escalation returned no spans"
+        );
+        // Retrieved from the *live* index, so the reported fingerprint is the
+        // current one, not the pinned one.
+        assert_eq!(s.fingerprint, h.core.index.fingerprint());
+    }
+
+    #[test]
+    fn denying_reports_the_refusal_and_still_no_spans() {
+        let Some(h) = harness(vec![Scope::ProjectQuery("fixture".into())]) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let now = access::epoch_ms();
+        let e = queue_row(&h, "esc_cccccccccccc", "adding a terminal backend", now);
+        h.core
+            .escalations
+            .decide(
+                &e,
+                crate::query::escalate::VerdictState::Denied,
+                Some("not for you".into()),
+                now,
+                th::ESCALATION_TTL_MS,
+            )
+            .unwrap();
+
+        let s = h.core.poll_escalation_at(&h.token, &e.id, now).unwrap();
+        assert_eq!(s.state, "denied");
+        assert_eq!(s.note.as_deref(), Some("not for you"));
+        assert!(s.spans.is_empty(), "a denial leaked spans");
+    }
+
+    #[test]
+    fn an_expired_escalation_cannot_be_polled_into_an_answer() {
+        let Some(h) = harness(vec![Scope::ProjectQuery("fixture".into())]) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let queued = 1_000_000_000;
+        let e = queue_row(&h, "esc_dddddddddddd", "adding a terminal backend", queued);
+        let later = queued + th::ESCALATION_TTL_MS + 1;
+
+        let s = h.core.poll_escalation_at(&h.token, &e.id, later).unwrap();
+        assert_eq!(s.state, "expired");
+        assert!(s.spans.is_empty(), "an expired row answered anyway");
+    }
+
+    #[test]
+    fn another_grant_cannot_poll_someone_elses_escalation() {
+        // The 48-bit id space must not be an oracle for other holders'
+        // questions, so a wrong-grant poll is the same opaque refusal an
+        // unknown id gets.
+        let Some(h) = harness(vec![Scope::ProjectQuery("fixture".into())]) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let now = access::epoch_ms();
+        let e = queue_row(&h, "esc_eeeeeeeeeeee", "adding a terminal backend", now);
+        h.core
+            .escalations
+            .decide(
+                &e,
+                crate::query::escalate::VerdictState::Approved,
+                None,
+                now,
+                th::ESCALATION_TTL_MS,
+            )
+            .unwrap();
+
+        // A second, equally valid grant on the same project.
+        let other = access::new_grant(
+            "gr_other1".into(),
+            "other".into(),
+            vec![Scope::ProjectQuery("fixture".into())],
+            now,
+            now + 60_000,
+        );
+        h.core.store.create(&other).unwrap();
+        let other_token = access::token::mint(
+            &h.core.secret,
+            &other.grant_id,
+            &other.scopes,
+            other.expires_ms,
+        );
+
+        // Prove the second grant *works* before proving it cannot poll. Without
+        // this the test passes vacuously: any unrelated denial — a scope
+        // mismatch, an expiry window, an exhausted budget — would satisfy the
+        // assertion below while the grant-ownership check went untested.
+        assert!(
+            h.core.topics_at(&other_token, now).is_ok(),
+            "the second grant is not usable, so the refusal below proves nothing"
+        );
+
+        let got = h.core.poll_escalation_at(&other_token, &e.id, now);
+        assert!(
+            matches!(got, Err(QueryError::Denied)),
+            "another grant polled a foreign escalation: {got:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_or_malformed_id_is_the_same_opaque_refusal() {
+        let Some(h) = harness(vec![Scope::ProjectQuery("fixture".into())]) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let now = access::epoch_ms();
+        queue_row(&h, "esc_ffffffffffff", "adding a terminal backend", now);
+
+        for bad in [
+            "esc_000000000000", // well-formed, absent
+            "esc_short",
+            "../../etc/passwd",
+            "",
+        ] {
+            let got = h.core.poll_escalation_at(&h.token, bad, now);
+            assert!(
+                matches!(got, Err(QueryError::Denied)),
+                "{bad} produced {got:?} rather than an opaque refusal"
+            );
+        }
+    }
+
+    #[test]
+    fn polling_does_not_charge_the_daily_budget() {
+        // A poll is the tail of a question already paid for. Charging it would
+        // let a caller exhaust their own day waiting for the owner.
+        let Some(h) = harness_with_limits(
+            vec![Scope::ProjectQuery("fixture".into())],
+            None,
+            Some(1), // one query per day, total
+        ) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let now = access::epoch_ms();
+        let e = queue_row(&h, "esc_111111111111", "adding a terminal backend", now);
+        h.core
+            .escalations
+            .decide(
+                &e,
+                crate::query::escalate::VerdictState::Approved,
+                None,
+                now,
+                th::ESCALATION_TTL_MS,
+            )
+            .unwrap();
+
+        let before = h.core.store.load("gr_test01").unwrap().unwrap().budget_used;
+        for i in 0..5 {
+            h.core
+                .poll_escalation_at(&h.token, &e.id, now)
+                .unwrap_or_else(|e| panic!("poll {i} was refused: {e:?}"));
+        }
+        let after = h.core.store.load("gr_test01").unwrap().unwrap().budget_used;
+        assert_eq!(
+            before, after,
+            "polling moved budget_used from {before} to {after}"
+        );
+
+        // And the one real query the budget allows still goes through, which is
+        // the proof the budget was never spent on the polls.
+        assert!(
+            h.core.topics_at(&h.token, now).is_ok(),
+            "the polls consumed the day's only query"
+        );
     }
 
     #[test]

@@ -21,6 +21,7 @@
 //! POST /api/v1/project/<project>/query     {"question": "...", "limit": 5}
 //! GET  /api/v1/project/<project>/topics
 //! POST /api/v1/project/<project>/doc       {"path": "docs/x.md"}
+//! GET  /api/v1/project/<project>/escalation/<esc_id>
 //! ```
 //!
 //! §4.7 lists only the first two. `doc` is added so the three MCP tools have
@@ -125,11 +126,13 @@ impl Drop for QueryServer {
 }
 
 /// The three operations, as named in a route's last segment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Route {
     Query,
     Topics,
     Doc,
+    /// `GET …/escalation/<id>` — the one route with a path parameter (#446).
+    Escalation(String),
 }
 
 /// Split a request target into `(project, route)`.
@@ -143,13 +146,18 @@ fn parse_route(method: &str, target: &str) -> Option<(String, Route)> {
     let mut segments = rest.split('/');
     let project = segments.next()?;
     let action = segments.next()?;
+    // `escalation` is the one route taking a path parameter, so it is the one
+    // place a third segment is allowed — and exactly one, still rejecting
+    // anything deeper. Every other route stays strictly two-segment.
+    let tail = segments.next();
     if segments.next().is_some() {
         return None;
     }
-    let route = match (method, action) {
-        ("POST", "query") => Route::Query,
-        ("GET", "topics") => Route::Topics,
-        ("POST", "doc") => Route::Doc,
+    let route = match (method, action, tail) {
+        ("POST", "query", None) => Route::Query,
+        ("GET", "topics", None) => Route::Topics,
+        ("POST", "doc", None) => Route::Doc,
+        ("GET", "escalation", Some(id)) if !id.is_empty() => Route::Escalation(id.to_string()),
         _ => return None,
     };
     Some((project.to_string(), route))
@@ -258,6 +266,9 @@ fn handle_connection(mut stream: TcpStream, core: &Arc<QueryCore>) {
         Route::Query => serve_query(core, token, &body),
         Route::Topics => core.topics(token).and_then(encode).map(|j| (200, j)),
         Route::Doc => serve_doc(core, token, &body),
+        Route::Escalation(id) => core
+            .poll_escalation(token, &id)
+            .and_then(|s| encode(&s).map(|j| (s.http_status(), j))),
     };
 
     match result {
@@ -897,6 +908,35 @@ mod tests {
         assert_eq!(parse_route("POST", "/api/v1/project/p"), None);
         assert_eq!(parse_route("POST", "/api/v1/projects/p/query"), None);
         assert_eq!(parse_route("POST", "/metrics"), None);
+    }
+
+    #[test]
+    fn the_escalation_route_takes_one_path_parameter_and_only_one() {
+        assert_eq!(
+            parse_route("GET", "/api/v1/project/p/escalation/esc_7f2a1b9c4d3e"),
+            Some(("p".into(), Route::Escalation("esc_7f2a1b9c4d3e".into())))
+        );
+        // The query string is still discarded, as on every other route.
+        assert_eq!(
+            parse_route("GET", "/api/v1/project/p/escalation/esc_abc?x=1"),
+            Some(("p".into(), Route::Escalation("esc_abc".into())))
+        );
+        // Wrong method.
+        assert_eq!(
+            parse_route("POST", "/api/v1/project/p/escalation/esc_abc"),
+            None
+        );
+        // Depth is exactly three: no id, empty id, or a fourth segment.
+        assert_eq!(parse_route("GET", "/api/v1/project/p/escalation"), None);
+        assert_eq!(parse_route("GET", "/api/v1/project/p/escalation/"), None);
+        assert_eq!(
+            parse_route("GET", "/api/v1/project/p/escalation/esc_abc/more"),
+            None
+        );
+        // Allowing a third segment must not have loosened the other routes.
+        assert_eq!(parse_route("POST", "/api/v1/project/p/query/esc_abc"), None);
+        assert_eq!(parse_route("GET", "/api/v1/project/p/topics/x"), None);
+        assert_eq!(parse_route("POST", "/api/v1/project/p/doc/x"), None);
     }
 
     #[test]

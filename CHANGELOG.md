@@ -4,6 +4,48 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — acting on an escalation: verdict, caller poll, expiry (#446)
+- **The queue is drainable.** #430 queued a middle-band question and said
+  plainly that acting on one was out of scope. `claudectl access escalations
+  approve <id>` / `deny <id>` now record a verdict with an optional note, the
+  listing grew a STATE column and a count of what is awaiting you, and the
+  caller polls `GET /api/v1/project/<project>/escalation/<id>` with the token
+  they already hold.
+- **State lives beside the append-only queue, not in it.** A verdict is one
+  `create_new` file under `escalation-verdicts/`, which keeps `escalations.jsonl`
+  append-only and makes "decided twice" an `EEXIST` from the filesystem rather
+  than a lost write — across processes and with no lock, since `approve` runs in
+  the owner's shell while `query serve` answers the poll. Same reasoning as the
+  grant revocation tombstone #431 introduced.
+- **Approving marks the question answerable; it does not freeze an answer.**
+  The poll retrieves deterministically from the live index (the #429 path, never
+  the classifier) and reports both the fingerprint the question was classified
+  against and the index's fingerprint now, so a caller can see the project moved
+  underneath them. It also means `approve` needs no index, which is what lets an
+  owner decide from any directory rather than only from inside the repo.
+- **Expiry is derived, never swept.** A pending row stops being answerable after
+  seven days, computed from its timestamp, so there is no sweeper process and a
+  caller's poll never mutates the owner's queue. A recorded verdict always
+  outranks the clock: an owner who decided on the last day decided it.
+- **Polling does not spend the caller's daily budget** — it is the tail of a
+  question already charged, and charging again would let a caller exhaust their
+  own day waiting for an answer the owner had not yet given. The rate limit still
+  applies, so they cannot spin on it for free.
+- **Owner notification is a hook, not a new subsystem.** `[hooks.on_escalation]`
+  fires with `CLAUDECTL_ESCALATION_ID`, `_GRANT`, `_PROJECT` and a truncated
+  `_QUESTION`. It is the first hook with no session behind it, so it passes
+  context as environment variables and expands no `{placeholder}` — and it is
+  spawned without being waited on, so a slow notifier cannot hold the caller's
+  response open.
+- Every refusal on the poll path stays the one opaque `404`: unknown id,
+  malformed id, and another grant's escalation are indistinguishable, so the
+  48-bit id space is not an oracle for enumerating other holders' questions.
+- Rows queued before this change still parse. `fingerprint` is
+  `#[serde(default)]`, because without it every pre-existing line would fail to
+  parse and the queue would silently empty — losing exactly the questions this
+  closes the loop on.
+
+
 ## [0.65.0] - 2026-10-06
 
 ### Added — Jev query classification, confidence-gated routing, escalation queue (#430)

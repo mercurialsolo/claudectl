@@ -14,6 +14,32 @@ const DEFAULT_EXPIRES: &str = "30d";
 /// How many tries before we give up finding an unused grant id.
 const ID_MINT_ATTEMPTS: usize = 8;
 
+/// Deciding one escalation (#446).
+///
+/// Approve and deny are the same write with a different state, so they share a
+/// shape. Neither needs the project's index: the verdict is a one-line record,
+/// and `query serve` retrieves the spans when the caller next polls. That is
+/// what lets the owner decide from any directory.
+#[derive(Debug, Subcommand)]
+pub enum EscalationAction {
+    /// Let the caller have an answer to this question
+    Approve {
+        /// Escalation id, e.g. esc_7f2a1b9c4d3e
+        escalation_id: String,
+        /// Your own words, shown to the caller alongside the spans
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Refuse this question
+    Deny {
+        /// Escalation id, e.g. esc_7f2a1b9c4d3e
+        escalation_id: String,
+        /// Your own words, shown to the caller
+        #[arg(long)]
+        note: Option<String>,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 pub enum AccessCommand {
     /// Issue a grant and print its token once
@@ -42,12 +68,15 @@ pub enum AccessCommand {
         grant_id: Option<String>,
     },
 
-    /// Show queries classification escalated for your review
+    /// Show queries classification escalated for your review, or decide one
     ///
     /// §4.3's "anything else" row: a query that was neither answerable with
     /// confidence nor clearly refusable is queued instead of guessed at. The
-    /// caller got `pending_review` and an id.
-    Escalations,
+    /// caller got `pending_review` and an id, and polls it for your verdict.
+    Escalations {
+        #[command(subcommand)]
+        action: Option<EscalationAction>,
+    },
 
     /// Revoke a grant immediately
     Revoke {
@@ -66,7 +95,27 @@ pub fn dispatch_command(command: &AccessCommand, json_mode: bool) -> io::Result<
         } => cmd_grant(project, label, scopes, expires, json_mode),
         AccessCommand::List => cmd_list(json_mode),
         AccessCommand::Audit { grant_id } => cmd_audit(grant_id.as_deref(), json_mode),
-        AccessCommand::Escalations => cmd_escalations(json_mode),
+        AccessCommand::Escalations { action } => match action {
+            None => cmd_escalations(json_mode),
+            Some(EscalationAction::Approve {
+                escalation_id,
+                note,
+            }) => cmd_decide(
+                escalation_id,
+                crate::query::escalate::VerdictState::Approved,
+                note.as_deref(),
+                json_mode,
+            ),
+            Some(EscalationAction::Deny {
+                escalation_id,
+                note,
+            }) => cmd_decide(
+                escalation_id,
+                crate::query::escalate::VerdictState::Denied,
+                note.as_deref(),
+                json_mode,
+            ),
+        },
         AccessCommand::Revoke { grant_id } => cmd_revoke(grant_id, json_mode),
     }
 }
@@ -334,21 +383,46 @@ fn cmd_audit(grant_id: Option<&str>, json_mode: bool) -> io::Result<()> {
     Ok(())
 }
 
-/// Render the escalation queue (#430, RFC §4.3).
+/// Render the escalation queue with each row's state (#430, #446, RFC §4.3).
 ///
-/// Read-only. There is no approve/deny here, and that is stated rather than
-/// implied: acting on an escalation means notifying the owner and resuming a
-/// query that has already returned, which is a state machine of its own and
-/// filed as a follow-up.
+/// The STATE column is what makes the queue drainable: a row is pending,
+/// decided, or expired, and `approve`/`deny` act only on the first.
 fn cmd_escalations(json_mode: bool) -> io::Result<()> {
+    use crate::query::thresholds::ESCALATION_TTL_MS;
+
     let root = super::access_dir().map_err(io::Error::other)?;
     let queue = crate::query::escalate::EscalationQueue::in_access_dir(&root);
     let rows = queue.read();
+    let now = super::epoch_ms();
 
     if json_mode {
+        // State folded in rather than left to the caller: it is derived from a
+        // verdict file plus the clock, and a consumer of `--json` cannot
+        // compute it from the row alone.
+        let enriched: Vec<_> = rows
+            .iter()
+            .map(|e| {
+                let state = queue.state(e, now, ESCALATION_TTL_MS);
+                serde_json::json!({
+                    "id": e.id,
+                    "ts_ms": e.ts_ms,
+                    "grant_id": e.grant_id,
+                    "project": e.project,
+                    "question": e.question,
+                    "classification": e.classification,
+                    "fingerprint": e.fingerprint,
+                    "state": state.as_str(),
+                    "note": match &state {
+                        crate::query::escalate::EscalationState::Approved { note, .. }
+                        | crate::query::escalate::EscalationState::Denied { note, .. } => note.clone(),
+                        _ => None,
+                    },
+                })
+            })
+            .collect();
         println!(
             "{}",
-            serde_json::to_string_pretty(&rows).unwrap_or_default()
+            serde_json::to_string_pretty(&enriched).unwrap_or_default()
         );
         return Ok(());
     }
@@ -360,21 +434,101 @@ fn cmd_escalations(json_mode: bool) -> io::Result<()> {
     }
 
     println!(
-        "{:<17} {:<12} {:<10} QUESTION",
-        "ESCALATION", "GRANT", "WHEN"
+        "{:<17} {:<12} {:<10} {:<14} QUESTION",
+        "ESCALATION", "GRANT", "WHEN", "STATE"
     );
-    let now = super::epoch_ms();
+    let mut pending = 0usize;
     for e in &rows {
+        let state = queue.state(e, now, ESCALATION_TTL_MS);
+        // `is_terminal` already excludes expired — only `Pending` is false.
+        if !state.is_terminal() {
+            pending += 1;
+        }
         println!(
-            "{:<17} {:<12} {:<10} {}",
+            "{:<17} {:<12} {:<10} {:<14} {}",
             e.id,
             truncate(&e.grant_id, 12),
             fmt_ms_at(e.ts_ms, now),
-            truncate(&e.question, 60)
+            state.as_str(),
+            truncate(&e.question, 46)
         );
         // The five numbers are why it is here, so they are not hidden behind
         // `--json`.
         println!("                  {}", e.classification.audit_summary());
+    }
+    if pending > 0 {
+        println!();
+        println!(
+            "{pending} awaiting you. Decide with: claudectl access escalations approve <id>  (or deny)"
+        );
+    }
+    Ok(())
+}
+
+/// Record the owner's decision on one escalation (#446).
+///
+/// Refuses a row that is already decided, or already expired. Both refusals are
+/// loud here — unlike the query surface's opaque `404`, this caller *is* the
+/// owner, so naming the reason costs nothing and silently re-deciding would be
+/// the worse outcome.
+fn cmd_decide(
+    escalation_id: &str,
+    state: crate::query::escalate::VerdictState,
+    note: Option<&str>,
+    json_mode: bool,
+) -> io::Result<()> {
+    use crate::query::escalate::EscalationQueue;
+    use crate::query::thresholds::ESCALATION_TTL_MS;
+
+    let root = super::access_dir().map_err(io::Error::other)?;
+    let queue = EscalationQueue::in_access_dir(&root);
+
+    let entry = queue
+        .find(escalation_id)
+        .ok_or_else(|| io::Error::other(format!("no such escalation: {escalation_id}")))?;
+
+    // `decide` re-checks the state itself and refuses an already-decided or
+    // expired row, so there is no check to duplicate here.
+    let now = super::epoch_ms();
+    let verdict = queue
+        .decide(
+            &entry,
+            state,
+            note.map(str::to_string),
+            now,
+            ESCALATION_TTL_MS,
+        )
+        .map_err(io::Error::other)?;
+
+    if json_mode {
+        let json = serde_json::json!({
+            "escalation_id": entry.id,
+            "state": verdict.state.as_str(),
+            "grant_id": entry.grant_id,
+            "note": verdict.note,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap_or_default()
+        );
+        return Ok(());
+    }
+
+    println!("{} {}.", verdict.state.as_str(), entry.id);
+    println!("Question: {}", truncate(&entry.question, 70));
+    if let Some(n) = &verdict.note {
+        println!("Note: {n}");
+    }
+    match state {
+        crate::query::escalate::VerdictState::Approved => println!(
+            "{} sees spans the next time it polls — retrieved from the index as it is then, \
+             not as it was when the question was asked.",
+            entry.grant_id
+        ),
+        crate::query::escalate::VerdictState::Denied => println!(
+            "{} sees the refusal the next time it polls.",
+            entry.grant_id
+        ),
     }
     Ok(())
 }

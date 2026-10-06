@@ -1,6 +1,6 @@
 # claudectl Open Cluster — Design Specification
 
-**Status:** §§3–6 shipped in v0.65.0 — phases 0 (#426), 1 (#427), 2 (#428), 3 (#429), 4 (#430) and 5 (#431), closing epic #423. Acting on an escalation is the one carve-out (#446, still open). The named-hive (#424) and macOS-app (#425) epics remain proposed. Written against the code as of `3e784d7b`.
+**Status:** §§3–6 shipped in v0.65.0 — phases 0 (#426), 1 (#427), 2 (#428), 3 (#429), 4 (#430) and 5 (#431), closing epic #423. Acting on an escalation shipped in #446. The named-hive (#424) and macOS-app (#425) epics remain proposed. Written against the code as of `3e784d7b`.
 **Scope:** Let someone who is *not you* participate in your claudectl world at a reduced trust level — ask read-only questions about one of your projects, join a named hive, or run a node from a Mac app instead of a terminal.
 
 ## Implementation status
@@ -327,7 +327,6 @@ The ceiling is checked before the call and the spend charged after it, from `usa
 #### What is not shipped
 
 - **§4.5 step 2 — Jev reranking of candidate spans.** §4.5 itself calls it "a second, separable decision"; #429's deterministic ranker stays.
-- **Acting on an escalation.** Approve, deny, notify, and the resume path that turns an approved escalation into an answer are a notification system plus a state machine on a durable record. #430 asks for a queue and a "pending review" response and gets exactly those; the rest is #446.
 - **Branching retrieval on `intent`.** There is one retrieval strategy today, so a branch would be invention. The intent is recorded in the audit line instead.
 - **Any verification against the live API.** No request has been sent to `api.typesafe.ai` from this codebase; there is no key on the development machine. The client follows the published contract (request and response shapes verified against the vendor's API reference and model docs), every routing decision is fixture-tested, both degrade paths are tested, and the real `curl` invocation — stdin-fed credentials, status splitting, timeout, connection refusal — is tested against a local listener. What remains unverified is whether Jev accepts this request body.
 
