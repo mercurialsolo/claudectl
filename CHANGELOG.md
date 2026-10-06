@@ -116,6 +116,76 @@ All notable changes to claudectl are documented here.
   `user.email`/`commit.gpgsign=false` so they do not depend on CI's global git
   config, and skip rather than fail when git is absent.
 
+### Added — capability grants, scopes and `claudectl access` (#427)
+- **New `src/access/` module**: scoped, expiring, revocable read-only access
+  for a third party — phase 1 of the open-cluster RFC (#423). Everything else
+  in claudectl assumes one trust level (you, on your machines): a relay PSK is
+  symmetric, and the coordinator's bearer token has no identity, no scope and
+  no per-grant revocation.
+- **`claudectl access grant --project <p> --label <l> [--scopes …] [--expires …]`**
+  issues a grant and prints its token once. `--scopes` defaults to
+  `project.query`, `--expires` to `30d`. Plus **`access list`** (state, use
+  count, last use), **`access audit <grant_id>`** (what a grant actually asked
+  for) and **`access revoke <grant_id>`**. All four honour `--json`, which is a
+  global flag — `claudectl --json access list`.
+- **Token format `cctl_<grant_id>_<mac>`** — e.g.
+  `cctl_gr_cacccf_54814e5e550529c7cf02f3805f61d8eb`. The MAC is HMAC-SHA256
+  over a canonical payload of `grant_id` + sorted scopes + `expires_ms`,
+  truncated to 128 bits and hex-encoded, via the inline primitives already in
+  `relay::crypto` — no JWT library, no asymmetric crypto, no new dependency.
+- **The signature covers `scopes` and `expires_ms`; it does not cover
+  `revoked`, `last_used_ms` or `use_count`.** Revoking is a one-field write
+  that takes effect immediately with nothing restarted, while any edit to a
+  grant's scopes or expiry invalidates the issued token and forces a re-grant.
+- **Every denial is opaque to the caller.** One `AccessError::Denied` with no
+  detail: unknown grant, bad MAC, revoked, expired and missing scope are
+  indistinguishable from outside. The specific reason goes to
+  `~/.claudectl/access/audit.jsonl` only — the RFC's 404-not-403 rule applied
+  one layer down, since telling "no such grant" from "revoked" would leak which
+  grant ids exist. Denied attempts are audited too, so probing is visible.
+- **Scopes:** all five RFC verbs parse, so a grant file written by a later
+  version still loads, but only `project.query` and `project.docs` can be
+  issued today. `fleet.read` is refused citing open question Q8 ("defined,
+  issued to nobody"); `hive.read` and `hive.join` are refused pending #424.
+  There is no write verb in the grammar.
+- **The HMAC key at `~/.claudectl/access/secret` fails closed.** It uses a new
+  `crypto::try_generate_psk`, which errors rather than falling back to
+  `generate_psk`'s timestamp/pid/thread-id hash when `/dev/urandom` cannot be
+  read — fine for a LAN pairing code, not for
+  the root key behind third-party auth. A corrupt or wrong-length secret is an
+  error, never a silent re-mint, because re-minting would invalidate every live
+  grant without saying so.
+- **`secret`, `grants/*.json` and `audit.jsonl` are all `0600`**, with the mode
+  set in the `open(2)` call rather than chmodded afterwards — a chmod cannot
+  revoke a descriptor another process opened during the window at
+  `0666 & ~umask` (`save_peer_psk` still has that window). The audit log's mode
+  is re-asserted on every append, so a log left wider by an earlier version is
+  repaired instead of staying that way. Grant files are owner-only because each
+  carries every field the MAC covers — at a default umask, `secret` would be the
+  only barrier between an unprivileged local user and every token on the machine.
+- **`HOME` must be set.** Every other store in the codebase falls back to
+  `/tmp` when it is not; this one refuses. `/tmp` is world-writable and the
+  secret is read back with `read_to_string`, which follows symlinks — someone
+  who pre-places `/tmp/.claudectl/access/secret` would be supplying the key
+  every grant MAC derives from.
+- `claudectl access audit` with no grant id prints the whole log. Denials
+  against a token too malformed to name a grant are filed under a sentinel id
+  that is not a valid grant id, so the no-id form is the only way to see the
+  probing the log exists to surface.
+- A qualifier written into `--scopes` must agree with `--project` rather than
+  silently overriding it: `--project internal-api --scopes project.query:secrets`
+  is now an error, where before it issued a grant scoped to `secrets`.
+- **No network surface in this phase.** `access grant` opens no port. #429 adds
+  the read-only query surface; #431 adds enforcement of the
+  `rate_limit_per_min` (20) and `daily_query_budget` (500) fields the grant
+  file already carries.
+- Gated behind the `relay` feature, since the MAC comes from `relay::crypto`.
+  The minimal `--no-default-features --features hive` build has no access
+  surface. Written up in the new `docs/access.md`; `docs/open-cluster.md` §3.2,
+  §3.3, §5 and §10 are updated to what shipped — including its verify order,
+  which as specified put the MAC check before the grant-file load and could not
+  work, because the MAC covers fields that live only in the file.
+
 ### Changed — coordinator HTTP API binds loopback by default (#426)
 - **`RelayConfig` gains `http_addr`, defaulting to `127.0.0.1`**, plus a
   `claudectl relay serve --http-addr <ADDR>` flag. Resolution order is
@@ -169,6 +239,13 @@ All notable changes to claudectl are documented here.
   ignored rather than shown frozen.
 
 ### Fixed
+- **`claudectl_core::history::parse_duration` no longer panics on an absurd
+  duration.** It multiplied the numeric part by its unit without a guard, so
+  `--expires 99999999999999999999w` aborted in a debug build instead of being
+  read as invalid input. It now uses `checked_mul` and returns `None` on
+  overflow, like any other unparseable string. Reached through
+  `claudectl access grant --expires`, and shared with `--since` (the window for
+  `--summary`, `--history` and `--stats`).
 - `claudectl -l` no longer misaligns every column after a project name longer
   than the column width; the PROJECT column widened to fit `[worker-id] project`,
   and cells clamp via the new `helpers::truncate_cell`.
@@ -180,8 +257,10 @@ All notable changes to claudectl are documented here.
   for the first collection, 40ms for each one after, vs 158ms every time for a
   stateless collector. Honours the "never rereads full files" design rule.
 - `claudectl-core` gained a public `fleet` module, `helpers::truncate_cell` and
-  `helpers::is_exposed_bind`, so it needs a version bump (and a matching
-  path-dep `version` in the binary's `Cargo.toml`) at release time.
+  `helpers::is_exposed_bind`, and `history::parse_duration` changed behaviour
+  (overflow is now `None` rather than a debug panic), so it needs a version
+  bump (and a matching path-dep `version` in the binary's `Cargo.toml`) at
+  release time.
 - `is_exposed_bind` lives in core rather than in `relay` because both callers
   need it and they sit behind different features — `relay` for the coordinator
   API, `coord` for the metrics exporter.

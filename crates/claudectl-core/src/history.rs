@@ -353,14 +353,23 @@ pub fn parse_duration(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
-    let (num_str, unit) = s.split_at(s.len() - 1);
+    // Split at the last *character*, not the last byte: `split_at(len - 1)`
+    // panics outright when the final char is multibyte, and this is reached
+    // from user input (`access grant --expires 30é`).
+    let (last_idx, unit_char) = s.char_indices().next_back()?;
+    let (num_str, unit) = s.split_at(last_idx);
+    let _ = unit_char;
     let num: u64 = num_str.parse().ok()?;
+    // checked_mul, not `*`: an absurd value like "99999999999999999999w" used
+    // to panic in debug builds rather than reading as invalid input. Anything
+    // that overflows is not a duration a caller can act on, so it is `None`
+    // like any other unparseable string.
     match unit {
         "s" => Some(num),
-        "m" => Some(num * 60),
-        "h" => Some(num * 3600),
-        "d" => Some(num * 86400),
-        "w" => Some(num * 604800),
+        "m" => num.checked_mul(60),
+        "h" => num.checked_mul(3600),
+        "d" => num.checked_mul(86400),
+        "w" => num.checked_mul(604800),
         _ => None,
     }
 }
@@ -406,6 +415,27 @@ mod tests {
         assert_eq!(parse_duration("1w"), Some(604800));
         assert_eq!(parse_duration(""), None);
         assert_eq!(parse_duration("abc"), None);
+    }
+
+    #[test]
+    fn parse_duration_rejects_a_multibyte_suffix_instead_of_panicking() {
+        // split_at(len-1) lands mid-codepoint when the last char is multibyte.
+        // Reachable from `claudectl access grant --expires 30é` (#427).
+        assert_eq!(parse_duration("30é"), None);
+        assert_eq!(parse_duration("é"), None);
+        assert_eq!(parse_duration("7日"), None);
+        assert_eq!(parse_duration("30🕐"), None);
+    }
+
+    #[test]
+    fn parse_duration_rejects_overflow_instead_of_panicking() {
+        // These used to panic in debug builds. Reached from user input via
+        // `claudectl access grant --expires` (#427).
+        assert_eq!(parse_duration(&format!("{}w", u64::MAX)), None);
+        assert_eq!(parse_duration(&format!("{}d", u64::MAX)), None);
+        assert_eq!(parse_duration(&format!("{}m", u64::MAX)), None);
+        // Seconds have no multiplier, so the max is still a valid duration.
+        assert_eq!(parse_duration(&format!("{}s", u64::MAX)), Some(u64::MAX));
     }
 
     #[test]

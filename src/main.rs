@@ -17,6 +17,8 @@ use claudectl_core::{
 // unchanged.
 use claudectl_tui::{app, demo, recorder, session_recorder, ui};
 
+#[cfg(feature = "relay")]
+mod access;
 mod brain;
 mod brain_screen;
 #[cfg(feature = "bus")]
@@ -108,6 +110,14 @@ pub(crate) enum Command {
     Supervisor {
         #[command(subcommand)]
         command: coord::supervisor_cli::SupervisorCommand,
+    },
+
+    #[cfg(feature = "relay")]
+    /// Capability grants (#427, open-cluster RFC §3). Issue scoped,
+    /// expiring, revocable read-only access to a third party.
+    Access {
+        #[command(subcommand)]
+        command: access::cli::AccessCommand,
     },
 
     /// Guided first-value tour over fake sessions (#373). Launches the
@@ -873,6 +883,11 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
             #[cfg(feature = "coord")]
             Command::Supervisor { command } => return coord::supervisor_cli::dispatch(command),
+
+            #[cfg(feature = "relay")]
+            Command::Access { command } => {
+                return access::cli::dispatch_command(command, cli.json);
+            }
 
             // Fall through to the TUI launch below with demo + tour enabled.
             Command::Demo => {}

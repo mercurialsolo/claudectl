@@ -29,9 +29,9 @@ crates/
                        #   app.rs, ui/*, recorder.rs, session_recorder.rs, demo.rs
                        #   Depends on claudectl-core. Never on the binary.
 src/                   # the binary crate `claudectl`
-                       #   main.rs + brain/ + bus/ + context/ + coord/ +
-                       #   hive/ + relay/ + orchestrator + init + commands +
-                       #   config.rs + brain_screen.rs.
+                       #   main.rs + access/ + brain/ + bus/ + context/ +
+                       #   coord/ + hive/ + relay/ + orchestrator + init +
+                       #   commands + config.rs + brain_screen.rs.
                        #   Implements the runtime traits over the real
                        #   subsystems via `src/runtime/`.
 ```
@@ -150,6 +150,13 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 - `trust.rs` — PeerTrust with auto-drift, TrustTier classification, TrustStore persistence
 - `injection.rs` — Brain prompt integration with trust labels, concordance checking for drift
 - `cli.rs` — CLI dispatch for hive subcommands (status, knowledge, export, import, trust)
+
+**Access** (`src/access/`): Capability grants — scoped, expiring, revocable read-only access for a third party (#427, phase 1 of the open-cluster RFC #423; feature-gated behind `relay` because the MAC comes from `relay::crypto`). See `docs/access.md`.
+- `mod.rs` — `~/.claudectl/access` layout, grant-id validation/minting, opaque `AccessError::Denied`, audit-only `DenyReason`
+- `scope.rs` — `<resource>.<verb>:<qualifier>` grammar; read-only verbs, qualifier validation that keeps the MAC payload unambiguous, `is_issuable` gate
+- `token.rs` — `cctl_<grant_id>_<mac>` mint/parse, canonical MAC payload, HMAC key at `access/secret` (fails closed, 0600 before first byte)
+- `grant.rs` — `Grant` records, atomic per-grant JSON store, `audit.jsonl`, `verify` (parse → load → MAC → revoked/expiry → scope)
+- `cli.rs` — `claudectl access` subcommand (grant / list / audit / revoke), all with `--json`
 
 **Context index** (`src/context/`): The substrate a read-only project query may be answered from — open-cluster phase 2 (#428, `docs/open-cluster.md` §4.2). Ungated, so it builds in every feature configuration; the hive-unit source is `#[cfg(feature = "hive")]` and yields nothing without it. No CLI and no caller yet — #429 adds the query surface.
 - `mod.rs` — `ContextIndex::build(&Path)` and `build_with(root, &IndexExposure, ShareMode)`; takes a path, not a project name. Routes markdown by name and location, collects skills and hive units, `fingerprint()` is FNV-1a (`"fnv1a:<hex>"`)
