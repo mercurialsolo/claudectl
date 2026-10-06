@@ -34,6 +34,7 @@ pub mod brain;
 pub mod brain_screen;
 #[cfg(feature = "bus")]
 pub mod bus;
+#[cfg(feature = "relay")]
 pub mod context;
 #[cfg(feature = "coord")]
 pub mod coord;
@@ -42,6 +43,8 @@ pub mod doctor;
 pub mod hive;
 pub mod init;
 pub mod orchestrator;
+#[cfg(feature = "relay")]
+pub mod query;
 #[cfg(feature = "relay")]
 pub mod relay;
 pub mod runtime;

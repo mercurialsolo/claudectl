@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Capability grants — scoped, expiring, revocable read-only access for a
 //! third party (#427, open-cluster RFC §3.2, §3.3, §5).
 //!

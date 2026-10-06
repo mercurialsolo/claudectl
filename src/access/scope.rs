@@ -57,16 +57,17 @@ impl Scope {
         }
     }
 
-    /// Whether `claudectl access grant` will mint this scope today.
-    ///
-    /// `fleet.read` is Q8 ("scope defined, issued to nobody"); the hive scopes
-    /// need the named-hive work in #424. Keeping them parseable but unissuable
-    /// means a grant file written by a later version still loads here.
-    pub fn is_issuable(&self) -> bool {
-        matches!(self, Scope::ProjectQuery(_) | Scope::ProjectDocs(_))
-    }
-
     /// Why this scope cannot be issued yet, for the CLI's error message.
+    ///
+    /// `None` means `claudectl access grant` will mint it. `fleet.read` is Q8
+    /// ("scope defined, issued to nobody"); the hive scopes need the
+    /// named-hive work in #424. Keeping them parseable but unissuable means a
+    /// grant file written by a later version still loads here.
+    ///
+    /// This is the single place that list lives. There was a companion
+    /// `is_issuable` predicate carrying a second copy of it; #429 removed it
+    /// when the module stopped carrying `#![allow(dead_code)]` and it turned
+    /// out to have no caller.
     pub fn unissuable_reason(&self) -> Option<&'static str> {
         match self {
             Scope::ProjectQuery(_) | Scope::ProjectDocs(_) => None,
@@ -245,12 +246,16 @@ mod tests {
 
     #[test]
     fn only_query_and_docs_are_issuable_today() {
-        assert!(Scope::ProjectQuery("p".into()).is_issuable());
-        assert!(Scope::ProjectDocs("p".into()).is_issuable());
+        assert!(
+            Scope::ProjectQuery("p".into())
+                .unissuable_reason()
+                .is_none()
+        );
+        assert!(Scope::ProjectDocs("p".into()).unissuable_reason().is_none());
         // Parseable so later-written grant files still load, but not mintable.
-        assert!(!Scope::FleetRead("p".into()).is_issuable());
-        assert!(!Scope::HiveRead("h".into()).is_issuable());
-        assert!(!Scope::HiveJoin("h".into()).is_issuable());
+        assert!(Scope::FleetRead("p".into()).unissuable_reason().is_some());
+        assert!(Scope::HiveRead("h".into()).unissuable_reason().is_some());
+        assert!(Scope::HiveJoin("h".into()).unissuable_reason().is_some());
     }
 
     #[test]

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Project context index — what a read-only query can be answered from
 //! (#428, open-cluster RFC §4.2).
 //!
@@ -425,6 +424,13 @@ pub(crate) mod tests_support {
     /// after the fixture's initial commit.
     pub fn stage_all(root: &Path) -> bool {
         git(root, &["add", "-A"])
+    }
+
+    /// `git init` an existing directory, for a test that needs the repo at a
+    /// path it chose rather than at the tempdir root — the directory's *name*
+    /// is the thing under test in `query::cli::resolve_project`.
+    pub fn git_init(root: &Path) -> bool {
+        git(root, &["init", "-q"])
     }
 
     pub fn git_fixture(files: &[(&str, &str)]) -> Option<(tempfile::TempDir, PathBuf)> {

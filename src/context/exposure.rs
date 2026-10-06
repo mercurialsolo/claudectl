@@ -49,6 +49,13 @@ impl Category {
         }
     }
 
+    /// Parse a category from its wire label.
+    ///
+    /// No caller yet: this is half of the exposure-management CLI
+    /// (`claudectl access expose <category> <expose|hide>`), which the RFC
+    /// puts with the owner-side controls rather than with the query surface.
+    /// #429 wired the read path and left the write path waiting.
+    #[allow(dead_code)]
     pub fn parse(s: &str) -> Option<Self> {
         Category::ALL
             .iter()
@@ -174,6 +181,13 @@ impl IndexExposure {
         Self { entries }
     }
 
+    /// Persist to the default path.
+    ///
+    /// Together with `set` and `clear`, the write half of the exposure file —
+    /// awaiting the `claudectl access expose` CLI. `save_to` has a test
+    /// caller; `save` does not, and resolving the default path is exactly what
+    /// a test must not do.
+    #[allow(dead_code)]
     pub fn save(&self) -> io::Result<()> {
         self.save_to(&exposure_path())
     }
@@ -190,10 +204,12 @@ impl IndexExposure {
         self.entries.get(category.label()).copied()
     }
 
+    #[allow(dead_code)] // Consumer: the `access expose` CLI. Tests use it today.
     pub fn set(&mut self, category: Category, state: ExposureState) {
         self.entries.insert(category.label().to_string(), state);
     }
 
+    #[allow(dead_code)] // Consumer: the `access expose` CLI.
     pub fn clear(&mut self, category: Category) {
         self.entries.remove(category.label());
     }
