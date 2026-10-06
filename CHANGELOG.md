@@ -4,6 +4,79 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — project context index: the query surface's boundary (#428)
+- New ungated **`src/context/`** — the substrate a read-only project query may
+  be answered from, phase 2 of the open-cluster RFC (#423).
+  `ContextIndex::build(&Path)` / `build_with(root, &IndexExposure, ShareMode)`
+  build it out of CLAUDE.md, README.md, `docs/**` markdown, a Rust module map,
+  project skills and exposed hive units. There is deliberately **no CLI and no caller**:
+  retrieval and the query surface are #429, caps and budgets #431.
+- It takes a **path, not a project name**. Project names are many-to-one onto
+  directories — every worktree of a repo shares a basename — so resolving a
+  grant's `project.query:<name>` to a directory is #429's problem.
+- **`git ls-files -z --cached` is the only source of paths.** No `read_dir` and
+  no directory walk anywhere in the module, which is what makes "published
+  implies tracked and not excluded" true rather than aspirational. `--cached`
+  is the git index, so a staged file counts and a modified file's untracked
+  sibling does not.
+- **No git is an error, never a fallback** — `IndexError::{GitUnavailable,
+  NotARepo, GitFailed}`, an enum so #429 can match on it. `coord::resume`
+  degrades to an mtime hash when git is missing because a stale tree hash is
+  tolerable; here a fallback would mean indexing whatever is on disk, `.env`
+  included.
+- **`deny.rs` is the "excluded" half**, because tracked is not the same as
+  publishable. Deny-first on the relative path before any read: directory
+  segments at any depth (`.claude`, `.claudectl`, `.git`, `.ssh`, `target`,
+  `node_modules`, …), whole names and prefixes (`.env*`, `.netrc`, the `id_*`
+  ssh keys, `credentials`, `secrets.yml`, `secrets.yaml`, `.npmrc`, `.pypirc`),
+  and extensions (`jsonl`, keys, certs, `sqlite`/`db`). Denying `jsonl` covers
+  two of the three never-published content classes in one rule — session
+  transcripts and the brain decision log are both JSONL. `.claude`/`.claudectl` as *segments* stop a repo that commits its own
+  agent state from publishing it.
+- **The module map emits `//!` headers, `///` docs and public signatures, never
+  bodies.** Two separate depth counters do it: `skip_depth` for item bodies
+  (emit nothing) and `container_depth` for `impl` / inline-`mod` blocks (descend,
+  their contents are more items). Nothing inside a brace is emitted, so struct
+  fields and enum variants are out too. `pub(crate)` is not public API, and
+  private items are dropped entirely, name included.
+- **Per-category exposure** over six categories — `claude_md`, `readme`, `docs`,
+  `module_map`, `skills`, `hive_units` — at `~/.claudectl/access/index-exposure.json`.
+  Mirrors `hive::exposure::ExposureStore` semantics exactly (explicit entry wins;
+  missing entry follows the mode; auto exposes, manual hides) with the types
+  redefined locally and identical `"expose"`/`"hide"` wire values, because
+  `src/context/` is ungated and hive is not. The mode is the existing
+  `Config.hive.share_mode` — no new config field. Manual mode publishes nothing
+  until a category is opted in.
+- **Two holes the tests found and closed.** `skills::discover` reads the
+  filesystem directly, sweeping `~/.claude/skills`, every installed plugin and
+  the project, so publishing its output as-is drove a hole through the
+  tracked-only rule: an *untracked* project skill would publish, and so would
+  the operator's personal global skills. Intersecting with the tracked set
+  closes both, since a skill outside the repo is not in that set. Separately,
+  hive units were not filtered by origin, so a unit that arrived by gossip could
+  be republished to a third party who was never part of that exchange — now
+  locally-originated only (`source_peer` equals this machine's identity), with
+  categories matched on the `KnowledgeCategory` enum rather than a string, which
+  sidesteps `WorkflowPattern` serializing as `workflow_pattern` while its
+  `label()` returns `workflow`.
+- **Deterministic by construction**: tracked list sorted and deduped, units and
+  skills sorted, so two builds of the same tree are byte-identical.
+  `fingerprint()` is FNV-1a (`"fnv1a:<hex>"`) rather than SHA-256 because
+  `relay::crypto` is feature-gated and this module is not — same reasoning as
+  `coord::resume`'s tree hash, and it is a cache key, not an auth primitive.
+- Acceptance test is one fixture project that *contains* every forbidden thing
+  — committed `.env`, committed `decisions.jsonl` and `transcript.jsonl`, a
+  tracked `.claudectl/` file, an untracked file, a gitignored file and a
+  function body — asserting through a single serialized-blob check that no
+  sentinel appears, and that the things that should be there are. Plus a
+  self-index test against claudectl itself, the one fixture that cannot drift
+  from reality. That run reports **0 denied**, which is correct: this repo's
+  `.env` is untracked, so `ls-files` never returns it — meaning the tracked gate
+  and the denylist are each covered by a different test.
+- First `git init` in the repo's test suite. Fixtures pass `-c user.name`/
+  `user.email`/`commit.gpgsign=false` so they do not depend on CI's global git
+  config, and skip rather than fail when git is absent.
+
 ### Changed — coordinator HTTP API binds loopback by default (#426)
 - **`RelayConfig` gains `http_addr`, defaulting to `127.0.0.1`**, plus a
   `claudectl relay serve --http-addr <ADDR>` flag. Resolution order is

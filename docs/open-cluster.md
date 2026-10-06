@@ -1,6 +1,6 @@
 # claudectl Open Cluster — Design Specification
 
-**Status:** Proposed / RFC. Phase 0 (#426) has shipped; nothing else here is implemented. Written against the code as of `871b26e5`.
+**Status:** Proposed / RFC. Phases 0 (#426) and 2 (#428) have shipped; nothing else here is implemented. Written against the code as of `5bc72d60`.
 **Scope:** Let someone who is *not you* participate in your claudectl world at a reduced trust level — ask read-only questions about one of your projects, join a named hive, or run a node from a Mac app instead of a terminal.
 
 ## Implementation status
@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | 0. Prerequisite hardening (constant-time auth, transport decision) | **Shipped** (#426) | `src/relay/crypto.rs`, `src/relay/http.rs`, `src/relay/protocol.rs` |
 | 1. Capability tokens + scopes | **Not started** | proposed `src/access/` |
-| 2. Context index (what a query can be answered from) | **Not started** | proposed `src/context/` |
+| 2. Context index (what a query can be answered from) | **Shipped** (#428) | `src/context/{mod,git,deny,docs,module_map,exposure}.rs` |
 | 3. Jev query classification + routing | **Not started** | proposed `src/access/classify.rs` |
 | 4. Read-only query surface (MCP + HTTP) | **Not started** | proposed `src/access/query.rs` |
 | 5. Named hives + advertise/discover | **Not started** | `src/hive/`, `src/relay/lan.rs`, `src/relay/invite.rs` |
@@ -123,25 +123,72 @@ The deliverable is an answer grounded in the project's own published context, pl
 
 ### 4.2 The context substrate
 
-What can answer those questions — and, equally, what cannot.
+**Shipped in #428 as `src/context/`.** This section now describes the built thing. There is no query surface over it yet — the module has no CLI and no caller, which is why it carries `#![allow(dead_code)]`; retrieval and the surface are #429, caps and budgets #431.
 
-| Source | In scope | Why |
-| --- | --- | --- |
-| `CLAUDE.md` | **Yes** | Already the canonical structure-and-conventions document |
-| `docs/*.md` | **Yes** | Design specs, already public-facing |
-| `README.md` | **Yes** | Public |
-| Repo module map (paths + doc comments) | **Yes** | Structure without bodies |
-| `skills.rs` registry | **Yes** | Answers "what's available" |
-| Hive units, categories `best_practice`/`technique`/`workflow_pattern` | **Yes, via `ExposureStore`** | Exactly "what to use"; exposure gating already exists |
-| Source bodies | **No (default)** | See [Q1](#q1-source-bodies) |
-| Session transcripts | **Never** | Carries prompts, code, output |
-| `recent_errors` | **Never** | Today this carries raw `Bash` stderr verbatim |
-| Brain decision logs | **Never** | "Brain decisions are local-only" is a stated design decision |
-| `.env`, untracked files, anything gitignored | **Never** | — |
+#### The two structural rules
+
+The index is the security boundary of the query surface, and two rules are what make it a boundary by construction rather than by policy:
+
+1. **`git ls-files -z --cached` is the only source of paths.** There is no `read_dir` and no directory walk anywhere in `src/context/`. The indexer iterates the tracked list and nothing else, so a file git's index does not name is a file the indexer has no way to open.
+2. **No git is an error, never a fallback.** `IndexError::{GitUnavailable, NotARepo, GitFailed}` — an enum, so a caller can match `NotARepo` and say something useful. `coord::resume` degrades to an mtime tree hash when git is missing, because a stale hash is tolerable. Here a fallback would mean indexing whatever happens to be on disk, `.env` included.
+
+The guarantee those give is one-way: anything published is tracked and not excluded. The converse does not hold. `Cargo.toml` is tracked and passes the denylist and is still not published, because only the sources in the table are read.
+
+`--cached` means the git index, not the working tree, so a staged-but-uncommitted file counts and a modified file's untracked sibling does not.
+
+#### What is in, and what is not
+
+| Source | Status | Index field | Why |
+| --- | --- | --- | --- |
+| `CLAUDE.md`, at any depth | **Indexed** | `claude_md` | Already the canonical structure-and-conventions document |
+| `README.md`, at any depth | **Indexed** | `readme` | Public |
+| `.md` / `.markdown` under `docs/`, recursively | **Indexed** | `docs` | Design specs, already public-facing |
+| Module map — paths, `//!` headers, `///` docs, public signatures | **Indexed** | `module_map` | Structure without bodies |
+| Project skills, intersected with the tracked set | **Indexed** | `skills` | Answers "what's available" |
+| Hive units, categories `best_practice`/`technique`/`workflow_pattern`, locally originated | **Indexed**, via `ExposureStore` | `hive_units` | Exactly "what to use"; exposure gating already exists |
+| Any other tracked markdown | **No** | — | A stray `.md` elsewhere in the tree has not been offered up as documentation |
+| Item bodies, struct fields, enum variants, `pub(crate)` and private items | **No (default)** | — | See [Q1](#q1-source-bodies) |
+| Session transcripts | **Never** | — | Carries prompts, code, output |
+| `recent_errors` | **Never** | — | Today this carries raw `Bash` stderr verbatim |
+| Brain decision logs | **Never** | — | "Brain decisions are local-only" is a stated design decision |
+| `.env*`, `.netrc`, ssh keys, certs, local databases, `.claude`/`.claudectl` trees | **Never**, by `deny.rs` | — | Tracked is not the same as publishable |
+| Untracked files, gitignored or not | **Never** | — | `--cached` never returns them |
 
 The default is **documentation-grade context**, which is also the honest answer to "how is it structured / what should I use." A project that wants to expose more opts in per-category, the same shape as `ExposureStore`'s per-unit model.
 
-The index is built from the project's committed tree, so *"is this file published?"* reduces to *"is it tracked by git and not excluded?"* — a question with a crisp answer, rather than a heuristic.
+An earlier draft of this table said "anything gitignored" was never published. That is false for a file that was committed and *then* ignored: `ls-files --cached` still returns it, because tracked is the definition of published. The denylist, not the ignore rules, is what keeps a committed `.env` out.
+
+#### The "excluded" half — `deny.rs`
+
+Someone can commit a `.env`; a transcript or a brain decision log dropped into a repo is a tracked `.jsonl` like any other. So the denylist is the second half of "tracked and not excluded", matched deny-first on the work-tree-relative path before any read, case-insensitively, in this order:
+
+- **Path segments at any depth** — `.claude`, `.claudectl`, `.git`, `.ssh`, `.gnupg`, `node_modules`, `target`, `vendor`, `.venv`, `__pycache__`. `.claude` and `.claudectl` as *directory segments* are what keeps a repo that commits its own agent state from publishing decision logs and session policy through the index.
+- **Whole filenames** — `.env`, `.envrc`, `.netrc`, `.npmrc`, `.pypirc`, the `id_*` ssh keys, `credentials`, `secrets.yml`, `secrets.yaml`.
+- **Filename prefixes** — `.env`, `id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa`, so `.env.production` needs no separate entry.
+- **Extensions** — `jsonl` plus keys, certs and local databases (`pem`, `key`, `p12`, `pfx`, `crt`, `cer`, `der`, `keystore`, `jks`, `asc`, `gpg`, `kdbx`, `sqlite`, `sqlite3`, `db`). Denying `jsonl` covers two of the three never-published content classes in one rule: session transcripts and the brain decision log are both JSONL. `recent_errors` is the third, and it is not a file.
+
+A match yields `DenyReason::{Name, Extension, Directory}`, which is what the build's `denied` count is made of. Matching is on whole segments and names, not substrings — `docs/environment.md` and `docs/keys-and-tokens.md` stay indexable.
+
+#### Structure without bodies — `module_map.rs`
+
+Deliberately not a Rust parser. A line state machine that understands four things: a file's `//!` header (only before the first line of code), a `///` block immediately preceding an item, the signature of a `pub` item, and where a body begins. Anything it cannot classify is dropped, which is the safe direction.
+
+It keeps two depth counters, and conflating them is the easy bug: `skip_depth` means "inside an item body, emit nothing", while `container_depth` counts `impl` and inline `mod` blocks, which are descended into because their contents are more items. Because nothing inside a brace is emitted, struct fields and enum variants are out as well as function bodies. `pub(crate)` is not public API, and private items are dropped entirely — name included — since a private helper's name is an implementation detail.
+
+#### Per-category exposure — `exposure.rs`
+
+Six categories, one decision each: `claude_md`, `readme`, `docs`, `module_map`, `skills`, `hive_units`. Semantics are `hive::exposure::ExposureStore`'s exactly — an explicit entry always wins, and a missing entry means exposed in `auto` and hidden in `manual` — but keyed on index source rather than on unit id. The types are redefined locally, with identical `"expose"` / `"hide"` wire values, because `src/context/` is ungated and hive is not. Decisions persist at `~/.claudectl/access/index-exposure.json`.
+
+The mode is the existing `Config.hive.share_mode`, not a new config field: "how freely does this machine share" is one question. That resolution is itself behind `#[cfg(feature = "hive")]`, so `ContextIndex::build()` in a build without hive always resolves `auto`; `build_with` takes the mode explicitly. In `manual` mode the index publishes nothing until a category is opted in, and a hidden category is recorded in the build's `categories_hidden` so an empty index is distinguishable from a broken one.
+
+#### Two holes the tests found
+
+- **Skills are intersected with the tracked set.** `skills::discover` reads the filesystem directly and sweeps three roots: `~/.claude/skills`, each installed plugin's skills, and `<project>/.claude/skills`. Publishing its output as-is drove a hole straight through rule 1 — an *untracked* skill dropped into the project would publish, and so would the operator's personal global skills, which say more about their machine than about this project. The intersection closes both, since a skill outside the repo is not in the tracked set.
+- **Hive units are locally originated only.** A unit that arrived by gossip belongs to a peer, and republishing it onward would hand a third party something they were never part of the exchange for. The filter is `source_peer` equal to this machine's peer identity, and it stacks with four others: the category must be `BestPractice`, `Technique` or `WorkflowPattern` (matched on the enum, which sidesteps `WorkflowPattern` serializing as `workflow_pattern` while its `label()` returns `workflow`), the scope must be `Universal` or `Project(<repo basename>)`, the unit must pass hive's per-unit `ExposureStore`, and the `hive_units` category must itself be exposed. What is published is the rendered semantic key, not the unit, so none of its bookkeeping — source peer, injection stats, consent — travels with it.
+
+#### Determinism
+
+The tracked list is sorted and deduped, and units and skills are sorted, so two builds of the same tree are byte-identical. `fingerprint()` is FNV-1a over the serialized index, formatted `"fnv1a:<hex>"`, rather than SHA-256: `relay::crypto` sits behind the `relay` feature and this module is ungated, and the same reasoning as `coord::resume`'s tree hash applies — this is a cache key, not an auth primitive. If it ever becomes security-load-bearing, `sha256` moves into `claudectl-core` first.
 
 ### 4.3 Query classification with Jev
 
@@ -227,7 +274,7 @@ The sensitive and injection thresholds are deliberately paranoid at `0.15` — a
 A probabilistic classifier must never be the only thing between a third party and your data. Even a well-calibrated one is a thing that can be argued with, and the input is attacker-controlled text. So the architecture puts the security property in code:
 
 - The query executor can only read from the **pre-built index** (§4.2). Source bodies, transcripts, error strings and env files are not in the index, so no classification outcome — and no prompt injection — can reach them. There is no code path from a query to a file that was not indexed.
-- The index is built from tracked, non-excluded files only, under the owner's exposure policy.
+- The index is built from tracked, non-excluded files only, under the owner's exposure policy. Since #428 that is enforced by construction rather than asserted: `git ls-files` is the only source of paths in `src/context/`, there is no directory walk in the module, and a missing git is an error instead of a fallback (§4.2).
 - The grant's scopes are checked in code before classification runs. Jev never sees a query it has no business seeing, and never decides whether a caller is authorized.
 - There is no write verb anywhere in the surface.
 
@@ -436,7 +483,7 @@ Ordered so each phase is independently useful and the riskiest dependency comes 
 | --- | --- | --- |
 | **0** | **Shipped (#426).** `relay::crypto::ct_eq` on both auth sites; HTTP API bound to loopback, tunnel documented | Prerequisite for anything third-party-facing (§3.4) |
 | **1** | Capability tokens, scopes, `access grant/list/revoke/audit` | The spine. Testable alone: issue, verify, expire, revoke |
-| **2** | Context index over tracked docs + module map + exposed hive units | Deterministic and unit-testable with no network |
+| **2** | **Shipped (#428).** `src/context/` — index over tracked docs + module map + tracked skills + locally-originated exposed hive units | Deterministic and unit-testable with no network |
 | **3** | Deterministic query surface (MCP + HTTP), **no Jev** | Proves the whole path end to end while the boundary is simple |
 | **4** | Jev classification + confidence routing + escalation queue | Added once there is real traffic to tune thresholds against — the docs are explicit that thresholds need your own data |
 | **5** | Hive naming, LAN advertisement, hive invite links | Independent of §4; dep-free; unblocks discovery |
@@ -455,7 +502,7 @@ Nothing here is greenfield. The spec is mostly composition:
 | `relay::crypto` (SHA-256, HMAC-SHA256, inline) | Grant token MACs — no JWT, no asymmetric crypto |
 | `relay::invite` (base32, word phrases, `cctl://`, QR) | Hive invite links (§7.4) |
 | `relay::lan` (UDP 9848, `CCTL` magic) | Hive advertisement (§7.3) |
-| `hive::exposure` (`ShareMode`, per-unit expose/hide) | Per-category index exposure (§4.2) |
+| `hive::exposure` (`ShareMode`, per-unit expose/hide) | Per-category index exposure (§4.2) — semantics and wire values mirrored, types redefined locally because `src/context/` is ungated |
 | `hive::trust` (`TrustTier`) | Read-only hive membership (§7.5) |
 | `bus::policy` + `bus::rate_limit` | Query caps and rate limiting (§4.8) |
 | `bus::mcp` (rmcp stdio server) | MCP query surface (§4.7) |

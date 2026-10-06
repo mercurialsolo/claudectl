@@ -4,8 +4,9 @@
 //!
 //! This is the security boundary of the query surface, and it is a boundary by
 //! construction rather than by policy. The index is built from the project's
-//! committed tree, so *"is this published?"* reduces to *"is it tracked by git
-//! and not excluded?"*. If something is not in the index, no classification
+//! git index, so *"is this published?"* reduces to *"is it tracked by git and
+//! not excluded?"* — that is the index, not HEAD, so a staged file counts as
+//! tracked. If something is not in the index, no classification
 //! outcome and no prompt injection can reach it, because there is no code path
 //! from a query to an unindexed file.
 //!

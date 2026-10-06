@@ -40,7 +40,7 @@ impl std::fmt::Display for IndexError {
             IndexError::NotARepo { root } => write!(
                 f,
                 "{} is not a git work tree; the index is built from the \
-                 committed tree, so there is nothing to publish",
+                 git index, so there is nothing to publish",
                 root.display()
             ),
             IndexError::GitFailed { detail } => write!(f, "git failed: {detail}"),
@@ -93,9 +93,11 @@ pub fn repo_root(start: &Path) -> Result<PathBuf, IndexError> {
 
 /// Every file tracked in `root`, as paths relative to the work-tree root.
 ///
-/// `--cached` only: the index, not the working tree. An uncommitted new file is
-/// not published, and neither is a modified-but-tracked file's untracked
-/// sibling. Sorted, so an index built twice is byte-identical.
+/// `--cached` is the git index, which is what "tracked" means. Worth stating
+/// precisely, because the RFC's prose says "committed tree" and that is not the
+/// same thing: a file that has been `git add`ed but not yet committed *is*
+/// tracked, and is published. An untracked file never is. Sorted, so an index
+/// built twice is byte-identical.
 ///
 /// Note this deliberately *does* return a tracked file that also matches a
 /// `.gitignore` pattern — adding a file and then ignoring it leaves it tracked,
@@ -151,7 +153,7 @@ mod tests {
         let err = IndexError::NotARepo {
             root: PathBuf::from("/tmp/x"),
         };
-        assert!(err.to_string().contains("committed tree"));
+        assert!(err.to_string().contains("git index"));
         assert!(
             IndexError::GitUnavailable
                 .to_string()
