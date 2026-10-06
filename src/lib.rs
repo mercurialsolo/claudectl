@@ -28,6 +28,8 @@ pub use claudectl_core::{
 pub use claudectl_tui::{app, demo, recorder, session_recorder, ui};
 pub mod config;
 
+#[cfg(feature = "relay")]
+pub mod access;
 pub mod brain;
 pub mod brain_screen;
 #[cfg(feature = "bus")]

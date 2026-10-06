@@ -355,12 +355,16 @@ pub fn parse_duration(s: &str) -> Option<u64> {
     }
     let (num_str, unit) = s.split_at(s.len() - 1);
     let num: u64 = num_str.parse().ok()?;
+    // checked_mul, not `*`: an absurd value like "99999999999999999999w" used
+    // to panic in debug builds rather than reading as invalid input. Anything
+    // that overflows is not a duration a caller can act on, so it is `None`
+    // like any other unparseable string.
     match unit {
         "s" => Some(num),
-        "m" => Some(num * 60),
-        "h" => Some(num * 3600),
-        "d" => Some(num * 86400),
-        "w" => Some(num * 604800),
+        "m" => num.checked_mul(60),
+        "h" => num.checked_mul(3600),
+        "d" => num.checked_mul(86400),
+        "w" => num.checked_mul(604800),
         _ => None,
     }
 }
@@ -406,6 +410,17 @@ mod tests {
         assert_eq!(parse_duration("1w"), Some(604800));
         assert_eq!(parse_duration(""), None);
         assert_eq!(parse_duration("abc"), None);
+    }
+
+    #[test]
+    fn parse_duration_rejects_overflow_instead_of_panicking() {
+        // These used to panic in debug builds. Reached from user input via
+        // `claudectl access grant --expires` (#427).
+        assert_eq!(parse_duration(&format!("{}w", u64::MAX)), None);
+        assert_eq!(parse_duration(&format!("{}d", u64::MAX)), None);
+        assert_eq!(parse_duration(&format!("{}m", u64::MAX)), None);
+        // Seconds have no multiplier, so the max is still a valid duration.
+        assert_eq!(parse_duration(&format!("{}s", u64::MAX)), Some(u64::MAX));
     }
 
     #[test]
