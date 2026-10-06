@@ -130,6 +130,12 @@ Both are omitted while zero, so a freshly minted grant reads exactly as above.
 Like `revoked`, neither is signed: editing them changes accounting, not
 capability, so it cannot invalidate a token already in someone's hands.
 
+A `0` in either field reads as `1`, not as "unlimited" and not as "deny
+everything". These fields have no CLI flag, so the only way to set them is to
+edit this file — and a hand-written `0` is far likelier to mean "I didn't think
+about this" than "refuse every query". The two guardrails agree on that
+reading; the file keeps whatever you wrote.
+
 ### Scopes
 
 Scopes are `<resource>.<verb>:<qualifier>`. `--scopes project.query` takes
@@ -188,14 +194,47 @@ Not signed: `revoked`, `last_used_ms`, `use_count`.
 
 Operationally that splits grant edits into two kinds:
 
-- **Revoking** flips one unsigned field. It takes effect on the next
-  verification, with no restart and no re-issue.
+- **Revoking** takes effect on the next verification, with no restart and no
+  re-issue. It is also **one-way**: see below.
 - **Editing `scopes` or `expires_ms`** — by hand in the JSON, or by any future
   tooling — invalidates the token already in the third party's hands. There is
   no "widen this grant" operation. Issue a new grant and revoke the old one.
 
 The same property is why a token can't be edited to widen itself: the scopes it
 would have to claim are the ones under the signature.
+
+### Revocation is one-way, and the tombstone is why
+
+`claudectl access revoke` writes two things: the `revoked: true` field, and an
+empty marker file at `grants/<grant_id>.revoked`. **The marker is the
+authority.** Setting the JSON field back to `false` does not restore the grant;
+removing the marker by hand does, but that is a deliberate act, not an
+accident.
+
+The reason is concurrency. Three operations rewrite the *whole* grant record —
+the daily-budget charge, the use-count bump, and revoke itself — and they do not
+all live in one process. `access revoke` is the CLI; the other two are
+`query serve`. So this was possible:
+
+```text
+  serve:  load the grant (revoked: false)
+  you:    claudectl access revoke gr_a38487
+  serve:  bump use_count, write the whole record back  ->  revoked: false
+```
+
+A token you believed was dead kept answering. A process-local lock cannot order
+writes across two processes, and revocation is monotonic — there is no
+un-revoke command — so it does not belong in a mutable record at all. A file
+that is only ever *created* cannot be clobbered by a writer that never writes
+it.
+
+Two consequences worth knowing:
+
+- The marker outlives a deleted `.json`. If you delete a grant file by hand and
+  a later `access grant` happens to draw the same 24-bit id, that new grant is
+  born revoked. Fail-closed, and the fix is to delete the stale `.revoked` too.
+- `access list` and `--json` both read the marker, so the table and `verify`
+  can never disagree about whether a grant is live.
 
 ## The audit log
 

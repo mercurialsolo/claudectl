@@ -219,6 +219,49 @@ impl GrantStore {
         }
     }
 
+    /// The revocation tombstone's path.
+    ///
+    /// `.revoked` rather than `.json`, so [`Self::list`]'s extension filter
+    /// skips it and a tombstone never reads as a grant.
+    fn revoked_path(&self, grant_id: &str) -> Option<PathBuf> {
+        if super::is_valid_grant_id(grant_id) {
+            Some(self.grants_dir().join(format!("{grant_id}.revoked")))
+        } else {
+            None
+        }
+    }
+
+    /// Whether a revocation tombstone exists for `grant_id`.
+    ///
+    /// # Why revocation is a file and not just a field
+    ///
+    /// Three writers rewrite the *whole* grant record: `charge_daily_budget`,
+    /// `record_query_use` and `revoke` itself. They are serialised inside one
+    /// `query serve` process, but `access revoke` runs in a **different
+    /// process**, and a process-local mutex cannot order writes across a
+    /// process boundary. So this interleaving was possible:
+    ///
+    /// ```text
+    ///   serve: load grant (revoked: false)
+    ///   cli:   load, set revoked = true, write
+    ///   serve: bump use_count, write the whole record  -> revoked: false
+    /// ```
+    ///
+    /// A token the owner believes is dead keeps answering. #431 called a
+    /// cross-process clobber "the benign direction", which was true of the
+    /// budget counters and false of this.
+    ///
+    /// Revocation is **monotonic** — once revoked, always revoked; there is no
+    /// un-revoke command — and a monotonic fact does not belong in a mutable
+    /// record. A file that is only ever *created* cannot be clobbered by a
+    /// writer that never writes it, so the property holds by construction
+    /// rather than by locking. `revoke` still sets the JSON field too, so the
+    /// on-disk shape `docs/access.md` documents is unchanged for anything that
+    /// reads it; the tombstone is simply the authority when the two disagree.
+    fn is_tombstoned(&self, grant_id: &str) -> bool {
+        self.revoked_path(grant_id).is_some_and(|p| p.exists())
+    }
+
     /// Persist a grant, refusing to clobber an existing id.
     ///
     /// A grant-id collision is an error rather than a silent overwrite that
@@ -282,9 +325,15 @@ impl GrantStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(format!("read grant {grant_id}: {e}")),
         };
-        serde_json::from_str(&body)
-            .map(Some)
-            .map_err(|e| format!("grant {grant_id} is malformed: {e}"))
+        let mut grant: Grant = serde_json::from_str(&body)
+            .map_err(|e| format!("grant {grant_id} is malformed: {e}"))?;
+        // Folded in here rather than at each call site, so `verify`,
+        // `verify_detailed`, `charge_daily_budget` and `access list` are all
+        // correct without knowing the tombstone exists.
+        if self.is_tombstoned(grant_id) {
+            grant.revoked = true;
+        }
+        Ok(Some(grant))
     }
 
     /// Every readable grant, newest first. Unreadable files are skipped so one
@@ -293,24 +342,57 @@ impl GrantStore {
         let Ok(entries) = fs::read_dir(self.grants_dir()) else {
             return Vec::new();
         };
+        // Parsed, then the tombstone applied — `list` reads the file directly
+        // rather than going through `load`, so it has to do the same fold or
+        // `access list` would print `active` for a grant `verify` refuses.
         let mut out: Vec<Grant> = entries
             .flatten()
             .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
             .filter_map(|e| fs::read_to_string(e.path()).ok())
             .filter_map(|body| serde_json::from_str::<Grant>(&body).ok())
+            .map(|mut g| {
+                if self.is_tombstoned(&g.grant_id) {
+                    g.revoked = true;
+                }
+                g
+            })
             .collect();
         out.sort_by_key(|g| std::cmp::Reverse(g.issued_ms));
         out
     }
 
     /// Mark a grant revoked. Idempotent.
+    ///
+    /// The tombstone is written **first**, and that order is the fail-closed
+    /// one: if this dies between the two writes, a tombstone with a stale JSON
+    /// field still reads as revoked, while a written field with no tombstone
+    /// could be clobbered back to live by a concurrent `query serve`. See
+    /// [`Self::is_tombstoned`].
     pub fn revoke(&self, grant_id: &str) -> Result<Grant, String> {
         let mut grant = self
             .load(grant_id)?
             .ok_or_else(|| format!("no such grant: {grant_id}"))?;
+        self.tombstone(grant_id)?;
         grant.revoked = true;
-        self.update(&grant)?;
+        // Best-effort: the tombstone above is what makes the revocation
+        // durable, so a failure to also update the JSON must not report a
+        // revocation that did not happen.
+        let _ = self.update(&grant);
         Ok(grant)
+    }
+
+    /// Create the revocation tombstone. Idempotent.
+    fn tombstone(&self, grant_id: &str) -> Result<(), String> {
+        let path = self
+            .revoked_path(grant_id)
+            .ok_or_else(|| format!("invalid grant id: {grant_id}"))?;
+        fs::create_dir_all(self.grants_dir()).map_err(|e| format!("create grants dir: {e}"))?;
+        // Created, never rewritten, and the content is irrelevant — existence
+        // is the whole signal. `create_private` truncates, which is harmless
+        // on an empty marker and keeps the 0600 discipline.
+        let f = create_private(&path)?;
+        f.sync_data()
+            .map_err(|e| format!("sync revocation tombstone: {e}"))
     }
 
     /// Verify a presented token against the stored grant and a required scope.
@@ -477,25 +559,35 @@ impl GrantStore {
         };
 
         let today = super::utc_day(now_ms);
-        if grant.budget_day != today {
+        // `>` rather than `!=`, so the counter only ever rolls *forward*. An
+        // NTP correction backwards across a day boundary would make `today`
+        // less than `budget_day`, and `!=` read that as a new day and handed
+        // the grant a second full allowance for a day it had already spent.
+        // Keeping the old day's counter is the conservative direction, and a
+        // fresh grant (`budget_day: 0`) still rolls forward on first use.
+        if today > grant.budget_day {
             grant.budget_day = today;
             grant.budget_used = 0;
         }
-        if grant.budget_used >= grant.daily_query_budget {
+        // `max(1)`, matching `rate_limit::try_acquire_with_capacity`. These
+        // fields have no CLI flag and `docs/access.md` tells owners to edit the
+        // grant file, so a hand-written `0` is far more likely to mean "I did
+        // not think about this" than "deny every query" — and two guardrails
+        // reading `0` in opposite directions would be worse than either
+        // reading alone. Read-time only: the file is not rewritten.
+        let budget = grant.daily_query_budget.max(1);
+        if grant.budget_used >= budget {
             self.audit_denied_outside_verify(
                 grant_id,
                 DenyReason::BudgetExhausted,
-                Some(format!(
-                    "{}/{} used today",
-                    grant.budget_used, grant.daily_query_budget
-                )),
+                Some(format!("{}/{} used today", grant.budget_used, budget)),
                 question,
                 now_ms,
             );
             return Err(ChargeError::Exhausted);
         }
         grant.budget_used = grant.budget_used.saturating_add(1);
-        let remaining = grant.daily_query_budget.saturating_sub(grant.budget_used);
+        let remaining = budget.saturating_sub(grant.budget_used);
         if let Err(e) = self.update(&grant) {
             self.audit_denied_outside_verify(
                 grant_id,
@@ -828,16 +920,75 @@ mod tests {
     }
 
     #[test]
-    fn revoking_does_not_invalidate_the_mac() {
-        // Accounting fields are unsigned on purpose: revoke is a one-field
-        // write, and un-revoking restores the same token rather than forcing
-        // a re-grant.
+    fn a_revocation_cannot_be_undone_by_editing_the_grant_file() {
+        // This test used to assert the opposite — that writing `revoked:
+        // false` back restored the token — on the reasoning that an unsigned
+        // field is a cheap two-way switch. That reasoning was the hole: three
+        // writers rewrite the whole record and one of them lives in another
+        // process, so "whatever was written last wins" meant a concurrent
+        // `query serve` could un-revoke a grant by accident. Nothing in
+        // `docs/access.md` ever offered un-revoke; it says revocation is
+        // immediate and idempotent, and that widening means issuing a new
+        // grant. Revocation is monotonic now, and the tombstone is what makes
+        // it so.
         let (_d, store, _g, token) = fixture();
         store.revoke("gr_7f2a1b").unwrap();
+        assert!(store.verify(&SECRET, &token, None, NOW).is_err());
+
         let mut g = store.load("gr_7f2a1b").unwrap().unwrap();
         g.revoked = false;
         store.update(&g).unwrap();
-        assert!(store.verify(&SECRET, &token, None, NOW).is_ok());
+
+        // The field is back to `false` on disk and the MAC still matches — it
+        // was never signed — but the tombstone outranks the field.
+        assert!(
+            store.verify(&SECRET, &token, None, NOW).is_err(),
+            "editing the field must not resurrect a revoked grant"
+        );
+        assert!(
+            store.load("gr_7f2a1b").unwrap().unwrap().revoked,
+            "`load` folds the tombstone in, so every consumer sees revoked"
+        );
+    }
+
+    #[test]
+    fn a_concurrent_write_cannot_clobber_a_revocation() {
+        // The two-process shape, as two stores over one directory: `serve`
+        // loads the grant, the CLI revokes it, `serve` writes its stale copy
+        // back. Before the tombstone this silently un-revoked the grant.
+        let dir = tempfile::tempdir().unwrap();
+        let serve = GrantStore::new(dir.path());
+        let cli = GrantStore::new(dir.path());
+        let grant = new_grant(
+            "gr_7f2a1b".into(),
+            "t".into(),
+            vec!["project.query:p".parse().unwrap()],
+            NOW,
+            NOW + HOUR,
+        );
+        serve.create(&grant).unwrap();
+        let secret = [7u8; 32];
+        let token =
+            super::super::token::mint(&secret, &grant.grant_id, &grant.scopes, grant.expires_ms);
+
+        // `serve` has the record in hand, pre-revocation.
+        let stale = serve.load("gr_7f2a1b").unwrap().unwrap();
+        assert!(!stale.revoked);
+
+        cli.revoke("gr_7f2a1b").unwrap();
+
+        // …and writes it back, exactly as a `use_count` bump would.
+        serve.update(&stale).unwrap();
+
+        assert!(
+            serve.verify(&secret, &token, None, NOW).is_err(),
+            "a stale write must not resurrect the grant"
+        );
+        // And `access list` agrees with `verify`, which is the other half:
+        // `list` reads the files directly rather than through `load`.
+        let listed = serve.list();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].revoked, "list must fold the tombstone in too");
     }
 
     #[test]
@@ -1222,5 +1373,60 @@ mod tests {
         assert!(g.has_scope(&scope("project.query:claudectl")));
         assert!(!g.has_scope(&scope("project.query:claudectl-fork")));
         assert!(!g.has_scope(&scope("project.docs:claudectl")));
+    }
+
+    // ── Review follow-ups on #431 ──
+
+    #[test]
+    fn a_clock_step_backwards_does_not_hand_out_a_second_allowance() {
+        let (_d, store, mut grant, _t) = fixture();
+        grant.daily_query_budget = 2;
+        store.update(&grant).unwrap();
+
+        let day2 = super::super::MS_PER_DAY * 2 + 1_000;
+        store.charge_daily_budget("gr_7f2a1b", None, day2).unwrap();
+        store.charge_daily_budget("gr_7f2a1b", None, day2).unwrap();
+        assert_eq!(
+            store.charge_daily_budget("gr_7f2a1b", None, day2),
+            Err(ChargeError::Exhausted)
+        );
+
+        // An NTP correction backwards across the day boundary. With `!=` this
+        // read as "a new day" and reset the counter, handing the grant a
+        // second full allowance for time it had already spent.
+        let day1 = super::super::MS_PER_DAY + 1_000;
+        assert_eq!(
+            store.charge_daily_budget("gr_7f2a1b", None, day1),
+            Err(ChargeError::Exhausted),
+            "going back in time must not refill the budget"
+        );
+
+        // Forward still rolls, which is the direction that has to work.
+        let day3 = super::super::MS_PER_DAY * 3 + 1_000;
+        assert_eq!(store.charge_daily_budget("gr_7f2a1b", None, day3), Ok(1));
+    }
+
+    #[test]
+    fn a_zero_daily_budget_reads_as_one_rather_than_a_dead_grant() {
+        // `rate_limit_per_min: 0` is deliberately raised to 1, on the grounds
+        // that a 0 in a hand-edited grant file is far likelier to be an
+        // oversight than a deliberate denial. These fields have no CLI flag
+        // and `docs/access.md` tells owners to edit the file, so the budget
+        // follows the same convention — two guardrails reading 0 in opposite
+        // directions would be worse than either reading alone.
+        let (_d, store, mut grant, _t) = fixture();
+        grant.daily_query_budget = 0;
+        store.update(&grant).unwrap();
+
+        assert_eq!(store.charge_daily_budget("gr_7f2a1b", None, NOW), Ok(0));
+        assert_eq!(
+            store.charge_daily_budget("gr_7f2a1b", None, NOW),
+            Err(ChargeError::Exhausted)
+        );
+        // Read-time only: the file keeps the 0 the owner wrote.
+        assert_eq!(
+            store.load("gr_7f2a1b").unwrap().unwrap().daily_query_budget,
+            0
+        );
     }
 }

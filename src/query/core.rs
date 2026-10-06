@@ -250,12 +250,22 @@ pub struct QueryCore {
     /// Per-grant token buckets (#431, RFC §4.8). Keyed on *verified* grant
     /// ids — see the eviction note in `crate::rate_limit`.
     limiter: RateLimiter,
-    /// Serialises the daily budget's load → check → increment → write.
+    /// Serialises **every** read-modify-write this process makes on a grant
+    /// file — `charge_daily_budget` and `record_query_use` both.
     ///
-    /// `charge_daily_budget` is a read-modify-write on a file and two
-    /// concurrent requests could otherwise both read the same `budget_used`
-    /// and both write `+1`, losing a charge. One server process serves one
-    /// project, so a process-local lock closes the window that matters.
+    /// Two concurrent requests could otherwise read the same `budget_used` and
+    /// both write `+1`, losing a charge. Holding the lock for only one of the
+    /// two writers does not close that: the unsynchronised one reads the
+    /// record, the locked one charges, and the first then writes its stale
+    /// copy back. #431 shipped with exactly that gap.
+    ///
+    /// **What this lock cannot do is order writes against another process.**
+    /// `access revoke` runs in the CLI, not here, so a stale write from this
+    /// process could clobber a revocation. That is why `revoked` is backed by
+    /// a create-only tombstone rather than by this mutex — see
+    /// `GrantStore::is_tombstoned`. What remains cross-process-racy is the
+    /// benign direction only: a lost budget charge or use-count bump between
+    /// two `query serve` processes sharing one access dir.
     budget_lock: Mutex<()>,
 }
 
@@ -347,8 +357,29 @@ impl QueryCore {
         {
             Ok(g) => g,
             Err((DenyReason::MissingScope, Some(grant_id))) => {
-                // Audited by `verify_detailed` already; this only charges. The
-                // result is discarded on purpose: the response is `Denied`
+                // Throttled on the same bucket as a successful request, and
+                // for the same reason the limit sits after `verify`: this id
+                // has presented a valid MAC, so it is already eligible to key
+                // a bucket. Leaving it out meant a holder with a wrong-scope
+                // token was *unthrottled* — each request costing an HMAC, a
+                // grant read, a grant write and two `audit.jsonl` appends at
+                // wire speed — which contradicted the per-grant ceiling this
+                // surface documents.
+                //
+                // What the throttle actually bounds is the grant-file writes
+                // and the budget charges. `verify_detailed` has already
+                // appended its `missing_scope` line by the time this runs, so
+                // audit appends stay one per request: the same disk-write
+                // vector an unauthenticated flood has, and the TLS
+                // terminator's job either way.
+                //
+                // No second `rate_limited` line here. The `missing_scope` line
+                // is already the record of the attempt, and halving the
+                // appends matters more than narrating which guard stopped it.
+                if !self.acquire(&grant_id, now_ms) {
+                    return Err(QueryError::Denied);
+                }
+                // The result is discarded on purpose: the response is `Denied`
                 // whether the charge landed, was already exhausted, or failed
                 // against the store — and each of those wrote its own audit
                 // line on the way through.
@@ -358,14 +389,16 @@ impl QueryCore {
             Err(_) => return Err(QueryError::Denied),
         };
 
-        if !self.limiter.try_acquire_with_capacity(
-            &grant.grant_id,
-            grant.rate_limit_per_min,
-            Instant::now(),
-        ) {
-            let retry_after = self
-                .limiter
-                .retry_after_secs(&grant.grant_id, Instant::now());
+        // One `Instant`, read once and used for both calls. Two separate
+        // `Instant::now()`s let a token refill between them, and then
+        // `retry_after_secs` returns `None` and the 429 ships without the
+        // `Retry-After` header `docs/access.md` promises.
+        let now = Instant::now();
+        if !self
+            .limiter
+            .try_acquire_with_capacity(&grant.grant_id, grant.rate_limit_per_min, now)
+        {
+            let retry_after = self.limiter.retry_after_secs(&grant.grant_id, now);
             self.store.audit_denied_outside_verify(
                 &grant.grant_id,
                 DenyReason::RateLimited,
@@ -381,6 +414,49 @@ impl QueryCore {
 
         self.charge_budget(&grant.grant_id, question, now_ms)?;
         Ok(grant)
+    }
+
+    /// Take one token from `grant_id`'s bucket, at that grant's own capacity.
+    ///
+    /// The capacity lives on the grant, so this loads it. That is not a new
+    /// class of I/O on either caller's path: the success path has the grant in
+    /// hand and `charge_budget` loads it again anyway, and the `MissingScope`
+    /// path is a denial. A grant that cannot be read falls back to the
+    /// limiter's own default rather than going unthrottled.
+    fn acquire(&self, grant_id: &str, _now_ms: u64) -> bool {
+        let capacity = self
+            .store
+            .load(grant_id)
+            .ok()
+            .flatten()
+            .map(|g| g.rate_limit_per_min)
+            .unwrap_or(crate::rate_limit::DEFAULT_CAPACITY);
+        self.limiter
+            .try_acquire_with_capacity(grant_id, capacity, Instant::now())
+    }
+
+    /// Record a successful use, under the grant-file lock.
+    ///
+    /// `record_query_use` is load → bump `use_count` → `update`, so it is a
+    /// second read-modify-write on the grant file and needs the same lock
+    /// `charge_daily_budget` takes. Without it, two concurrent requests could
+    /// both read the same record and the second write would drop the first's
+    /// charge — the lost-write window the mutex was supposed to close.
+    fn record_use(
+        &self,
+        grant_id: &str,
+        detail: Option<&str>,
+        question: Option<&str>,
+        cited: Option<Vec<String>>,
+        now_ms: u64,
+    ) -> Result<(), QueryError> {
+        let _guard = self
+            .budget_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.store
+            .record_query_use(grant_id, detail, question, cited, now_ms)
+            .map_err(QueryError::Internal)
     }
 
     /// Spend one unit of the grant's daily budget, under the process lock.
@@ -449,15 +525,13 @@ impl QueryCore {
         let (spans, truncated) = self.select(&terms, limit);
 
         // Record after the work, so the line says what actually came back.
-        self.store
-            .record_query_use(
-                &grant.grant_id,
-                Some(Operation::Ask.audit_detail()),
-                Some(question),
-                Some(cited_paths(&spans)),
-                now_ms,
-            )
-            .map_err(QueryError::Internal)?;
+        self.record_use(
+            &grant.grant_id,
+            Some(Operation::Ask.audit_detail()),
+            Some(question),
+            Some(cited_paths(&spans)),
+            now_ms,
+        )?;
 
         Ok(Answer {
             project: self.project.clone(),
@@ -476,15 +550,6 @@ impl QueryCore {
     /// [`Self::topics`] with the clock injected.
     pub fn topics_at(&self, token: &str, now_ms: u64) -> Result<Topics, QueryError> {
         let grant = self.authorize(token, Operation::Topics, None, now_ms)?;
-        self.store
-            .record_query_use(
-                &grant.grant_id,
-                Some(Operation::Topics.audit_detail()),
-                None,
-                None,
-                now_ms,
-            )
-            .map_err(QueryError::Internal)?;
         let mut topics = Vec::new();
         for (source, sections) in self.doc_channels() {
             for section in sections {
@@ -516,6 +581,17 @@ impl QueryCore {
                 heading_path: vec![unit.category.clone(), unit.id.clone()],
             });
         }
+        // Recorded after the list is built, matching `ask` and `get_doc`. The
+        // build cannot fail today, but the module documents "record after the
+        // work" as the invariant and holding it in two of three operations is
+        // how a future fallible step logs a use that did not happen.
+        self.record_use(
+            &grant.grant_id,
+            Some(Operation::Topics.audit_detail()),
+            None,
+            None,
+            now_ms,
+        )?;
         Ok(Topics {
             project: self.project.clone(),
             fingerprint: self.index.fingerprint(),
@@ -559,17 +635,29 @@ impl QueryCore {
             }
         }
         if sections.is_empty() {
+            // Audited before returning. `authorize` already charged the
+            // budget, so without this a holder enumerating doc paths drained
+            // `budget_used` while `access audit` showed nothing — the two
+            // commands disagreed and neither could be reconciled with the
+            // other. The caller still gets the same opaque `404`; the line is
+            // for the owner, and carries the path as `question` so it reads
+            // the same way a hit does.
+            self.store.audit_denied_outside_verify(
+                &grant.grant_id,
+                DenyReason::NotIndexed,
+                Some(Operation::GetDoc.audit_detail().to_string()),
+                Some(path),
+                now_ms,
+            );
             return Err(QueryError::Denied);
         }
-        self.store
-            .record_query_use(
-                &grant.grant_id,
-                Some(Operation::GetDoc.audit_detail()),
-                Some(path),
-                Some(vec![path.to_string()]),
-                now_ms,
-            )
-            .map_err(QueryError::Internal)?;
+        self.record_use(
+            &grant.grant_id,
+            Some(Operation::GetDoc.audit_detail()),
+            Some(path),
+            Some(vec![path.to_string()]),
+            now_ms,
+        )?;
         Ok(Document {
             project: self.project.clone(),
             fingerprint: self.index.fingerprint(),
@@ -1474,5 +1562,127 @@ mod tests {
         assert_eq!(seconds_until_utc_midnight(DAY * 8 - 1), 1);
         // Exactly midnight: a whole day ahead, not zero.
         assert_eq!(seconds_until_utc_midnight(DAY * 8), 86_400);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Review follow-ups on #431
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_doc_path_that_is_not_indexed_is_audited_rather_than_silently_charged() {
+        let Some(h) = harness(vec![
+            Scope::ProjectQuery("fixture".into()),
+            Scope::ProjectDocs("fixture".into()),
+        ]) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        assert_eq!(
+            h.core.get_doc(&h.token, "docs/nope.md"),
+            Err(QueryError::Denied),
+            "the caller still gets the one opaque refusal"
+        );
+
+        // The owner's side is the point: before this, the budget moved and the
+        // log said nothing, so `access list` and `access audit` disagreed.
+        let audit = h.core.store.read_audit(Some("gr_test01"));
+        let last = audit.last().expect("a line");
+        assert_eq!(last.event, "denied");
+        assert_eq!(last.reason.as_deref(), Some("not_indexed"));
+        assert_eq!(last.question.as_deref(), Some("docs/nope.md"));
+
+        let g = h
+            .core
+            .store
+            .load("gr_test01")
+            .unwrap()
+            .expect("grant present");
+        assert_eq!(g.budget_used, 1, "it did cost a query");
+        assert_eq!(g.use_count, 0, "but it was not a use");
+    }
+
+    #[test]
+    fn a_wrong_scope_probe_is_throttled_like_any_other_request() {
+        // One request per minute, and a grant that holds `project.query` only
+        // while asking for a doc — so every request is a `MissingScope`
+        // denial. Before this the arm returned before the rate limit and the
+        // probe was unthrottled.
+        let Some(h) = harness_with_limits(
+            vec![Scope::ProjectQuery("fixture".into())],
+            Some(1),
+            Some(500),
+        ) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        for i in 0..4 {
+            assert_eq!(
+                h.core.get_doc(&h.token, "CLAUDE.md"),
+                Err(QueryError::Denied),
+                "request {i} must be refused"
+            );
+        }
+
+        let g = h
+            .core
+            .store
+            .load("gr_test01")
+            .unwrap()
+            .expect("grant present");
+        // One token in the bucket, so exactly one request got as far as the
+        // charge. The other three were stopped before touching the grant file.
+        assert_eq!(
+            g.budget_used, 1,
+            "the throttle must bound the grant-file writes"
+        );
+
+        // And the refusal stays opaque. A 429 here would tell the caller this
+        // project recognises their token, which §3.3 exists to withhold — the
+        // success path earns a 429 by proving scope; this caller did not.
+        let audit = h.core.store.read_audit(Some("gr_test01"));
+        assert!(
+            audit
+                .iter()
+                .all(|e| e.reason.as_deref() != Some("rate_limited")),
+            "a throttled missing-scope probe must not add a second line"
+        );
+        assert_eq!(
+            audit
+                .iter()
+                .filter(|e| e.reason.as_deref() == Some("missing_scope"))
+                .count(),
+            4,
+            "verify_detailed logs each attempt before the throttle runs — the \
+             appends are not what the throttle bounds"
+        );
+    }
+
+    #[test]
+    fn a_throttled_request_always_carries_a_retry_hint() {
+        let Some(h) = harness_with_limits(
+            vec![Scope::ProjectQuery("fixture".into())],
+            Some(1),
+            Some(500),
+        ) else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        h.core
+            .ask(&h.token, "how is config layering done?", None)
+            .expect("first");
+        match h.core.ask(&h.token, "again", None) {
+            Err(QueryError::Throttled {
+                retry_after_secs, ..
+            }) => {
+                // One `Instant` for the acquire and the hint. With two, a
+                // refill between them returned `None` and the 429 shipped bare
+                // while `docs/access.md` promised the header.
+                assert!(
+                    retry_after_secs.is_some(),
+                    "docs/access.md promises a Retry-After on every 429"
+                );
+            }
+            other => panic!("expected a throttle: {other:?}"),
+        }
     }
 }

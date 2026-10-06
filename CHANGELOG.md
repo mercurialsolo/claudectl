@@ -4,6 +4,60 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed — review follow-ups on the query guardrails (#431)
+
+Eight findings from a review of #444. All eight were real.
+
+- **A revocation could be silently undone by a concurrent write.** The budget
+  charge, the use-count bump and `revoke` all rewrite the *whole* grant record,
+  and `access revoke` runs in the CLI while the other two run in
+  `query serve` — a different process, which a process-local mutex cannot
+  order. So `serve` could load a grant, the owner could revoke it, and `serve`
+  could write its stale copy back: a token the owner believed was dead kept
+  answering. Revocation is now backed by a create-only marker file at
+  `grants/<grant_id>.revoked`, which a writer that never writes it cannot
+  clobber; `load` and `list` both fold it in, so `access list` and `verify` can
+  never disagree. **Revocation is one-way now** — setting `revoked: false` back
+  in the JSON no longer restores the grant. Nothing documented un-revoke as a
+  capability, and #431's "a cross-process clobber is the benign direction" was
+  true of the counters and false of this.
+- **The budget mutex didn't close the window it was for.** `record_query_use`
+  is a second read-modify-write on the grant file and never took the lock, so
+  an unsynchronised read followed by a locked charge followed by a stale write
+  still lost the charge. All three recording paths take it now.
+- **A `get_doc` miss charged the budget and audited nothing.** A holder
+  enumerating doc paths drained `budget_used` while `access audit` stayed
+  empty, so the two commands disagreed and neither could be reconciled with the
+  other — exactly the probing #431 argued the QUESTION column exists to
+  surface. The miss now writes a `not_indexed` line carrying the path. The
+  caller still gets the same opaque `404`.
+- **A question could forge an audit row or drive the operator's terminal.**
+  `question` is third-party text printed straight to stdout; a newline inside
+  the first 44 characters survived the truncation and forged a plausible extra
+  row, and an ANSI escape could clear the screen. Control characters are now
+  replaced with a visible marker **at render** — never on the way into
+  `audit.jsonl`, because scrubbing on write would destroy the evidence the log
+  exists to keep. `--json` was already safe.
+- **The `missing_scope` denial bypassed the rate limit entirely.** A holder
+  with a wrong-scope token was unthrottled, each request costing an HMAC, a
+  grant read, a grant write and two audit appends at wire speed. It has
+  presented a valid MAC, which is the only thing the bucket-map argument
+  requires, so it is throttled on its own grant's limit. The refusal stays the
+  opaque `404` — a `429` there would confirm this project recognises the token.
+  The throttle bounds the grant-file writes, not the appends: `verify_detailed`
+  has already written its line by then.
+- **A backwards clock step handed out a second daily allowance.** The rollover
+  compared `!=`, so an NTP correction back across a day boundary read as a new
+  day and reset the counter. It compares `>` now and only ever rolls forward.
+- **`daily_query_budget: 0` was a dead grant.** `rate_limit_per_min: 0` is
+  deliberately read as `1`; the budget read `0` as deny-everything. These
+  fields have no CLI flag and `docs/access.md` tells owners to edit the file, so
+  both now read `0` as `1` — one convention is worth more than either reading
+  alone. Read-time only; the file keeps what was written.
+- **A `429` could ship without the `Retry-After` the docs promise.** The
+  acquire and the hint read two different `Instant`s, so a refill between them
+  returned `None`. One `Instant`, used for both.
+
 ### Added — query guardrails: rate limit, daily budget, audited questions (#431)
 - **The per-grant limits #427 persisted are now enforced.** `rate_limit_per_min`
   is a token bucket, `daily_query_budget` a UTC-day counter on the grant file.

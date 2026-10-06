@@ -130,6 +130,14 @@ pub enum DenyReason {
     RateLimited,
     /// The grant's `daily_query_budget` was spent for the current UTC day.
     BudgetExhausted,
+    /// A `get_doc` named a path the index does not carry.
+    ///
+    /// Also written by the caller. The caller is told the same opaque `404` a
+    /// missing scope gets — what this reason exists for is the *owner's* side:
+    /// without it a holder enumerating doc paths spent the budget while
+    /// `access audit` showed nothing, so `access list` and `access audit`
+    /// disagreed and neither could be reconciled with the other.
+    NotIndexed,
 }
 
 impl DenyReason {
@@ -144,6 +152,7 @@ impl DenyReason {
             DenyReason::MissingScope => "missing_scope",
             DenyReason::RateLimited => "rate_limited",
             DenyReason::BudgetExhausted => "budget_exhausted",
+            DenyReason::NotIndexed => "not_indexed",
         }
     }
 }
