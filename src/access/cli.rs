@@ -440,7 +440,8 @@ fn cmd_escalations(json_mode: bool) -> io::Result<()> {
     let mut pending = 0usize;
     for e in &rows {
         let state = queue.state(e, now, ESCALATION_TTL_MS);
-        if !state.is_terminal() && state != crate::query::escalate::EscalationState::Expired {
+        // `is_terminal` already excludes expired — only `Pending` is false.
+        if !state.is_terminal() {
             pending += 1;
         }
         println!(
@@ -486,17 +487,17 @@ fn cmd_decide(
         .find(escalation_id)
         .ok_or_else(|| io::Error::other(format!("no such escalation: {escalation_id}")))?;
 
+    // `decide` re-checks the state itself and refuses an already-decided or
+    // expired row, so there is no check to duplicate here.
     let now = super::epoch_ms();
-    let current = queue.state(&entry, now, ESCALATION_TTL_MS);
-    if current.is_terminal() {
-        return Err(io::Error::other(format!(
-            "{escalation_id} is already {}",
-            current.as_str()
-        )));
-    }
-
     let verdict = queue
-        .decide(escalation_id, state, note.map(str::to_string), now)
+        .decide(
+            &entry,
+            state,
+            note.map(str::to_string),
+            now,
+            ESCALATION_TTL_MS,
+        )
         .map_err(io::Error::other)?;
 
     if json_mode {

@@ -246,13 +246,31 @@ impl EscalationQueue {
     /// lock and across processes. `access escalations approve` and `deny` run in
     /// a different process from `query serve`, so a read-then-write check here
     /// would race.
+    /// Takes the record rather than a bare id so the "still decidable?" check
+    /// and the write live in one function. A caller that checked
+    /// [`Self::state`] and then wrote could have the row expire in between; here
+    /// there is no gap to drift through, and the only remaining race — two
+    /// owners deciding at once — is the `create_new` the doc above describes.
     pub fn decide(
         &self,
-        id: &str,
+        entry: &Escalation,
         state: VerdictState,
         note: Option<String>,
         now_ms: u64,
+        ttl_ms: u64,
     ) -> Result<Verdict, String> {
+        let id = entry.id.as_str();
+        match self.state(entry, now_ms, ttl_ms) {
+            EscalationState::Pending => {}
+            EscalationState::Expired => {
+                return Err(format!(
+                    "{id} expired before it was decided — the caller has stopped waiting"
+                ));
+            }
+            decided => {
+                return Err(format!("{id} is already {}", decided.as_str()));
+            }
+        }
         let path = self
             .verdict_path(id)
             .ok_or_else(|| format!("invalid escalation id: {id}"))?;
@@ -501,18 +519,67 @@ mod tests {
         let e = sample("esc_00000000000a", "q");
         q.push(&e).unwrap();
 
-        q.decide(&e.id, VerdictState::Approved, Some("yes".into()), 10)
-            .expect("first decision lands");
-        let second = q.decide(&e.id, VerdictState::Denied, None, 20);
-        assert!(second.is_err(), "a second decision overwrote the first");
-        assert!(
-            second.unwrap_err().contains("already been decided"),
-            "the error should say why"
+        q.decide(
+            &e,
+            VerdictState::Approved,
+            Some("yes".into()),
+            10,
+            crate::query::thresholds::ESCALATION_TTL_MS,
+        )
+        .expect("first decision lands");
+        let second = q.decide(
+            &e,
+            VerdictState::Denied,
+            None,
+            20,
+            crate::query::thresholds::ESCALATION_TTL_MS,
         );
+        assert!(second.is_err(), "a second decision overwrote the first");
+        // The state check catches it first and names the state it found, which
+        // is more use to the owner than "already decided".
+        let msg = second.unwrap_err();
+        assert!(msg.contains("already approved"), "unhelpful error: {msg}");
         // And the first verdict is intact — not clobbered by the attempt.
         let v = q.verdict(&e.id).expect("verdict still there");
         assert_eq!(v.state, VerdictState::Approved);
         assert_eq!(v.note.as_deref(), Some("yes"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_create_new_backstop_still_refuses_a_racing_second_write() {
+        // The state check above is the *message*; `create_new` is the
+        // *guarantee*. Two owners deciding at once both see Pending, so only
+        // the filesystem can order them. Reach that path directly by writing a
+        // verdict file behind the state check's back — which is exactly what
+        // the losing process in a real race does.
+        let dir = tmpdir("backstop");
+        let q = EscalationQueue::in_access_dir(&dir);
+        let e = sample("esc_00000000001a", "q");
+        q.push(&e).unwrap();
+
+        // Pre-create the verdict file with no content the state check can parse,
+        // so `verdict()` returns `None` (state: Pending) while the path exists.
+        fs::create_dir_all(q.verdicts_dir()).unwrap();
+        fs::write(q.verdict_path(&e.id).unwrap(), b"{not json").unwrap();
+        assert_eq!(
+            q.state(&e, e.ts_ms, crate::query::thresholds::ESCALATION_TTL_MS),
+            EscalationState::Pending,
+            "the state check must not see this, or the backstop is untested"
+        );
+
+        let got = q.decide(
+            &e,
+            VerdictState::Approved,
+            None,
+            e.ts_ms,
+            crate::query::thresholds::ESCALATION_TTL_MS,
+        );
+        assert!(got.is_err(), "create_new let a second write through");
+        assert!(
+            got.unwrap_err().contains("already been decided"),
+            "the EEXIST path should say so"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -538,6 +605,29 @@ mod tests {
     }
 
     #[test]
+    fn an_expired_row_cannot_be_decided() {
+        // The check lives inside `decide` rather than in its caller, so there is
+        // no window between "is this still decidable?" and the write.
+        let dir = tmpdir("decide-expired");
+        let q = EscalationQueue::in_access_dir(&dir);
+        let mut e = sample("esc_00000000002a", "q");
+        e.ts_ms = 1_000_000;
+        q.push(&e).unwrap();
+        let ttl = 1_000;
+
+        let got = q.decide(&e, VerdictState::Approved, None, e.ts_ms + ttl + 1, ttl);
+        assert!(got.is_err(), "an expired row was decided");
+        assert!(
+            got.unwrap_err().contains("expired"),
+            "the error should say it expired"
+        );
+        // And nothing was written, so a later read still sees expiry, not a
+        // half-recorded decision.
+        assert!(q.verdict(&e.id).is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn a_verdict_outranks_the_clock() {
         // An owner who approved on the last day decided it. The caller should
         // see the decision, not an expiry that arrived while they polled.
@@ -546,8 +636,14 @@ mod tests {
         let mut e = sample("esc_00000000000c", "q");
         e.ts_ms = 1_000_000;
         q.push(&e).unwrap();
-        q.decide(&e.id, VerdictState::Approved, None, e.ts_ms + 10)
-            .unwrap();
+        q.decide(
+            &e,
+            VerdictState::Approved,
+            None,
+            e.ts_ms + 10,
+            crate::query::thresholds::ESCALATION_TTL_MS,
+        )
+        .unwrap();
         let far_future = e.ts_ms + 10_000_000;
         assert!(
             matches!(
@@ -573,7 +669,14 @@ mod tests {
         ] {
             assert!(!is_valid_escalation_id(bad), "{bad} passed validation");
             assert!(
-                q.decide(bad, VerdictState::Approved, None, 1).is_err(),
+                q.decide(
+                    &sample(bad, "q"),
+                    VerdictState::Approved,
+                    None,
+                    1,
+                    crate::query::thresholds::ESCALATION_TTL_MS
+                )
+                .is_err(),
                 "{bad} was accepted"
             );
             assert!(q.verdict(bad).is_none(), "{bad} resolved to a file");
@@ -599,7 +702,14 @@ mod tests {
         let q = EscalationQueue::in_access_dir(&dir);
         let e = sample("esc_00000000000f", "q");
         q.push(&e).unwrap();
-        q.decide(&e.id, VerdictState::Denied, None, 1).unwrap();
+        q.decide(
+            &e,
+            VerdictState::Denied,
+            None,
+            1,
+            crate::query::thresholds::ESCALATION_TTL_MS,
+        )
+        .unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

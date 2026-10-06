@@ -1474,10 +1474,11 @@ mod tests {
         h.core
             .escalations
             .decide(
-                &e.id,
+                &e,
                 crate::query::escalate::VerdictState::Approved,
                 Some("fine by me".into()),
                 now,
+                th::ESCALATION_TTL_MS,
             )
             .expect("decide");
 
@@ -1504,10 +1505,11 @@ mod tests {
         h.core
             .escalations
             .decide(
-                &e.id,
+                &e,
                 crate::query::escalate::VerdictState::Denied,
                 Some("not for you".into()),
                 now,
+                th::ESCALATION_TTL_MS,
             )
             .unwrap();
 
@@ -1546,10 +1548,11 @@ mod tests {
         h.core
             .escalations
             .decide(
-                &e.id,
+                &e,
                 crate::query::escalate::VerdictState::Approved,
                 None,
                 now,
+                th::ESCALATION_TTL_MS,
             )
             .unwrap();
 
@@ -1567,6 +1570,15 @@ mod tests {
             &other.grant_id,
             &other.scopes,
             other.expires_ms,
+        );
+
+        // Prove the second grant *works* before proving it cannot poll. Without
+        // this the test passes vacuously: any unrelated denial — a scope
+        // mismatch, an expiry window, an exhausted budget — would satisfy the
+        // assertion below while the grant-ownership check went untested.
+        assert!(
+            h.core.topics_at(&other_token, now).is_ok(),
+            "the second grant is not usable, so the refusal below proves nothing"
         );
 
         let got = h.core.poll_escalation_at(&other_token, &e.id, now);
@@ -1616,10 +1628,11 @@ mod tests {
         h.core
             .escalations
             .decide(
-                &e.id,
+                &e,
                 crate::query::escalate::VerdictState::Approved,
                 None,
                 now,
+                th::ESCALATION_TTL_MS,
             )
             .unwrap();
 
