@@ -75,7 +75,7 @@ All notable changes to claudectl are documented here.
   key is not among them; a secret in `.claudectl.toml` is a secret in the repo.
 - **Not shipped, and said rather than implied:** Jev reranking of candidate
   spans (§4.5 step 2, which the RFC itself calls separable); approve/deny and
-  the resume path for an escalation; and any verification against the live API.
+  the resume path for an escalation (#446); and any verification against the live API.
   No request has been sent to `api.typesafe.ai` from this codebase. The client
   follows the published contract, the routing table is fixture-tested against
   24 adversarial cases, both degrade paths are tested, and the real `curl`

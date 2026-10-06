@@ -15,8 +15,7 @@
 //! path that turns an approved escalation into an answer. That is a
 //! notification system plus a state machine on a durable record, and it would
 //! more than double this change. #430 asks for a queue and a "pending review"
-//! response; it gets exactly those, and the follow-up is filed rather than
-//! left looking finished.
+//! response; it gets exactly those. The rest is #446.
 //!
 //! # Why the record keeps the full question
 //!

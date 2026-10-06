@@ -546,7 +546,7 @@ The caller already has the id and a `pending_review` response. **There is no
 approve command yet** — answering an escalation means reaching the caller after
 their request has returned, which needs a notification path this does not have.
 For now the queue is a record of the questions worth a human answer, and you
-reply however you already talk to that person.
+reply however you already talk to that person. Tracked as #446.
 
 ### Flagged grants
 

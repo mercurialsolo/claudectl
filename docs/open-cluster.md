@@ -315,7 +315,7 @@ The ceiling is checked before the call and the spend charged after it, from `usa
 #### What is not shipped
 
 - **§4.5 step 2 — Jev reranking of candidate spans.** §4.5 itself calls it "a second, separable decision"; #429's deterministic ranker stays.
-- **Acting on an escalation.** Approve, deny, notify, and the resume path that turns an approved escalation into an answer are a notification system plus a state machine on a durable record. #430 asks for a queue and a "pending review" response and gets exactly those; the rest is filed as a follow-up rather than left looking finished.
+- **Acting on an escalation.** Approve, deny, notify, and the resume path that turns an approved escalation into an answer are a notification system plus a state machine on a durable record. #430 asks for a queue and a "pending review" response and gets exactly those; the rest is #446.
 - **Branching retrieval on `intent`.** There is one retrieval strategy today, so a branch would be invention. The intent is recorded in the audit line instead.
 - **Any verification against the live API.** No request has been sent to `api.typesafe.ai` from this codebase; there is no key on the development machine. The client follows the published contract (request and response shapes verified against the vendor's API reference and model docs), every routing decision is fixture-tested, both degrade paths are tested, and the real `curl` invocation — stdin-fed credentials, status splitting, timeout, connection refusal — is tested against a local listener. What remains unverified is whether Jev accepts this request body.
 
