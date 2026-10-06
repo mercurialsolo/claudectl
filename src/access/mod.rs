@@ -41,10 +41,24 @@ pub use scope::Scope;
 /// Maximum grant-id length, matching `relay::is_valid_peer_id`'s shape.
 const MAX_GRANT_ID_LEN: usize = 64;
 
-/// `~/.claudectl/access`.
-pub fn access_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join(".claudectl").join("access")
+/// `~/.claudectl/access`, or an error when `HOME` is unset.
+///
+/// Every other store in the codebase falls back to `/tmp` when `HOME` is
+/// missing. This one must not: `/tmp` is world-writable, and the secret is read
+/// back with `read_to_string`, which follows symlinks. Someone who pre-places
+/// `/tmp/.claudectl/access/secret` — or a symlink there — before the first
+/// `access grant` would be supplying the key every grant MAC derives from, and
+/// could then mint valid tokens. Refusing is the only safe answer.
+pub fn access_dir() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| {
+        "HOME is not set, and the access store will not fall back to a \
+         world-writable directory for an HMAC key"
+            .to_string()
+    })?;
+    if home.trim().is_empty() {
+        return Err("HOME is empty, so there is nowhere safe to keep the access secret".into());
+    }
+    Ok(PathBuf::from(home).join(".claudectl").join("access"))
 }
 
 /// Whether a grant id is safe to interpolate into a filename.

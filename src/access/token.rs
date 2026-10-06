@@ -158,8 +158,21 @@ pub fn load_or_create_secret(access_dir: &Path) -> Result<[u8; 32], String> {
         }
     }
 
-    let secret = crypto::try_generate_psk()
-        .map_err(|e| format!("cannot generate an access secret without a secure RNG: {e}"))?;
+    let secret = crypto::try_generate_psk().map_err(|e| {
+        // `try_generate_psk` reads /dev/urandom, so this is also the path a
+        // non-unix host takes. Failing closed is right — a predictable root key
+        // would let anyone mint tokens — but say why rather than surfacing a
+        // bare ENOENT for a file the operator has never heard of.
+        if cfg!(unix) {
+            format!("cannot generate an access secret without a secure RNG: {e}")
+        } else {
+            format!(
+                "capability grants need /dev/urandom for the HMAC key, which \
+                 this platform does not provide ({e}); `claudectl access` is \
+                 unix-only for now"
+            )
+        }
+    })?;
     write_secret(&path, &secret)?;
     Ok(secret)
 }
@@ -171,9 +184,11 @@ pub fn secret_path(access_dir: &Path) -> PathBuf {
 /// Write the secret 0600, atomically, never leaving a readable window.
 ///
 /// The existing `save_peer_psk` writes content first and chmods after, which
-/// leaves the secret world-readable for an instant. Here the mode is set on
-/// the temp file *before* any bytes land, then the rename publishes a file
-/// that was never readable.
+/// leaves the secret world-readable for an instant. Here the mode is part of
+/// the `open(2)` call, so the temp file never exists at a wider mode at all,
+/// and the rename then publishes a file that was never readable. Setting the
+/// mode after `File::create` would not be enough: a chmod cannot revoke a
+/// descriptor another process already holds.
 fn write_secret(path: &Path, secret: &[u8; 32]) -> Result<(), String> {
     let dir = path
         .parent()
@@ -182,15 +197,20 @@ fn write_secret(path: &Path, secret: &[u8; 32]) -> Result<(), String> {
 
     let tmp = dir.join(".secret.tmp");
     {
-        let mut f = fs::File::create(&tmp).map_err(|e| format!("create temp secret: {e}"))?;
-
+        // The mode goes in the open(2) call, not a chmod after it. `File::create`
+        // opens 0666 & ~umask — 0644 typically — and a later chmod does not
+        // revoke a descriptor another process already opened in that window, so
+        // chmod-after would hand the root HMAC key to anyone watching.
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            // Tighten before writing, so the bytes are never world-readable.
-            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
-                .map_err(|e| format!("chmod temp secret: {e}"))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
         }
+        let mut f = opts
+            .open(&tmp)
+            .map_err(|e| format!("create temp secret: {e}"))?;
 
         f.write_all(crypto::hex_encode(secret).as_bytes())
             .map_err(|e| format!("write temp secret: {e}"))?;
@@ -366,6 +386,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         load_or_create_secret(dir.path()).unwrap();
         assert!(!dir.path().join(".secret.tmp").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_in_the_access_dir_is_ever_group_or_world_readable() {
+        // The mode has to be part of open(2). A chmod after `File::create`
+        // leaves a window at 0644, and chmod cannot revoke a descriptor
+        // another process already opened during it.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        load_or_create_secret(dir.path()).unwrap();
+
+        for entry in fs::read_dir(dir.path()).unwrap().flatten() {
+            if entry.metadata().unwrap().is_dir() {
+                continue;
+            }
+            let mode = entry.metadata().unwrap().permissions().mode() & 0o077;
+            assert_eq!(
+                mode,
+                0,
+                "{} grants group/other access",
+                entry.path().display()
+            );
+        }
     }
 
     #[cfg(unix)]

@@ -60,6 +60,7 @@ practice losing the token means issuing a new grant and revoking the old one.
 claudectl access grant …              # issue one, print the token once
 claudectl access list                 # every grant, its state, uses, last use
 claudectl access audit gr_a38487      # what that grant actually asked for
+claudectl access audit                # the whole log, every grant
 claudectl access revoke gr_a38487     # immediate, nothing to restart
 ```
 
@@ -119,8 +120,19 @@ persisted but not yet enforced — that's #431.
 ### Scopes
 
 Scopes are `<resource>.<verb>:<qualifier>`. `--scopes project.query` takes
-`--project` as its qualifier; `--scopes project.query:other-project` names one
-explicitly. Duplicates collapse and whitespace is tolerated.
+`--project` as its qualifier. Writing the qualifier out — `--scopes
+project.query:claudectl` — is accepted only when it agrees with `--project`;
+disagreeing is an error rather than a silent override, since `--project` reads
+as the bound on the grant and is the only value validated up front:
+
+```
+$ claudectl access grant --project internal-api --label x \
+    --scopes project.query:secrets
+Error: … "scope 'project.query:secrets' is scoped to 'secrets' but --project is
+'internal-api' — drop the qualifier, or pass the project you mean"
+```
+
+Duplicates collapse and whitespace is tolerated.
 
 | Scope | Issuable today |
 | --- | --- |
@@ -185,13 +197,17 @@ records allowed and denied attempts alike:
 
 `reason` is absent on an allowed entry. `detail` is free-form and absent when
 there's nothing to say. `claudectl access audit <grant_id>` renders the lines
-for one grant, oldest first:
+for one grant, oldest first; `claudectl access audit` with no id renders the
+whole log. The no-id form is the only way to see denials recorded against a
+token too malformed to name a grant — those are filed under a sentinel id that
+is not a valid grant id, which is precisely the probing the log exists to
+surface:
 
 ```
-WHEN                   EVENT    REASON           DETAIL
-2d ago                 allowed  -                how is the brain's decision logging structured?
-3h ago                 denied   missing_scope    fleet.read:claudectl
-2h ago                 denied   bad_mac
+GRANT        WHEN           EVENT    REASON           DETAIL
+gr_cd2630    2d ago         allowed  -                how is the brain's decision logging structured?
+gr_cd2630    3h ago         denied   missing_scope    fleet.read:claudectl
+gr_cd2630    2h ago         denied   bad_mac
 ```
 
 The seven deny reasons are `malformed_token`, `unknown_grant`,
@@ -227,10 +243,15 @@ Two properties of how it is created:
   secret uses `try_generate_psk`, which errors instead, because a predictable
   key here would let someone recompute tokens. If the RNG is unavailable,
   `access grant` fails.
-- The `0600` mode is set on the temp file before any bytes are written, then
-  the rename publishes a file that was never readable by anyone else. (The older
-  `relay::save_peer_psk` writes content first and chmods after, which leaves a
-  brief readable window.)
+- The `0600` mode is part of the `open(2)` call, so the file never exists at a
+  wider mode and the rename publishes something nobody else could have read.
+  Setting it with a `chmod` after `File::create` would not be enough: that
+  leaves a window at `0666 & ~umask`, and a `chmod` cannot revoke a descriptor
+  another process already opened during it. (The older
+  `relay::save_peer_psk` does write first and chmod after.)
+- `grants/*.json` and `audit.jsonl` get the same treatment, and the audit log's
+  mode is re-asserted on every append so a log left wider by an earlier version
+  is repaired rather than staying that way.
 
 **Back the secret up together with `grants/`.** The two are only meaningful as
 a pair:

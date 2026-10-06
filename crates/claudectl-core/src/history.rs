@@ -353,7 +353,12 @@ pub fn parse_duration(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
-    let (num_str, unit) = s.split_at(s.len() - 1);
+    // Split at the last *character*, not the last byte: `split_at(len - 1)`
+    // panics outright when the final char is multibyte, and this is reached
+    // from user input (`access grant --expires 30é`).
+    let (last_idx, unit_char) = s.char_indices().next_back()?;
+    let (num_str, unit) = s.split_at(last_idx);
+    let _ = unit_char;
     let num: u64 = num_str.parse().ok()?;
     // checked_mul, not `*`: an absurd value like "99999999999999999999w" used
     // to panic in debug builds rather than reading as invalid input. Anything
@@ -410,6 +415,16 @@ mod tests {
         assert_eq!(parse_duration("1w"), Some(604800));
         assert_eq!(parse_duration(""), None);
         assert_eq!(parse_duration("abc"), None);
+    }
+
+    #[test]
+    fn parse_duration_rejects_a_multibyte_suffix_instead_of_panicking() {
+        // split_at(len-1) lands mid-codepoint when the last char is multibyte.
+        // Reachable from `claudectl access grant --expires 30é` (#427).
+        assert_eq!(parse_duration("30é"), None);
+        assert_eq!(parse_duration("é"), None);
+        assert_eq!(parse_duration("7日"), None);
+        assert_eq!(parse_duration("30🕐"), None);
     }
 
     #[test]

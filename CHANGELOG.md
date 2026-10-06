@@ -44,11 +44,25 @@ All notable changes to claudectl are documented here.
   error, never a silent re-mint, because re-minting would invalidate every live
   grant without saying so.
 - **`secret`, `grants/*.json` and `audit.jsonl` are all `0600`**, with the mode
-  set on the temp file *before* any bytes land rather than chmodded after
-  (unlike `save_peer_psk`, which leaves a readable window). Grant files are
-  owner-only because each carries every field the MAC covers — at a default
-  umask, `secret` would be the only barrier between an unprivileged local user
-  and every token on the machine.
+  set in the `open(2)` call rather than chmodded afterwards — a chmod cannot
+  revoke a descriptor another process opened during the window at
+  `0666 & ~umask` (`save_peer_psk` still has that window). The audit log's mode
+  is re-asserted on every append, so a log left wider by an earlier version is
+  repaired instead of staying that way. Grant files are owner-only because each
+  carries every field the MAC covers — at a default umask, `secret` would be the
+  only barrier between an unprivileged local user and every token on the machine.
+- **`HOME` must be set.** Every other store in the codebase falls back to
+  `/tmp` when it is not; this one refuses. `/tmp` is world-writable and the
+  secret is read back with `read_to_string`, which follows symlinks — someone
+  who pre-places `/tmp/.claudectl/access/secret` would be supplying the key
+  every grant MAC derives from.
+- `claudectl access audit` with no grant id prints the whole log. Denials
+  against a token too malformed to name a grant are filed under a sentinel id
+  that is not a valid grant id, so the no-id form is the only way to see the
+  probing the log exists to surface.
+- A qualifier written into `--scopes` must agree with `--project` rather than
+  silently overriding it: `--project internal-api --scopes project.query:secrets`
+  is now an error, where before it issued a grant scoped to `secrets`.
 - **No network surface in this phase.** `access grant` opens no port. #429 adds
   the read-only query surface; #431 adds enforcement of the
   `rate_limit_per_min` (20) and `daily_query_budget` (500) fields the grant

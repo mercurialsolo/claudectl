@@ -35,10 +35,11 @@ pub enum AccessCommand {
     /// List grants with last-used and use counts
     List,
 
-    /// Show what a grant actually asked for
+    /// Show what a grant actually asked for, or every entry when no id is given
     Audit {
-        /// Grant id, e.g. gr_7f2a1b
-        grant_id: String,
+        /// Grant id, e.g. gr_7f2a1b. Omit to show the whole log, including
+        /// denials recorded against unparseable tokens.
+        grant_id: Option<String>,
     },
 
     /// Revoke a grant immediately
@@ -57,7 +58,7 @@ pub fn dispatch_command(command: &AccessCommand, json_mode: bool) -> io::Result<
             expires,
         } => cmd_grant(project, label, scopes, expires, json_mode),
         AccessCommand::List => cmd_list(json_mode),
-        AccessCommand::Audit { grant_id } => cmd_audit(grant_id, json_mode),
+        AccessCommand::Audit { grant_id } => cmd_audit(grant_id.as_deref(), json_mode),
         AccessCommand::Revoke { grant_id } => cmd_revoke(grant_id, json_mode),
     }
 }
@@ -88,6 +89,16 @@ fn parse_scopes(raw: &str, project: &str) -> Result<Vec<Scope>, String> {
             continue;
         }
         let scope = Scope::parse_with_default(piece, Some(project))?;
+        // `--project` reads as the bound on the grant, and it is the only value
+        // `cmd_grant` validates up front — so a qualifier written into
+        // `--scopes` must not quietly win over it.
+        if scope.qualifier() != project {
+            return Err(format!(
+                "scope '{piece}' is scoped to '{}' but --project is '{project}' \
+                 — drop the qualifier, or pass the project you mean",
+                scope.qualifier()
+            ));
+        }
         if let Some(reason) = scope.unissuable_reason() {
             return Err(format!("cannot issue '{scope}': {reason}"));
         }
@@ -117,7 +128,7 @@ fn cmd_grant(
     let scopes = parse_scopes(scopes_raw, project).map_err(io::Error::other)?;
     let ttl_ms = parse_expires(expires_raw).map_err(io::Error::other)?;
 
-    let store = GrantStore::open_default();
+    let store = GrantStore::open_default().map_err(io::Error::other)?;
     let secret = token::load_or_create_secret(store.root()).map_err(io::Error::other)?;
 
     let issued_ms = super::epoch_ms();
@@ -142,7 +153,11 @@ fn cmd_grant(
                 print_new_grant(&grant, &tok, json_mode);
                 return Ok(());
             }
-            Err(e) => last_err = e,
+            // Only an id collision is worth another draw. Retrying a full disk
+            // or an unwritable home eight times and then blaming the id would
+            // point the operator at the wrong thing entirely.
+            Err(e) if e.contains("already exists") => last_err = e,
+            Err(e) => return Err(io::Error::other(e)),
         }
     }
     Err(io::Error::other(format!(
@@ -187,7 +202,7 @@ fn print_new_grant(grant: &Grant, tok: &str, json_mode: bool) {
 }
 
 fn cmd_list(json_mode: bool) -> io::Result<()> {
-    let store = GrantStore::open_default();
+    let store = GrantStore::open_default().map_err(io::Error::other)?;
     let grants = store.list();
     let now = super::epoch_ms();
 
@@ -239,12 +254,18 @@ fn cmd_list(json_mode: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn cmd_audit(grant_id: &str, json_mode: bool) -> io::Result<()> {
-    if !super::is_valid_grant_id(grant_id) {
-        return Err(io::Error::other(format!("invalid grant id: {grant_id}")));
+fn cmd_audit(grant_id: Option<&str>, json_mode: bool) -> io::Result<()> {
+    // A denial against a token too malformed to parse is recorded under a
+    // sentinel id, which `is_valid_grant_id` rejects — so without the no-arg
+    // form those entries would be written and then unreadable from the CLI,
+    // which is exactly the garbage-token probing the log exists to surface.
+    if let Some(id) = grant_id
+        && !super::is_valid_grant_id(id)
+    {
+        return Err(io::Error::other(format!("invalid grant id: {id}")));
     }
-    let store = GrantStore::open_default();
-    let entries = store.read_audit(Some(grant_id));
+    let store = GrantStore::open_default().map_err(io::Error::other)?;
+    let entries = store.read_audit(grant_id);
 
     if json_mode {
         println!(
@@ -257,17 +278,24 @@ fn cmd_audit(grant_id: &str, json_mode: bool) -> io::Result<()> {
     // A grant with no entries and no record is worth distinguishing from one
     // that exists but was never used.
     if entries.is_empty() {
-        match store.load(grant_id).map_err(io::Error::other)? {
-            Some(_) => println!("No audit entries for {grant_id} — issued but never used."),
-            None => println!("No such grant: {grant_id}"),
+        match grant_id {
+            None => println!("No audit entries yet."),
+            Some(id) => match store.load(id).map_err(io::Error::other)? {
+                Some(_) => println!("No audit entries for {id} — issued but never used."),
+                None => println!("No such grant: {id}"),
+            },
         }
         return Ok(());
     }
 
-    println!("{:<22} {:<8} {:<16} DETAIL", "WHEN", "EVENT", "REASON");
+    println!(
+        "{:<12} {:<14} {:<8} {:<16} DETAIL",
+        "GRANT", "WHEN", "EVENT", "REASON"
+    );
     for e in &entries {
         println!(
-            "{:<22} {:<8} {:<16} {}",
+            "{:<12} {:<14} {:<8} {:<16} {}",
+            truncate(&e.grant_id, 12),
             fmt_ms(e.ts_ms),
             e.event,
             e.reason.as_deref().unwrap_or("-"),
@@ -281,7 +309,7 @@ fn cmd_revoke(grant_id: &str, json_mode: bool) -> io::Result<()> {
     if !super::is_valid_grant_id(grant_id) {
         return Err(io::Error::other(format!("invalid grant id: {grant_id}")));
     }
-    let store = GrantStore::open_default();
+    let store = GrantStore::open_default().map_err(io::Error::other)?;
     let grant = store.revoke(grant_id).map_err(io::Error::other)?;
 
     if json_mode {

@@ -108,8 +108,11 @@ impl GrantStore {
     }
 
     /// Open the real store at `~/.claudectl/access`.
-    pub fn open_default() -> Self {
-        Self::new(super::access_dir())
+    ///
+    /// Fails rather than falling back to `/tmp` when `HOME` is unset — see
+    /// `access_dir`.
+    pub fn open_default() -> Result<Self, String> {
+        Ok(Self::new(super::access_dir()?))
     }
 
     pub fn root(&self) -> &Path {
@@ -172,12 +175,10 @@ impl GrantStore {
         let tmp = dir.join(format!(".{}.json.tmp", grant.grant_id));
         let body = serde_json::to_vec_pretty(grant).map_err(|e| format!("encode grant: {e}"))?;
         {
-            let mut f = fs::File::create(&tmp).map_err(|e| format!("create temp grant: {e}"))?;
-            // 0600 before the bytes land, same as the secret. A grant file
-            // holds every field the MAC covers, so anyone who can read both it
-            // and the secret can recompute the live token. Default-umask 0644
-            // would make the secret the only barrier.
-            set_owner_only(&tmp)?;
+            // Owner-only from the open(2) call, not chmodded afterwards. A
+            // grant file holds every field the MAC covers, so anyone who can
+            // read both it and the secret can recompute the live token.
+            let mut f = create_private(&tmp)?;
             f.write_all(&body)
                 .map_err(|e| format!("write temp grant: {e}"))?;
             f.sync_data().map_err(|e| format!("sync grant: {e}"))?;
@@ -270,6 +271,17 @@ impl GrantStore {
             }
         };
 
+        // Defence in depth. The MAC already covers `grant_id`, so a token
+        // naming the grant by a different spelling fails as `bad_mac` on a
+        // case-insensitive filesystem rather than verifying — but that safety
+        // is a property of `canonical_payload`, not of this function. Checking
+        // the identity here means a future change to the signed payload cannot
+        // quietly turn an alias into a bypass.
+        if grant.grant_id != parsed.grant_id {
+            self.audit_denied(&parsed.grant_id, DenyReason::UnknownGrant, None, now_ms);
+            return Err(AccessError::Denied);
+        }
+
         let expected =
             super::token::compute_mac(secret, &grant.grant_id, &grant.scopes, grant.expires_ms);
         if !super::token::mac_matches(&parsed.mac, &expected) {
@@ -353,17 +365,24 @@ impl GrantStore {
         fs::create_dir_all(&self.root).map_err(|e| format!("create access dir: {e}"))?;
         let line = serde_json::to_string(entry).map_err(|e| format!("encode audit entry: {e}"))?;
         let path = self.audit_path();
-        let existed = path.exists();
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
+        let mut opts = fs::OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // Owner-only from the first line. #429 appends query text here, so
+            // this log only gets more sensitive.
+            opts.mode(0o600);
+        }
+        let mut f = opts
             .open(&path)
             .map_err(|e| format!("open audit log: {e}"))?;
-        if !existed {
-            // Owner-only from the first line. #429 appends query text here, so
-            // this log gets more sensitive over time, not less.
-            set_owner_only(&path)?;
-        }
+        // `mode` applies only when the file is created, so repair anything a
+        // previous version (or an interrupted run) left wider. Unconditional
+        // rather than gated on a `path.exists()` check taken before the open:
+        // that check could never notice a log already sitting at 0644, so it
+        // would stay 0644 forever.
+        set_owner_only(&path)?;
         writeln!(f, "{line}").map_err(|e| format!("write audit entry: {e}"))
     }
 
@@ -390,6 +409,24 @@ fn set_owner_only(path: &Path) -> Result<(), String> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
+}
+
+/// Create a file owner-only *at creation*, so there is no window in which it
+/// exists with a wider mode.
+///
+/// `File::create` opens `0o666 & ~umask` — 0644 on a default umask — and a
+/// later `chmod` does not revoke descriptors another process already holds.
+/// Setting the mode in the `open(2)` call closes that race.
+fn create_private(path: &Path) -> Result<fs::File, String> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+        .map_err(|e| format!("create {}: {e}", path.display()))
 }
 
 /// Build a new grant with defaults filled in. Does not persist.
@@ -565,6 +602,25 @@ mod tests {
     }
 
     // ── Denials ──
+
+    #[test]
+    fn a_grant_id_alias_does_not_verify() {
+        // On a case-insensitive filesystem (APFS by default) `gr_7F2A1B.json`
+        // resolves to `gr_7f2a1b.json`. If verify recomputes the MAC from the
+        // *file's* id rather than checking it against the presented one, an
+        // aliased token verifies — and every audit line then lands under the
+        // alias, so `access audit gr_7f2a1b` shows nothing while the holder
+        // hammers under a different spelling.
+        let (_d, store, grant, _t) = fixture();
+        let alias = grant.grant_id.to_uppercase();
+        assert_ne!(alias, grant.grant_id);
+
+        let aliased = super::super::token::mint(&SECRET, &alias, &grant.scopes, grant.expires_ms);
+        assert!(
+            store.verify(&SECRET, &aliased, None, NOW).is_err(),
+            "a token naming the grant by a different spelling must not verify"
+        );
+    }
 
     #[test]
     fn a_token_from_a_different_secret_is_denied() {
