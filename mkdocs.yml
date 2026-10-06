@@ -46,6 +46,10 @@ nav:
   - Reference: reference.md
   - Agent Bus: agent-bus.md
   - Relay & Hive Mind: relay.md
+  - Capability Grants: access.md
+  - Policy as Code: policy-as-code.md
+  - Team Observability: team-observability.md
+  - Open Cluster (RFC): open-cluster.md
   - Terminal Support: terminal-support.md
   - Troubleshooting: troubleshooting.md
   - Contributing: contributing.md

@@ -191,16 +191,25 @@ pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 // PSK generation and formatting
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Generate a random 32-byte key from /dev/urandom, failing if it is unavailable.
+///
+/// Prefer this over `generate_psk` for any long-lived key whose compromise is
+/// not self-limiting. `generate_psk`'s fallback is predictable by design-tradeoff
+/// (see its warning), which is tolerable for a short-lived pairing code shared
+/// out-of-band on a LAN and not tolerable for, say, the root secret every
+/// capability-grant MAC derives from (#427).
+pub fn try_generate_psk() -> std::io::Result<[u8; 32]> {
+    use std::io::Read;
+    let mut buf = [0u8; 32];
+    // read_exact, not read — the file is infinite and a short read is possible.
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
 /// Generate a random 32-byte PSK using /dev/urandom.
 pub fn generate_psk() -> [u8; 32] {
-    let mut buf = [0u8; 32];
-
-    // Try /dev/urandom first (must use read_exact, not read — the file is infinite)
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        use std::io::Read;
-        if file.read_exact(&mut buf).is_ok() {
-            return buf;
-        }
+    if let Ok(buf) = try_generate_psk() {
+        return buf;
     }
 
     // Fallback: seed from timestamps and pid.
@@ -215,8 +224,7 @@ pub fn generate_psk() -> [u8; 32] {
     let pid = std::process::id() as u128;
     let tid = format!("{:?}", std::thread::current().id());
     let combined = format!("{seed}-{pid}-{tid}");
-    buf = sha256(combined.as_bytes());
-    buf
+    sha256(combined.as_bytes())
 }
 
 /// Format a 32-byte PSK as a human-friendly code: `xxxx-xxxx-xxxx-xxxx`.
