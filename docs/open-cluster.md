@@ -97,7 +97,7 @@ The `secret` fails closed. It comes from `relay::crypto::try_generate_psk`, whic
 
 All three paths are written `0600`, with the mode set on the temp file before any bytes land rather than chmodded afterwards (`relay::save_peer_psk` writes first and chmods after, leaving a readable instant). The grant files are owner-only too, not just the secret: a grant file carries every field the MAC covers, so leaving them at a default umask would make `secret` the only barrier between an unprivileged local user and every token on the machine.
 
-#427 ships the spine only — mint, verify, list, audit, revoke — and no network surface. `access grant` opens no port. The read-only query surface is #429, and enforcement of the `rate_limit_per_min` and `daily_query_budget` fields the grant file already carries is #431.
+#427 ships the spine — mint, verify, list, audit, revoke — and opens no port. The read-only query surface that presents these credentials shipped in #429 as `src/query/` (§4.7), and enforcement of the `rate_limit_per_min` and `daily_query_budget` fields the grant file already carries is #431.
 
 ### 3.3 Scopes
 
@@ -424,7 +424,7 @@ claudectl query connect cctl_gr_7f2a1b_9e3c… --endpoint https://…
 claudectl query ask "how is the brain's decision logging structured?"
 ```
 
-The owner half shipped in #427. `--project` and `--label` are required; `--scopes` defaults to `project.query` and `--expires` to `30d`. All four subcommands take `--json`, which is a global flag and so goes *before* the subcommand (`claudectl --json access list`). The third-party half is #429 and does not exist yet.
+The owner half shipped in #427. `--project` and `--label` are required; `--scopes` defaults to `project.query` and `--expires` to `30d`. All four subcommands take `--json`, which is a global flag and so goes *before* the subcommand (`claudectl --json access list`). The third-party half shipped in #429 as `claudectl query serve` / `claudectl query stdio` (§4.7).
 
 Shown once, like `relay pair`. `access list` surfaces `last_used_ms` and `use_count` so a dormant or hammering grant is visible without reading the audit log.
 

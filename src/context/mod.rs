@@ -20,8 +20,8 @@
 //! `module_map.rs` emits signatures and doc comments but never function bodies.
 //!
 //! Scope note: this module builds the substrate and nothing more. Retrieval,
-//! ranking and the query surface itself are #429; rate limits and budgets are
-//! #431. There is deliberately no CLI here.
+//! ranking and the surface over it are `src/query/` (#429); rate limits and
+//! budgets are #431. There is deliberately no CLI here.
 
 pub mod deny;
 pub mod docs;
@@ -98,8 +98,9 @@ impl ContextIndex {
     ///
     /// Takes a path, not a project name: project names are many-to-one onto
     /// directories (every worktree of a repo shares a basename), so resolving a
-    /// grant's `project.query:<name>` to a directory is #429's problem, not
-    /// this module's.
+    /// grant's `project.query:<name>` to a directory is not this module's
+    /// problem — and `query::core` does not solve it either. It serves one
+    /// project and compares the name rather than resolving it.
     pub fn build(root: &Path) -> Result<Self, IndexError> {
         let mode = exposure::mode_from_config();
         let gate = IndexExposure::load();

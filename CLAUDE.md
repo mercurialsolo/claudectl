@@ -181,7 +181,7 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 - **Native `ps`** over `sysinfo` crate to keep binary small.
 - **Multi-signal status inference** — combines CPU usage, JSONL events, and timestamps (not just one signal).
 - **Incremental JSONL parsing** — tracks file offsets, never rereads full files.
-- **No async runtime** — synchronous with polling. Keeps complexity low. **Exception:** the `bus` MCP server (`src/bus/mcp.rs`) runs inside a current-thread Tokio runtime when invoked as `claudectl bus stdio`. The TUI and every other code path remain sync.
+- **No async runtime** — synchronous with polling. Keeps complexity low. **Exception:** the two MCP servers — `src/bus/mcp.rs` under `claudectl bus stdio` and `src/query/mcp.rs` under `claudectl query stdio` — each build their own current-thread Tokio runtime inside their `run_stdio`. Tokio carries no `rt-multi-thread`, so a multi-thread runtime would not compile; the TUI and every other code path remain sync.
 - **Deny-first rule evaluation** — deny rules always override approve/brain suggestions, regardless of config order.
 - **Brain decisions are local-only** — all decision logs and few-shot examples stay on the user's machine.
 - **Brain gate mode** — `~/.claudectl/brain/gate-mode` controls on/off/auto. File absent = on (default). The plugin hook and `--brain-query` both check this before querying the LLM.

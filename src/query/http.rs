@@ -292,14 +292,14 @@ struct DocBody {
 
 fn serve_query(core: &QueryCore, token: &str, body: &[u8]) -> Result<String, QueryError> {
     let parsed: QueryBody = serde_json::from_slice(body)
-        .map_err(|_| QueryError::BadRequest("expected {\\\"question\\\": \\\"...\\\"}".into()))?;
+        .map_err(|_| QueryError::BadRequest("expected {\"question\": \"...\"}".into()))?;
     core.ask(token, &parsed.question, parsed.limit)
         .and_then(encode)
 }
 
 fn serve_doc(core: &QueryCore, token: &str, body: &[u8]) -> Result<String, QueryError> {
     let parsed: DocBody = serde_json::from_slice(body)
-        .map_err(|_| QueryError::BadRequest("expected {\\\"path\\\": \\\"...\\\"}".into()))?;
+        .map_err(|_| QueryError::BadRequest("expected {\"path\": \"...\"}".into()))?;
     core.get_doc(token, &parsed.path).and_then(encode)
 }
 
@@ -662,6 +662,21 @@ mod tests {
             );
             assert!(response.contains("400"), "{name} — got: {response}");
         }
+    }
+
+    /// `escape` does the JSON quoting, so the message literal must not also
+    /// pre-escape — double-escaping ships visible backslashes to the caller.
+    #[test]
+    fn an_error_message_is_escaped_exactly_once() {
+        let body = format!(
+            r#"{{"error":"{}"}}"#,
+            escape("expected {\"question\": \"...\"}")
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        assert_eq!(
+            parsed["error"], "expected {\"question\": \"...\"}",
+            "got {body}"
+        );
     }
 
     #[test]

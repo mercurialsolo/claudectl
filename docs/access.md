@@ -229,9 +229,9 @@ down — distinguishing "no such grant" from "revoked" would tell a prober which
 grant ids exist. Because denied attempts are audited too, someone hammering an
 invalid token is visible to you even though it's invisible to them.
 
-Verification is where those entries come from, and nothing calls it yet. Until
-#429 lands there is no code path a third party can reach, so in practice
-`audit.jsonl` doesn't exist until the first attempt — `access audit` on a live
+Verification is where those entries come from, and `claudectl query serve` is
+what calls it. `audit.jsonl` does not exist until the first attempt reaches a
+running surface — `access audit` on a live
 grant prints `No audit entries for gr_a38487 — issued but never used.` and
 distinguishes that from `No such grant: gr_nope`.
 
