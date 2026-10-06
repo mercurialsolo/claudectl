@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::scope::Scope;
-use super::{AccessError, DenyReason, epoch_ms};
+use super::{AccessError, DenyReason};
 
 /// Default per-grant rate limit (RFC §4.8; the bus uses 60/min per role).
 const DEFAULT_RATE_LIMIT_PER_MIN: u32 = 20;
@@ -134,8 +134,13 @@ impl GrantStore {
 
     /// Persist a grant, refusing to clobber an existing id.
     ///
-    /// `create_new` turns a grant-id collision into an error instead of a
-    /// silent overwrite that would strand the previous holder's token.
+    /// A grant-id collision is an error rather than a silent overwrite that
+    /// would strand the previous holder's token. This checks `exists()` and
+    /// then atomically renames, rather than using `create_new` on the final
+    /// path, because the atomic-write guarantee matters more than exclusive
+    /// creation: two concurrent `access grant` calls that draw the same 24-bit
+    /// id could both pass the check, and the loser is a lost grant rather than
+    /// a corrupt one.
     pub fn create(&self, grant: &Grant) -> Result<(), String> {
         let path = self
             .grant_path(&grant.grant_id)
@@ -229,6 +234,10 @@ impl GrantStore {
     /// `scopes` and `expires_ms`, which live only in the grant file, so the
     /// file must be loaded before the MAC can be recomputed.
     ///
+    /// This never mutates the grant: accounting is [`Self::record_use`]'s job,
+    /// so checking a capability cannot inflate its use count. It does append a
+    /// line to `audit.jsonl` on a denial, which is the point of the log.
+    ///
     /// Every failure returns the same opaque [`AccessError::Denied`]. The
     /// specific [`DenyReason`] goes to the audit log and never to the caller —
     /// distinguishing "no such grant" from "revoked" would leak which grant
@@ -244,7 +253,7 @@ impl GrantStore {
         let parsed = match super::token::parse(token) {
             Ok(p) => p,
             Err(_) => {
-                self.audit_denied("<unparseable>", DenyReason::MalformedToken, None);
+                self.audit_denied("<unparseable>", DenyReason::MalformedToken, None, now_ms);
                 return Err(AccessError::Denied);
             }
         };
@@ -252,11 +261,11 @@ impl GrantStore {
         let grant = match self.load(&parsed.grant_id) {
             Ok(Some(g)) => g,
             Ok(None) => {
-                self.audit_denied(&parsed.grant_id, DenyReason::UnknownGrant, None);
+                self.audit_denied(&parsed.grant_id, DenyReason::UnknownGrant, None, now_ms);
                 return Err(AccessError::Denied);
             }
             Err(_) => {
-                self.audit_denied(&parsed.grant_id, DenyReason::UnreadableGrant, None);
+                self.audit_denied(&parsed.grant_id, DenyReason::UnreadableGrant, None, now_ms);
                 return Err(AccessError::Denied);
             }
         };
@@ -264,17 +273,17 @@ impl GrantStore {
         let expected =
             super::token::compute_mac(secret, &grant.grant_id, &grant.scopes, grant.expires_ms);
         if !super::token::mac_matches(&parsed.mac, &expected) {
-            self.audit_denied(&parsed.grant_id, DenyReason::BadMac, None);
+            self.audit_denied(&parsed.grant_id, DenyReason::BadMac, None, now_ms);
             return Err(AccessError::Denied);
         }
 
         if grant.revoked {
-            self.audit_denied(&parsed.grant_id, DenyReason::Revoked, None);
+            self.audit_denied(&parsed.grant_id, DenyReason::Revoked, None, now_ms);
             return Err(AccessError::Denied);
         }
 
         if grant.is_expired_at(now_ms) {
-            self.audit_denied(&parsed.grant_id, DenyReason::Expired, None);
+            self.audit_denied(&parsed.grant_id, DenyReason::Expired, None, now_ms);
             return Err(AccessError::Denied);
         }
 
@@ -285,6 +294,7 @@ impl GrantStore {
                 &parsed.grant_id,
                 DenyReason::MissingScope,
                 Some(want.to_string()),
+                now_ms,
             );
             return Err(AccessError::Denied);
         }
@@ -294,19 +304,24 @@ impl GrantStore {
 
     /// Record a successful use: bump accounting and append an audit line.
     ///
-    /// Deliberately separate from [`Self::verify`], which is a pure read. A
-    /// caller that only needs to check a capability should not write.
+    /// Deliberately separate from [`Self::verify`], which never touches the
+    /// grant. A caller that only needs to check a capability should not bump
+    /// its counters.
     pub fn record_use(
         &self,
         grant_id: &str,
         detail: Option<&str>,
         now_ms: u64,
     ) -> Result<(), String> {
-        if let Some(mut grant) = self.load(grant_id)? {
-            grant.last_used_ms = Some(now_ms);
-            grant.use_count = grant.use_count.saturating_add(1);
-            self.update(&grant)?;
-        }
+        // Refuse rather than log a use of nothing. Callers reach here only
+        // after `verify` returned a grant, so an absent record means the store
+        // changed underneath them and the audit line would be a lie.
+        let mut grant = self
+            .load(grant_id)?
+            .ok_or_else(|| format!("no such grant: {grant_id}"))?;
+        grant.last_used_ms = Some(now_ms);
+        grant.use_count = grant.use_count.saturating_add(1);
+        self.update(&grant)?;
         self.append_audit(&AuditEntry {
             ts_ms: now_ms,
             grant_id: grant_id.to_string(),
@@ -316,11 +331,17 @@ impl GrantStore {
         })
     }
 
-    fn audit_denied(&self, grant_id: &str, reason: DenyReason, detail: Option<String>) {
+    fn audit_denied(
+        &self,
+        grant_id: &str,
+        reason: DenyReason,
+        detail: Option<String>,
+        now_ms: u64,
+    ) {
         // Best-effort: a failing audit write must not turn a denial into an
         // error the caller could distinguish from any other denial.
         let _ = self.append_audit(&AuditEntry {
-            ts_ms: epoch_ms(),
+            ts_ms: now_ms,
             grant_id: grant_id.to_string(),
             event: "denied".into(),
             reason: Some(reason.as_str().to_string()),
@@ -724,6 +745,15 @@ mod tests {
     #[test]
     fn audit_filters_by_grant_and_survives_a_torn_line() {
         let (_d, store, _g, _t) = fixture();
+        store
+            .create(&new_grant(
+                "gr_other1".into(),
+                "second".into(),
+                vec![scope("project.query:p")],
+                NOW,
+                NOW + HOUR,
+            ))
+            .unwrap();
         store.record_use("gr_7f2a1b", Some("one"), NOW).unwrap();
         store.record_use("gr_other1", Some("two"), NOW).unwrap();
         // A line truncated by a crash must not discard the readable ones.
@@ -737,6 +767,58 @@ mod tests {
         assert_eq!(store.read_audit(Some("gr_7f2a1b")).len(), 1);
         assert_eq!(store.read_audit(Some("gr_other1")).len(), 1);
         assert_eq!(store.read_audit(None).len(), 2);
+    }
+
+    #[test]
+    fn record_use_refuses_a_grant_that_does_not_exist() {
+        // Logging an "allowed" line for a grant with no record would put a
+        // lie in the audit log.
+        let (_d, store, _g, _t) = fixture();
+        assert!(store.record_use("gr_nope11", None, NOW).is_err());
+        assert!(store.read_audit(Some("gr_nope11")).is_empty());
+    }
+
+    #[test]
+    fn denial_timestamps_match_the_decision_they_record() {
+        // audit_denied used to stamp wall-clock time while verify took an
+        // explicit now_ms, so the log disagreed with the decision.
+        let (_d, store, _g, token) = fixture();
+        let at = NOW + 1234;
+        let _ = store.verify(&SECRET, &token, Some(&scope("project.docs:claudectl")), at);
+        let audit = store.read_audit(Some("gr_7f2a1b"));
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0].ts_ms, at);
+        assert_eq!(audit[0].reason.as_deref(), Some("missing_scope"));
+        assert_eq!(audit[0].detail.as_deref(), Some("project.docs:claudectl"));
+    }
+
+    #[test]
+    fn audit_lines_serialize_the_shape_the_docs_promise() {
+        // docs/access.md documents audit.jsonl verbatim, so pin the field
+        // order and the omit-when-absent behaviour.
+        let allowed = AuditEntry {
+            ts_ms: 1_791_072_975_409,
+            grant_id: "gr_cd2630".into(),
+            event: "allowed".into(),
+            reason: None,
+            detail: Some("how is auth structured?".into()),
+        };
+        assert_eq!(
+            serde_json::to_string(&allowed).unwrap(),
+            r#"{"ts_ms":1791072975409,"grant_id":"gr_cd2630","event":"allowed","detail":"how is auth structured?"}"#
+        );
+
+        let denied = AuditEntry {
+            ts_ms: 1_791_238_575_409,
+            grant_id: "gr_cd2630".into(),
+            event: "denied".into(),
+            reason: Some(DenyReason::BadMac.as_str().into()),
+            detail: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&denied).unwrap(),
+            r#"{"ts_ms":1791238575409,"grant_id":"gr_cd2630","event":"denied","reason":"bad_mac"}"#
+        );
     }
 
     #[test]

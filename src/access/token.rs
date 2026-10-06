@@ -128,20 +128,34 @@ pub fn mac_matches(presented: &str, expected: &str) -> bool {
 pub fn load_or_create_secret(access_dir: &Path) -> Result<[u8; 32], String> {
     let path = secret_path(access_dir);
 
-    if let Ok(hex) = fs::read_to_string(&path) {
-        let bytes = crypto::hex_decode(hex.trim())
-            .map_err(|e| format!("access secret at {} is corrupt: {e}", path.display()))?;
-        if bytes.len() != 32 {
+    // Only a genuinely absent secret may be minted over. Any other read
+    // failure — EACCES, EIO, a directory sitting at that path — must propagate,
+    // because falling through to the mint below would `rename` a fresh key over
+    // a secret that was merely unreadable and kill every live grant silently.
+    match fs::read_to_string(&path) {
+        Ok(hex) => {
+            let bytes = crypto::hex_decode(hex.trim())
+                .map_err(|e| format!("access secret at {} is corrupt: {e}", path.display()))?;
+            if bytes.len() != 32 {
+                return Err(format!(
+                    "access secret at {} is {} bytes, expected 32 — move it aside \
+                     to mint a new one (every existing token stops verifying)",
+                    path.display(),
+                    bytes.len()
+                ));
+            }
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&bytes);
+            return Ok(out);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
             return Err(format!(
-                "access secret at {} is {} bytes, expected 32 — move it aside \
-                 to mint a new one (every existing token stops verifying)",
-                path.display(),
-                bytes.len()
+                "cannot read the access secret at {}: {e} — refusing to mint a \
+                 new one, which would invalidate every live grant",
+                path.display()
             ));
         }
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&bytes);
-        return Ok(out);
     }
 
     let secret = crypto::try_generate_psk()
@@ -375,6 +389,18 @@ mod tests {
         // Silently minting a fresh key would invalidate every live grant
         // without saying so.
         assert!(load_or_create_secret(dir.path()).is_err());
+    }
+
+    #[test]
+    fn an_unreadable_secret_is_an_error_not_a_silent_re_mint() {
+        // A directory at the secret's path reads as something other than
+        // NotFound on every platform. The old code fell through on any read
+        // error and renamed a fresh key over the existing secret, killing
+        // every live grant without a word.
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(secret_path(dir.path())).unwrap();
+        let err = load_or_create_secret(dir.path()).unwrap_err();
+        assert!(err.contains("refusing to mint"), "got {err}");
     }
 
     #[test]
