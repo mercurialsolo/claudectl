@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-10-07
+
 ### Fixed — a relay code of only letters could not be redeemed
 
 - `relay join` and `hive join` picked the invite format with a guess — "every
