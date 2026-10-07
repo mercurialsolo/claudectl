@@ -574,7 +574,11 @@ The LAN announcer in `src/relay/lan.rs` already broadcasts `{identity, port, ver
 
 ### 7.4 Discovery beyond the LAN
 
-`src/relay/invite.rs` already has base32 codes, a 256-word phrase list, `cctl://` links and QR rendering. Extend it to hive invites — `cctl://hive/<hive_id>?k=<psk>&n=<name>` — and remote joining needs **no new infrastructure**. A hosted hive directory would make hives genuinely discoverable by strangers, but it is a service with cost, uptime, abuse-handling and a central trust point in an otherwise peer-to-peer product. That is a product decision, not a design detail: [Q6](#q6-hive-directory).
+`src/relay/invite.rs` already has base32 codes, a 256-word phrase list, `cctl://` links and QR rendering. Extend it to hive invites and remote joining needs **no new infrastructure**.
+
+> **Correction (shipped in #434).** The link format sketched here as `cctl://hive/<hive_id>?k=<psk>&n=<name>` cannot be used: it names a hive but no machine, so a holder has nothing to connect to. What shipped carries the address too — `cctl://hive/<hive_id>?a=<identity>@<host:port>&k=<psk>&n=<name>&p=<policy>` — where `a=` is the same `identity@host:port` the peer link already puts before its `/k/`. The path shape is as written.
+>
+> Two further corrections the implementation forced. The relay code and word phrase **cannot** carry a hive id — all of their bytes go to the address and key — so they pair with the machine and ask to join second; `hive_id` in the join request is therefore optional. And `join_policy` had to become something the *host* enforces over the wire, because a joiner holding a valid PSK can pair regardless: possession of a link cannot be what admits anyone. See `docs/relay.md` for what `ask` does, and for why `invite` and `open` are not yet distinguishable at the host. A hosted hive directory would make hives genuinely discoverable by strangers, but it is a service with cost, uptime, abuse-handling and a central trust point in an otherwise peer-to-peer product. That is a product decision, not a design detail: [Q6](#q6-hive-directory).
 
 ### 7.5 Joining as a reader
 

@@ -17,6 +17,10 @@ pub enum HookEvent {
     ConflictDetected,
     /// A third-party query was queued for the owner's review (#446).
     Escalation,
+    /// A peer asked to join this machine's hive and is waiting for the owner to
+    /// decide (#434). Only fires for `join_policy: ask` — the other policies
+    /// admit without anyone needing to be told.
+    HiveJoinRequest,
 }
 
 impl HookEvent {
@@ -32,6 +36,7 @@ impl HookEvent {
             "hooks.on_context_high" => Some(Self::ContextHigh),
             "hooks.on_conflict_detected" => Some(Self::ConflictDetected),
             "hooks.on_escalation" => Some(Self::Escalation),
+            "hooks.on_hive_join_request" => Some(Self::HiveJoinRequest),
             _ => None,
         }
     }
@@ -48,6 +53,7 @@ impl HookEvent {
             Self::ContextHigh => "on_context_high",
             Self::ConflictDetected => "on_conflict_detected",
             Self::Escalation => "on_escalation",
+            Self::HiveJoinRequest => "on_hive_join_request",
         }
     }
 }

@@ -181,8 +181,19 @@ fn set(
 
     identity::save(&next).map_err(io::Error::other)?;
 
+    // #434: naming a hive turns the membership gate on. Peers that were already
+    // paired were trusted before the hive had a name, so they are admitted here
+    // rather than having their gossip stop dead until each of them re-joined.
+    // Only on first naming — a rename must not re-admit anyone who was denied.
+    let grandfathered = if existing.is_none() {
+        crate::hive::membership::grandfather(&next.hive_id, &paired_peers())
+    } else {
+        Vec::new()
+    };
+
     if json_mode {
         let json = serde_json::json!({
+            "grandfathered": grandfathered,
             "hive_id": next.hive_id,
             "name": next.name,
             "description": next.description,
@@ -204,10 +215,38 @@ fn set(
         println!("Updated \"{}\" ({}).", next.name, next.hive_id);
     }
     println!("Join policy: {}", next.join_policy.as_str());
+
+    if !grandfathered.is_empty() {
+        println!();
+        println!(
+            "Admitted {} already-paired peer(s) into the hive:",
+            grandfathered.len()
+        );
+        for peer in &grandfathered {
+            println!("  {peer}");
+        }
+        println!("  (they were paired before this hive had a name, so naming it does");
+        println!("   not shut them out — `claudectl hive requests` can review them)");
+    }
+
     println!();
-    println!("Advertising it on the LAN is #433, and is not wired up yet — this");
-    println!("records the identity that work will read.");
+    println!("`claudectl relay serve` advertises it on the LAN, and");
+    println!("`claudectl hive invite` mints a link for someone to join with.");
     Ok(())
+}
+
+/// Peers this machine has already paired with.
+///
+/// Behind `relay` because the PSK store is: without it there are no peers to
+/// grandfather, and the hive gate has nothing to be lenient about.
+#[cfg(feature = "relay")]
+fn paired_peers() -> Vec<String> {
+    crate::relay::list_known_peers()
+}
+
+#[cfg(not(feature = "relay"))]
+fn paired_peers() -> Vec<String> {
+    Vec::new()
 }
 
 fn clear(yes: bool, json_mode: bool) -> io::Result<()> {
