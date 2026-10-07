@@ -69,6 +69,9 @@ pub enum Admission {
     Approved,
     /// Already paired when the hive was first named. See [`Roster::grandfather`].
     Grandfathered,
+    /// Admitted on a capability grant they presented (#435) — the owner
+    /// authorised them when they minted it, so no approval was asked for.
+    Grant,
 }
 
 impl Admission {
@@ -77,7 +80,39 @@ impl Admission {
             Admission::Policy => "policy",
             Admission::Approved => "approved",
             Admission::Grandfathered => "grandfathered",
+            Admission::Grant => "grant",
         }
+    }
+}
+
+/// What a member may *do*, as distinct from how they got in (#435).
+///
+/// `Admission` records the route; this records the permission. A reader meshes
+/// and receives knowledge without contributing any — §7.5's "participation
+/// without symmetry". It composes with `hive::trust` rather than touching it:
+/// `TrustTier` weighs how much a peer's claims count for, and a reader simply
+/// never makes any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    /// Receives knowledge and may contribute it. The default, and what every
+    /// member admitted before #435 is.
+    #[default]
+    Contributor,
+    /// Receives knowledge and may never contribute it.
+    Reader,
+}
+
+impl Role {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::Contributor => "contributor",
+            Role::Reader => "reader",
+        }
+    }
+
+    pub fn may_contribute(&self) -> bool {
+        matches!(self, Role::Contributor)
     }
 }
 
@@ -87,6 +122,17 @@ pub struct Member {
     pub hive_id: String,
     pub admitted_ms: u64,
     pub admission: Admission,
+    /// Defaulted so every member file written by #434 stays valid and reads as
+    /// a contributor, which is what it was.
+    #[serde(default)]
+    pub role: Role,
+    /// The `hive.read` grant a reader was admitted on, for audit.
+    ///
+    /// Admission is the only moment the grant is consulted; from then on this
+    /// file is authoritative, so revoking the grant does **not** demote the
+    /// peer. Recorded so an owner can at least see the connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via_grant: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +244,18 @@ impl Roster {
         hive_id: &str,
         admission: Admission,
     ) -> Result<bool, String> {
+        self.admit_as(peer_id, hive_id, admission, Role::Contributor, None)
+    }
+
+    /// [`Self::admit`], with the role and the grant that role rests on.
+    pub fn admit_as(
+        &self,
+        peer_id: &str,
+        hive_id: &str,
+        admission: Admission,
+        role: Role,
+        via_grant: Option<String>,
+    ) -> Result<bool, String> {
         let path = self
             .member_path(peer_id)
             .ok_or_else(|| format!("'{peer_id}' is not a usable peer id"))?;
@@ -209,6 +267,8 @@ impl Roster {
             hive_id: hive_id.to_string(),
             admitted_ms: epoch_ms(),
             admission,
+            role,
+            via_grant,
         };
         let body = serde_json::to_vec_pretty(&member)
             .map_err(|e| format!("cannot serialise member record: {e}"))?;
@@ -224,6 +284,28 @@ impl Roster {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
             Err(e) => Err(format!("cannot create {}: {e}", path.display())),
         }
+    }
+
+    /// What this peer may do. `None` when they are not a member at all.
+    pub fn role(&self, peer_id: &str) -> Option<Role> {
+        let path = self.member_path(peer_id)?;
+        let body = fs::read_to_string(path).ok()?;
+        serde_json::from_str::<Member>(&body).ok().map(|m| m.role)
+    }
+
+    /// May this peer be sent knowledge? Any member, readers included — that is
+    /// the entire point of a reader.
+    pub fn may_receive(&self, peer_id: &str) -> bool {
+        self.is_member(peer_id)
+    }
+
+    /// May this peer contribute knowledge?
+    ///
+    /// A member file that cannot be parsed denies the contribution rather than
+    /// defaulting to allowing it: failing open here would let a corrupted file
+    /// promote a reader into a contributor.
+    pub fn may_contribute(&self, peer_id: &str) -> bool {
+        self.role(peer_id).is_some_and(|r| r.may_contribute())
     }
 
     /// Every admitted peer, sorted.
@@ -417,6 +499,16 @@ pub fn admit(peer_id: &str, hive_id: &str, admission: Admission) -> Result<bool,
     Roster::local().admit(peer_id, hive_id, admission)
 }
 
+pub fn admit_as(
+    peer_id: &str,
+    hive_id: &str,
+    admission: Admission,
+    role: Role,
+    via_grant: Option<String>,
+) -> Result<bool, String> {
+    Roster::local().admit_as(peer_id, hive_id, admission, role, via_grant)
+}
+
 pub fn list_members() -> Vec<Member> {
     Roster::local().list_members()
 }
@@ -472,6 +564,9 @@ pub struct Membership {
     pub hive_id: String,
     #[serde(default)]
     pub name: Option<String>,
+    /// What the host said we may do. Defaulted for files written by #434.
+    #[serde(default)]
+    pub role: Role,
     /// The peer we joined through — the machine that answers for this hive.
     pub joined_via: String,
     pub state: MemberState,
@@ -734,6 +829,7 @@ mod tests {
         let m = Membership {
             hive_id: "hv_3a9f21".into(),
             name: Some("barrys-hive".into()),
+            role: Role::Contributor,
             joined_via: "laptop-a3f2".into(),
             state: MemberState::Pending,
             joined_ms: 1_700_000_000_000,

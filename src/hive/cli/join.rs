@@ -8,7 +8,7 @@
 
 use std::io;
 
-use crate::hive::membership::{self, Admission, JoinRequest, MemberState, Membership};
+use crate::hive::membership::{self, Admission, JoinRequest, MemberState, Membership, Role};
 
 /// Record what a host said about our join request.
 ///
@@ -32,6 +32,10 @@ pub fn apply_join_result(
         name: Option<String>,
         #[serde(default)]
         reason: Option<String>,
+        /// What the host says we may do (#435). Absent from a pre-#435 host,
+        /// which only ever admitted contributors.
+        #[serde(default)]
+        role: Option<String>,
     }
 
     let incoming: Incoming = serde_json::from_value(payload.clone())
@@ -53,10 +57,19 @@ pub fn apply_join_result(
         .hive_id
         .ok_or("the host answered without naming a hive")?;
 
+    // An unrecognised role is read as `reader`, not as `contributor`: a host
+    // that names a role this build does not know is describing something more
+    // restricted than full membership, and guessing the permissive reading
+    // would be the wrong way to be wrong.
+    let role = match incoming.role.as_deref() {
+        None | Some("contributor") => Role::Contributor,
+        Some(_) => Role::Reader,
+    };
+
     // An unchanged answer is not news. Re-running `hive join` on a hive we are
     // already in should be quiet rather than chatty.
     if let Ok(Some(existing)) = membership::load_membership() {
-        if existing.hive_id == hive_id && existing.state == state {
+        if existing.hive_id == hive_id && existing.state == state && existing.role == role {
             return Ok(None);
         }
     }
@@ -64,6 +77,7 @@ pub fn apply_join_result(
     let record = Membership {
         hive_id: hive_id.clone(),
         name: incoming.name.clone(),
+        role,
         joined_via: from_peer.to_string(),
         state,
         joined_ms: crate::hive::identity::epoch_ms(),
@@ -71,9 +85,15 @@ pub fn apply_join_result(
     membership::save_membership(&record)?;
 
     let label = incoming.name.unwrap_or(hive_id);
-    Ok(Some(match state {
-        MemberState::Member => format!("Joined hive \"{label}\" — knowledge will now be shared."),
-        MemberState::Pending => format!(
+    Ok(Some(match (state, role) {
+        (MemberState::Member, Role::Contributor) => {
+            format!("Joined hive \"{label}\" — knowledge will now be shared.")
+        }
+        (MemberState::Member, Role::Reader) => format!(
+            "Joined hive \"{label}\" as a reader — you will receive its knowledge, \
+             and nothing of yours is sent."
+        ),
+        (MemberState::Pending, _) => format!(
             "Asked to join \"{label}\" — waiting for its owner to approve. \
              Nothing is shared until they do."
         ),
@@ -100,6 +120,8 @@ pub fn cmd_requests(json_mode: bool) -> io::Result<()> {
                 "hive_id": m.hive_id,
                 "admitted_ms": m.admitted_ms,
                 "admission": m.admission.as_str(),
+                "role": m.role.as_str(),
+                "via_grant": m.via_grant,
             })).collect::<Vec<_>>(),
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
@@ -148,15 +170,22 @@ pub fn cmd_requests(json_mode: bool) -> io::Result<()> {
     } else {
         println!("{} member(s):", members.len());
         println!();
-        println!("  {:<28} {:<14} ADMITTED", "PEER", "HOW");
-        println!("  {}", "─".repeat(72));
+        println!("  {:<28} {:<12} {:<14} ADMITTED", "PEER", "ROLE", "HOW");
+        println!("  {}", "─".repeat(78));
         for m in &members {
             println!(
-                "  {:<28} {:<14} {}",
+                "  {:<28} {:<12} {:<14} {}",
                 m.peer_id,
+                m.role.as_str(),
                 m.admission.as_str(),
                 claudectl_core::helpers::fmt_ms_at(m.admitted_ms, now)
             );
+        }
+        let readers = members.iter().filter(|m| m.role == Role::Reader).count();
+        if readers > 0 {
+            println!();
+            println!("  {readers} of them are readers: they receive this hive's knowledge and");
+            println!("  contribute none of their own.");
         }
     }
 
@@ -251,6 +280,9 @@ fn notify_decision(
         hive_id: Some(hive.hive_id.clone()),
         name: Some(hive.name.clone()),
         reason: None,
+        // An owner approving a queued request is admitting a contributor;
+        // readers are admitted by their grant, never through this queue.
+        role: Some(Role::Contributor.as_str().to_string()),
     };
     let msg = crate::relay::hivejoin::build_join_result(identity.as_str(), &payload);
     crate::relay::cli::send_message_to_peer(peer_id, &identity, &msg).is_ok()
@@ -271,9 +303,11 @@ pub fn membership_line() -> Option<String> {
         Ok(Some(m)) => {
             let label = m.name.clone().unwrap_or_else(|| m.hive_id.clone());
             Some(match m.state {
-                MemberState::Member => {
-                    format!("Hive membership: in \"{label}\" via {}", m.joined_via)
-                }
+                MemberState::Member => format!(
+                    "Hive membership: {} in \"{label}\" via {}",
+                    m.role.as_str(),
+                    m.joined_via
+                ),
                 MemberState::Pending => format!(
                     "Hive membership: asked to join \"{label}\" via {} — awaiting owner approval",
                     m.joined_via

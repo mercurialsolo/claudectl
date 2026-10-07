@@ -681,9 +681,16 @@ mod tests {
         // Q8: defined, issued to nobody.
         let err = parse_scopes("fleet.read", "p").unwrap_err();
         assert!(err.contains("Q8"), "got {err}");
-        // Needs named hives (#424).
-        let err = parse_scopes("hive.read", "h").unwrap_err();
-        assert!(err.contains("#424"), "got {err}");
+        // hive.join is not a grant scope; a hive is joined with an invite.
+        let err = parse_scopes("hive.join", "h").unwrap_err();
+        assert!(err.contains("hive join"), "got {err}");
+    }
+
+    #[test]
+    fn hive_read_is_issuable_now_that_hives_have_names() {
+        // #435: the one scope this phase added. The qualifier is the hive name.
+        let scopes = parse_scopes("hive.read", "barrys-hive").expect("hive.read should mint");
+        assert_eq!(scopes, vec![Scope::HiveRead("barrys-hive".into())]);
     }
 
     #[test]
