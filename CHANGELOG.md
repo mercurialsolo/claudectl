@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-10-07
+
 ### Fixed
 
 - **Hive knowledge now actually propagates (#455).** Both ends of a connection
