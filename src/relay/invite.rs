@@ -289,6 +289,27 @@ pub fn encode_words(addr: &SocketAddr, psk: &[u8; 32]) -> String {
         .join("-")
 }
 
+/// Is this input a word phrase rather than a relay code?
+///
+/// Both formats are dash-separated and fixed-length, and the two lengths differ
+/// — a phrase is one word per payload byte, a code is seven groups of three
+/// base32 characters — so the question has an exact answer and does not need a
+/// guess.
+///
+/// It used to be guessed: "every segment is short and alphabetic". A base32 code
+/// contains only `A`–`Z` and `2`–`7`, so a code that happens to draw no digits
+/// satisfies that and was read as a phrase, then failed to decode. At 21
+/// characters that is `(26/32)^21`, about **1 in 78** invites; before #453
+/// widened the payload it was 15 characters, or about 1 in 18. Either way the
+/// code was unredeemable and the error blamed the phrase decoder.
+pub fn looks_like_word_phrase(input: &str) -> bool {
+    let segments: Vec<&str> = input.split('-').collect();
+    segments.len() == INVITE_PAYLOAD_LEN
+        && segments
+            .iter()
+            .all(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_alphabetic()))
+}
+
 /// Decode a word phrase back into address + PSK.
 pub fn decode_words(phrase: &str) -> Result<(SocketAddr, [u8; 32]), String> {
     let words: Vec<&str> = phrase.split('-').collect();
@@ -800,5 +821,59 @@ mod tests {
         let addr: SocketAddr = "192.168.4.24:9910".parse().unwrap();
         let phrase = encode_words(&addr, &psk);
         assert_eq!(phrase.split('-').count(), 13, "phrase: {phrase}");
+    }
+
+    #[test]
+    fn a_code_of_only_letters_is_not_mistaken_for_a_word_phrase() {
+        // The bug this replaced: base32 is A-Z plus 2-7, so a code that draws no
+        // digits used to satisfy "short alphabetic segments" and be sent to the
+        // phrase decoder, which could not read it.
+        let all_letters = format_grouped("ABCDEFGHIJKLMNOPQRSTU", 3);
+        assert_eq!(all_letters.split('-').count(), 7);
+        assert!(
+            !looks_like_word_phrase(&all_letters),
+            "{all_letters} is a relay code, not a phrase"
+        );
+    }
+
+    #[test]
+    fn a_real_phrase_is_recognised_and_a_real_code_is_not() {
+        let psk = canonical();
+        let addr: SocketAddr = "192.168.4.24:9910".parse().unwrap();
+        assert!(looks_like_word_phrase(&encode_words(&addr, &psk)));
+        assert!(!looks_like_word_phrase(&encode_relay_code(&addr, &psk)));
+    }
+
+    #[test]
+    fn every_generated_code_is_told_apart_from_a_phrase() {
+        // Sweep the PSK space rather than trusting one sample: with the old
+        // heuristic roughly one in seventy-eight of these was misread.
+        let addr: SocketAddr = "192.168.4.24:9910".parse().unwrap();
+        for seed in 0u32..600 {
+            let hex = format!("{:016x}", seed.wrapping_mul(2_654_435_761));
+            let psk = crypto::parse_psk(&hex).unwrap();
+            let code = encode_relay_code(&addr, &psk);
+            assert!(
+                !looks_like_word_phrase(&code),
+                "code {code} misread as a phrase"
+            );
+            assert!(
+                looks_like_word_phrase(&encode_words(&addr, &psk)),
+                "phrase for seed {seed} not recognised"
+            );
+        }
+    }
+
+    #[test]
+    fn neither_a_link_nor_junk_looks_like_a_phrase() {
+        assert!(!looks_like_word_phrase(
+            "cctl://x@1.2.3.4:1/k/aaaabbbbccccdddd"
+        ));
+        assert!(!looks_like_word_phrase(""));
+        assert!(!looks_like_word_phrase("one-two-three"));
+        // Right count, but an empty segment is not a word.
+        assert!(!looks_like_word_phrase(
+            &"a-".repeat(12).to_string().replace("a-a", "a--a")
+        ));
     }
 }
