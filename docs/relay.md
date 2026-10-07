@@ -442,6 +442,87 @@ to be watching the terminal:
 run = "osascript -e 'display notification \"$CLAUDECTL_HIVE_JOIN_PEER wants to join\"'"
 ```
 
+### Joining as a reader
+
+A reader meshes with the hive and receives its knowledge, and never contributes
+any — the hive analogue of read-only project access. It is the one membership
+tier the owner hands out explicitly, with a capability grant:
+
+```bash
+# the owner, once
+claudectl access grant --scopes hive.read --project barrys-hive \
+  --label "alice, read-only" --expires 30d
+claudectl hive invite
+```
+
+```bash
+# the reader
+claudectl hive join cctl://hive/hv_3a9f21?a=... --grant cctl_gr_cf827c_9efd83d0…
+```
+
+```
+Presenting a hive.read grant — asking to join as a reader.
+Joined hive "read-hive" as a reader — you will receive its knowledge, and
+nothing of yours is sent.
+```
+
+**Both halves are needed.** The invite is transport authentication — it pairs the
+two machines. The grant is the hive-level role, and says what the peer may do
+once paired. Neither alone is enough, and `--project` on `access grant` names the
+*hive* here, because `hive.read:<hive-name>` is the scope.
+
+**A grant admits directly, even on an `ask` hive.** The owner already decided when
+they minted it; queueing the peer would be asking them the same question twice.
+So a reader is never in the `hive requests` queue — it appears straight away in
+the members list, with its role:
+
+```
+  PEER                         ROLE         HOW            ADMITTED
+  barrys-mac-b0ceaa2b          reader       grant          just now
+
+  1 of them are readers: they receive this hive's knowledge and
+  contribute none of their own.
+```
+
+What a reader may and may not do:
+
+| | Reader | Contributor |
+|---|---|---|
+| Receive knowledge units | yes | yes |
+| Ask for a snapshot | yes | yes |
+| Contribute units | **no** | yes |
+| Appear in `hive requests` queue | no — the grant is the approval | only under `ask` |
+
+A reader's attempted contribution is **refused on the wire**, not silently
+dropped. The host answers with a rejection naming the reason and how many units
+it discarded, and the reader prints it:
+
+```
+[2026-10-07T09:17:28Z] barrys-mac-fc78cb5c refused our knowledge:
+  this hive admitted you as a reader — readers receive knowledge but do not
+  contribute it (2 unit(s) dropped)
+```
+
+Silently ignoring it would be indistinguishable, at the reader, from a network
+fault.
+
+Readers need nothing from `hive trust`: `TrustTier` weighs how much a peer's
+claims count for, and a reader never makes any, so merging, drift detection and
+concordance checking are unchanged by this tier.
+
+Three limits worth knowing before you hand out a reader grant:
+
+- **The roster is authoritative after admission.** Revoking the grant does
+  **not** demote an existing reader — it only stops *new* admissions. The grant
+  id is recorded on the member file so you can see the connection. Removing a
+  member is `rm ~/.claudectl/hive/members/<peer>.json` for now; making revocation
+  reach the roster is a follow-up.
+- **Renaming the hive invalidates every outstanding reader grant,** because the
+  hive name is the scope qualifier. `hive identity set --name` warns and lists
+  the grants that will stop working.
+- **A reader is still a paired peer.** Read-only is about the hive, not about the
+  relay: the two machines can still exchange heartbeats and fleet data.
+
 ### What membership actually gates
 
 Knowledge is exchanged only with hive **members**, and in both directions. A peer
@@ -457,6 +538,8 @@ Three things worth knowing:
   trusted before the hive had a name, and naming it does not withdraw that —
   otherwise gossip would stop dead until every peer re-joined. The command says
   who it admitted. A peer you have denied is not admitted this way.
+- **A reader receives but never contributes**, which is the one case where the
+  two directions differ. See *Joining as a reader* above.
 - **`invite` and `open` are the same rule at the host today.** The PSK is
   per-host rather than per-invite, so the host genuinely cannot tell which link a
   peer used — pairing *is* the credential. The two policies differ in your intent

@@ -4,6 +4,42 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — read-only hive membership (#435)
+
+- **`hive.read:<hive-name>` grants are issuable, and admit a reader**: a peer that
+  meshes and receives the hive's knowledge and can never contribute any — §7.5's
+  "participation without symmetry". `claudectl access grant --scopes hive.read
+  --project <hive-name>` mints one; `claudectl hive join <invite> --grant <token>`
+  redeems it.
+- Both halves are needed: the invite is transport authentication, the grant is
+  the hive-level role. A grant admits directly even on an `ask` hive, because the
+  owner already decided when they minted it.
+- **A reader's attempted contribution is refused on the wire**, not silently
+  dropped — the host answers with the reason and how many units it discarded, so
+  a reader cannot mistake refusal for a network fault.
+- `hive requests` grew a ROLE column and names how many members are readers.
+  `hive status` says which this machine is. Member records carry the grant id
+  they were admitted on.
+- `hive identity set --name` now warns when renaming would orphan live
+  `hive.read` grants, because the hive name is the scope qualifier.
+- Readers need nothing from `hive trust`: `TrustTier` weighs a peer's claims and
+  a reader makes none, so merging, drift detection and concordance checking are
+  untouched.
+
+### Known limitations
+- **The roster is authoritative after admission.** Revoking a `hive.read` grant
+  stops new admissions but does not demote an existing reader; remove
+  `~/.claudectl/hive/members/<peer>.json` to do that. Making revocation reach the
+  roster is a follow-up.
+- **Hive gossip is more inert than it looks, and #435 did not change it.** A peer
+  that dials with `relay connect` neither sends nor merges knowledge —
+  `run_connect_loop` has no gossip at all — and `relay serve` only syncs when the
+  brain distills something new, and never dials out. So knowledge moves only from
+  a serving host to peers connected to it at the moment of a distillation. The
+  membership gate is unit-tested on the exact function the serve loop calls; it
+  could not be socket-tested, because in this architecture a dialing peer cannot
+  send a `KnowledgeSync` at all.
+
 ### Fixed — peer pairing never worked on macOS
 - **`claudectl relay join` could not pair with anything on macOS.** The accept
   loop puts the *listening* socket in non-blocking mode so it can poll for

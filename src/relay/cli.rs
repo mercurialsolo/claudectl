@@ -547,6 +547,7 @@ fn cmd_serve(
                         .unwrap_or(super::hivejoin::JoinRequestPayload {
                             hive_id: None,
                             label: None,
+                            grant: None,
                         });
                         let result = super::hivejoin::decide_join(
                             hive_identity.as_ref(),
@@ -587,6 +588,15 @@ fn cmd_serve(
                         let _ = reg.send_to(from_peer.as_str(), &reply);
                     }
                     #[cfg(feature = "hive")]
+                    super::MessageType::KnowledgeRejected => {
+                        eprintln!(
+                            "[{}] {} refused our knowledge: {}",
+                            crate::logger::timestamp_now(),
+                            from_peer,
+                            super::hivejoin::rejection_reason(&msg.payload)
+                        );
+                    }
+                    #[cfg(feature = "hive")]
                     super::MessageType::HiveJoinResult => {
                         // We are the joiner: the host has answered, possibly
                         // long after `hive join` exited (an owner approving a
@@ -610,12 +620,23 @@ fn cmd_serve(
                         // much as refusing to send: an `ask` hive that gated
                         // only its own sends would still merge whatever an
                         // unapproved peer pushed.
-                        if !hive_exchange_allowed(hive_roster.as_ref(), from_peer.as_str()) {
+                        if let Some(rejection) = super::hivejoin::knowledge_refusal(
+                            hive_roster.as_ref(),
+                            from_peer.as_str(),
+                            identity.as_str(),
+                            &msg.payload,
+                        ) {
+                            // Refused on the wire, not merely dropped (#435): a
+                            // reader that believes it is contributing and is
+                            // silently ignored cannot tell that from a network
+                            // fault.
                             println!(
-                                "[{}] KnowledgeSync from {} ignored — not a member of this hive",
+                                "[{}] KnowledgeSync from {} refused — {}",
                                 crate::logger::timestamp_now(),
-                                from_peer
+                                from_peer,
+                                super::hivejoin::rejection_reason(&rejection.payload)
                             );
+                            let _ = reg.send_to(from_peer.as_str(), &rejection);
                         } else if let (Some(gossip), Some(hive_store)) =
                             (gossip.as_mut(), hive_store.as_mut())
                         {
@@ -648,7 +669,8 @@ fn cmd_serve(
                     }
                     #[cfg(feature = "hive")]
                     super::MessageType::KnowledgeRequest => {
-                        if !hive_exchange_allowed(hive_roster.as_ref(), from_peer.as_str()) {
+                        // Asking for a snapshot is *receiving*, so a reader may.
+                        if !hive_may_receive(hive_roster.as_ref(), from_peer.as_str()) {
                             println!(
                                 "[{}] KnowledgeRequest from {} refused — not a member of this hive",
                                 crate::logger::timestamp_now(),
@@ -665,9 +687,9 @@ fn cmd_serve(
                     }
                     #[cfg(feature = "hive")]
                     super::MessageType::KnowledgeSnapshot => {
-                        if !hive_exchange_allowed(hive_roster.as_ref(), from_peer.as_str()) {
+                        if !hive_may_contribute(hive_roster.as_ref(), from_peer.as_str()) {
                             println!(
-                                "[{}] KnowledgeSnapshot from {} ignored — not a member of this hive",
+                                "[{}] KnowledgeSnapshot from {} refused — not a contributor to this hive",
                                 crate::logger::timestamp_now(),
                                 from_peer
                             );
@@ -1003,6 +1025,15 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                     // approves long after `hive join` exited, so this is where
                     // most approvals actually land.
                     #[cfg(feature = "hive")]
+                    super::MessageType::KnowledgeRejected => {
+                        eprintln!(
+                            "[{}] {} refused our knowledge: {}",
+                            crate::logger::timestamp_now(),
+                            peer_id,
+                            super::hivejoin::rejection_reason(&msg.payload)
+                        );
+                    }
+                    #[cfg(feature = "hive")]
                     super::MessageType::HiveJoinResult => {
                         match crate::hive::cli::apply_join_result(peer_id.as_str(), &msg.payload) {
                             Ok(Some(line)) => {
@@ -1064,11 +1095,27 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
 /// This is deliberately the *only* place the question is asked, and it is asked
 /// on both directions: gating what we send without gating what we accept would
 /// let an unapproved peer still push units into the hive.
+/// May this peer be *sent* hive knowledge?
+///
+/// Any member, readers included — receiving without contributing is the whole
+/// point of a reader (#435, §7.5).
 #[cfg(feature = "hive")]
-fn hive_exchange_allowed(roster: Option<&crate::hive::membership::Roster>, peer_id: &str) -> bool {
+fn hive_may_receive(roster: Option<&crate::hive::membership::Roster>, peer_id: &str) -> bool {
     match roster {
         None => true,
-        Some(r) => r.is_member(peer_id),
+        Some(r) => r.may_receive(peer_id),
+    }
+}
+
+/// May this peer *contribute* hive knowledge?
+///
+/// Members whose role is contributor. A reader is refused here and allowed in
+/// `hive_may_receive`, and that asymmetry is the feature.
+#[cfg(feature = "hive")]
+fn hive_may_contribute(roster: Option<&crate::hive::membership::Roster>, peer_id: &str) -> bool {
+    match roster {
+        None => true,
+        Some(r) => r.may_contribute(peer_id),
     }
 }
 
@@ -1083,7 +1130,7 @@ fn hive_gossip_targets(
     };
     connected
         .into_iter()
-        .filter(|p| r.is_member(p.as_str()))
+        .filter(|p| r.may_receive(p.as_str()))
         .collect()
 }
 
@@ -1669,7 +1716,7 @@ const JOIN_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// Deliberately short-lived: it does not stay in the gossip loop, because
 /// membership is a stored fact rather than a property of this process.
 #[cfg(feature = "hive")]
-pub fn cmd_hive_join(input: &[String]) -> io::Result<()> {
+pub fn cmd_hive_join(input: &[String], grant: Option<&str>) -> io::Result<()> {
     if input.is_empty() {
         eprintln!("Usage: claudectl hive join <hive-link | relay-code | word-phrase>");
         return Err(io::Error::other("missing argument"));
@@ -1738,6 +1785,7 @@ pub fn cmd_hive_join(input: &[String]) -> io::Result<()> {
         identity.as_str(),
         asked_hive.as_deref(),
         Some(identity.as_str()),
+        grant,
     );
     {
         let reg = registry
@@ -1745,6 +1793,9 @@ pub fn cmd_hive_join(input: &[String]) -> io::Result<()> {
             .map_err(|_| io::Error::other("registry lock poisoned"))?;
         reg.send_to(remote_id.as_str(), &request)
             .map_err(|e| io::Error::other(format!("could not send the join request: {e}")))?;
+    }
+    if grant.is_some() {
+        println!("Presenting a hive.read grant — asking to join as a reader.");
     }
     println!(
         "Asking to join{}...",
@@ -2104,8 +2155,9 @@ mod hive_gate_tests {
             names(&hive_gossip_targets(None, connected.clone())),
             vec!["a-1", "b-2"]
         );
-        assert!(hive_exchange_allowed(None, "a-1"));
-        assert!(hive_exchange_allowed(None, "nobody-ever-heard-of"));
+        assert!(hive_may_contribute(None, "a-1"));
+        assert!(hive_may_receive(None, "a-1"));
+        assert!(hive_may_contribute(None, "nobody-ever-heard-of"));
     }
 
     #[test]
@@ -2136,7 +2188,7 @@ mod hive_gate_tests {
         // Inbound: its units are dropped. Gating only one direction would let an
         // unapproved peer poison the hive while receiving nothing.
         assert!(
-            !hive_exchange_allowed(Some(&r), "b-2"),
+            !hive_may_contribute(Some(&r), "b-2"),
             "a pending peer must not be able to contribute either"
         );
     }
@@ -2146,12 +2198,12 @@ mod hive_gate_tests {
         let tmp = tempfile::tempdir().unwrap();
         let r = Roster::at(tmp.path());
         let entry = r.record_request("b-2", "hv_1", None).unwrap();
-        assert!(!hive_exchange_allowed(Some(&r), "b-2"));
+        assert!(!hive_may_contribute(Some(&r), "b-2"));
 
         r.admit(&entry.peer_id, "hv_1", Admission::Approved)
             .unwrap();
 
-        assert!(hive_exchange_allowed(Some(&r), "b-2"));
+        assert!(hive_may_contribute(Some(&r), "b-2"));
         assert_eq!(
             names(&hive_gossip_targets(Some(&r), peers(&["b-2"]))),
             vec!["b-2"]
@@ -2164,8 +2216,65 @@ mod hive_gate_tests {
         let r = Roster::at(tmp.path());
         let entry = r.record_request("b-2", "hv_1", None).unwrap();
         r.deny(&entry).unwrap();
-        assert!(!hive_exchange_allowed(Some(&r), "b-2"));
+        assert!(!hive_may_contribute(Some(&r), "b-2"));
         assert!(hive_gossip_targets(Some(&r), peers(&["b-2"])).is_empty());
+    }
+
+    #[test]
+    fn a_reader_receives_but_may_not_contribute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Roster::at(tmp.path());
+        r.admit_as(
+            "reader-1",
+            "hv_1",
+            crate::hive::membership::Admission::Grant,
+            crate::hive::membership::Role::Reader,
+            Some("g_abc".into()),
+        )
+        .unwrap();
+
+        // This asymmetry is §7.5: participation without symmetry.
+        assert!(
+            hive_may_receive(Some(&r), "reader-1"),
+            "a reader must receive knowledge — that is what it is for"
+        );
+        assert!(
+            !hive_may_contribute(Some(&r), "reader-1"),
+            "a reader must never be able to contribute"
+        );
+        // And it is a sync target, unlike a pending peer.
+        assert_eq!(
+            names(&hive_gossip_targets(Some(&r), peers(&["reader-1"]))),
+            vec!["reader-1"]
+        );
+    }
+
+    #[test]
+    fn a_contributor_and_a_reader_are_both_targets_but_only_one_may_push() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Roster::at(tmp.path());
+        r.admit(
+            "writer-1",
+            "hv_1",
+            crate::hive::membership::Admission::Policy,
+        )
+        .unwrap();
+        r.admit_as(
+            "reader-1",
+            "hv_1",
+            crate::hive::membership::Admission::Grant,
+            crate::hive::membership::Role::Reader,
+            None,
+        )
+        .unwrap();
+
+        let selected = hive_gossip_targets(Some(&r), peers(&["writer-1", "reader-1", "stranger"]));
+        let mut targets = names(&selected);
+        targets.sort();
+        assert_eq!(targets, vec!["reader-1", "writer-1"]);
+
+        assert!(hive_may_contribute(Some(&r), "writer-1"));
+        assert!(!hive_may_contribute(Some(&r), "reader-1"));
     }
 
     #[test]
@@ -2174,6 +2283,7 @@ mod hive_gate_tests {
         // not membership.
         let tmp = tempfile::tempdir().unwrap();
         let r = Roster::at(tmp.path());
-        assert!(!hive_exchange_allowed(Some(&r), "never-asked"));
+        assert!(!hive_may_contribute(Some(&r), "never-asked"));
+        assert!(!hive_may_receive(Some(&r), "never-asked"));
     }
 }

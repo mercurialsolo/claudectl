@@ -164,6 +164,13 @@ pub enum HiveCommand {
         /// The invite link, relay code, or word phrase
         #[arg(required = true, num_args = 1..)]
         invite: Vec<String>,
+        /// A `hive.read` capability token, to join as a reader (#435)
+        ///
+        /// A reader receives the hive's knowledge and never contributes any.
+        /// You still need an invite: the invite pairs you with the machine, and
+        /// the grant is what the owner authorised you to do once there.
+        #[arg(long)]
+        grant: Option<String>,
     },
 
     /// Review peers waiting to join this hive (#434)
@@ -423,7 +430,9 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
             crate::relay::cli::cmd_hive_invite(*qr, *words, json_mode)
         }
         #[cfg(feature = "relay")]
-        HiveCommand::Join { invite } => crate::relay::cli::cmd_hive_join(invite),
+        HiveCommand::Join { invite, grant } => {
+            crate::relay::cli::cmd_hive_join(invite, grant.as_deref())
+        }
         HiveCommand::Requests { action } => match action {
             None => join::cmd_requests(json_mode),
             Some(RequestAction::Approve { peer }) => {

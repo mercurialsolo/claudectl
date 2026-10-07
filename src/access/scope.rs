@@ -60,9 +60,9 @@ impl Scope {
     /// Why this scope cannot be issued yet, for the CLI's error message.
     ///
     /// `None` means `claudectl access grant` will mint it. `fleet.read` is Q8
-    /// ("scope defined, issued to nobody"); the hive scopes need the
-    /// named-hive work in #424. Keeping them parseable but unissuable means a
-    /// grant file written by a later version still loads here.
+    /// ("scope defined, issued to nobody"). `hive.read` became issuable in #435.
+    /// Keeping `hive.join` parseable but unissuable means a grant file written by
+    /// a later version still loads here.
     ///
     /// This is the single place that list lives. There was a companion
     /// `is_issuable` predicate carrying a second copy of it; #429 removed it
@@ -76,9 +76,16 @@ impl Scope {
                  (open-cluster RFC Q8) — a third party reviewing your project \
                  should not see your live session costs",
             ),
-            Scope::HiveRead(_) | Scope::HiveJoin(_) => {
-                Some("hive scopes need named-hive identity, which is #424")
-            }
+            // #435: issuable now that #432 gave hives a name to qualify on.
+            // The qualifier is the hive *name*, so renaming a hive invalidates
+            // outstanding reader grants — `hive identity set --name` warns when
+            // any are still live.
+            Scope::HiveRead(_) => None,
+            Scope::HiveJoin(_) => Some(
+                "hive.join is not issued as a grant — a hive is joined with an \
+                 invite (`claudectl hive join`), and `hive.read` is the scope that \
+                 grants membership without contribution",
+            ),
         }
     }
 
@@ -245,16 +252,17 @@ mod tests {
     }
 
     #[test]
-    fn only_query_and_docs_are_issuable_today() {
+    fn issuable_scopes_are_query_docs_and_hive_read() {
         assert!(
             Scope::ProjectQuery("p".into())
                 .unissuable_reason()
                 .is_none()
         );
         assert!(Scope::ProjectDocs("p".into()).unissuable_reason().is_none());
+        // #435 made this one mintable; #432 gave it a name to qualify on.
+        assert!(Scope::HiveRead("h".into()).unissuable_reason().is_none());
         // Parseable so later-written grant files still load, but not mintable.
         assert!(Scope::FleetRead("p".into()).unissuable_reason().is_some());
-        assert!(Scope::HiveRead("h".into()).unissuable_reason().is_some());
         assert!(Scope::HiveJoin("h".into()).unissuable_reason().is_some());
     }
 
@@ -271,12 +279,11 @@ mod tests {
                 .unwrap()
                 .contains("Q8")
         );
-        assert!(
-            Scope::HiveJoin("h".into())
-                .unissuable_reason()
-                .unwrap()
-                .contains("#424")
-        );
+        // Points at how a hive is actually joined, rather than at an epic that
+        // has since shipped.
+        let why = Scope::HiveJoin("h".into()).unissuable_reason().unwrap();
+        assert!(why.contains("hive join"), "got {why}");
+        assert!(why.contains("hive.read"), "got {why}");
     }
 
     // The qualifier grammar exists to keep the MAC's `\n` join unambiguous.

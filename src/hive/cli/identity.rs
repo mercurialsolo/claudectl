@@ -179,6 +179,14 @@ fn set(
         open_acknowledged_ms: acknowledged,
     };
 
+    // #435: the scope qualifier on a reader grant is the hive *name*, so a
+    // rename silently invalidates every outstanding one. Say so rather than
+    // leaving the owner to discover it when a reader stops being able to join.
+    let orphaned_grants = match &existing {
+        Some(prev) if prev.name != next.name => reader_grants_for(&prev.name),
+        _ => Vec::new(),
+    };
+
     identity::save(&next).map_err(io::Error::other)?;
 
     // #434: naming a hive turns the membership gate on. Peers that were already
@@ -216,6 +224,23 @@ fn set(
     }
     println!("Join policy: {}", next.join_policy.as_str());
 
+    if !orphaned_grants.is_empty() {
+        println!();
+        println!(
+            "warning: {} live hive.read grant(s) are scoped to the old name and will",
+            orphaned_grants.len()
+        );
+        println!("no longer admit anyone:");
+        for id in &orphaned_grants {
+            println!("  {id}");
+        }
+        println!("  Mint replacements against the new name, and revoke these:");
+        println!(
+            "    claudectl access grant --scopes hive.read --project {}",
+            next.name
+        );
+    }
+
     if !grandfathered.is_empty() {
         println!();
         println!(
@@ -233,6 +258,30 @@ fn set(
     println!("`claudectl relay serve` advertises it on the LAN, and");
     println!("`claudectl hive invite` mints a link for someone to join with.");
     Ok(())
+}
+
+/// Live `hive.read` grants scoped to `hive_name`.
+///
+/// Behind `relay` because the grant store is. Revoked and expired grants are
+/// left out — warning about a grant that already admits nobody would be noise.
+#[cfg(feature = "relay")]
+fn reader_grants_for(hive_name: &str) -> Vec<String> {
+    let Ok(store) = crate::access::grant::GrantStore::open_default() else {
+        return Vec::new();
+    };
+    let now = identity::epoch_ms();
+    let want = crate::access::scope::Scope::HiveRead(hive_name.to_string());
+    store
+        .list()
+        .into_iter()
+        .filter(|g| g.has_scope(&want) && !g.is_expired_at(now) && !g.revoked)
+        .map(|g| g.grant_id)
+        .collect()
+}
+
+#[cfg(not(feature = "relay"))]
+fn reader_grants_for(_hive_name: &str) -> Vec<String> {
+    Vec::new()
 }
 
 /// Peers this machine has already paired with.

@@ -76,6 +76,11 @@ pub enum MessageType {
     // Layer 3: hive membership (#434)
     HiveJoinRequest,
     HiveJoinResult,
+    /// Knowledge was refused rather than merged (#435) — a reader tried to
+    /// contribute, or a non-member did. Sent so the sender finds out, instead
+    /// of its units vanishing into a silence it cannot tell from a network
+    /// fault.
+    KnowledgeRejected,
 }
 
 static MSG_COUNTER: AtomicU64 = AtomicU64::new(0);

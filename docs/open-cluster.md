@@ -584,6 +584,8 @@ The LAN announcer in `src/relay/lan.rs` already broadcasts `{identity, port, ver
 
 `hive.read:<hive>` is the interesting new tier: mesh and receive knowledge without contributing or being trusted. It composes with existing machinery — `TrustTier` already decides how much weight a peer's claims carry, and a read-only member simply never supplies claims. This is the hive analogue of §4: participation without symmetry.
 
+**Shipped in #435.** Two things the implementation settled. A reader needs *both* an invite and the grant: the invite is transport authentication and the grant is the hive-level role, and making the grant alone sufficient would mean a second handshake path. And the grant admits directly even on an `ask` hive — the owner decided when they minted it, so queueing the peer would ask them the same question twice. The qualifier is the hive *name*, so renaming a hive invalidates outstanding reader grants; `hive identity set --name` warns. After admission the roster is authoritative, so revoking a grant stops new admissions rather than demoting an existing reader. See `docs/relay.md` for the surface.
+
 ## 8. `claudectl.app` — the macOS app
 
 ### 8.1 Honest prerequisite
