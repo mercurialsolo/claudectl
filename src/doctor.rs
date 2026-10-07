@@ -71,6 +71,7 @@ pub fn run_all_checks() -> Vec<Check> {
         check_coord_session_policy_dir(),
         check_supervisor_drain_state(),
         check_team_policy(),
+        check_relay_agent(),
         check_session_discovery(),
         check_terminal_integration(),
     ]
@@ -650,6 +651,71 @@ fn check_supervisor_drain_state() -> Check {
                 message: "no drain marker (supervisor accepts new assignments)".into(),
                 fix_hint: None,
             }
+        }
+    }
+}
+
+/// Whether the relay survives logout (#438).
+///
+/// Three distinguishable states, and only one of them is a failure:
+///
+/// - **Not installed** is `Skipped`, not a `Fail`. Plenty of people run a relay
+///   in a terminal when they want one, or do not use the relay at all, and
+///   nagging them about an optional daemon is noise.
+/// - **Installed and loaded** is a `Pass`.
+/// - **Installed but not loaded** is a `Fail`, because the user asked for a
+///   durable relay and does not have one — this is the state that silently
+///   produces a stale cluster view.
+///
+/// A fourth state, loaded with no plist, is reported too: it is how a relay
+/// keeps resurrecting after someone deletes the file by hand.
+fn check_relay_agent() -> Check {
+    #[cfg(not(all(feature = "relay", target_os = "macos")))]
+    {
+        Check {
+            name: "relay agent".into(),
+            status: CheckStatus::Skipped,
+            message: "launchd agent is macOS-only".into(),
+            fix_hint: None,
+        }
+    }
+    #[cfg(all(feature = "relay", target_os = "macos"))]
+    {
+        let st = crate::relay::agent::status();
+        let (_, err_log) = crate::relay::agent::log_paths();
+        match (st.plist_exists, st.loaded) {
+            (true, true) => Check {
+                name: "relay agent".into(),
+                status: CheckStatus::Pass,
+                message: "installed and running — survives logout".into(),
+                fix_hint: None,
+            },
+            (true, false) => Check {
+                name: "relay agent".into(),
+                status: CheckStatus::Fail,
+                message: "installed but launchd is not running it".into(),
+                fix_hint: Some(format!(
+                    "Check {} for why it failed to start, then re-run `claudectl relay install-agent`.",
+                    err_log.display()
+                )),
+            },
+            (false, true) => Check {
+                name: "relay agent".into(),
+                status: CheckStatus::Fail,
+                message: "loaded in launchd but its plist is missing".into(),
+                fix_hint: Some(
+                    "Run `claudectl relay uninstall-agent` to clear the orphaned service.".into(),
+                ),
+            },
+            (false, false) => Check {
+                name: "relay agent".into(),
+                status: CheckStatus::Skipped,
+                message: "not installed — `relay serve` will not survive logout".into(),
+                fix_hint: Some(
+                    "Install it with `claudectl relay install-agent` if you want a durable relay."
+                        .into(),
+                ),
+            },
         }
     }
 }

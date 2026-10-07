@@ -118,9 +118,10 @@ view.
 Consequences worth knowing:
 
 - **A relay must be running on each machine.** `relay fleet` with no snapshot
-  falls back to local sessions and tells you so. Nothing keeps `relay serve`
-  alive across reboots — run it under `launchd`, `tmux`, or whatever you already
-  use for long-lived processes.
+  falls back to local sessions and tells you so. On macOS,
+  [`relay install-agent`](#keeping-the-relay-alive) keeps one running across
+  logout and reboot; otherwise `relay serve` is a foreground process that stops
+  when its terminal does.
 - **A peer that stops reporting disappears** after 90s rather than lingering as
   a stale row, and the whole snapshot is ignored after 120s (which is how a
   stopped relay shows up as "no snapshot" instead of a frozen cluster).
@@ -150,6 +151,59 @@ Cloudflare Tunnel and Tailscale Funnel do the same job without SSH. You can
 bind the API to every interface with `--http-addr 0.0.0.0`; it works, it prints
 a warning at startup, and [Security](#security) says why you probably want the
 tunnel.
+
+## Keeping the relay alive
+
+`relay serve` is a foreground process. Close the terminal and the relay stops, which means the cluster view on every peer goes stale — `relay fleet` falls back to local sessions and says so. On macOS, install a launchd agent instead:
+
+```bash
+claudectl relay install-agent                    # port 9847
+claudectl relay install-agent --port 9850 --http-port 9876 --auth-token secret
+claudectl relay agent-status
+claudectl relay uninstall-agent
+```
+
+```
+Installed the relay agent.
+
+  plist:  /Users/you/Library/LaunchAgents/io.claudectl.relay.plist
+  label:  io.claudectl.relay
+  port:   9847
+  logs:   /Users/you/.claudectl/relay/agent.out.log
+          /Users/you/.claudectl/relay/agent.err.log
+
+It is running now, starts at login, and restarts if it dies.
+```
+
+The agent starts at login (`RunAtLoad`) and is restarted if it exits (`KeepAlive`), so a crash or a kill brings it straight back. `claudectl doctor` reports whether it is running.
+
+Details worth knowing:
+
+- **Re-run `install-agent` to change anything.** It replaces the plist and reloads the service, so changing a port or picking up a `brew upgrade` is one command. Running it twice is harmless.
+- **Uninstall never leaves an orphan.** The plist is removed even if unloading complains — an orphaned plist that keeps resurrecting a service you thought you removed is the usual way this feature goes wrong. `agent-status` also detects the reverse case (loaded, plist missing) and tells you to run `uninstall-agent`.
+- **`--auth-token` lands in the plist**, under `~/Library/LaunchAgents`, readable by your user. The install output says so when you pass one.
+- **The relay is killed abruptly on unload**, not asked to shut down. That is safe: `fleet.json` and the knowledge store are both written atomically, so the worst case is losing the current one-second tick rather than a torn file.
+
+### Linux
+
+There is no launchd, and `install-agent` says so rather than failing silently. The `systemd --user` equivalent — write `~/.config/systemd/user/claudectl-relay.service`:
+
+```ini
+[Unit]
+Description=claudectl relay
+
+[Service]
+ExecStart=%h/.cargo/bin/claudectl relay serve --port 9847
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user enable --now claudectl-relay
+loginctl enable-linger $USER     # so it survives logout
+```
 
 ## Three Ways to Share a Code
 
@@ -454,6 +508,9 @@ address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`.
 |---------|-------------|
 | `relay serve [--port N]` | Start the relay listener |
 | `relay serve --http-port N --auth-token T [--http-addr ADDR]` | Also start the coordinator HTTP API. `--http-addr` defaults to `127.0.0.1` |
+| `relay install-agent [--port N] [--http-port N] [--http-addr ADDR] [--auth-token T]` | macOS: keep the relay alive across logout and reboot |
+| `relay agent-status` | Whether the launchd agent is installed and running |
+| `relay uninstall-agent` | Remove the launchd agent |
 | `relay invite [--qr] [--words]` | Generate invite code/link/phrase |
 | `relay join <code>` | Join using any invite format |
 | `relay discover` | Scan LAN for nearby instances |

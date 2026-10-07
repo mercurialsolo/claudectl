@@ -618,7 +618,7 @@ Four things beyond the UI, each a real work item:
 | Notarization | Required, or Gatekeeper blocks it on first launch |
 | Auto-update | Sparkle, or a "new version available" link; the Homebrew bottle does not update an app bundle |
 | Distribution | Homebrew cask alongside the existing formula, or a notarized DMG |
-| Relay lifecycle | A `launchd` agent so the relay survives logout — this is also the fix for the CLI's "nothing keeps `relay serve` alive" gap |
+| Relay lifecycle | **Shipped in #438**, ahead of the rest of this epic because it is not app-specific: `relay install-agent` / `uninstall-agent` / `agent-status` manage a `launchd` agent from the CLI, so terminal users get a durable relay too. `claudectl doctor` reports it. |
 
 The `launchd` piece is worth noting as a two-for-one: solving it for the app solves it for terminal users too.
 

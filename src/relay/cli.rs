@@ -36,6 +36,35 @@ pub enum RelayCommand {
         auth_token: Option<String>,
     },
 
+    /// Keep `relay serve` running across logout and reboot (#438, macOS)
+    ///
+    /// Installs a launchd agent that starts the relay at login and restarts it
+    /// if it dies. Without this, nothing keeps a relay alive and the cluster
+    /// view goes stale the moment you close a terminal.
+    ///
+    /// Re-run it to update the agent after changing ports or upgrading.
+    InstallAgent {
+        /// Port the relay should listen on
+        #[arg(long, default_value_t = 9847)]
+        port: u16,
+        /// Also serve the coordinator HTTP API on this port
+        #[arg(long)]
+        http_port: Option<u16>,
+        /// Bind address for the HTTP API [default: 127.0.0.1]
+        #[arg(long)]
+        http_addr: Option<String>,
+        /// Bearer token for the HTTP API. Note this is stored in the plist
+        /// under ~/Library/LaunchAgents, which is readable by your user.
+        #[arg(long)]
+        auth_token: Option<String>,
+    },
+
+    /// Remove the launchd agent (#438, macOS)
+    UninstallAgent,
+
+    /// Whether the launchd agent is installed and running (#438, macOS)
+    AgentStatus,
+
     /// Generate a raw PSK pairing code
     Pair,
 
@@ -138,6 +167,22 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
             http_addr.as_deref(),
             auth_token.as_deref(),
         ),
+        RelayCommand::InstallAgent {
+            port,
+            http_port,
+            http_addr,
+            auth_token,
+        } => cmd_install_agent(
+            super::agent::AgentConfig {
+                port: *port,
+                http_port: *http_port,
+                http_addr: http_addr.clone(),
+                auth_token: auth_token.clone(),
+            },
+            json_mode,
+        ),
+        RelayCommand::UninstallAgent => cmd_uninstall_agent(json_mode),
+        RelayCommand::AgentStatus => cmd_agent_status(json_mode),
         RelayCommand::Pair => cmd_pair(json_mode),
         RelayCommand::Accept { code, peer_id } => cmd_accept(code, peer_id),
         RelayCommand::Connect { addr } => cmd_connect(addr),
@@ -527,6 +572,135 @@ fn cmd_serve(
 
 /// `claudectl relay pair`
 /// Generate a new PSK and display it.
+/// `relay install-agent` (#438).
+fn cmd_install_agent(cfg: super::agent::AgentConfig, json_mode: bool) -> io::Result<()> {
+    let path = super::agent::install(&cfg).map_err(io::Error::other)?;
+    let (out_log, err_log) = super::agent::log_paths();
+    let loaded = super::agent::is_loaded();
+
+    if json_mode {
+        let json = serde_json::json!({
+            "installed": true,
+            "loaded": loaded,
+            "plist": path.display().to_string(),
+            "label": super::agent::AGENT_LABEL,
+            "port": cfg.port,
+            "stdout_log": out_log.display().to_string(),
+            "stderr_log": err_log.display().to_string(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap_or_default()
+        );
+        return Ok(());
+    }
+
+    println!("Installed the relay agent.");
+    println!();
+    println!("  plist:  {}", path.display());
+    println!("  label:  {}", super::agent::AGENT_LABEL);
+    println!("  port:   {}", cfg.port);
+    println!("  logs:   {}", out_log.display());
+    println!("          {}", err_log.display());
+    println!();
+    if loaded {
+        println!("It is running now, starts at login, and restarts if it dies.");
+    } else {
+        // Installed-but-not-loaded is worth saying out loud rather than
+        // reporting success: it is the state `doctor` will flag.
+        println!("The plist is written but launchd does not report it as loaded.");
+        println!("Check the error log above, then: claudectl relay agent-status");
+    }
+    if cfg.auth_token.is_some() {
+        println!();
+        println!("Note: --auth-token is stored in the plist, which is readable by your user.");
+    }
+    println!();
+    println!("Remove it with: claudectl relay uninstall-agent");
+    Ok(())
+}
+
+/// `relay uninstall-agent` (#438).
+fn cmd_uninstall_agent(json_mode: bool) -> io::Result<()> {
+    let (was_present, note) = super::agent::uninstall().map_err(io::Error::other)?;
+
+    if json_mode {
+        let json = serde_json::json!({
+            "removed": was_present,
+            "note": note,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap_or_default()
+        );
+        return Ok(());
+    }
+
+    if was_present {
+        println!("Removed the relay agent. It will not come back at login.");
+    } else {
+        println!("No relay agent was installed — nothing to remove.");
+    }
+    if let Some(n) = note {
+        // The plist is gone either way; this only explains why unloading was
+        // noisy, usually "it was not running".
+        println!();
+        println!("(launchctl said: {n})");
+        println!("The plist was removed regardless, so nothing will restart it.");
+    }
+    Ok(())
+}
+
+/// `relay agent-status` (#438).
+fn cmd_agent_status(json_mode: bool) -> io::Result<()> {
+    let st = super::agent::status();
+    let (out_log, err_log) = super::agent::log_paths();
+
+    if json_mode {
+        let json = serde_json::json!({
+            "plist_exists": st.plist_exists,
+            "loaded": st.loaded,
+            "plist": st.plist.display().to_string(),
+            "label": super::agent::AGENT_LABEL,
+            "stdout_log": out_log.display().to_string(),
+            "stderr_log": err_log.display().to_string(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap_or_default()
+        );
+        return Ok(());
+    }
+
+    match (st.plist_exists, st.loaded) {
+        (true, true) => {
+            println!("Relay agent: running.");
+            println!("  plist: {}", st.plist.display());
+            println!("  logs:  {}", out_log.display());
+        }
+        (true, false) => {
+            println!("Relay agent: installed but NOT running.");
+            println!("  plist: {}", st.plist.display());
+            println!("  error log: {}", err_log.display());
+            println!();
+            println!("Re-run `claudectl relay install-agent` to reload it.");
+        }
+        (false, true) => {
+            // Orphaned service with no plist — the state that makes a relay
+            // keep coming back after someone deleted the file by hand.
+            println!("Relay agent: loaded in launchd, but its plist is gone.");
+            println!("Clean it up with: claudectl relay uninstall-agent");
+        }
+        (false, false) => {
+            println!("Relay agent: not installed.");
+            println!();
+            println!("Nothing keeps `relay serve` alive across logout. Install it with:");
+            println!("  claudectl relay install-agent");
+        }
+    }
+    Ok(())
+}
+
 fn cmd_pair(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
     let psk = crypto::generate_psk();
