@@ -6,7 +6,7 @@ Share learnings, delegate tasks, and collaborate across machines — all peer-to
 
 The relay connects two or more claudectl instances over TCP. Once connected, they can:
 
-- **Share brain knowledge** — patterns your brain learns ("always approve `cargo test`") propagate to peers automatically
+- **Share brain knowledge** — patterns your brain learns ("always approve `cargo test`") propagate to hive members ([with a caveat](#what-propagation-actually-does-today))
 - **Delegate tasks** — offload work to a remote machine running Claude Code
 - **Synchronize insights** — friction patterns, error loops, and accuracy data merge across the network
 
@@ -585,9 +585,30 @@ Peer and unit counts are advisory — they are snapshots from whenever the annou
 
 ## Hive Mind: Knowledge Sharing
 
-The hive mind is the layer that makes connected brains smarter. It works automatically once peers are connected.
+The hive mind is the layer that makes connected brains smarter.
 
-### How it works
+### What propagation actually does today
+
+Read this before relying on it. Knowledge moves in exactly one situation: a
+machine running `relay serve` distills something new, and sends it to the peers
+connected to it at that moment.
+
+Three consequences, all of them current behaviour rather than design intent:
+
+- **A peer that dials out does not exchange knowledge at all.** The loop behind
+  `relay join` and `relay connect` handles heartbeats and nothing else — it
+  neither sends its units nor merges the ones it receives. Only a `relay serve`
+  listener does.
+- **There is no catch-up.** Nothing syncs on connect, so a peer that joins a
+  minute after a distillation never receives that unit.
+- **`relay serve` never dials out.** It redials a peer it has *lost*, but it does
+  not connect to known peers at startup.
+
+So for knowledge to move from A to B today, A must be serving, B must be
+serving, one must have dialled the other, and A must distill while the connection
+is up. [#455](https://github.com/mercurialsolo/claudectl/issues/455) is the fix.
+
+### How it works once it does fire
 
 1. Your brain distills patterns every 10 decisions (e.g., "approve `cargo test` at 95% confidence")
 2. These patterns become **knowledge units** stored in `~/.claudectl/hive/knowledge.jsonl`
@@ -807,7 +828,7 @@ address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`.
 
 - **Relay**: TCP transport with HMAC-SHA256 pre-shared key authentication, NDJSON wire protocol, heartbeats with exponential backoff reconnect
 - **Delegation**: Remote task execution with periodic status updates, handoffs, and interrupt support
-- **Hive Mind**: Gossip-based knowledge sharing with conflict resolution (local always wins), trust-weighted brain injection, epidemic propagation with TTL
+- **Hive Mind**: Gossip-based knowledge sharing with conflict resolution (local always wins), trust-weighted brain injection, epidemic propagation with TTL — though see [what propagation actually does today](#what-propagation-actually-does-today)
 
 ## Security
 

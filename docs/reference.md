@@ -223,6 +223,13 @@ Connect machines, delegate tasks. See the [full relay guide](relay.md).
 | `relay peers` | List known and connected peers |
 | `relay delegate <peer> <prompt>` | Delegate a task to a remote peer |
 | `relay identity` | Show this instance's relay identity |
+| `relay install-agent` | Install a `launchd` agent so the relay survives logout |
+| `relay uninstall-agent` | Remove the `launchd` agent |
+| `relay agent-status` | Whether the agent is installed, loaded, and running |
+
+A peer that dials out with `relay join` or `relay connect` does not currently
+exchange hive knowledge — only a `relay serve` listener does, and only when the
+brain distills something new. See [#455](https://github.com/mercurialsolo/claudectl/issues/455).
 
 ### Hive Mind (--features hive)
 
@@ -238,6 +245,28 @@ Share knowledge, distill learnings. Requires relay for transport.
 | `hive archive [--prune Nd]` | Show cold storage archive stats |
 | `hive distill` | Run distillation pipeline (dedup, condense, curriculum) |
 | `hive curriculum` | Show distilled curriculum |
+
+Naming a hive makes it something that can be advertised, found and joined *as
+such*. A hive with no name advertises nothing, which is how every install starts.
+
+| Command | Description |
+|---------|-------------|
+| `hive identity` | Show this hive's name, description and join policy |
+| `hive identity set --name X [--join-policy P]` | Name it. `P` is `invite` (default), `ask` or `open` |
+| `hive identity clear --yes` | Back to unnamed |
+| `hive discover` | Find named hives on the LAN, with peer and unit counts |
+| `hive invite [--qr] [--words]` | Mint an invite to this hive (link, code, phrase) |
+| `hive join <invite> [--grant T]` | Join a hive. `--grant` joins read-only |
+| `hive requests` | Peers waiting to join, and who is already a member |
+| `hive requests approve <peer>` | Admit a waiting peer |
+| `hive requests deny <peer>` | Refuse one. They stay paired; the hive stays closed to them |
+
+`join_policy` is enforced by the host, not by the invite: `ask` queues each
+request for the owner rather than admitting on possession of a link. A
+`hive.read:<hive-name>` capability grant admits a **reader** — it receives the
+hive's knowledge and can never contribute any, and its attempted contributions
+are refused on the wire. A reader needs both an invite (transport) and the grant
+(role). See the [full relay guide](relay.md).
 
 ### Cleanup
 

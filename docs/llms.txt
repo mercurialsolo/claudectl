@@ -32,6 +32,10 @@ claudectl --demo    # try with fake sessions
 - Relay & hive mind: connect instances across machines, share brain learnings peer-to-peer
 - Remote task delegation: offload tasks to connected peers with status streaming
 - Discovery: invite codes, word phrases, QR codes, LAN broadcast scanning
+- Named hives: name a hive, advertise it over LAN, find it with hive discover, join it with a cctl://hive/ link, code or phrase
+- Host-enforced join policy: invite / ask / open; ask queues each request for the owner rather than admitting on possession of a link
+- Read-only hive membership: a hive.read capability grant receives the hive knowledge and can never contribute any; refusals are sent on the wire
+- Durable relay: relay install-agent runs it under launchd so it survives logout
 - Terminal support: Ghostty, tmux, Kitty, Warp, iTerm2, Terminal.app, WezTerm, GNOME Terminal
 
 ## How It Works

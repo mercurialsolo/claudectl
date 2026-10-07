@@ -324,8 +324,9 @@ claudectl hive distill                # Condense archive into curriculum
 
 # Relay for cross-machine networking is enabled by default
 claudectl relay invite                # Generate an invite code
-claudectl relay join YEK-AGA-YHK-QAA-BM       # Join from another machine
+claudectl relay join YCU-AIG-EAH-CC7-GUK-RYW-ZB4  # Join from another machine
 claudectl relay discover              # Scan LAN for nearby instances
+claudectl relay install-agent         # Keep the relay running across logout
 
 # Run a relay on each machine, then see every session on either one
 claudectl relay serve                 # leave running on both machines
@@ -339,7 +340,31 @@ claudectl relay serve --http-port 9876 --auth-token secret
 # a bearer token, so forward the port for an off-machine dashboard.
 ```
 
-Knowledge categories (best practices, techniques, workflow patterns) propagate automatically. Personal patterns (time-of-day habits, cost tolerance) stay local. You control what's shared:
+### Name a hive, and it becomes joinable
+
+By default a hive has no name — it is whatever your relay peers happen to be. Naming one makes it something you can advertise, find and join *as such*, and lets you decide who gets in:
+
+```bash
+claudectl hive identity set --name barrys-hive --join-policy ask
+claudectl hive discover               # named hives on the LAN, with peer/unit counts
+claudectl hive invite                 # a link, a code, or a word phrase (--qr, --words)
+claudectl hive join cctl://hive/hv_3a9f21?a=...   # from another machine
+claudectl hive requests               # who is waiting; approve <peer> / deny <peer>
+```
+
+**The host decides, not the link.** With `--join-policy ask`, holding an invite gets you queued for approval rather than admitted. `invite` admits a paired peer that asks; `open` warns you about what it exposes and records your confirmation before it will advertise as open.
+
+**Read-only membership.** A `hive.read` capability grant admits someone who receives your hive's knowledge and can never contribute any — useful for a contractor or a colleague you want to teach without being taught by:
+
+```bash
+claudectl access grant --scopes hive.read --project barrys-hive --label "alice, read-only"
+# alice, with both the invite and the grant:
+claudectl hive join <invite> --grant cctl_gr_cf827c_...
+```
+
+A hive with no name advertises nothing and gates nothing, so none of this changes anything until you opt in.
+
+Knowledge categories (best practices, techniques, workflow patterns) propagate between hive members. Personal patterns (time-of-day habits, cost tolerance) stay local. You control what's shared:
 
 ```toml
 [hive]
@@ -348,6 +373,8 @@ exclude_tools = ["Write"]
 max_units = 500
 max_prompt_units = 20
 ```
+
+> **Propagation is narrower than it sounds today.** Knowledge moves from a machine running `relay serve` to peers connected to it at the moment the brain distills something new. A peer that dials out with `relay join` or `relay connect` does not exchange knowledge at all, and there is no catch-up for a peer that connects later. Being fixed in [#455](https://github.com/mercurialsolo/claudectl/issues/455).
 
 See the [full Relay & Hive Mind guide](docs/relay.md).
 
