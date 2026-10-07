@@ -13,7 +13,7 @@
 | 3. Read-only query surface (MCP + HTTP), deterministic | **Shipped** (#429) | `src/query/{mod,core,rank,http,mcp,cli}.rs` |
 | 4. Jev query classification + routing | **Shipped** (#430), off unless `TYPESAFE_API_KEY` is set | `src/query/{jev,thresholds,classify,escalate,spend}.rs` |
 | 5. Query guardrails (rate limit, budget, audit) | **Shipped** (#431) | `src/rate_limit.rs`, `src/access/grant.rs`, `src/query/core.rs` |
-| 5. Named hives + advertise/discover | **Not started** | `src/hive/`, `src/relay/lan.rs`, `src/relay/invite.rs` |
+| 5. Named hives + advertise/discover | **Identity shipped** (#432); advertise/discover/join not started | `src/hive/identity.rs`, `src/hive/cli/identity.rs`; still to come: `src/relay/lan.rs`, `src/relay/invite.rs` |
 | 6. `claudectl.app` (macOS menu-bar shell) | **Not started** | separate artifact, separate toolchain |
 
 ---
@@ -632,7 +632,14 @@ The `launchd` piece is worth noting as a two-for-one: solving it for the app sol
 
 <a id="q4-secret-scanning"></a>**Q4 — Secret scanning before indexing?** The index trusts the git tree, so a repo with a committed key will index it. Worth a scan at index time, or is "don't commit secrets" the project's position?
 
-<a id="q5-open-join"></a>**Q5 — Is `join_policy: open` ever safe?** Even LAN-only, it lets anyone on a coffee-shop network join a hive and receive knowledge. Perhaps `open` should mean "advertise, but still require approval."
+<a id="q5-open-join"></a>**Q5 — Is `join_policy: open` ever safe?** ~~Even LAN-only, it lets anyone on a coffee-shop network join a hive and receive knowledge. Perhaps `open` should mean "advertise, but still require approval."~~
+
+**Resolved in #432: allowed, but warranted.** `open` keeps its plain meaning rather than being quietly redefined as `ask` — an owner on a network they control should be able to have hands-off joining, and a setting that does not do what it says is worse than a setting that asks. So the gate is consent, not prohibition:
+
+- `hive identity set --join-policy open` prints what it actually exposes (your distilled preferences and insights, to everyone on the network) and points at `ask` as the alternative that keeps discoverability.
+- It then requires confirmation — interactively a `y/N` prompt, and `--yes` where there is no terminal. In a pipe the flag is **required**, never assumed, because defaulting to yes in a script is how a permissive setting gets made by accident.
+- The consent is **recorded** in `open_acknowledged_ms`, and that is what makes it more than theatre: `identity.json` is an ordinary editable file, so a hand-written `"join_policy": "open"` has had no confirmation. `effective_join_policy()` returns `invite` for an unacknowledged `open`, and the advertiser must consult it rather than the raw field. Fail closed — a policy nobody consented to is not the permissive one.
+- Leaving `open` drops the acknowledgement, so returning to it asks again rather than reusing stale consent.
 
 <a id="q6-hive-directory"></a>**Q6 — Hosted hive directory?** Genuine stranger-discovery needs a rendezvous service: cost, uptime, moderation, and a central point in a peer-to-peer product. Out of scope here; needs its own decision.
 

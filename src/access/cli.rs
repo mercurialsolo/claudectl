@@ -615,25 +615,10 @@ fn fmt_ms(ms: u64) -> String {
 }
 
 fn fmt_ms_at(ms: u64, now_ms: u64) -> String {
-    let (delta_ms, future) = if ms >= now_ms {
-        (ms - now_ms, true)
-    } else {
-        (now_ms - ms, false)
-    };
-    let secs = delta_ms / 1000;
-    // Round to nearest unit rather than truncating.
-    let nearest = |unit: u64| (secs + unit / 2) / unit;
-    let span = match secs {
-        0..=59 => return "just now".into(),
-        60..=3599 => format!("{}m", nearest(60)),
-        3600..=86_399 => format!("{}h", nearest(3600)),
-        _ => format!("{}d", nearest(86_400)),
-    };
-    if future {
-        format!("in {span}")
-    } else {
-        format!("{span} ago")
-    }
+    // Moved to core so `hive::identity` can share it: that module is not
+    // behind the `relay` feature this one is, and the sync-only build has a
+    // hive but no grants.
+    claudectl_core::helpers::fmt_ms_at(ms, now_ms)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

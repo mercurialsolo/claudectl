@@ -11,6 +11,7 @@ pub mod exposure;
 pub mod feedback;
 #[cfg(feature = "relay")]
 pub mod gossip;
+pub mod identity;
 pub mod injection;
 pub mod merger;
 pub mod store;

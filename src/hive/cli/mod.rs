@@ -10,12 +10,72 @@ use crate::hive::store::HiveStore;
 // Behavior-preserving split of the former monolithic cli.rs. Command handlers
 // grouped by concern; dispatch_command below routes to them.
 mod effectiveness;
+mod identity;
 mod onboarding;
 mod share;
 use effectiveness::*;
+use identity::cmd_identity;
 use onboarding::*;
 pub use share::share_artifact_from_path;
 use share::*;
+
+/// `--join-policy` as a CLI value, mapped onto [`crate::hive::identity::JoinPolicy`].
+///
+/// A separate type so the wire enum does not have to derive clap's traits, and
+/// so the help text for each policy lives next to the flag the user types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum JoinPolicyArg {
+    /// A link or code is required (default)
+    Invite,
+    /// You approve each join request
+    Ask,
+    /// Anyone who can see your LAN broadcast may join — needs confirmation
+    Open,
+}
+
+impl From<JoinPolicyArg> for crate::hive::identity::JoinPolicy {
+    fn from(a: JoinPolicyArg) -> Self {
+        match a {
+            JoinPolicyArg::Invite => Self::Invite,
+            JoinPolicyArg::Ask => Self::Ask,
+            JoinPolicyArg::Open => Self::Open,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IdentityAction {
+    /// Name this hive, or change its name, description or join policy
+    ///
+    /// Re-running this updates the fields you pass and keeps the hive's id and
+    /// creation time — renaming a hive is not creating a new one.
+    Set {
+        /// The hive's name. Must be usable as a capability scope qualifier
+        /// (`[A-Za-z0-9._-]`), because #435 grants `hive.read:<name>`.
+        #[arg(long)]
+        name: Option<String>,
+        /// What this hive is for, shown to anyone who discovers it
+        #[arg(long)]
+        description: Option<String>,
+        /// Who may join: invite (default), ask, or open
+        #[arg(long, value_enum)]
+        join_policy: Option<JoinPolicyArg>,
+        /// Accept the warning that `--join-policy open` prints, without being
+        /// asked. Required for `open` when there is no terminal to prompt on.
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Remove this hive's identity, returning to unnamed
+    ///
+    /// Nothing is advertised while unnamed, which is where every install starts.
+    Clear {
+        /// Required: clearing discards the hive id, so peers who knew this hive
+        /// by it will not recognise a later one.
+        #[arg(long)]
+        yes: bool,
+    },
+}
 
 #[derive(Subcommand)]
 pub enum HiveCommand {
@@ -48,6 +108,16 @@ pub enum HiveCommand {
 
     /// Show knowledge store overview
     Status,
+
+    /// Show or set this hive's name, description and join policy (#432)
+    ///
+    /// A hive with no identity behaves exactly as it always has: nothing is
+    /// advertised and nothing changes. Naming one is what makes #424's
+    /// advertise, discover and join possible.
+    Identity {
+        #[command(subcommand)]
+        action: Option<IdentityAction>,
+    },
 
     /// List knowledge units
     Knowledge {
@@ -280,6 +350,7 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         HiveCommand::Expose { unit_id, all } => cmd_expose(unit_id.as_deref(), *all, json_mode),
         HiveCommand::Hide { unit_id, all } => cmd_hide(unit_id.as_deref(), *all, json_mode),
         HiveCommand::Status => cmd_status(json_mode),
+        HiveCommand::Identity { action } => cmd_identity(action.as_ref(), json_mode),
         HiveCommand::Knowledge { from, scope } => {
             cmd_knowledge(from.as_deref(), scope.as_deref(), json_mode)
         }

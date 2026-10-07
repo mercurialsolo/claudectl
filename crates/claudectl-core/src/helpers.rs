@@ -184,6 +184,37 @@ pub fn is_exposed_bind(addr: &std::net::SocketAddr) -> bool {
     !addr.ip().is_loopback()
 }
 
+/// Render an epoch-millisecond timestamp as a coarse relative span.
+///
+/// `"just now"`, `"5m ago"`, `"in 30d"`. Rounds to the nearest unit rather than
+/// truncating, so a grant issued with `--expires 30d` does not read back as
+/// `in 29d` a millisecond later.
+///
+/// Lives in core because two feature-gated callers need it — `access` (behind
+/// `relay`) and `hive` (not) — and a display helper duplicated across a feature
+/// boundary is a display helper that drifts.
+pub fn fmt_ms_at(ms: u64, now_ms: u64) -> String {
+    let (delta_ms, future) = if ms >= now_ms {
+        (ms - now_ms, true)
+    } else {
+        (now_ms - ms, false)
+    };
+    let secs = delta_ms / 1000;
+    // Round to nearest unit rather than truncating.
+    let nearest = |unit: u64| (secs + unit / 2) / unit;
+    let span = match secs {
+        0..=59 => return "just now".into(),
+        60..=3599 => format!("{}m", nearest(60)),
+        3600..=86_399 => format!("{}h", nearest(3600)),
+        _ => format!("{}d", nearest(86_400)),
+    };
+    if future {
+        format!("in {span}")
+    } else {
+        format!("{span} ago")
+    }
+}
+
 #[cfg(test)]
 mod exposed_bind_tests {
     use super::is_exposed_bind;
