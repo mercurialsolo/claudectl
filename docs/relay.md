@@ -339,6 +339,137 @@ Two details worth knowing:
 
 Moving away from `open` drops the acknowledgement, so coming back to it asks again.
 
+### Inviting someone into the hive
+
+```bash
+claudectl hive invite              # link + relay code
+claudectl hive invite --words      # also the memorable phrase
+claudectl hive invite --qr         # QR of the link
+```
+
+```
+Inviting to hive "barrys-hive" (hv_3a9f21), join_policy=ask
+  Each join will wait for you to approve it (claudectl hive requests).
+
+  HIVE LINK:   cctl://hive/hv_3a9f21?a=laptop-a3f2@192.168.1.50:9847&k=cbc3179ea1a8bb70&n=barrys-hive&p=ask
+
+  RELAY CODE:  YCU-AIG-B7L-VNU-HAS-MFS-BRA
+    (the code and the phrase pair them with this machine; only
+     the link names the hive — either way they end up asking to join)
+```
+
+The invite carries the same address and PSK a peer invite does, because the
+holder still has to reach this machine. **Only the link carries the hive id** —
+the relay code and the word phrase spend all thirteen of their bytes on the
+address and the key. That costs nothing: a code pairs you with the machine, and
+the machine then answers for whichever hive it runs.
+
+> The RFC sketched this link as `cctl://hive/<hive_id>?k=<psk>&n=<name>`, which
+> cannot be used — it names a hive but no machine, so a holder has nothing to
+> connect to. The address is carried in `a=<identity>@<host:port>`, the same pair
+> the peer link already puts before its `/k/`.
+
+`hive invite` warns if nothing is listening on the port it is about to hand out,
+because an invite minted while the relay is down cannot be redeemed.
+
+### Joining a hive
+
+```bash
+claudectl hive join cctl://hive/hv_3a9f21?a=...     # link
+claudectl hive join YCU-AIG-B7L-VNU-HAS-MFS-BRA     # relay code
+claudectl hive join nut-may-aim-bud-era-cow-...     # word phrase
+```
+
+All three pair with the machine and then *ask* to join. What happens next is the
+host's `join_policy` to decide — holding a link is not the same as being let in:
+
+```
+Hive "barrys-hive" (hv_3a9f21), join_policy=ask
+Connecting to 192.168.1.50:9847...
+Paired with laptop-a3f2 (192.168.1.50:9847)
+Asking to join "barrys-hive"...
+Asked to join "barrys-hive" — waiting for its owner to approve. Nothing is
+shared until they do.
+
+To start exchanging knowledge, connect to the hive:
+
+  claudectl relay connect 192.168.1.50:9847
+```
+
+That last line matters: `hive join` records membership and exits. `relay serve`
+listens but does not dial out, so the joiner is the side that has to connect for
+knowledge to actually move.
+
+`claudectl hive status` always says where you stand:
+
+```
+  Hive membership: asked to join "barrys-hive" via laptop-a3f2 — awaiting owner approval
+```
+
+A link that names a *different* hive is refused, which is what stops an invite
+for someone else's hive from quietly joining yours.
+
+### Approving who gets in
+
+With `join_policy: ask`, each request waits for you:
+
+```bash
+claudectl hive requests                        # who is waiting, and who is in
+claudectl hive requests approve laptop-a3f2
+claudectl hive requests deny laptop-a3f2
+```
+
+```
+Hive "barrys-hive" (hv_3a9f21), join_policy=ask
+
+1 waiting for you:
+
+  PEER                         REQUEST                ASKED
+  ────────────────────────────────────────────────────────────────────────
+  laptop-a3f2                  jr_1791349617144_0     just now
+```
+
+Approving tells the peer immediately if it is reachable; otherwise it finds out
+the next time it connects or re-runs `hive join`. Denying leaves the peer
+*paired* — a denial is about the hive, not the machine — but it gets nothing from
+the hive, and re-asking does not undo it.
+
+`hooks.on_hive_join_request` fires when a request is queued, so you do not have
+to be watching the terminal:
+
+```toml
+[hooks.on_hive_join_request]
+run = "osascript -e 'display notification \"$CLAUDECTL_HIVE_JOIN_PEER wants to join\"'"
+```
+
+### What membership actually gates
+
+Knowledge is exchanged only with hive **members**, and in both directions. A peer
+that is merely pending receives no units *and* cannot contribute any — gating only
+what you send would let an unapproved peer push into the hive while getting
+nothing back.
+
+Three things worth knowing:
+
+- **An unnamed hive gates nothing.** Membership only exists once a hive has a
+  name, so nothing changes for anyone who has not named one.
+- **Naming a hive admits everyone you had already paired with.** They were
+  trusted before the hive had a name, and naming it does not withdraw that —
+  otherwise gossip would stop dead until every peer re-joined. The command says
+  who it admitted. A peer you have denied is not admitted this way.
+- **`invite` and `open` are the same rule at the host today.** The PSK is
+  per-host rather than per-invite, so the host genuinely cannot tell which link a
+  peer used — pairing *is* the credential. The two policies differ in your intent
+  and in what gets advertised on the LAN, not yet in what the host enforces. Only
+  `ask` currently changes who gets in. Per-invite tokens are the follow-up that
+  would make `invite` enforce what its name says.
+
+Membership is stored as one create-only file per peer under
+`~/.claudectl/hive/members/`, so the gossip gate is a single `stat` and
+`relay serve` admitting a peer cannot collide with `hive requests approve`
+running in another process. A joiner's own standing is in
+`~/.claudectl/hive/membership.json` — one hive per machine.
+
 ### Finding hives on the LAN
 
 Once a hive has a name, `relay serve` advertises it alongside the machine's own announcement, and `hive discover` lists hives rather than machines:

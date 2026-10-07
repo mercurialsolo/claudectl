@@ -4,6 +4,78 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed — peer pairing never worked on macOS
+- **`claudectl relay join` could not pair with anything on macOS.** The accept
+  loop puts the *listening* socket in non-blocking mode so it can poll for
+  shutdown; on macOS and the BSDs an accepted socket inherits `O_NONBLOCK` from
+  its listener (Linux does not), and a non-blocking socket ignores
+  `set_read_timeout`. So the host's first read of the handshake returned
+  `EAGAIN` immediately instead of waiting, every time. The host logged
+  `handshake read failed … Resource temporarily unavailable (os error 35)` and
+  the joiner reported `auth failed: connection closed before ack`. The accepted
+  connection is now put back into blocking mode before the handshake, which is
+  what the timeouts around it always assumed.
+
+### Fixed — relay codes and word phrases could never be redeemed
+- **Only the `cctl://` link could authenticate; the code and the phrase never
+  could.** The link carries 8 PSK bytes and both sides rebuild the key with
+  `crypto::parse_psk`. The relay code and word phrase packed only **4** bytes
+  and then derived their own key with `sha256(seed4)` — a different 32-byte key
+  than the link produces, and a different one than the inviter stores in
+  `_pending.key`. A joiner using a code or phrase therefore presented a key the
+  host could not match, and got `handshake denied`. All three formats now pack
+  the same 8 bytes and go through the same single derivation, so the bug class
+  cannot recur. The round-trip tests did not catch this because each codec was
+  only ever checked against itself; the new tests assert the decoded key equals
+  the canonical key an inviter actually stores.
+- A relay code is now 13 bytes — seven groups of three characters instead of
+  five — and a word phrase is 13 words instead of 9. Codes and phrases minted by
+  v0.65.0 or earlier are refused with an explanation rather than decoded into a
+  key nothing matches. Nothing is lost by this: they could not be redeemed.
+
+### Fixed — `relay invite --json` minted invites that could not be redeemed
+- `cmd_invite` returned from inside its `--json` branch *before* storing the
+  pending PSK, so a scripted invite printed a perfectly valid-looking link that
+  the serve side had no key for. The pending key is now claimed before either
+  output path.
+
+### Added — hive invite links and `join_policy` enforcement (#434)
+- `claudectl hive invite` mints an invite to *this machine's named hive*, as a
+  link, a relay code, a word phrase or a QR code. The link is
+  `cctl://hive/<hive_id>?a=<identity>@<host:port>&k=<psk>&n=<name>&p=<policy>`.
+  The spec wrote this as `cctl://hive/<id>?k=&n=`, which cannot be used — it
+  names a hive but no machine, so a holder has nothing to connect to; the
+  address rides in `a=`. Codes and phrases have no room for a hive id, so they
+  pair with the machine and ask to join second.
+- `claudectl hive join <link|code|phrase>` pairs and asks to join. It warns if
+  nothing is listening on the port it is about to hand out.
+- **`join_policy` is now enforced, by the host.** `ask` queues the request for
+  its owner instead of admitting on possession of a link;
+  `claudectl hive requests` lists who is waiting, with `approve` and `deny`.
+  `invite` and `open` admit a paired peer that asks. A link naming a different
+  hive is refused.
+- Knowledge is only exchanged with hive **members**, in both directions — a
+  peer that is merely pending neither receives units nor can contribute any.
+- Naming a hive admits every already-paired peer, so gossip does not silently
+  stop for anyone who named a hive after pairing. A peer the owner has denied is
+  not admitted this way. A hive with no name gates nothing and behaves exactly
+  as before.
+- `claudectl hive status` shows where this machine stands and how many peers are
+  waiting to join. New hook: `hooks.on_hive_join_request`.
+- Membership is one create-only file per peer, so the gate is a single `stat` and
+  two processes deciding at once cannot lose an update — the same
+  monotonic-fact-as-create-only-file pattern as the escalation verdicts in #446.
+
+### Known limitation
+- At the host, `invite` and `open` are the same rule today, because the PSK is
+  per-host rather than per-invite: pairing is the credential, so the host cannot
+  tell which link a peer used. The two differ in owner intent and in what is
+  advertised over LAN. Per-invite tokens are the follow-up that would make
+  `invite` enforce what its name says.
+- Knowledge still syncs only when the host distills something new while a peer
+  is connected; there is no catch-up on connect. A peer that joins after a
+  distillation has to wait for the next one. Pre-existing, and not changed here.
+
 ### Fixed — LAN discovery never worked at all
 - **`relay discover` has returned "No claudectl instances found" since it
   shipped**, even with a relay running on the same network. The scanner was
