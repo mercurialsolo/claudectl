@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod advertise;
+pub mod agent;
 pub mod cli;
 pub mod crypto;
 pub mod delegation;

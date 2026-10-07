@@ -45,6 +45,33 @@ All notable changes to claudectl are documented here.
   hive name grammar is spelled out in `hive::identity` for the same reason, with
   a `relay`-gated test asserting it agrees with `access::scope` where both exist.
 
+### Added — the relay survives logout: launchd agent (#438)
+- **`claudectl relay install-agent`**, plus `uninstall-agent` and
+  `agent-status`. `relay serve` was a foreground "Press Ctrl+C to stop" process,
+  so closing a terminal stopped the relay and every peer's cluster view went
+  stale — `relay fleet` quietly fell back to local sessions. The agent starts at
+  login (`RunAtLoad`) and is restarted if it exits (`KeepAlive`).
+- **Managed from the CLI, not from an app bundle.** This is phase 3 of the macOS
+  app epic (#425), but nothing about it is app-specific, so terminal users get a
+  durable relay from the same change. `docs/relay.md` previously told people to
+  "run it under `launchd`, `tmux`, or whatever you already use" — that advice is
+  now a command.
+- **Uninstall cannot leave an orphan.** The plist is removed even when unloading
+  complains, because an orphaned plist that keeps resurrecting a service you
+  thought you removed is how this feature usually goes wrong. `agent-status`
+  detects the reverse too (loaded in launchd, plist missing) and says how to
+  clear it.
+- **`claudectl doctor` reports it**, with "not installed" as `Skipped` rather
+  than a failure — running a relay in a terminal is a legitimate choice, and
+  nagging about an optional daemon is noise. "Installed but not loaded" *is* a
+  `Fail`, because that is the state that silently produces a stale cluster view.
+- **The binary path is recorded un-canonicalized**, so a Homebrew install keeps
+  pointing at the stable `/opt/homebrew/bin/claudectl` symlink rather than a
+  versioned Cellar path the next `brew upgrade` would invalidate.
+- Not macOS prints the `systemd --user` recipe instead of failing silently.
+  `--auth-token` is stored in the plist (readable by your user) and the install
+  output says so.
+
 
 ### Added — acting on an escalation: verdict, caller poll, expiry (#446)
 - **The queue is drainable.** #430 queued a middle-band question and said
