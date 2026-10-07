@@ -1830,6 +1830,14 @@ fn cmd_invite(show_qr: bool, show_words: bool, json_mode: bool) -> io::Result<()
     let relay_code = super::invite::encode_relay_code(&addr, &canonical_psk);
     let word_phrase = super::invite::encode_words(&addr, &canonical_psk);
 
+    // Claim the pending key *before* the `--json` early return below. It used to
+    // happen only at the end of the human-readable path, so `relay invite --json`
+    // printed a perfectly valid invite that the serve side had no key for — every
+    // scripted pairing failed with "unknown peer".
+    let pending_path = super::peers_dir().join("_pending.key");
+    let _ = std::fs::create_dir_all(super::peers_dir());
+    let _ = std::fs::write(&pending_path, crypto::hex_encode(&canonical_psk));
+
     if json_mode {
         let output = serde_json::json!({
             "identity": identity.as_str(),
@@ -1875,11 +1883,6 @@ fn cmd_invite(show_qr: bool, show_words: bool, json_mode: bool) -> io::Result<()
         println!();
         println!("{}", super::invite::render_qr(&invite_link));
     }
-
-    // Also store as pending (for the serve side to accept)
-    let pending_path = super::peers_dir().join("_pending.key");
-    let _ = std::fs::create_dir_all(super::peers_dir());
-    let _ = std::fs::write(&pending_path, crypto::hex_encode(&canonical_psk));
 
     Ok(())
 }

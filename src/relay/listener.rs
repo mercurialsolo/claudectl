@@ -170,6 +170,15 @@ fn handle_incoming(
     registry: &Arc<Mutex<PeerRegistry>>,
     identity: &PeerId,
 ) -> bool {
+    // The accept loop puts the *listening* socket in non-blocking mode so it can
+    // poll `shutdown`. On macOS and the BSDs an accepted socket inherits
+    // `O_NONBLOCK` from its listener (Linux does not), and a non-blocking socket
+    // ignores `set_read_timeout` — the first read returns `EAGAIN` immediately
+    // instead of waiting. That made every inbound pairing fail with "handshake
+    // read failed: Resource temporarily unavailable" on macOS, which is why
+    // `relay join` has never worked here. Put the connection back into blocking
+    // mode before the handshake, which is what the timeouts below assume.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
 

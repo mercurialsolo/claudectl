@@ -1,8 +1,14 @@
 // Invite system: compact relay codes, invite links, word encoding, QR rendering.
 //
-// A "relay code" encodes IP + port + PSK-seed into a short, human-speakable string.
-// Format: 9 bytes (4 IP + 1 port-delta + 4 PSK-seed) → 15 base32 chars → XXX-XXX-XXX-XXX-XXX
+// A "relay code" encodes IP + port + PSK into a short, human-speakable string.
+// Format: 13 bytes (4 IP + 1 port-delta + 8 PSK) → 21 base32 chars → seven groups of 3.
 // No raw IPs visible. Speakable over a phone call.
+//
+// All three formats — code, word phrase and cctl:// link — carry the same 8 PSK
+// bytes and rebuild the full key with the same `crypto::parse_psk`. They used
+// not to: codes and phrases packed 4 bytes and derived their own key, so they
+// produced a key neither the link nor the inviter'"'"'s stored `_pending.key` would
+// ever match, and no code or phrase could be redeemed.
 
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -14,9 +20,19 @@ use super::crypto;
 
 const DEFAULT_PORT: u16 = 9847;
 
-/// Encode connection info into a compact relay code.
-/// Format: 9 bytes → base32 → grouped with dashes.
-pub fn encode_relay_code(addr: &SocketAddr, psk: &[u8; 32]) -> String {
+/// Bytes an invite payload packs into: 4 IPv4 octets, 1 port delta, 8 PSK bytes.
+///
+/// The PSK half is **8** bytes, not 4, because that is what the invite *link*
+/// carries and what [`crypto::parse_psk`] rebuilds a full key from. The relay
+/// code and the word phrase used to pack only 4 and then derive the key
+/// themselves with `sha256(seed4)` — a different 32-byte key than the link
+/// produces, and a different one than the inviter stores in `_pending.key`. So
+/// codes and phrases could never authenticate; only links could. The fix is not
+/// really the width, it is that all three formats now go through one derivation.
+const INVITE_PAYLOAD_LEN: usize = 13;
+
+/// Pack an address and PSK into the bytes a code or phrase carries.
+fn pack_invite(addr: &SocketAddr, psk: &[u8; 32]) -> [u8; INVITE_PAYLOAD_LEN] {
     let ip = match addr.ip() {
         std::net::IpAddr::V4(v4) => v4,
         std::net::IpAddr::V6(_) => Ipv4Addr::new(127, 0, 0, 1), // fallback
@@ -30,23 +46,28 @@ pub fn encode_relay_code(addr: &SocketAddr, psk: &[u8; 32]) -> String {
         delta.clamp(0, 255) as u8
     };
 
-    let mut buf = [0u8; 9];
+    let mut buf = [0u8; INVITE_PAYLOAD_LEN];
     buf[0..4].copy_from_slice(&ip.octets());
     buf[4] = port_delta;
-    buf[5..9].copy_from_slice(&psk[..4]); // PSK seed (first 4 bytes)
-
-    let encoded = base32_encode(&buf);
-    // Group into 3-char chunks with dashes: XXX-XXX-XXX-XXX-XX
-    format_grouped(&encoded, 3)
+    buf[5..13].copy_from_slice(&psk[..8]);
+    buf
 }
 
-/// Decode a relay code back into address + PSK.
-pub fn decode_relay_code(code: &str) -> Result<(SocketAddr, [u8; 32]), String> {
-    let clean: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    let bytes = base32_decode(&clean)?;
-
-    if bytes.len() < 9 {
-        return Err(format!("relay code too short: {} bytes", bytes.len()));
+/// Unpack what [`pack_invite`] produced.
+///
+/// The PSK comes back through `crypto::parse_psk`, the same function the link
+/// path uses, so every invite format yields the identical canonical key.
+fn unpack_invite(bytes: &[u8]) -> Result<(SocketAddr, [u8; 32]), String> {
+    if bytes.len() != INVITE_PAYLOAD_LEN {
+        // Loud rather than lenient: a 9-byte payload is a code minted by a
+        // claudectl whose codes could not authenticate anyway, and decoding a
+        // short buffer would just produce a key nothing matches.
+        return Err(format!(
+            "invite payload is {} bytes, expected {INVITE_PAYLOAD_LEN} — a code or phrase \
+             this short was minted by claudectl 0.65.0 or earlier, whose codes could not \
+             be redeemed at all. Ask for a new one.",
+            bytes.len()
+        ));
     }
 
     let ip = Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]);
@@ -60,12 +81,23 @@ pub fn decode_relay_code(code: &str) -> Result<(SocketAddr, [u8; 32]), String> {
         .parse()
         .map_err(|e| format!("invalid address: {e}"))?;
 
-    // Derive full 32-byte PSK from 4-byte seed
-    let seed = &bytes[5..9];
-    let mut psk = crypto::sha256(seed);
-    psk[..4].copy_from_slice(seed);
-
+    let psk = crypto::parse_psk(&crypto::hex_encode(&bytes[5..13]))?;
     Ok((addr, psk))
+}
+
+/// Encode connection info into a compact relay code.
+/// Format: 13 bytes -> 21 base32 chars -> XXX-XXX-XXX-XXX-XXX-XXX-XXX
+pub fn encode_relay_code(addr: &SocketAddr, psk: &[u8; 32]) -> String {
+    let encoded = base32_encode(&pack_invite(addr, psk));
+    // 13 bytes is 21 base32 chars, which groups into 7 chunks of 3 exactly.
+    format_grouped(&encoded, 3)
+}
+
+/// Decode a relay code back into address + PSK.
+pub fn decode_relay_code(code: &str) -> Result<(SocketAddr, [u8; 32]), String> {
+    let clean: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let bytes = base32_decode(&clean)?;
+    unpack_invite(&bytes)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -250,24 +282,8 @@ pub fn parse_hive_invite_link(link: &str) -> Result<HiveInvite, String> {
 /// Encode a relay code as a word phrase (e.g., "brave-tiger-quiet-river-bold").
 /// Uses a 256-word list (8 bits per word), so 9 bytes = 9 words.
 pub fn encode_words(addr: &SocketAddr, psk: &[u8; 32]) -> String {
-    let ip = match addr.ip() {
-        std::net::IpAddr::V4(v4) => v4,
-        std::net::IpAddr::V6(_) => Ipv4Addr::new(127, 0, 0, 1),
-    };
-
-    let port_delta = if addr.port() == DEFAULT_PORT {
-        128u8
-    } else {
-        let delta = addr.port() as i32 - DEFAULT_PORT as i32;
-        delta.clamp(0, 255) as u8
-    };
-
-    let mut buf = [0u8; 9];
-    buf[0..4].copy_from_slice(&ip.octets());
-    buf[4] = port_delta;
-    buf[5..9].copy_from_slice(&psk[..4]);
-
-    buf.iter()
+    pack_invite(addr, psk)
+        .iter()
         .map(|&b| WORD_LIST[b as usize])
         .collect::<Vec<_>>()
         .join("-")
@@ -276,15 +292,15 @@ pub fn encode_words(addr: &SocketAddr, psk: &[u8; 32]) -> String {
 /// Decode a word phrase back into address + PSK.
 pub fn decode_words(phrase: &str) -> Result<(SocketAddr, [u8; 32]), String> {
     let words: Vec<&str> = phrase.split('-').collect();
-    if words.len() < 9 {
+    if words.len() != INVITE_PAYLOAD_LEN {
         return Err(format!(
-            "word phrase too short: {} words, need 9",
+            "word phrase has {} words, need {INVITE_PAYLOAD_LEN}",
             words.len()
         ));
     }
 
-    let mut buf = [0u8; 9];
-    for (i, word) in words.iter().take(9).enumerate() {
+    let mut buf = [0u8; INVITE_PAYLOAD_LEN];
+    for (i, word) in words.iter().enumerate() {
         let lower = word.to_lowercase();
         let idx = WORD_LIST
             .iter()
@@ -293,22 +309,7 @@ pub fn decode_words(phrase: &str) -> Result<(SocketAddr, [u8; 32]), String> {
         buf[i] = idx as u8;
     }
 
-    let ip = Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]);
-    let port = if buf[4] == 128 {
-        DEFAULT_PORT
-    } else {
-        (DEFAULT_PORT as i32 + buf[4] as i32) as u16
-    };
-
-    let addr: SocketAddr = format!("{ip}:{port}")
-        .parse()
-        .map_err(|e| format!("invalid address: {e}"))?;
-
-    let seed = &buf[5..9];
-    let mut psk = crypto::sha256(seed);
-    psk[..4].copy_from_slice(seed);
-
-    Ok((addr, psk))
+    unpack_invite(&buf)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -510,12 +511,17 @@ mod tests {
         let psk = test_psk();
         let phrase = encode_words(&addr, &psk);
 
-        // Should be 9 words separated by dashes
-        assert_eq!(phrase.split('-').count(), 9);
+        // 13 words: 4 IP + 1 port-delta + 8 PSK bytes, one word per byte.
+        assert_eq!(phrase.split('-').count(), 13);
 
         let (decoded_addr, decoded_psk) = decode_words(&phrase).unwrap();
         assert_eq!(decoded_addr, addr);
-        assert_eq!(&decoded_psk[..4], &psk[..4]);
+        // The carried half must survive exactly. `test_psk` is a raw key rather
+        // than a canonical one, so the derived tail legitimately differs; the
+        // full-key agreement is asserted in
+        // `a_word_phrase_yields_the_key_the_inviter_stored`, which starts from
+        // the canonical form an inviter actually stores.
+        assert_eq!(&decoded_psk[..8], &psk[..8]);
     }
 
     #[test]
@@ -698,5 +704,101 @@ mod tests {
         );
         let qr = render_qr(&link);
         assert!(!qr.trim().is_empty(), "QR render produced nothing");
+    }
+
+    // ── All three invite formats must agree on the key ────────────────────
+    //
+    // The round-trip tests above check each codec against itself, which is
+    // exactly the vacuous shape that let the real bug hide: the code and the
+    // phrase round-tripped perfectly while producing a key the link and the
+    // inviter's `_pending.key` never matched. These compare the three formats
+    // against *each other*, and against the canonical key the inviter stores.
+
+    /// The key an inviter actually stores: `parse_psk(format_psk(raw))`.
+    fn canonical() -> [u8; 32] {
+        let raw = [
+            0x93u8, 0x4b, 0xb9, 0x1f, 0xa5, 0x39, 0x41, 0x19, 0xde, 0xad, 0xbe, 0xef, 0x00, 0x11,
+            0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+            0x01, 0x02, 0x03, 0x04,
+        ];
+        crypto::parse_psk(&crypto::format_psk(&raw)).unwrap()
+    }
+
+    #[test]
+    fn a_relay_code_yields_the_key_the_inviter_stored() {
+        let psk = canonical();
+        let addr: SocketAddr = "192.168.4.24:9910".parse().unwrap();
+        let (back_addr, back_psk) = decode_relay_code(&encode_relay_code(&addr, &psk)).unwrap();
+        assert_eq!(back_addr, addr);
+        assert_eq!(
+            back_psk, psk,
+            "a code must rebuild the same key the inviter stored, or it can never authenticate"
+        );
+    }
+
+    #[test]
+    fn a_word_phrase_yields_the_key_the_inviter_stored() {
+        let psk = canonical();
+        let addr: SocketAddr = "10.1.2.3:9850".parse().unwrap();
+        let (back_addr, back_psk) = decode_words(&encode_words(&addr, &psk)).unwrap();
+        assert_eq!(back_addr, addr);
+        assert_eq!(back_psk, psk);
+    }
+
+    #[test]
+    fn code_phrase_and_link_all_agree_on_the_key() {
+        let psk = canonical();
+        let addr: SocketAddr = "192.168.4.24:9910".parse().unwrap();
+
+        let (_, from_code) = decode_relay_code(&encode_relay_code(&addr, &psk)).unwrap();
+        let (_, from_words) = decode_words(&encode_words(&addr, &psk)).unwrap();
+        let (_, _, from_link) = parse_invite_link(&build_invite_link("x", &addr, &psk)).unwrap();
+        let from_hive = parse_hive_invite_link(&build_hive_invite_link(
+            "hv_1", "x", &addr, &psk, None, None,
+        ))
+        .unwrap()
+        .psk;
+
+        assert_eq!(from_code, psk);
+        assert_eq!(from_words, psk);
+        assert_eq!(from_link, psk);
+        assert_eq!(from_hive, psk);
+    }
+
+    #[test]
+    fn a_legacy_nine_byte_code_is_refused_with_a_reason() {
+        // Rather than decoding a short buffer into a key nothing matches.
+        let legacy = base32_encode(&[192u8, 168, 4, 24, 63, 0x93, 0x4b, 0xb9, 0x1f]);
+        let err = decode_relay_code(&format_grouped(&legacy, 3)).unwrap_err();
+        assert!(err.contains("expected 13"), "got: {err}");
+        assert!(err.contains("0.65.0"), "should say which versions: {err}");
+    }
+
+    #[test]
+    fn a_phrase_of_the_old_length_is_refused() {
+        let nine: Vec<&str> = WORD_LIST.iter().take(9).copied().collect();
+        let err = decode_words(&nine.join("-")).unwrap_err();
+        assert!(err.contains("need 13"), "got: {err}");
+    }
+
+    #[test]
+    fn a_relay_code_groups_without_a_dangling_chunk() {
+        let psk = canonical();
+        let addr: SocketAddr = "192.168.4.24:9910".parse().unwrap();
+        let code = encode_relay_code(&addr, &psk);
+        let groups: Vec<&str> = code.split('-').collect();
+        assert_eq!(groups.len(), 7, "code: {code}");
+        assert!(
+            groups.iter().all(|g| g.len() == 3),
+            "every group should be 3 chars: {code}"
+        );
+    }
+
+    #[test]
+    fn a_word_phrase_is_thirteen_words() {
+        let psk = canonical();
+        let addr: SocketAddr = "192.168.4.24:9910".parse().unwrap();
+        let phrase = encode_words(&addr, &psk);
+        assert_eq!(phrase.split('-').count(), 13, "phrase: {phrase}");
     }
 }
