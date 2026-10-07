@@ -13,6 +13,7 @@ pub mod feedback;
 pub mod gossip;
 pub mod identity;
 pub mod injection;
+pub mod membership;
 pub mod merger;
 pub mod store;
 pub mod trust;

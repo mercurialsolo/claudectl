@@ -117,6 +117,133 @@ pub fn parse_invite_link(link: &str) -> Result<(String, SocketAddr, [u8; 32]), S
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Hive invite links (#434)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Everything a hive invite link carries.
+///
+/// `name` and `policy` are advisory — what the holder is told they are joining,
+/// so `hive join` can print it before connecting. The host re-decides both from
+/// its own identity file; a link cannot talk its way into a policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HiveInvite {
+    pub hive_id: String,
+    pub identity: String,
+    pub addr: SocketAddr,
+    pub psk: [u8; 32],
+    pub name: Option<String>,
+    pub policy: Option<String>,
+}
+
+/// Build a hive invite link.
+///
+/// The spec (§7.4) wrote this as `cctl://hive/<hive_id>?k=<psk>&n=<name>`, which
+/// cannot be used: it names a hive but no machine, so a holder has nothing to
+/// connect to. The address is therefore carried in `a=`, exactly the
+/// `identity@host:port` the peer link already puts before `/k/`. The path shape
+/// is the spec's, so a hive link is still recognisable at a glance.
+pub fn build_hive_invite_link(
+    hive_id: &str,
+    identity: &str,
+    addr: &SocketAddr,
+    psk: &[u8; 32],
+    name: Option<&str>,
+    policy: Option<&str>,
+) -> String {
+    let psk_code = crypto::format_psk(psk).replace('-', "");
+    let mut link = format!("cctl://hive/{hive_id}?a={identity}@{addr}&k={psk_code}");
+    if let Some(name) = name {
+        link.push_str(&format!("&n={name}"));
+    }
+    if let Some(policy) = policy {
+        link.push_str(&format!("&p={policy}"));
+    }
+    link
+}
+
+/// True when `link` is a hive invite rather than a peer invite.
+///
+/// The two are unambiguous: a peer link always has `<identity>@` before its
+/// `/k/`, and a hive link's first path segment is the literal `hive`.
+pub fn is_hive_invite_link(link: &str) -> bool {
+    link.strip_prefix("cctl://")
+        .is_some_and(|rest| rest.starts_with("hive/"))
+}
+
+/// Parse a hive invite link.
+pub fn parse_hive_invite_link(link: &str) -> Result<HiveInvite, String> {
+    let rest = link
+        .strip_prefix("cctl://hive/")
+        .ok_or("a hive invite link must start with cctl://hive/")?;
+
+    let (hive_id, query) = rest.split_once('?').ok_or(
+        "hive invite link has no parameters — it must carry at least \
+         a=<identity>@<host:port> and k=<psk>",
+    )?;
+
+    if hive_id.is_empty() {
+        return Err("hive invite link has no hive id".into());
+    }
+
+    let mut addr_part = None;
+    let mut psk_part = None;
+    let mut name = None;
+    let mut policy = None;
+
+    for field in query.split('&') {
+        if field.is_empty() {
+            continue;
+        }
+        let (key, value) = field
+            .split_once('=')
+            .ok_or_else(|| format!("malformed parameter '{field}' — expected key=value"))?;
+        match key {
+            "a" => addr_part = Some(value),
+            "k" => psk_part = Some(value),
+            "n" => name = Some(value.to_string()),
+            "p" => policy = Some(value.to_string()),
+            // Unknown keys are ignored rather than rejected, so a future field
+            // does not make today's binary refuse an otherwise valid link.
+            _ => {}
+        }
+    }
+
+    let addr_part = addr_part.ok_or(
+        "hive invite link is missing a=<identity>@<host:port>, so there is nothing to connect to",
+    )?;
+    let (identity, host_port) = addr_part
+        .split_once('@')
+        .ok_or("the a= parameter must be <identity>@<host:port>")?;
+    if identity.is_empty() {
+        return Err("the a= parameter has an empty identity".into());
+    }
+    let addr: SocketAddr = host_port
+        .parse()
+        .map_err(|e| format!("invalid address '{host_port}': {e}"))?;
+
+    let psk_code = psk_part
+        .ok_or("hive invite link is missing k=<psk>")?
+        .trim();
+    if psk_code.len() != 16 {
+        return Err(format!(
+            "invalid PSK code length: expected 16, got {}",
+            psk_code.len()
+        ));
+    }
+    // parse_psk filters to hex digits itself, so the undashed form is fine.
+    let psk = crypto::parse_psk(psk_code)?;
+
+    Ok(HiveInvite {
+        hive_id: hive_id.to_string(),
+        identity: identity.to_string(),
+        addr,
+        psk,
+        name,
+        policy,
+    })
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Word-based encoding: memorable phrases
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -437,5 +564,139 @@ mod tests {
         // qrencode likely not available in test env — tests the fallback
         let output = render_qr("test-data");
         assert!(output.contains("test-data") || output.contains("qrencode"));
+    }
+
+    // ── Hive invite links (#434) ───────────────────────────────────────────
+
+    fn sample_psk() -> [u8; 32] {
+        // Round-tripped through the code form, because that is the only part a
+        // link carries: `format_psk` keeps 8 bytes and `parse_psk` derives the
+        // rest. Comparing against a raw random PSK would compare the wrong thing.
+        crypto::parse_psk("a1b2-c3d4-e5f6-0789").unwrap()
+    }
+
+    #[test]
+    fn a_hive_link_round_trips_every_field() {
+        let psk = sample_psk();
+        let addr: SocketAddr = "192.168.1.50:9847".parse().unwrap();
+        let link = build_hive_invite_link(
+            "hv_3a9f21",
+            "laptop-a3f2",
+            &addr,
+            &psk,
+            Some("barrys-hive"),
+            Some("ask"),
+        );
+        let back = parse_hive_invite_link(&link).unwrap();
+        assert_eq!(back.hive_id, "hv_3a9f21");
+        assert_eq!(back.identity, "laptop-a3f2");
+        assert_eq!(back.addr, addr);
+        assert_eq!(back.psk, psk);
+        assert_eq!(back.name.as_deref(), Some("barrys-hive"));
+        assert_eq!(back.policy.as_deref(), Some("ask"));
+    }
+
+    #[test]
+    fn a_hive_link_carries_the_address_the_spec_left_out() {
+        // §7.4 wrote `cctl://hive/<id>?k=<psk>&n=<name>`, which names a hive but
+        // no machine. Such a link must be refused with a reason rather than
+        // parsed into something unusable.
+        let err = parse_hive_invite_link("cctl://hive/hv_3a9f21?k=a1b2c3d4e5f60789&n=barrys-hive")
+            .unwrap_err();
+        assert!(err.contains("nothing to connect to"), "got: {err}");
+    }
+
+    #[test]
+    fn the_optional_fields_are_optional() {
+        let psk = sample_psk();
+        let addr: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+        let link = build_hive_invite_link("hv_1", "box-1", &addr, &psk, None, None);
+        assert!(!link.contains("&n="));
+        assert!(!link.contains("&p="));
+        let back = parse_hive_invite_link(&link).unwrap();
+        assert_eq!(back.name, None);
+        assert_eq!(back.policy, None);
+        assert_eq!(back.addr, addr);
+    }
+
+    #[test]
+    fn hive_and_peer_links_are_told_apart() {
+        let psk = sample_psk();
+        let addr: SocketAddr = "192.168.1.50:9847".parse().unwrap();
+        let hive = build_hive_invite_link("hv_1", "laptop-a3f2", &addr, &psk, None, None);
+        let peer = build_invite_link("laptop-a3f2", &addr, &psk);
+
+        assert!(is_hive_invite_link(&hive));
+        assert!(!is_hive_invite_link(&peer));
+        // And each parser refuses the other's format rather than half-reading it.
+        assert!(parse_hive_invite_link(&peer).is_err());
+        assert!(parse_invite_link(&hive).is_err());
+    }
+
+    #[test]
+    fn a_malformed_hive_link_says_what_is_wrong() {
+        for (link, want) in [
+            ("cctl://laptop@1.2.3.4:1/k/aaaa", "must start with"),
+            ("cctl://hive/hv_1", "no parameters"),
+            (
+                "cctl://hive/?a=x@1.2.3.4:1&k=a1b2c3d4e5f60789",
+                "no hive id",
+            ),
+            (
+                "cctl://hive/hv_1?a=laptop@nonsense&k=a1b2c3d4e5f60789",
+                "invalid address",
+            ),
+            (
+                "cctl://hive/hv_1?a=laptop-a3f2-1.2.3.4:1&k=a1b2c3d4e5f60789",
+                "<identity>@<host:port>",
+            ),
+            (
+                "cctl://hive/hv_1?a=@1.2.3.4:1&k=a1b2c3d4e5f60789",
+                "empty identity",
+            ),
+            ("cctl://hive/hv_1?a=laptop@1.2.3.4:1", "missing k="),
+            (
+                "cctl://hive/hv_1?a=laptop@1.2.3.4:1&k=tooshort",
+                "expected 16",
+            ),
+            (
+                "cctl://hive/hv_1?a=laptop@1.2.3.4:1&k=a1b2c3d4e5f60789&oops",
+                "expected key=value",
+            ),
+        ] {
+            let err = parse_hive_invite_link(link).unwrap_err();
+            assert!(
+                err.contains(want),
+                "link {link:?}\n  wanted {want:?}\n  got    {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_parameter_does_not_make_a_valid_link_unusable() {
+        // A field added by a later version must not make this build refuse a
+        // link whose required parts it understands perfectly well.
+        let link = "cctl://hive/hv_1?a=laptop@1.2.3.4:9847&k=a1b2c3d4e5f60789&n=x&z=future";
+        let back = parse_hive_invite_link(link).unwrap();
+        assert_eq!(back.hive_id, "hv_1");
+        assert_eq!(back.name.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn a_hive_link_survives_qr_rendering() {
+        // The link is the one format that carries the hive id, so it is also the
+        // one that gets scanned. An empty render would be a silent failure.
+        let psk = sample_psk();
+        let addr: SocketAddr = "192.168.1.50:9847".parse().unwrap();
+        let link = build_hive_invite_link(
+            "hv_3a9f21",
+            "laptop-a3f2",
+            &addr,
+            &psk,
+            Some("barrys-hive"),
+            Some("invite"),
+        );
+        let qr = render_qr(&link);
+        assert!(!qr.trim().is_empty(), "QR render produced nothing");
     }
 }

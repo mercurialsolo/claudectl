@@ -135,7 +135,7 @@ pub fn gen_hive_id() -> String {
     format!("hv_{:06x}", mixed & 0xff_ffff)
 }
 
-fn hive_dir() -> PathBuf {
+pub fn hive_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     PathBuf::from(home).join(".claudectl").join("hive")
 }

@@ -5,6 +5,9 @@ pub mod agent;
 pub mod cli;
 pub mod crypto;
 pub mod delegation;
+/// The hive join handshake — needs the hive module, which `relay` does not imply.
+#[cfg(feature = "hive")]
+pub mod hivejoin;
 pub mod http;
 pub mod invite;
 pub mod lan;
@@ -69,6 +72,10 @@ pub enum MessageType {
     KnowledgeSync,
     KnowledgeRequest,
     KnowledgeSnapshot,
+
+    // Layer 3: hive membership (#434)
+    HiveJoinRequest,
+    HiveJoinResult,
 }
 
 static MSG_COUNTER: AtomicU64 = AtomicU64::new(0);

@@ -379,44 +379,69 @@ fn cmd_serve(
     // advertisement continues without a hive.
     let hive_peers = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let hive_units = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    // #434: the owner approving a queued join request is not necessarily at this
+    // terminal, so a pending request fires a hook as well as printing.
     #[cfg(feature = "hive")]
-    let hive_advert = match crate::hive::identity::load() {
-        Ok(Some(id)) => {
-            // `effective_join_policy`, never the stored field: #432 records
-            // consent for `open` in the data precisely so this cannot put an
-            // unconfirmed `open` on the wire.
-            let effective = id.effective_join_policy();
+    let hook_registry = crate::config::load_hooks();
+
+    // #434: membership decisions answer to the same identity the advertiser
+    // uses, so it is loaded once here and both read it. Re-reading it per
+    // message would also let a rename take effect mid-run, which the banner
+    // below promises it does not.
+    #[cfg(feature = "hive")]
+    let hive_identity: Option<crate::hive::identity::HiveIdentity> =
+        match crate::hive::identity::load() {
+            Ok(Some(id)) => Some(id),
+            Ok(None) => {
+                println!(
+                    "Hive: unnamed, so nothing is advertised (claudectl hive identity set --name X)"
+                );
+                None
+            }
+            Err(e) => {
+                eprintln!("warning: hive identity unreadable, advertising no hive: {e}");
+                None
+            }
+        };
+    // The gate is on only while a hive is named. `None` means every paired peer
+    // is treated exactly as it was before #434, so nobody's existing setup goes
+    // quiet on upgrade.
+    #[cfg(feature = "hive")]
+    let hive_roster = hive_identity
+        .as_ref()
+        .map(|_| crate::hive::membership::Roster::local());
+
+    #[cfg(feature = "hive")]
+    let hive_advert = hive_identity.as_ref().map(|id| {
+        // `effective_join_policy`, never the stored field: #432 records
+        // consent for `open` in the data precisely so this cannot put an
+        // unconfirmed `open` on the wire.
+        let effective = id.effective_join_policy();
+        println!(
+            "Hive: \"{}\" ({}) advertised as join_policy={}",
+            id.name,
+            id.hive_id,
+            effective.as_str()
+        );
+        if !id.open_is_acknowledged() {
             println!(
-                "Hive: \"{}\" ({}) advertised as join_policy={}",
-                id.name,
-                id.hive_id,
+                "  (stored policy is `open` but was never confirmed — advertising `{}`)",
                 effective.as_str()
             );
-            if !id.open_is_acknowledged() {
-                println!(
-                    "  (stored policy is `open` but was never confirmed — advertising `{}`)",
-                    effective.as_str()
-                );
-            }
-            Some(super::lan::HiveAdvert {
-                id: id.hive_id,
-                name: id.name,
-                join_policy: effective.as_str().to_string(),
-                peers: Arc::clone(&hive_peers),
-                units: Arc::clone(&hive_units),
-            })
         }
-        Ok(None) => {
-            println!(
-                "Hive: unnamed, so nothing is advertised (claudectl hive identity set --name X)"
-            );
-            None
+        println!(
+            "  Members: {} admitted, {} awaiting approval",
+            crate::hive::membership::list_members().len(),
+            crate::hive::membership::pending_requests().len()
+        );
+        super::lan::HiveAdvert {
+            id: id.hive_id.clone(),
+            name: id.name.clone(),
+            join_policy: effective.as_str().to_string(),
+            peers: Arc::clone(&hive_peers),
+            units: Arc::clone(&hive_units),
         }
-        Err(e) => {
-            eprintln!("warning: hive identity unreadable, advertising no hive: {e}");
-            None
-        }
-    };
+    });
     #[cfg(not(feature = "hive"))]
     let hive_advert: Option<super::lan::HiveAdvert> = None;
 
@@ -512,8 +537,86 @@ fn cmd_serve(
                         );
                     }
                     #[cfg(feature = "hive")]
+                    super::MessageType::HiveJoinRequest => {
+                        // `from_peer` here is the id the *connection*
+                        // authenticated as, not a string off the payload — it
+                        // becomes a filename, so it must be the former.
+                        let request: super::hivejoin::JoinRequestPayload = serde_json::from_value(
+                            msg.payload.clone(),
+                        )
+                        .unwrap_or(super::hivejoin::JoinRequestPayload {
+                            hive_id: None,
+                            label: None,
+                        });
+                        let result = super::hivejoin::decide_join(
+                            hive_identity.as_ref(),
+                            &crate::hive::membership::Roster::local(),
+                            from_peer.as_str(),
+                            &request,
+                        );
+                        println!(
+                            "[{}] hive join request from {}: {}{}",
+                            crate::logger::timestamp_now(),
+                            from_peer,
+                            result.state.as_str(),
+                            result
+                                .reason
+                                .as_deref()
+                                .map(|r| format!(" — {r}"))
+                                .unwrap_or_default()
+                        );
+                        if result.state == super::hivejoin::JoinResultState::Pending {
+                            // The owner is not necessarily watching this
+                            // terminal, so the queue gets an event too.
+                            hook_registry.fire_env(
+                                crate::hooks::HookEvent::HiveJoinRequest,
+                                &[
+                                    ("CLAUDECTL_HIVE_JOIN_PEER", from_peer.as_str()),
+                                    (
+                                        "CLAUDECTL_HIVE_JOIN_HIVE",
+                                        result.hive_id.as_deref().unwrap_or(""),
+                                    ),
+                                    (
+                                        "CLAUDECTL_HIVE_JOIN_NAME",
+                                        result.name.as_deref().unwrap_or(""),
+                                    ),
+                                ],
+                            );
+                        }
+                        let reply = super::hivejoin::build_join_result(identity.as_str(), &result);
+                        let _ = reg.send_to(from_peer.as_str(), &reply);
+                    }
+                    #[cfg(feature = "hive")]
+                    super::MessageType::HiveJoinResult => {
+                        // We are the joiner: the host has answered, possibly
+                        // long after `hive join` exited (an owner approving a
+                        // queued request). Record it so `hive status` is true.
+                        match crate::hive::cli::apply_join_result(from_peer.as_str(), &msg.payload)
+                        {
+                            Ok(Some(line)) => {
+                                println!("[{}] {line}", crate::logger::timestamp_now())
+                            }
+                            Ok(None) => {}
+                            Err(e) => eprintln!(
+                                "[{}] could not record hive join result: {e}",
+                                crate::logger::timestamp_now()
+                            ),
+                        }
+                    }
+                    #[cfg(feature = "hive")]
                     super::MessageType::KnowledgeSync => {
-                        if let (Some(gossip), Some(hive_store)) =
+                        // #434: a peer that is not in the hive does not get to
+                        // contribute to it. Dropping inbound units matters as
+                        // much as refusing to send: an `ask` hive that gated
+                        // only its own sends would still merge whatever an
+                        // unapproved peer pushed.
+                        if !hive_exchange_allowed(hive_roster.as_ref(), from_peer.as_str()) {
+                            println!(
+                                "[{}] KnowledgeSync from {} ignored — not a member of this hive",
+                                crate::logger::timestamp_now(),
+                                from_peer
+                            );
+                        } else if let (Some(gossip), Some(hive_store)) =
                             (gossip.as_mut(), hive_store.as_mut())
                         {
                             let (stats, accepted) = gossip.handle_sync(hive_store, &msg);
@@ -532,7 +635,10 @@ fn cmd_serve(
                                 );
                             }
                             if !accepted.is_empty() {
-                                let connected = reg.connected_peers();
+                                let connected = hive_gossip_targets(
+                                    hive_roster.as_ref(),
+                                    reg.connected_peers(),
+                                );
                                 let prop_msgs = gossip.propagate(&accepted, &from_peer, &connected);
                                 for (target, prop_msg) in prop_msgs {
                                     let _ = reg.send_to(target.as_str(), &prop_msg);
@@ -542,7 +648,13 @@ fn cmd_serve(
                     }
                     #[cfg(feature = "hive")]
                     super::MessageType::KnowledgeRequest => {
-                        if let (Some(gossip), Some(hive_store)) =
+                        if !hive_exchange_allowed(hive_roster.as_ref(), from_peer.as_str()) {
+                            println!(
+                                "[{}] KnowledgeRequest from {} refused — not a member of this hive",
+                                crate::logger::timestamp_now(),
+                                from_peer
+                            );
+                        } else if let (Some(gossip), Some(hive_store)) =
                             (gossip.as_ref(), hive_store.as_ref())
                         {
                             let snapshots = gossip.handle_request(hive_store, &msg);
@@ -553,7 +665,13 @@ fn cmd_serve(
                     }
                     #[cfg(feature = "hive")]
                     super::MessageType::KnowledgeSnapshot => {
-                        if let (Some(gossip), Some(hive_store)) =
+                        if !hive_exchange_allowed(hive_roster.as_ref(), from_peer.as_str()) {
+                            println!(
+                                "[{}] KnowledgeSnapshot from {} ignored — not a member of this hive",
+                                crate::logger::timestamp_now(),
+                                from_peer
+                            );
+                        } else if let (Some(gossip), Some(hive_store)) =
                             (gossip.as_mut(), hive_store.as_mut())
                         {
                             let (stats, merged) = gossip.handle_snapshot(hive_store, &msg);
@@ -595,7 +713,9 @@ fn cmd_serve(
                 (broadcast_rx.as_ref(), gossip.as_mut(), hive_store.as_ref())
             {
                 while broadcast_rx.try_recv().is_ok() {
-                    let connected = reg.connected_peers();
+                    // #434: only hive members are sync targets.
+                    let connected =
+                        hive_gossip_targets(hive_roster.as_ref(), reg.connected_peers());
                     let sync_msgs = gossip.generate_sync_messages(hive_store, &connected);
                     for (target, sync_msg) in sync_msgs {
                         let _ = reg.send_to(target.as_str(), &sync_msg);
@@ -879,6 +999,22 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(peer_id, &msg.payload);
                     }
+                    // #434: the owner of a `join_policy: ask` hive usually
+                    // approves long after `hive join` exited, so this is where
+                    // most approvals actually land.
+                    #[cfg(feature = "hive")]
+                    super::MessageType::HiveJoinResult => {
+                        match crate::hive::cli::apply_join_result(peer_id.as_str(), &msg.payload) {
+                            Ok(Some(line)) => {
+                                println!("[{}] {line}", crate::logger::timestamp_now())
+                            }
+                            Ok(None) => {}
+                            Err(e) => eprintln!(
+                                "[{}] could not record hive join result: {e}",
+                                crate::logger::timestamp_now()
+                            ),
+                        }
+                    }
                     _ => {
                         println!(
                             "[{}] {:?} from {}",
@@ -918,6 +1054,39 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
 }
 
 /// Try to connect using a specific PSK. Returns Ok(registry) on success.
+/// May we exchange hive knowledge with this peer? (#434)
+///
+/// `named_hive` is whether this machine runs a named hive. If it does not, there
+/// is no membership to check and everything is permitted exactly as it was
+/// before #434 — naming a hive is what turns the gate on, so nobody's existing
+/// setup goes quiet on upgrade.
+///
+/// This is deliberately the *only* place the question is asked, and it is asked
+/// on both directions: gating what we send without gating what we accept would
+/// let an unapproved peer still push units into the hive.
+#[cfg(feature = "hive")]
+fn hive_exchange_allowed(roster: Option<&crate::hive::membership::Roster>, peer_id: &str) -> bool {
+    match roster {
+        None => true,
+        Some(r) => r.is_member(peer_id),
+    }
+}
+
+/// The subset of `connected` that may receive hive knowledge.
+#[cfg(feature = "hive")]
+fn hive_gossip_targets(
+    roster: Option<&crate::hive::membership::Roster>,
+    connected: Vec<super::PeerId>,
+) -> Vec<super::PeerId> {
+    let Some(r) = roster else {
+        return connected;
+    };
+    connected
+        .into_iter()
+        .filter(|p| r.is_member(p.as_str()))
+        .collect()
+}
+
 fn try_connect(
     addr: SocketAddr,
     psk: &[u8; 32],
@@ -943,7 +1112,7 @@ fn try_connect(
 /// PSK + address, independent of any running `relay serve` daemon. Returns the
 /// resolved remote id on success; an `Err` here must surface as a non-zero exit
 /// so scripts never mistake a built-but-unsent message for a delivered one.
-fn send_message_to_peer(
+pub fn send_message_to_peer(
     peer_id: &str,
     identity: &super::PeerId,
     msg: &RelayMessage,
@@ -1357,6 +1526,287 @@ fn cmd_interrupt(
 // Discovery commands: invite, join, discover
 // ────────────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────────────
+// Hive invite and join (#434)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Is anything actually listening on our relay port?
+///
+/// `hive invite` hands out an address someone else is going to dial, so an
+/// invite minted while nothing serves is an invite that cannot be redeemed. A
+/// loopback connect is direct evidence; `relay agent-status` only knows what
+/// launchd was told, which is not the same question.
+#[cfg(feature = "hive")]
+fn relay_is_listening(port: u16) -> bool {
+    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
+}
+
+/// `claudectl hive invite`
+///
+/// A hive invite is a peer invite plus the hive's name — the holder still has to
+/// reach this machine, so the address and PSK are exactly what `relay invite`
+/// mints. Only the link can carry the hive id: the relay code and word phrase
+/// spend all nine of their bytes on the address and PSK, which is why they are
+/// printed with the hive named on a second line instead.
+#[cfg(feature = "hive")]
+pub fn cmd_hive_invite(show_qr: bool, show_words: bool, json_mode: bool) -> io::Result<()> {
+    let hive = match crate::hive::identity::load() {
+        Ok(Some(h)) => h,
+        Ok(None) => {
+            return Err(io::Error::other(
+                "this machine has no named hive — run `claudectl hive identity set --name <name>` first",
+            ));
+        }
+        Err(e) => return Err(io::Error::other(e)),
+    };
+
+    let identity = load_or_create_identity();
+    let cfg = crate::config::Config::load();
+    let relay_cfg = cfg.relay.unwrap_or_default();
+
+    let ip = detect_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = relay_cfg.listen_port;
+    let addr: std::net::SocketAddr = format!("{ip}:{port}")
+        .parse()
+        .map_err(|e| io::Error::other(format!("invalid addr: {e}")))?;
+
+    let raw_psk = crypto::generate_psk();
+    let code = crypto::format_psk(&raw_psk);
+    let canonical_psk = crypto::parse_psk(&code).expect("just-generated code must parse");
+
+    // The *effective* policy, so an unconfirmed `open` is never advertised as
+    // open — the same gate #432 put on the stored record and #433 put on the
+    // LAN datagram.
+    let effective = hive.effective_join_policy();
+    let hive_link = super::invite::build_hive_invite_link(
+        &hive.hive_id,
+        identity.as_str(),
+        &addr,
+        &canonical_psk,
+        Some(&hive.name),
+        Some(effective.as_str()),
+    );
+    let relay_code = super::invite::encode_relay_code(&addr, &canonical_psk);
+    let word_phrase = super::invite::encode_words(&addr, &canonical_psk);
+    let listening = relay_is_listening(port);
+
+    if json_mode {
+        let output = serde_json::json!({
+            "identity": identity.as_str(),
+            "hive_id": hive.hive_id,
+            "hive_name": hive.name,
+            "join_policy": effective.as_str(),
+            "hive_link": hive_link,
+            "relay_code": relay_code,
+            "word_phrase": word_phrase,
+            "addr": addr.to_string(),
+            "relay_listening": listening,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!(
+            "Inviting to hive \"{}\" ({}), join_policy={}",
+            hive.name,
+            hive.hive_id,
+            effective.as_str()
+        );
+        if effective == crate::hive::identity::JoinPolicy::Ask {
+            println!("  Each join will wait for you to approve it (claudectl hive requests).");
+        }
+        println!();
+        println!("  HIVE LINK:   {hive_link}");
+        println!();
+        println!("  RELAY CODE:  {relay_code}");
+        if show_words {
+            println!("  WORD PHRASE: {word_phrase}");
+        }
+        println!("    (the code and the phrase pair them with this machine; only");
+        println!("     the link names the hive — either way they end up asking to join)");
+        println!();
+        println!("They run:");
+        println!();
+        println!("  claudectl hive join {hive_link}");
+        println!("  claudectl hive join {relay_code}");
+        if show_words {
+            println!("  claudectl hive join {word_phrase}");
+        }
+        println!();
+        if show_qr {
+            println!("QR Code (scan to join):");
+            println!();
+            println!("{}", super::invite::render_qr(&hive_link));
+        }
+        if !listening {
+            println!(
+                "warning: nothing is listening on port {port}, so this invite cannot be\n\
+                 redeemed yet. Start the relay with `claudectl relay serve`, or install it\n\
+                 to survive logout with `claudectl relay install-agent`."
+            );
+        }
+    }
+
+    // The serve side claims this on first contact, exactly as `relay invite`.
+    let pending_path = super::peers_dir().join("_pending.key");
+    let _ = std::fs::create_dir_all(super::peers_dir());
+    let _ = std::fs::write(&pending_path, crypto::hex_encode(&canonical_psk));
+
+    Ok(())
+}
+
+/// How long `hive join` waits for the host to answer before giving up.
+///
+/// The host answers from its serve loop, which ticks once a second, so this is
+/// generous rather than tight — and a silence here is reported as a silence, not
+/// as a refusal.
+#[cfg(feature = "hive")]
+const JOIN_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+
+/// `claudectl hive join <link|code|phrase>`
+///
+/// Pairs with the host, asks to join its hive, and reports what the host said.
+/// Deliberately short-lived: it does not stay in the gossip loop, because
+/// membership is a stored fact rather than a property of this process.
+#[cfg(feature = "hive")]
+pub fn cmd_hive_join(input: &[String]) -> io::Result<()> {
+    if input.is_empty() {
+        eprintln!("Usage: claudectl hive join <hive-link | relay-code | word-phrase>");
+        return Err(io::Error::other("missing argument"));
+    }
+
+    let input = input.join(" ");
+    let identity = load_or_create_identity();
+
+    // All three formats, plus a plain peer link — someone handed a peer invite
+    // and told to join a hive should get the hive, not a parse error.
+    let (addr, psk, expected_identity, asked_hive, asked_name) =
+        if super::invite::is_hive_invite_link(&input) {
+            let inv = super::invite::parse_hive_invite_link(&input)
+                .map_err(|e| io::Error::other(format!("invalid hive link: {e}")))?;
+            println!(
+                "Hive \"{}\" ({}){}",
+                inv.name.as_deref().unwrap_or("?"),
+                inv.hive_id,
+                inv.policy
+                    .as_deref()
+                    .map(|p| format!(", join_policy={p}"))
+                    .unwrap_or_default()
+            );
+            (
+                inv.addr,
+                inv.psk,
+                Some(inv.identity),
+                Some(inv.hive_id),
+                inv.name,
+            )
+        } else if input.starts_with("cctl://") {
+            let (id, addr, psk) = super::invite::parse_invite_link(&input)
+                .map_err(|e| io::Error::other(format!("invalid invite link: {e}")))?;
+            (addr, psk, Some(id), None, None)
+        } else if input.contains('-')
+            && input
+                .split('-')
+                .all(|w| w.len() <= 5 && w.chars().all(|c| c.is_ascii_alphabetic()))
+        {
+            let (addr, psk) = super::invite::decode_words(&input)
+                .map_err(|e| io::Error::other(format!("invalid word phrase: {e}")))?;
+            (addr, psk, None, None, None)
+        } else {
+            let (addr, psk) = super::invite::decode_relay_code(&input)
+                .map_err(|e| io::Error::other(format!("invalid relay code: {e}")))?;
+            (addr, psk, None, None, None)
+        };
+
+    println!("Connecting to {addr}...");
+    let (remote_id, registry) = try_connect(addr, &psk, &identity)
+        .map_err(|e| io::Error::other(format!("connection failed: {e}")))?;
+
+    if let Some(ref expected) = expected_identity {
+        if remote_id != *expected {
+            println!("Warning: expected peer '{expected}' but connected to '{remote_id}'");
+        }
+    }
+    println!("Paired with {remote_id} ({addr})");
+
+    // Pairing is worth keeping even if the hive request goes nowhere — it is
+    // what `relay connect` will use next time.
+    let _ = save_peer_psk(&remote_id, &psk);
+    let _ = super::save_peer_meta(&remote_id, &addr.to_string());
+
+    let request = super::hivejoin::build_join_request(
+        identity.as_str(),
+        asked_hive.as_deref(),
+        Some(identity.as_str()),
+    );
+    {
+        let reg = registry
+            .lock()
+            .map_err(|_| io::Error::other("registry lock poisoned"))?;
+        reg.send_to(remote_id.as_str(), &request)
+            .map_err(|e| io::Error::other(format!("could not send the join request: {e}")))?;
+    }
+    println!(
+        "Asking to join{}...",
+        asked_name
+            .as_deref()
+            .map(|n| format!(" \"{n}\""))
+            .unwrap_or_default()
+    );
+
+    // Wait for the answer. A dropped connection here is the interesting case:
+    // an older host errors on an unknown message type and closes, so silence
+    // plus a disconnect is reported as a possible version mismatch rather than
+    // as a refusal.
+    let deadline = std::time::Instant::now() + JOIN_REPLY_TIMEOUT;
+    let mut answered = false;
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let drained = {
+            match registry.lock() {
+                Ok(mut reg) => reg.drain_messages(),
+                Err(_) => break,
+            }
+        };
+        for (peer, msg) in drained {
+            if msg.msg_type != super::MessageType::HiveJoinResult {
+                continue;
+            }
+            match crate::hive::cli::apply_join_result(peer.as_str(), &msg.payload) {
+                Ok(Some(line)) => println!("{line}"),
+                Ok(None) => {}
+                Err(e) => return Err(io::Error::other(e)),
+            }
+            answered = true;
+        }
+        if answered {
+            break;
+        }
+    }
+
+    if !answered {
+        return Err(io::Error::other(format!(
+            "paired with {remote_id}, but it never answered the join request.\n\
+             Either it is not running a named hive, or it is an older claudectl that \
+             does not understand hive membership (before v0.66.0) — a host that cannot \
+             parse the request closes the connection rather than replying.\n\
+             The pairing is saved, so `claudectl relay connect {addr}` still works."
+        )));
+    }
+
+    // Membership is stored; gossip is someone else's loop. `relay serve` only
+    // redials peers it has already lost, so the joiner is the side that has to
+    // dial out for knowledge to actually flow.
+    println!();
+    println!("To start exchanging knowledge, connect to the hive:");
+    println!();
+    println!("  claudectl relay connect {addr}");
+    println!();
+    println!("Check where you stand any time with `claudectl hive status`.");
+
+    Ok(())
+}
+
 /// `claudectl relay invite [--qr] [--words]`
 fn cmd_invite(show_qr: bool, show_words: bool, json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
@@ -1618,5 +2068,109 @@ mod tests {
                 "{host} joined to {joined} should parse"
             );
         }
+    }
+}
+
+/// The hive membership gate (#434).
+///
+/// These are the teeth of `join_policy`: a peer that is only *pending* must
+/// neither receive knowledge nor be able to push any. Policy correctness is
+/// tested in `relay::hivejoin`; what is tested here is that the gate the serve
+/// loop actually calls agrees with the roster.
+#[cfg(all(test, feature = "hive"))]
+mod hive_gate_tests {
+    use super::*;
+    use crate::hive::membership::{Admission, Roster};
+
+    fn peers(ids: &[&str]) -> Vec<super::super::PeerId> {
+        ids.iter()
+            .map(|s| super::super::PeerId(s.to_string()))
+            .collect()
+    }
+
+    fn names(v: &[super::super::PeerId]) -> Vec<&str> {
+        v.iter().map(|p| p.as_str()).collect()
+    }
+
+    #[test]
+    fn an_unnamed_hive_gates_nothing() {
+        // The no-regression case: everyone who never named a hive keeps the
+        // pre-#434 behaviour exactly.
+        let connected = peers(&["a-1", "b-2"]);
+        assert_eq!(
+            names(&hive_gossip_targets(None, connected.clone())),
+            vec!["a-1", "b-2"]
+        );
+        assert!(hive_exchange_allowed(None, "a-1"));
+        assert!(hive_exchange_allowed(None, "nobody-ever-heard-of"));
+    }
+
+    #[test]
+    fn a_named_hive_sends_only_to_members() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Roster::at(tmp.path());
+        r.admit("a-1", "hv_1", Admission::Policy).unwrap();
+
+        let connected = peers(&["a-1", "b-2", "c-3"]);
+        assert_eq!(
+            names(&hive_gossip_targets(Some(&r), connected)),
+            vec!["a-1"],
+            "only the admitted peer is a sync target"
+        );
+    }
+
+    #[test]
+    fn a_pending_peer_is_gated_in_both_directions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Roster::at(tmp.path());
+        r.record_request("b-2", "hv_1", None).unwrap();
+
+        // Outbound: not a target.
+        assert!(
+            hive_gossip_targets(Some(&r), peers(&["b-2"])).is_empty(),
+            "a pending peer must not be sent knowledge"
+        );
+        // Inbound: its units are dropped. Gating only one direction would let an
+        // unapproved peer poison the hive while receiving nothing.
+        assert!(
+            !hive_exchange_allowed(Some(&r), "b-2"),
+            "a pending peer must not be able to contribute either"
+        );
+    }
+
+    #[test]
+    fn approving_opens_the_gate_the_serve_loop_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Roster::at(tmp.path());
+        let entry = r.record_request("b-2", "hv_1", None).unwrap();
+        assert!(!hive_exchange_allowed(Some(&r), "b-2"));
+
+        r.admit(&entry.peer_id, "hv_1", Admission::Approved)
+            .unwrap();
+
+        assert!(hive_exchange_allowed(Some(&r), "b-2"));
+        assert_eq!(
+            names(&hive_gossip_targets(Some(&r), peers(&["b-2"]))),
+            vec!["b-2"]
+        );
+    }
+
+    #[test]
+    fn a_denied_peer_stays_gated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Roster::at(tmp.path());
+        let entry = r.record_request("b-2", "hv_1", None).unwrap();
+        r.deny(&entry).unwrap();
+        assert!(!hive_exchange_allowed(Some(&r), "b-2"));
+        assert!(hive_gossip_targets(Some(&r), peers(&["b-2"])).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_peer_is_gated_by_a_named_hive() {
+        // A peer may be paired without ever having asked to join — pairing is
+        // not membership.
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Roster::at(tmp.path());
+        assert!(!hive_exchange_allowed(Some(&r), "never-asked"));
     }
 }

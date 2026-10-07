@@ -11,10 +11,15 @@ use crate::hive::store::HiveStore;
 // grouped by concern; dispatch_command below routes to them.
 mod effectiveness;
 mod identity;
+mod join;
 mod onboarding;
 mod share;
 use effectiveness::*;
 use identity::cmd_identity;
+// Only the relay loops consume this — without `relay` there is no peer to hear
+// an answer from.
+#[cfg(feature = "relay")]
+pub use join::apply_join_result;
 use onboarding::*;
 pub use share::share_artifact_from_path;
 use share::*;
@@ -22,6 +27,23 @@ use share::*;
 /// `--join-policy` as a CLI value, mapped onto [`crate::hive::identity::JoinPolicy`].
 ///
 /// A separate type so the wire enum does not have to derive clap's traits, and
+/// `hive requests approve|deny <peer>`.
+#[derive(Debug, Clone, Subcommand)]
+pub enum RequestAction {
+    /// Admit a waiting peer into the hive
+    Approve {
+        /// The peer id that asked
+        peer: String,
+    },
+    /// Refuse a waiting peer
+    ///
+    /// They stay paired — a denial is about the hive, not the machine.
+    Deny {
+        /// The peer id that asked
+        peer: String,
+    },
+}
+
 /// so the help text for each policy lives next to the flag the user types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum JoinPolicyArg {
@@ -116,6 +138,42 @@ pub enum HiveCommand {
     /// A machine whose hive is unnamed advertises nothing and does not appear.
     #[cfg(feature = "relay")]
     Discover,
+
+    /// Mint an invite to this machine's hive (#434)
+    ///
+    /// The address and PSK are a normal peer invite — the holder still has to
+    /// reach this machine. Only the link carries the hive id; the relay code and
+    /// word phrase have no room for it, so they pair first and ask second.
+    #[cfg(feature = "relay")]
+    Invite {
+        /// Render the hive link as a QR code
+        #[arg(long)]
+        qr: bool,
+        /// Also print the memorable word phrase
+        #[arg(long)]
+        words: bool,
+    },
+
+    /// Join a hive from an invite link, relay code or word phrase (#434)
+    ///
+    /// Pairs with the host and asks to join. Whether that admits you now or
+    /// queues you for its owner is the host's `join_policy` to decide, not the
+    /// invite's — holding a link is not the same as being let in.
+    #[cfg(feature = "relay")]
+    Join {
+        /// The invite link, relay code, or word phrase
+        #[arg(required = true, num_args = 1..)]
+        invite: Vec<String>,
+    },
+
+    /// Review peers waiting to join this hive (#434)
+    ///
+    /// Only `join_policy: ask` produces a queue; the other policies admit on
+    /// request. Also lists who is already a member and how they got in.
+    Requests {
+        #[command(subcommand)]
+        action: Option<RequestAction>,
+    },
 
     /// Show or set this hive's name, description and join policy (#432)
     ///
@@ -360,6 +418,19 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         HiveCommand::Status => cmd_status(json_mode),
         #[cfg(feature = "relay")]
         HiveCommand::Discover => identity::cmd_hive_discover(json_mode),
+        #[cfg(feature = "relay")]
+        HiveCommand::Invite { qr, words } => {
+            crate::relay::cli::cmd_hive_invite(*qr, *words, json_mode)
+        }
+        #[cfg(feature = "relay")]
+        HiveCommand::Join { invite } => crate::relay::cli::cmd_hive_join(invite),
+        HiveCommand::Requests { action } => match action {
+            None => join::cmd_requests(json_mode),
+            Some(RequestAction::Approve { peer }) => {
+                join::cmd_decide_request(peer, true, json_mode)
+            }
+            Some(RequestAction::Deny { peer }) => join::cmd_decide_request(peer, false, json_mode),
+        },
         HiveCommand::Identity { action } => cmd_identity(action.as_ref(), json_mode),
         HiveCommand::Knowledge { from, scope } => {
             cmd_knowledge(from.as_deref(), scope.as_deref(), json_mode)
@@ -760,6 +831,16 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
             "sources": sources,
             "categories": by_category,
             "conflicts": conflict_count,
+            // #434: where this machine stands in a hive, and who stands in ours.
+            "membership": crate::hive::membership::load_membership().ok().flatten().map(|m| serde_json::json!({
+                "hive_id": m.hive_id,
+                "name": m.name,
+                "joined_via": m.joined_via,
+                "state": m.state.as_str(),
+                "joined_ms": m.joined_ms,
+            })),
+            "members": crate::hive::membership::list_members().len(),
+            "pending_join_requests": crate::hive::membership::pending_requests().len(),
         });
         #[cfg(feature = "relay")]
         if let Some(ref id) = relay_identity {
@@ -785,6 +866,15 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
         println!();
         if let Some(ref id) = relay_identity {
             println!("  Identity: {}", id);
+        }
+        if let Some(line) = join::membership_line() {
+            println!("  {line}");
+        }
+        let pending_joins = crate::hive::membership::pending_requests().len();
+        if pending_joins > 0 {
+            println!(
+                "  {pending_joins} peer(s) waiting to join your hive — claudectl hive requests"
+            );
         }
         println!("  Share mode: {}", hive_cfg.share_mode);
         println!("  Total units: {} / {} max", all.len(), hive_cfg.max_units);
