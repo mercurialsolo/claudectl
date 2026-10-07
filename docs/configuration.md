@@ -241,6 +241,7 @@ max_peers = 8               # maximum connected peers
 heartbeat_interval_secs = 30
 reconnect_max_secs = 60
 auto_connect = []           # list of "host:port" to auto-connect on startup
+lan_announce = true        # broadcast presence on UDP 9848 so `relay discover` finds this machine
 http_addr = "127.0.0.1"     # bind address for the coordinator HTTP API
 # http_port = 9876          # no default; unset means no HTTP API at all
 # auth_token = "…"          # no default; the API's bearer token

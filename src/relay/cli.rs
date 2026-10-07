@@ -357,6 +357,35 @@ fn cmd_serve(
         r.store(false, std::sync::atomic::Ordering::Relaxed);
     });
 
+    // LAN discovery. `relay discover` has always *scanned* for announcements,
+    // but nothing ever sent one — `start_announcer` had no callers anywhere, and
+    // `#![allow(dead_code)]` on `relay/mod.rs` kept that quiet. So `discover`
+    // returned "no instances found" even with a relay running next to it, while
+    // telling the operator to start the thing that was already running (#433).
+    //
+    // Note the flag polarity: `start_announcer` takes a *shutdown* flag (it
+    // loops while that is `false`), whereas this function's `running` means the
+    // opposite. Passing `running` directly stops the thread on its first check,
+    // which looks exactly like a working announcer that sends nothing — so the
+    // announcer gets its own flag, set when the serve loop exits.
+    let lan_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let lan_handle = if relay_cfg.lan_announce {
+        println!(
+            "LAN discovery: announcing every {}s on UDP {}",
+            super::lan::ANNOUNCE_INTERVAL_SECS,
+            super::lan::LAN_PORT
+        );
+        Some(super::lan::start_announcer(
+            identity.clone(),
+            port,
+            super::lan::ANNOUNCE_INTERVAL_SECS,
+            Arc::clone(&lan_shutdown),
+        ))
+    } else {
+        println!("LAN discovery: off ([relay] lan_announce = false)");
+        None
+    };
+
     // This machine's sessions, advertised to peers on every heartbeat.
     let mut local_feed = super::advertise::LocalSessionFeed::new();
 
@@ -566,6 +595,13 @@ fn cmd_serve(
     }
 
     listener.stop();
+    // Tell the announcer to stop, then wait for it so it is not killed
+    // mid-`send_to`. Its sleep is the announce interval, so this can take that
+    // long — which is why it happens after `listener.stop()` rather than before.
+    lan_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(h) = lan_handle {
+        let _ = h.join();
+    }
     println!("\nRelay stopped.");
     Ok(())
 }
@@ -1397,10 +1433,13 @@ fn cmd_join(input: &[String]) -> io::Result<()> {
 fn cmd_discover(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
 
-    println!("Scanning LAN for claudectl instances (3 seconds)...");
+    println!(
+        "Scanning LAN for claudectl instances ({} seconds)...",
+        super::lan::SCAN_DURATION.as_secs()
+    );
     println!();
 
-    let peers = super::lan::scan_lan(std::time::Duration::from_secs(3), identity.as_str());
+    let peers = super::lan::scan_lan(super::lan::SCAN_DURATION, identity.as_str());
 
     if json_mode {
         let json_peers: Vec<serde_json::Value> = peers

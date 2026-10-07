@@ -6,9 +6,24 @@ use std::time::{Duration, Instant};
 
 use super::PeerId;
 
-const LAN_PORT: u16 = 9848;
+pub const LAN_PORT: u16 = 9848;
 const ANNOUNCE_MAGIC: &[u8; 4] = b"CCTL";
 const STALE_AFTER: Duration = Duration::from_secs(30);
+
+/// How often `relay serve` broadcasts its presence.
+///
+/// Discovery is passive: a scanner only hears a peer that happens to announce
+/// while it is listening. So this and [`SCAN_DURATION`] are a pair and live
+/// together — a scan shorter than the announce interval misses peers at
+/// roughly `1 - scan/interval`, which is what a 3-second scan against a
+/// 5-second announcer would have done.
+pub const ANNOUNCE_INTERVAL_SECS: u64 = 5;
+
+/// How long `relay discover` listens.
+///
+/// One second longer than the announce interval, so every announcing peer is
+/// heard at least once rather than most of the time.
+pub const SCAN_DURATION: Duration = Duration::from_secs(ANNOUNCE_INTERVAL_SECS + 1);
 
 // ────────────────────────────────────────────────────────────────────────────
 // Discovered peer info
@@ -94,8 +109,25 @@ pub fn start_announcer(
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        // A send failure used to be discarded with `let _ =`. Nothing called
+        // this function at all, so it never mattered — but the moment it is
+        // wired up, a silently failing broadcast is indistinguishable from a
+        // working one, which is exactly the shape of the bug #433 had to find by
+        // packet-sniffing. Log the first failure and then stay quiet, so a
+        // machine with no broadcast route says so once instead of every tick.
+        let mut warned = false;
         while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
-            let _ = send_announcement(identity.as_str(), relay_port);
+            match send_announcement(identity.as_str(), relay_port) {
+                Ok(()) => warned = false,
+                Err(e) if !warned => {
+                    crate::logger::log("LAN", &format!("announcement failed: {e}"));
+                    eprintln!(
+                        "warning: LAN announcement failed ({e}); peers will not discover this machine"
+                    );
+                    warned = true;
+                }
+                Err(_) => {}
+            }
             std::thread::sleep(Duration::from_secs(interval_secs));
         }
     })

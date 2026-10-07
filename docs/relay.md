@@ -266,7 +266,16 @@ Found 2 instance(s):
   ci-runner-9d1e       192.168.1.101:9847       v0.40.0
 ```
 
-This sends a UDP broadcast and listens for 3 seconds. Peers running `claudectl relay serve` announce themselves automatically.
+Discovery is **passive**: `relay serve` broadcasts a small announcement on UDP 9848 every 5 seconds, and `relay discover` listens for 6 seconds — one second longer than the interval, so every announcing peer is heard at least once. `discover` sends nothing itself.
+
+Turn the broadcast off with:
+
+```toml
+[relay]
+lan_announce = false
+```
+
+> Before v0.66.0 nothing ever sent an announcement, so `relay discover` always reported "no instances found". If you tried it on an older build and concluded LAN discovery was broken, it was.
 
 ## Hive Identity
 
