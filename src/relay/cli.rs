@@ -369,6 +369,57 @@ fn cmd_serve(
     // which looks exactly like a working announcer that sends nothing — so the
     // announcer gets its own flag, set when the serve loop exits.
     let lan_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // The hive block this machine advertises (#433). Read once at startup, like
+    // the index in `query serve`: a rename takes a relay restart, which is said
+    // plainly in the banner rather than left to be discovered.
+    //
+    // A malformed identity file costs the hive block, not the relay — the
+    // machine is still worth discovering, so the error is printed and
+    // advertisement continues without a hive.
+    let hive_peers = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let hive_units = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    #[cfg(feature = "hive")]
+    let hive_advert = match crate::hive::identity::load() {
+        Ok(Some(id)) => {
+            // `effective_join_policy`, never the stored field: #432 records
+            // consent for `open` in the data precisely so this cannot put an
+            // unconfirmed `open` on the wire.
+            let effective = id.effective_join_policy();
+            println!(
+                "Hive: \"{}\" ({}) advertised as join_policy={}",
+                id.name,
+                id.hive_id,
+                effective.as_str()
+            );
+            if !id.open_is_acknowledged() {
+                println!(
+                    "  (stored policy is `open` but was never confirmed — advertising `{}`)",
+                    effective.as_str()
+                );
+            }
+            Some(super::lan::HiveAdvert {
+                id: id.hive_id,
+                name: id.name,
+                join_policy: effective.as_str().to_string(),
+                peers: Arc::clone(&hive_peers),
+                units: Arc::clone(&hive_units),
+            })
+        }
+        Ok(None) => {
+            println!(
+                "Hive: unnamed, so nothing is advertised (claudectl hive identity set --name X)"
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!("warning: hive identity unreadable, advertising no hive: {e}");
+            None
+        }
+    };
+    #[cfg(not(feature = "hive"))]
+    let hive_advert: Option<super::lan::HiveAdvert> = None;
+
     let lan_handle = if relay_cfg.lan_announce {
         println!(
             "LAN discovery: announcing every {}s on UDP {}",
@@ -380,6 +431,7 @@ fn cmd_serve(
             port,
             super::lan::ANNOUNCE_INTERVAL_SECS,
             Arc::clone(&lan_shutdown),
+            hive_advert,
         ))
     } else {
         println!("LAN discovery: off ([relay] lan_announce = false)");
@@ -591,6 +643,19 @@ fn cmd_serve(
             if collected {
                 super::advertise::publish_snapshot(identity.as_str(), &reg);
             }
+
+            // Counts for the LAN hive advertisement (#433). Stored here, where
+            // the registry lock is already held, and read by the announcer
+            // thread through an atomic — so nothing it does can block this loop.
+            hive_peers.store(
+                reg.connected_count() as u32,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+
+        #[cfg(feature = "hive")]
+        if let Some(store) = hive_store.as_ref() {
+            hive_units.store(store.len() as u32, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -1449,6 +1514,15 @@ fn cmd_discover(json_mode: bool) -> io::Result<()> {
                     "identity": p.identity,
                     "addr": p.relay_addr().to_string(),
                     "version": p.version,
+                    // Null rather than omitted, so a consumer can tell "no hive"
+                    // from "field this build does not emit".
+                    "hive": p.hive.as_ref().map(|h| serde_json::json!({
+                        "id": h.id,
+                        "name": h.name,
+                        "join_policy": h.join_policy,
+                        "peers": h.peers,
+                        "units": h.units,
+                    })),
                 })
             })
             .collect();
@@ -1464,18 +1538,29 @@ fn cmd_discover(json_mode: bool) -> io::Result<()> {
     } else {
         println!("Found {} instance(s):", peers.len());
         println!();
-        println!("  {:<20} {:<24} VERSION", "IDENTITY", "ADDRESS");
-        println!("  {}", "─".repeat(56));
+        println!(
+            "  {:<20} {:<22} {:<16} VERSION",
+            "IDENTITY", "ADDRESS", "HIVE"
+        );
+        println!("  {}", "─".repeat(70));
         for peer in &peers {
             let paired = if load_peer_psk(&peer.identity).is_some() {
                 " (paired)"
             } else {
                 ""
             };
+            // An em-dash for a machine whose hive is unnamed, which is the
+            // default and not a problem.
+            let hive = peer
+                .hive
+                .as_ref()
+                .map(|h| claudectl_core::helpers::truncate_cell(&h.name, 16))
+                .unwrap_or_else(|| "—".to_string());
             println!(
-                "  {:<20} {:<24} {}{}",
+                "  {:<20} {:<22} {:<16} {}{}",
                 peer.identity,
                 peer.relay_addr().to_string(),
+                hive,
                 peer.version,
                 paired,
             );

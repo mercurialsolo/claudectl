@@ -4,6 +4,59 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed — LAN discovery never worked at all
+- **`relay discover` has returned "No claudectl instances found" since it
+  shipped**, even with a relay running on the same network. The scanner was
+  fine; nothing was broadcasting. `start_announcer` and `send_announcement` had
+  zero callers anywhere in the tree, and `#![allow(dead_code)]` on
+  `relay/mod.rs` is why that never surfaced as a warning. `docs/relay.md` said
+  "Peers running `claudectl relay serve` announce themselves automatically",
+  which was untrue, and the empty-state message told you to start the thing that
+  was already running.
+- Two bugs, the second only visible after fixing the first: `cmd_serve` never
+  started the announcer, and `start_announcer`'s flag is a *shutdown* flag while
+  `cmd_serve`'s is a *running* flag — so passing it straight through stopped the
+  thread on its first check, printing "announcing every 5s" above a process
+  sending nothing. Measured: zero bytes on UDP 9848 over six seconds before, a
+  datagram every five seconds after.
+- A send error was discarded with `let _ =`; the first failure is now logged and
+  warned about once, since a silently failing broadcast is indistinguishable
+  from a working one.
+- Announce interval and scan duration are now paired constants — the old
+  hardcoded 3-second scan would have missed peers against a 5-second announcer.
+  `[relay] lan_announce` (default true) turns the broadcast off.
+
+### Added — named hives are advertised and discoverable (#433)
+- **`claudectl hive discover`** lists hives rather than machines: one row per
+  distinct hive id, with join policy and the peer and knowledge-unit counts each
+  advertises, grouped so several machines in one hive collect together.
+  `relay discover` grew a HIVE column.
+- The hive block rides the **existing** UDP datagram as additive fields, so a
+  peer on an older build reads the three keys it knows and ignores the rest. The
+  pre-#433 extraction is kept as a test fixture and run against a new payload,
+  so "an older build is unaffected" is checked rather than asserted.
+- **An unnamed hive adds no `hive` key at all**, so a machine that never ran
+  `hive identity set` sends exactly what it sent before and appears only in
+  `relay discover`.
+- **The advertised policy is the effective one.** A hand-edited `open` that was
+  never confirmed goes on the wire as `invite` — #432 put that gate on the
+  stored record rather than on its CLI precisely so this path could not leak it,
+  and there is now an end-to-end check that it does not.
+- `description` is deliberately not advertised (200 bytes against a 1 KB receive
+  buffer), and a test asserts the worst-case payload — longest name, longest
+  identity, `u32::MAX` counts — still fits.
+- Counts are read from atomics the serve loop updates each tick, so the
+  announcer never shares a lock with the thread doing a blocking `send_to`.
+
+### Fixed — a flaky test introduced in #438
+- `brain::decisions` mutates `HOME` process-wide with a comment claiming cargo
+  runs tests sequentially; it does not. #438's agent tests read `HOME`, so the
+  two raced and the suite failed intermittently. The agent paths now take an
+  explicit home, and no test in that module reads the environment. The
+  underlying `brain` test is untouched and still a latent hazard for anything
+  else that reads `HOME`.
+
+
 ### Added — hive identity: name, description, join policy (#432)
 - **A hive can be named.** `claudectl hive identity` shows it, `identity set
   --name X [--description Y] [--join-policy P]` sets it, `identity clear --yes`

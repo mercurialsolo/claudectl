@@ -36,6 +36,8 @@ pub struct DiscoveredPeer {
     pub relay_port: u16,
     pub version: String,
     pub last_seen: Instant,
+    /// The hive this machine advertises, if it named one.
+    pub hive: Option<HiveAd>,
 }
 
 impl DiscoveredPeer {
@@ -53,13 +55,72 @@ impl DiscoveredPeer {
 // Announcer: broadcast our presence on the LAN
 // ────────────────────────────────────────────────────────────────────────────
 
+/// The hive block a named machine adds to its announcement (#433, RFC §7.3).
+///
+/// Additive fields on the existing datagram, so a peer on an older build parses
+/// the three keys it knows and ignores this entirely — asserted by a test that
+/// runs the pre-#433 extraction against a payload carrying one.
+///
+/// `description` is deliberately **not** advertised. It is up to 200 bytes, the
+/// receive buffer is 1 KB, and a discovery listing shows a name and counts
+/// rather than prose.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HiveAd {
+    pub id: String,
+    pub name: String,
+    /// `invite`, `ask` or `open`.
+    ///
+    /// This is the **effective** policy, never the stored one: an `open` that
+    /// was never confirmed advertises as `invite`. See
+    /// `hive::identity::HiveIdentity::effective_join_policy` — the gate #432 put
+    /// on the data rather than on its CLI exists exactly so this code path
+    /// cannot leak an unconsented `open` onto the network.
+    pub join_policy: String,
+    /// Connected peers, and knowledge units held. Advisory — they are a snapshot
+    /// from whenever the announcer last ticked.
+    #[serde(default)]
+    pub peers: u32,
+    #[serde(default)]
+    pub units: u32,
+}
+
+/// One decoded announcement.
+///
+/// A struct rather than the tuple this used to return: #433 adds a fourth field
+/// and a growing tuple at three call sites is how a field gets dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Announcement {
+    pub identity: String,
+    pub relay_port: u16,
+    pub version: String,
+    /// `None` when the sender's hive is unnamed, which is every machine that has
+    /// not run `hive identity set`. Absence is the default and means "no hive to
+    /// advertise", never an error.
+    pub hive: Option<HiveAd>,
+}
+
 /// Build an announcement payload.
-fn build_announcement(identity: &str, relay_port: u16, version: &str) -> Vec<u8> {
-    let json = serde_json::json!({
+fn build_announcement(
+    identity: &str,
+    relay_port: u16,
+    version: &str,
+    hive: Option<&HiveAd>,
+) -> Vec<u8> {
+    let mut json = serde_json::json!({
         "identity": identity,
         "port": relay_port,
         "version": version,
     });
+    // Added only when there is a named hive, so an unnamed machine's datagram is
+    // byte-identical to what it sent before #433.
+    if let Some(h) = hive {
+        if let Some(obj) = json.as_object_mut() {
+            obj.insert(
+                "hive".to_string(),
+                serde_json::to_value(h).unwrap_or(serde_json::Value::Null),
+            );
+        }
+    }
     let json_bytes = serde_json::to_vec(&json).unwrap_or_default();
 
     let mut payload = Vec::with_capacity(4 + json_bytes.len());
@@ -69,29 +130,45 @@ fn build_announcement(identity: &str, relay_port: u16, version: &str) -> Vec<u8>
 }
 
 /// Parse an announcement payload.
-fn parse_announcement(data: &[u8]) -> Option<(String, u16, String)> {
+fn parse_announcement(data: &[u8]) -> Option<Announcement> {
     if data.len() < 5 || &data[..4] != ANNOUNCE_MAGIC {
         return None;
     }
     let json: serde_json::Value = serde_json::from_slice(&data[4..]).ok()?;
     let identity = json.get("identity")?.as_str()?.to_string();
-    let port = json.get("port")?.as_u64()? as u16;
+    let relay_port = json.get("port")?.as_u64()? as u16;
     let version = json
         .get("version")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    Some((identity, port, version))
+    // A malformed hive block costs the hive block, not the whole announcement:
+    // the machine is still worth discovering, and a future field this build does
+    // not understand must not make a peer vanish.
+    let hive = json
+        .get("hive")
+        .and_then(|h| serde_json::from_value::<HiveAd>(h.clone()).ok())
+        .filter(|h| !h.name.is_empty() && !h.id.is_empty());
+    Some(Announcement {
+        identity,
+        relay_port,
+        version,
+        hive,
+    })
 }
 
 /// Send a single UDP broadcast announcement.
-pub fn send_announcement(identity: &str, relay_port: u16) -> Result<(), String> {
+pub fn send_announcement(
+    identity: &str,
+    relay_port: u16,
+    hive: Option<&HiveAd>,
+) -> Result<(), String> {
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("bind: {e}"))?;
     socket
         .set_broadcast(true)
         .map_err(|e| format!("set_broadcast: {e}"))?;
 
-    let payload = build_announcement(identity, relay_port, env!("CARGO_PKG_VERSION"));
+    let payload = build_announcement(identity, relay_port, env!("CARGO_PKG_VERSION"), hive);
     let broadcast_addr = SocketAddr::new(Ipv4Addr::BROADCAST.into(), LAN_PORT);
 
     socket
@@ -101,12 +178,43 @@ pub fn send_announcement(identity: &str, relay_port: u16) -> Result<(), String> 
     Ok(())
 }
 
+/// The hive identity and live counts an announcer should advertise (#433).
+///
+/// The name and policy are fixed at `relay serve` startup — the identity file is
+/// read once, like `query serve` reads its config once, so renaming a hive takes
+/// a restart. The counts move, so they are atomics the serve loop stores into
+/// and the announcer reads: no lock is shared with a thread that is about to do
+/// a blocking `send_to`.
+#[derive(Clone)]
+pub struct HiveAdvert {
+    pub id: String,
+    pub name: String,
+    pub join_policy: String,
+    pub peers: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub units: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl HiveAdvert {
+    /// Snapshot the current counts into a wire record.
+    pub fn snapshot(&self) -> HiveAd {
+        use std::sync::atomic::Ordering;
+        HiveAd {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            join_policy: self.join_policy.clone(),
+            peers: self.peers.load(Ordering::Relaxed),
+            units: self.units.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// Start a background announcer thread that broadcasts periodically.
 pub fn start_announcer(
     identity: PeerId,
     relay_port: u16,
     interval_secs: u64,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    hive: Option<HiveAdvert>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         // A send failure used to be discarded with `let _ =`. Nothing called
@@ -117,7 +225,10 @@ pub fn start_announcer(
         // machine with no broadcast route says so once instead of every tick.
         let mut warned = false;
         while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
-            match send_announcement(identity.as_str(), relay_port) {
+            // Snapshotted each tick, so the counts a peer sees are at most one
+            // interval stale rather than frozen at startup.
+            let ad = hive.as_ref().map(|h| h.snapshot());
+            match send_announcement(identity.as_str(), relay_port, ad.as_ref()) {
                 Ok(()) => warned = false,
                 Err(e) if !warned => {
                     crate::logger::log("LAN", &format!("announcement failed: {e}"));
@@ -155,19 +266,20 @@ pub fn scan_lan(duration: Duration, own_identity: &str) -> Vec<DiscoveredPeer> {
     while start.elapsed() < duration {
         match socket.recv_from(&mut buf) {
             Ok((n, from_addr)) => {
-                if let Some((identity, relay_port, version)) = parse_announcement(&buf[..n]) {
+                if let Some(ann) = parse_announcement(&buf[..n]) {
                     // Don't discover ourselves
-                    if identity == own_identity {
+                    if ann.identity == own_identity {
                         continue;
                     }
                     peers.insert(
-                        identity.clone(),
+                        ann.identity.clone(),
                         DiscoveredPeer {
-                            identity,
+                            identity: ann.identity,
                             addr: from_addr,
-                            relay_port,
-                            version,
+                            relay_port: ann.relay_port,
+                            version: ann.version,
                             last_seen: Instant::now(),
+                            hive: ann.hive,
                         },
                     );
                 }
@@ -201,19 +313,20 @@ pub fn start_listener(
         while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
             match socket.recv_from(&mut buf) {
                 Ok((n, from_addr)) => {
-                    if let Some((identity, relay_port, version)) = parse_announcement(&buf[..n]) {
-                        if identity == own_identity {
+                    if let Some(ann) = parse_announcement(&buf[..n]) {
+                        if ann.identity == own_identity {
                             continue;
                         }
                         if let Ok(mut map) = peers_clone.lock() {
                             map.insert(
-                                identity.clone(),
+                                ann.identity.clone(),
                                 DiscoveredPeer {
-                                    identity,
+                                    identity: ann.identity,
                                     addr: from_addr,
-                                    relay_port,
-                                    version,
+                                    relay_port: ann.relay_port,
+                                    version: ann.version,
                                     last_seen: Instant::now(),
+                                    hive: ann.hive,
                                 },
                             );
                             // Prune stale entries
@@ -247,11 +360,134 @@ mod tests {
 
     #[test]
     fn announcement_roundtrip() {
-        let payload = build_announcement("laptop-a3f2", 9847, "0.36.0");
-        let (identity, port, version) = parse_announcement(&payload).unwrap();
+        let payload = build_announcement("laptop-a3f2", 9847, "0.36.0", None);
+        let ann = parse_announcement(&payload).unwrap();
+        assert_eq!(ann.identity, "laptop-a3f2");
+        assert_eq!(ann.relay_port, 9847);
+        assert_eq!(ann.version, "0.36.0");
+        assert_eq!(ann.hive, None, "an unnamed hive must advertise nothing");
+    }
+
+    fn sample_ad() -> HiveAd {
+        HiveAd {
+            id: "hv_3a9f21".into(),
+            name: "barrys-hive".into(),
+            join_policy: "invite".into(),
+            peers: 3,
+            units: 412,
+        }
+    }
+
+    /// Extract the three fields exactly as the pre-#433 parser did.
+    ///
+    /// This *is* the old implementation, kept as a test fixture rather than a
+    /// comment, so "a peer on an older build is unaffected" is a thing the suite
+    /// checks instead of a thing the PR asserts.
+    fn parse_v0(data: &[u8]) -> Option<(String, u16, String)> {
+        if data.len() < 5 || &data[..4] != ANNOUNCE_MAGIC {
+            return None;
+        }
+        let json: serde_json::Value = serde_json::from_slice(&data[4..]).ok()?;
+        let identity = json.get("identity")?.as_str()?.to_string();
+        let port = json.get("port")?.as_u64()? as u16;
+        let version = json
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        Some((identity, port, version))
+    }
+
+    #[test]
+    fn a_pre_433_payload_still_parses_with_no_hive() {
+        // A literal fixture of the shape that has been on the wire all along —
+        // not one this build produced, so a change to `build_announcement`
+        // cannot make this test vacuous.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(ANNOUNCE_MAGIC);
+        payload.extend_from_slice(br#"{"identity":"laptop-a3f2","port":9847,"version":"0.64.0"}"#);
+        let ann = parse_announcement(&payload).expect("the old shape must still parse");
+        assert_eq!(ann.identity, "laptop-a3f2");
+        assert_eq!(ann.relay_port, 9847);
+        assert_eq!(ann.version, "0.64.0");
+        assert_eq!(ann.hive, None);
+    }
+
+    #[test]
+    fn an_older_build_is_unaffected_by_the_hive_block() {
+        // The acceptance criterion, run rather than argued: the pre-#433
+        // extraction against a *new* payload carrying a hive block.
+        let payload = build_announcement("laptop-a3f2", 9847, "0.66.0", Some(&sample_ad()));
+        let (identity, port, version) =
+            parse_v0(&payload).expect("an old build must still read a new datagram");
         assert_eq!(identity, "laptop-a3f2");
         assert_eq!(port, 9847);
-        assert_eq!(version, "0.36.0");
+        assert_eq!(version, "0.66.0");
+    }
+
+    #[test]
+    fn a_hive_block_round_trips() {
+        let payload = build_announcement("laptop-a3f2", 9847, "0.66.0", Some(&sample_ad()));
+        let ann = parse_announcement(&payload).unwrap();
+        assert_eq!(ann.hive, Some(sample_ad()));
+    }
+
+    #[test]
+    fn an_unnamed_machine_adds_no_hive_key_at_all() {
+        // Not merely `hive: None` on parse — the key must be absent from the
+        // bytes, so an unnamed machine's datagram is what it always was.
+        let payload = build_announcement("laptop-a3f2", 9847, "0.66.0", None);
+        let text = String::from_utf8_lossy(&payload[4..]);
+        assert!(!text.contains("hive"), "{text}");
+    }
+
+    #[test]
+    fn a_malformed_hive_block_costs_the_block_not_the_peer() {
+        // A machine running a future build that adds a field, or a corrupted
+        // datagram, must still be discoverable.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(ANNOUNCE_MAGIC);
+        payload.extend_from_slice(
+            br#"{"identity":"laptop-a3f2","port":9847,"version":"0.66.0","hive":"not-an-object"}"#,
+        );
+        let ann = parse_announcement(&payload).expect("the peer must survive a bad hive block");
+        assert_eq!(ann.identity, "laptop-a3f2");
+        assert_eq!(ann.hive, None);
+
+        // An object missing the fields that identify a hive is also no hive.
+        let mut partial = Vec::new();
+        partial.extend_from_slice(ANNOUNCE_MAGIC);
+        partial.extend_from_slice(
+            br#"{"identity":"x","port":1,"version":"v","hive":{"id":"","name":"","join_policy":"open"}}"#,
+        );
+        assert_eq!(parse_announcement(&partial).unwrap().hive, None);
+    }
+
+    #[test]
+    fn the_worst_case_payload_fits_the_receive_buffer() {
+        // The scanner reads into a 1 KB buffer, so a datagram larger than that is
+        // silently truncated and then fails to parse. Check the largest thing
+        // this code can emit, rather than assuming a name and two integers are
+        // small.
+        let name = "n".repeat(crate::hive::identity::MAX_NAME_LEN);
+        let ad = HiveAd {
+            id: "hv_ffffff".into(),
+            name,
+            join_policy: "invite".into(),
+            peers: u32::MAX,
+            units: u32::MAX,
+        };
+        // Longest plausible identity: `is_valid_peer_id` caps it, and the real
+        // ones are `<host>-<8 hex>`.
+        let identity = "x".repeat(64);
+        let payload = build_announcement(&identity, u16::MAX, "999.999.999", Some(&ad));
+        assert!(
+            payload.len() < 1024,
+            "worst-case announcement is {} bytes, which the 1 KB scan buffer truncates",
+            payload.len()
+        );
+        // And it still parses at that size.
+        assert_eq!(parse_announcement(&payload).unwrap().hive, Some(ad));
     }
 
     #[test]
@@ -277,6 +513,7 @@ mod tests {
             relay_port: 9847,
             version: "0.36.0".into(),
             last_seen: Instant::now(),
+            hive: None,
         };
         assert!(!peer.is_stale());
 
@@ -295,6 +532,7 @@ mod tests {
             relay_port: 9847,                           // relay port
             version: "0.36.0".into(),
             last_seen: Instant::now(),
+            hive: None,
         };
         let relay = peer.relay_addr();
         assert_eq!(relay.port(), 9847);

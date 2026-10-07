@@ -93,8 +93,16 @@ impl AgentConfig {
 
 /// `~/Library/LaunchAgents/io.claudectl.relay.plist`.
 pub fn plist_path() -> PathBuf {
-    claudectl_core::helpers::dirs_home()
-        .join("Library")
+    plist_path_in(&claudectl_core::helpers::dirs_home())
+}
+
+/// [`plist_path`] under an explicit home.
+///
+/// Split out so the tests never read the ambient `HOME`. Another test in this
+/// crate mutates `HOME` process-wide (`brain::decisions`), and cargo runs tests
+/// on parallel threads, so anything reading the env here is a race.
+pub fn plist_path_in(home: &Path) -> PathBuf {
+    home.join("Library")
         .join("LaunchAgents")
         .join(format!("{AGENT_LABEL}.plist"))
 }
@@ -104,9 +112,12 @@ pub fn plist_path() -> PathBuf {
 /// Under `~/.claudectl/relay/` beside `fleet.json`, not `~/Library/Logs`, so
 /// everything about one relay is in one place.
 pub fn log_paths() -> (PathBuf, PathBuf) {
-    let dir = claudectl_core::helpers::dirs_home()
-        .join(".claudectl")
-        .join("relay");
+    log_paths_in(&claudectl_core::helpers::dirs_home())
+}
+
+/// [`log_paths`] under an explicit home. See [`plist_path_in`] for why.
+pub fn log_paths_in(home: &Path) -> (PathBuf, PathBuf) {
+    let dir = home.join(".claudectl").join("relay");
     (dir.join("agent.out.log"), dir.join("agent.err.log"))
 }
 
@@ -128,7 +139,12 @@ fn xml_escape(s: &str) -> String {
 /// Pure: path in, XML out, no filesystem. That is what makes the interesting
 /// part testable without touching a real `launchd`.
 pub fn render_plist(binary: &Path, cfg: &AgentConfig) -> String {
-    let (out_log, err_log) = log_paths();
+    render_plist_in(binary, cfg, &claudectl_core::helpers::dirs_home())
+}
+
+/// [`render_plist`] under an explicit home. See [`plist_path_in`] for why.
+pub fn render_plist_in(binary: &Path, cfg: &AgentConfig, home: &Path) -> String {
+    let (out_log, err_log) = log_paths_in(home);
     let args: String = cfg
         .argv(binary)
         .iter()
@@ -164,7 +180,7 @@ pub fn render_plist(binary: &Path, cfg: &AgentConfig) -> String {
         args = args,
         out = xml_escape(&out_log.display().to_string()),
         err = xml_escape(&err_log.display().to_string()),
-        home = xml_escape(&claudectl_core::helpers::dirs_home().display().to_string()),
+        home = xml_escape(&home.display().to_string()),
     )
 }
 
@@ -354,6 +370,12 @@ pub fn unsupported() -> String {
 mod tests {
     use super::*;
 
+    /// A fixed home, so no test here reads the ambient `HOME` — see
+    /// [`plist_path_in`].
+    fn home() -> PathBuf {
+        PathBuf::from("/Users/testuser")
+    }
+
     #[test]
     fn argv_starts_with_the_binary_and_the_subcommand() {
         let cfg = AgentConfig::default();
@@ -403,9 +425,10 @@ mod tests {
 
     #[test]
     fn the_plist_carries_the_label_argv_and_keepalive() {
-        let xml = render_plist(
+        let xml = render_plist_in(
             Path::new("/opt/homebrew/bin/claudectl"),
             &AgentConfig::default(),
+            &home(),
         );
         assert!(xml.contains("<string>io.claudectl.relay</string>"), "{xml}");
         assert!(xml.contains("<key>KeepAlive</key>\n  <true/>"), "{xml}");
@@ -430,9 +453,10 @@ mod tests {
         // breaks here, which is why `argv` is a vector.
         let argv = AgentConfig::default().argv(Path::new("/Users/a b/bin/claudectl"));
         assert_eq!(argv[0], "/Users/a b/bin/claudectl");
-        let xml = render_plist(
+        let xml = render_plist_in(
             Path::new("/Users/a b/bin/claudectl"),
             &AgentConfig::default(),
+            &home(),
         );
         assert!(
             xml.contains("<string>/Users/a b/bin/claudectl</string>"),
@@ -444,9 +468,10 @@ mod tests {
     fn xml_special_characters_are_escaped() {
         // An unescaped `&` in a home directory yields a plist launchd silently
         // refuses — an agent that is "installed" and never runs.
-        let xml = render_plist(
+        let xml = render_plist_in(
             Path::new("/Users/a&b/bin/claudectl"),
             &AgentConfig::default(),
+            &home(),
         );
         assert!(xml.contains("/Users/a&amp;b/bin/claudectl"), "{xml}");
         assert!(
@@ -468,7 +493,7 @@ mod tests {
             auth_token: Some("sekrit".into()),
             ..Default::default()
         };
-        let xml = render_plist(Path::new("/x/claudectl"), &cfg);
+        let xml = render_plist_in(Path::new("/x/claudectl"), &cfg, &home());
         assert!(
             xml.contains("<string>sekrit</string>"),
             "the token has to be in the plist for the agent to use it"
@@ -478,7 +503,7 @@ mod tests {
     #[test]
     fn the_label_is_used_for_both_the_plist_name_and_the_service() {
         assert!(
-            plist_path()
+            plist_path_in(&home())
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
@@ -490,7 +515,7 @@ mod tests {
 
     #[test]
     fn logs_land_beside_the_fleet_snapshot() {
-        let (out, err) = log_paths();
+        let (out, err) = log_paths_in(&home());
         assert!(out.ends_with("agent.out.log"), "{out:?}");
         assert!(err.ends_with("agent.err.log"), "{err:?}");
         assert_eq!(out.parent(), err.parent());

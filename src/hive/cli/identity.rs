@@ -277,3 +277,114 @@ fn confirm_open(yes: bool) -> io::Result<bool> {
 
     crate::init::prompt::yes_no("Open this hive to anyone on your LAN?", false)
 }
+
+/// `claudectl hive discover` — find named hives on the LAN (#433).
+///
+/// Groups by `hive_id` rather than by machine, because a hive is the thing being
+/// looked for and several machines can advertise the same one. A machine whose
+/// hive is unnamed sends no hive block and so does not appear here — it is still
+/// visible to `relay discover`, which lists machines.
+#[cfg(feature = "relay")]
+pub fn cmd_hive_discover(json_mode: bool) -> io::Result<()> {
+    use std::collections::BTreeMap;
+
+    let own = crate::relay::load_or_create_identity();
+    if !json_mode {
+        println!(
+            "Scanning LAN for named hives ({} seconds)...",
+            crate::relay::lan::SCAN_DURATION.as_secs()
+        );
+        println!();
+    }
+
+    let peers = crate::relay::lan::scan_lan(crate::relay::lan::SCAN_DURATION, own.as_str());
+
+    struct Found {
+        name: String,
+        join_policy: String,
+        peers: u32,
+        units: u32,
+        machines: Vec<String>,
+    }
+    // BTreeMap so repeated runs list in a stable order.
+    let mut hives: BTreeMap<String, Found> = BTreeMap::new();
+    for p in &peers {
+        let Some(h) = &p.hive else { continue };
+        let entry = hives.entry(h.id.clone()).or_insert_with(|| Found {
+            name: h.name.clone(),
+            join_policy: h.join_policy.clone(),
+            peers: 0,
+            units: 0,
+            machines: Vec::new(),
+        });
+        // Highest wins when two machines in one hive disagree: the counts are
+        // snapshots taken at different instants, so the larger is the more
+        // recently true.
+        entry.peers = entry.peers.max(h.peers);
+        entry.units = entry.units.max(h.units);
+        entry
+            .machines
+            .push(format!("{}@{}", p.identity, p.relay_addr()));
+    }
+
+    if json_mode {
+        let out: Vec<serde_json::Value> = hives
+            .iter()
+            .map(|(id, f)| {
+                serde_json::json!({
+                    "hive_id": id,
+                    "name": f.name,
+                    "join_policy": f.join_policy,
+                    "peers": f.peers,
+                    "units": f.units,
+                    "machines": f.machines,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        return Ok(());
+    }
+
+    if hives.is_empty() {
+        println!("No named hives found on the local network.");
+        println!();
+        if peers.is_empty() {
+            println!("No claudectl instances answered either. A relay has to be running");
+            println!("on the other machine: claudectl relay serve");
+        } else {
+            // The distinction worth drawing: machines answered, they just have
+            // no hive name.
+            println!(
+                "{} machine(s) answered, but none has named its hive.",
+                peers.len()
+            );
+            println!("On that machine: claudectl hive identity set --name their-hive");
+        }
+        return Ok(());
+    }
+
+    println!("Found {} hive(s):", hives.len());
+    println!();
+    println!(
+        "  {:<20} {:<10} {:<7} {:<7} MACHINES",
+        "HIVE", "POLICY", "PEERS", "UNITS"
+    );
+    println!("  {}", "─".repeat(66));
+    for (id, f) in &hives {
+        println!(
+            "  {:<20} {:<10} {:<7} {:<7} {}",
+            claudectl_core::helpers::truncate_cell(&f.name, 20),
+            f.join_policy,
+            f.peers,
+            f.units,
+            f.machines.len()
+        );
+        println!("  {:<20} {}", "", id);
+        for m in &f.machines {
+            println!("  {:<20}   {m}", "");
+        }
+    }
+    println!();
+    println!("`open` means any discoverer may join. `ask` and `invite` need the owner.");
+    Ok(())
+}

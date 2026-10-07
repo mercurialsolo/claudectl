@@ -109,6 +109,14 @@ pub enum HiveCommand {
     /// Show knowledge store overview
     Status,
 
+    /// Find named hives on the local network (#433)
+    ///
+    /// Lists hives rather than machines: one row per distinct hive, with the
+    /// join policy and the peer and knowledge-unit counts each advertises.
+    /// A machine whose hive is unnamed advertises nothing and does not appear.
+    #[cfg(feature = "relay")]
+    Discover,
+
     /// Show or set this hive's name, description and join policy (#432)
     ///
     /// A hive with no identity behaves exactly as it always has: nothing is
@@ -350,6 +358,8 @@ pub fn dispatch_command(command: &HiveCommand, json_mode: bool) -> io::Result<()
         HiveCommand::Expose { unit_id, all } => cmd_expose(unit_id.as_deref(), *all, json_mode),
         HiveCommand::Hide { unit_id, all } => cmd_hide(unit_id.as_deref(), *all, json_mode),
         HiveCommand::Status => cmd_status(json_mode),
+        #[cfg(feature = "relay")]
+        HiveCommand::Discover => identity::cmd_hive_discover(json_mode),
         HiveCommand::Identity { action } => cmd_identity(action.as_ref(), json_mode),
         HiveCommand::Knowledge { from, scope } => {
             cmd_knowledge(from.as_deref(), scope.as_deref(), json_mode)
