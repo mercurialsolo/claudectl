@@ -559,7 +559,7 @@ impl MemberState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Membership {
     pub hive_id: String,
     #[serde(default)]
