@@ -23,6 +23,7 @@
 //! since been approved, and a unit distilled while the link was down, without
 //! any of those needing their own trigger.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::{MessageType, PeerId, RelayMessage};
@@ -56,6 +57,9 @@ pub struct HiveSync {
     /// a reader must not *send*, and that has to be enforced here as well as at
     /// the host, or #435 only holds in one direction.
     membership: Option<Membership>,
+    /// Where `membership` is read from. Explicit so a test never reads `HOME`,
+    /// the same reason `Roster::at` takes a root.
+    membership_path: PathBuf,
     last_sync: Option<Instant>,
 }
 
@@ -73,11 +77,13 @@ impl HiveSync {
             }
             engine
         });
+        let membership_path = crate::hive::membership::membership_path();
         Self {
             store: enabled.then(HiveStore::load),
             engine,
             roster: named.then(Roster::local),
-            membership: load_membership_quietly(),
+            membership: load_membership_quietly(&membership_path),
+            membership_path,
             last_sync: None,
         }
     }
@@ -92,6 +98,23 @@ impl HiveSync {
             engine: None,
             roster,
             membership,
+            // Nothing reads this in the gate tests, and pointing it at a path
+            // that cannot exist is what keeps that true.
+            membership_path: PathBuf::from("/nonexistent/membership.json"),
+            last_sync: None,
+        }
+    }
+
+    /// Gate-only, but with a live engine and store rooted at `path`, so a test
+    /// can watch the re-offer actually happen.
+    #[cfg(test)]
+    fn with_engine(path: PathBuf, store: HiveStore) -> Self {
+        Self {
+            store: Some(store),
+            engine: Some(GossipEngine::new_empty("local", 5, 30)),
+            roster: None,
+            membership: None,
+            membership_path: path,
             last_sync: None,
         }
     }
@@ -100,14 +123,40 @@ impl HiveSync {
         self.store.as_ref()
     }
 
-    /// Re-read our membership file.
+    /// Re-read our membership file, and if our standing changed, re-offer
+    /// everything to the host.
     ///
     /// It changes under us: a `HiveJoinResult` arriving from an owner who has
     /// just approved a queued request rewrites it mid-run, and the role it
     /// carries is what decides whether the next tick may send. Loading it once
     /// at startup would leave a peer approved at 10:00 still gated at 18:00.
+    ///
+    /// The change is also the only sound trigger for re-offering a batch the
+    /// host refused. `units_sent` is recorded when a batch is *built* — there
+    /// is no acknowledgement to wait for — so a refusal leaves us believing in
+    /// a delivery that never happened, persisted, which is what used to
+    /// withhold the pre-approval units from a peer forever once it was
+    /// admitted. The tempting fix is to reset on the `KnowledgeRejected`
+    /// itself, but a refusal says nothing changed *here*: a peer paired for
+    /// delegation alone, against a host with a named hive, would then re-offer
+    /// its whole store every tick for as long as both stayed up. Our own
+    /// standing changing is the event that actually means "try again".
     pub fn refresh_membership(&mut self) {
-        self.membership = load_membership_quietly();
+        let fresh = load_membership_quietly(&self.membership_path);
+        if fresh == self.membership {
+            return;
+        }
+        if let Some(host) = fresh.as_ref().map(|m| m.joined_via.clone()) {
+            if let Some(engine) = self.engine.as_mut() {
+                if engine.forget_peer(&host) {
+                    println!(
+                        "[{}] our hive standing changed — re-offering knowledge to {host}",
+                        crate::logger::timestamp_now()
+                    );
+                }
+            }
+        }
+        self.membership = fresh;
     }
 
     /// The hive we joined, if we are an admitted member of one.
@@ -238,21 +287,10 @@ impl HiveSync {
                     from_peer,
                     super::hivejoin::rejection_reason(&msg.payload)
                 );
-                // The engine recorded those units as delivered when it built
-                // the batch — there is no ack to wait for — so a refusal has
-                // to undo that, or the peer is never offered them again. This
-                // is what made a pre-approval sync permanently poison the pair:
-                // the sync state is persisted, so even a restart kept the false
-                // belief.
-                if let Some(engine) = self.engine.as_mut() {
-                    if engine.forget_peer(from_peer.as_str()) {
-                        eprintln!(
-                            "[{}] will re-offer knowledge to {} once it is admitted",
-                            crate::logger::timestamp_now(),
-                            from_peer
-                        );
-                    }
-                }
+                // Reported and nothing more. The re-offer happens when our own
+                // standing changes (see `refresh_membership`), never on the
+                // refusal itself — a peer the host will always refuse would
+                // otherwise re-offer its whole store every tick forever.
                 Some(Vec::new())
             }
             _ => None,
@@ -384,8 +422,8 @@ impl HiveSync {
 /// Failing closed here would be worse than it sounds: `None` is also what every
 /// machine that never joined a hive has, so a hard error would take down
 /// gossip for a setup that has nothing to do with membership.
-fn load_membership_quietly() -> Option<Membership> {
-    match crate::hive::membership::load_membership() {
+fn load_membership_quietly(path: &std::path::Path) -> Option<Membership> {
+    match crate::hive::membership::load_membership_from(path) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("warning: membership unreadable, gossiping ungated: {e}");
@@ -691,5 +729,128 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         assert!(!gated(tmp.path()).may_contribute("never-asked"));
         assert!(!gated(tmp.path()).may_receive("never-asked"));
+    }
+
+    // ---------------------------------------------------------------------
+    // Re-offering a refused batch (#455).
+
+    fn write_membership(path: &std::path::Path, state: MemberState) {
+        let m = membership("host-1", Role::Contributor, state);
+        crate::hive::membership::save_membership_to(path, &m).unwrap();
+    }
+
+    fn one_unit_store() -> HiveStore {
+        let mut store = HiveStore::load_from(std::path::Path::new("/nonexistent"));
+        store.insert(crate::hive::KnowledgeUnit {
+            id: "ku_1".into(),
+            scope: crate::hive::KnowledgeScope::Universal,
+            category: crate::hive::KnowledgeCategory::BestPractice,
+            content: crate::hive::KnowledgeContent::Temporal {
+                description: "mornings are for refactors".into(),
+                strength: 0.9,
+            },
+            evidence_count: 5,
+            confidence: 0.9,
+            source_peer: "local".into(),
+            originated_at: crate::hive::epoch_secs(),
+            last_validated_at: crate::hive::epoch_secs(),
+            propagation_count: 0,
+            version: 1,
+            revalidation_interval_secs: 2_592_000,
+            injection_state: Default::default(),
+            injection_stats: Default::default(),
+            sharing_consent: None,
+        });
+        store
+    }
+
+    #[test]
+    fn being_admitted_re_offers_what_the_host_refused_while_we_were_pending() {
+        // The whole point: a batch refused before approval must not be lost.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("membership.json");
+        write_membership(&path, MemberState::Pending);
+
+        let mut h = HiveSync::with_engine(path.clone(), one_unit_store());
+        h.refresh_membership();
+        assert!(
+            h.targets(peers(&["host-1"])).is_empty(),
+            "a pending peer does not send"
+        );
+
+        // Pretend the gate was open for one tick and the host refused the
+        // batch: the engine has recorded it as delivered either way.
+        let sent = h.sync(peers(&["host-1"]));
+        assert!(sent.is_empty(), "still gated, so nothing was built");
+
+        // Force the recording the way a real pre-approval send would.
+        write_membership(&path, MemberState::Member);
+        h.refresh_membership();
+        assert_eq!(h.sync(peers(&["host-1"])).len(), 1, "admitted, so it sends");
+        assert!(
+            h.sync(peers(&["host-1"])).is_empty(),
+            "and does not repeat itself"
+        );
+
+        // Now the real case: the host refused that batch, and our standing
+        // changes again. The slate is reset and the unit is offered afresh.
+        write_membership(&path, MemberState::Pending);
+        h.refresh_membership();
+        write_membership(&path, MemberState::Member);
+        h.refresh_membership();
+        assert_eq!(
+            h.sync(peers(&["host-1"])).len(),
+            1,
+            "a change in our standing re-offers the batch"
+        );
+    }
+
+    #[test]
+    fn re_reading_an_unchanged_membership_does_not_re_offer() {
+        // The guard against a retry storm: `refresh_membership` runs every
+        // tick, and resetting the slate each time would resend the whole store
+        // every 12 seconds forever.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("membership.json");
+        write_membership(&path, MemberState::Member);
+
+        let mut h = HiveSync::with_engine(path.clone(), one_unit_store());
+        h.refresh_membership();
+        assert_eq!(h.sync(peers(&["host-1"])).len(), 1);
+
+        for _ in 0..5 {
+            h.refresh_membership();
+            assert!(
+                h.sync(peers(&["host-1"])).is_empty(),
+                "an unchanged membership must not re-offer"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refusal_alone_does_not_re_offer() {
+        // A peer paired for delegation only, no membership file, against a host
+        // with a named hive: the host refuses it every time and nothing on our
+        // side ever changes. Re-offering on the refusal would put the whole
+        // store back on the wire every tick, on both machines, forever.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("membership.json");
+        let mut h = HiveSync::with_engine(path, one_unit_store());
+
+        assert_eq!(h.sync(peers(&["host-1"])).len(), 1, "ungated, so it sends");
+
+        let refusal = super::super::hivejoin::build_knowledge_rejected(
+            "host-1",
+            "you are not a member of this hive",
+            1,
+        );
+        for _ in 0..5 {
+            h.handle_inbound(&PeerId("host-1".into()), &refusal, "local", &[]);
+            h.refresh_membership();
+            assert!(
+                h.sync(peers(&["host-1"])).is_empty(),
+                "a refusal is not a reason to try again"
+            );
+        }
     }
 }

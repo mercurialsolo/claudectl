@@ -18,8 +18,10 @@ All notable changes to claudectl are documented here.
   since there is no acknowledgement to wait for. A #434 membership refusal
   therefore left it believing in a delivery that never happened — persisted to
   disk, so even a restart kept the false belief, and the peer was never offered
-  those units again. `GossipEngine::forget_peer` resets that on a
-  `KnowledgeRejected`.
+  those units again. `GossipEngine::forget_peer` now resets that when our own
+  standing in the hive changes, which is the event that means "try again"; the
+  refusal itself is not, since nothing changed on our side and a peer the host
+  will always refuse would otherwise re-offer its whole store every tick.
 - **A read-only member no longer pushes its own knowledge upstream (#455).**
   #435 was enforced only at the receiving end; the reader's own side now
   declines to send, and a peer whose join request is still pending does not
