@@ -6,7 +6,7 @@ Share learnings, delegate tasks, and collaborate across machines — all peer-to
 
 The relay connects two or more claudectl instances over TCP. Once connected, they can:
 
-- **Share brain knowledge** — patterns your brain learns ("always approve `cargo test`") propagate to hive members ([with a caveat](#what-propagation-actually-does-today))
+- **Share brain knowledge** — patterns your brain learns ("always approve `cargo test`") propagate to [hive members](#what-propagation-actually-does-today), in both directions
 - **Delegate tasks** — offload work to a remote machine running Claude Code
 - **Synchronize insights** — friction patterns, error loops, and accuracy data merge across the network
 
@@ -589,24 +589,34 @@ The hive mind is the layer that makes connected brains smarter.
 
 ### What propagation actually does today
 
-Read this before relying on it. Knowledge moves in exactly one situation: a
-machine running `relay serve` distills something new, and sends it to the peers
-connected to it at that moment.
+Both ends of a connection offer each other whatever the other has not seen,
+every 12 seconds, plus immediately when the serving side distills something
+new. It does not matter which machine dialled: `relay serve` and `relay join`
+run the same gossip code.
 
-Three consequences, all of them current behaviour rather than design intent:
+The offer is incremental — each side records what it has already sent a given
+peer — so a tick with nothing new costs nothing, and one plain interval covers
+every case that would otherwise need its own trigger: connecting, reconnecting,
+being approved after a spell in the pending queue, and a unit distilled while
+the link was down.
 
-- **A peer that dials out does not exchange knowledge at all.** The loop behind
-  `relay join` and `relay connect` handles heartbeats and nothing else — it
-  neither sends its units nor merges the ones it receives. Only a `relay serve`
-  listener does.
-- **There is no catch-up.** Nothing syncs on connect, so a peer that joins a
-  minute after a distillation never receives that unit.
-- **`relay serve` never dials out.** It redials a peer it has *lost*, but it does
-  not connect to known peers at startup.
+Membership gates it at both ends. The host sends only to peers on its roster
+and merges only from contributors; a peer that joined as a
+[reader](#joining-as-a-reader) does not push its own units upstream. A refusal
+is sent back on the wire rather than silently dropped, and the refused batch is
+re-offered once the gate opens, so approving a queued request does not lose the
+knowledge that was turned away before it.
 
-So for knowledge to move from A to B today, A must be serving, B must be
-serving, one must have dialled the other, and A must distill while the connection
-is up. [#455](https://github.com/mercurialsolo/claudectl/issues/455) is the fix.
+Two limits worth knowing:
+
+- **`relay serve` does not dial out.** It redials a peer it has *lost*, but it
+  does not connect to known peers at startup. Somebody has to dial.
+- **A second connection from the same machine displaces the first.**
+  `claudectl hive join` opens its own short-lived connection, so running it
+  while `relay join` holds a durable one from the same machine leaves the host
+  sending into the closed socket until the durable connection is
+  re-established. Run `hive join` first, or restart `relay join` afterwards.
+  [#459](https://github.com/mercurialsolo/claudectl/issues/459) tracks it.
 
 ### How it works once it does fire
 
@@ -828,7 +838,7 @@ address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`.
 
 - **Relay**: TCP transport with HMAC-SHA256 pre-shared key authentication, NDJSON wire protocol, heartbeats with exponential backoff reconnect
 - **Delegation**: Remote task execution with periodic status updates, handoffs, and interrupt support
-- **Hive Mind**: Gossip-based knowledge sharing with conflict resolution (local always wins), trust-weighted brain injection, epidemic propagation with TTL — though see [what propagation actually does today](#what-propagation-actually-does-today)
+- **Hive Mind**: Gossip-based knowledge sharing with conflict resolution (local always wins), trust-weighted brain injection, epidemic propagation with TTL. See [what propagation actually does today](#what-propagation-actually-does-today) for the sync interval and the two limits that remain
 
 ## Security
 

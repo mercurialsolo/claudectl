@@ -645,16 +645,6 @@ fn cmd_serve(
                 let _ = reg.send_to(target.as_str(), &sync_msg);
             }
 
-            // #455: the dialling side's only sync trigger. A distillation here
-            // reaches the host on the next tick rather than immediately, which
-            // is the cost of the broadcast channel being process-global.
-            #[cfg(feature = "hive")]
-            for (target, sync_msg) in
-                hive.sync_if_due(std::time::Instant::now(), reg.connected_peers())
-            {
-                let _ = reg.send_to(target.as_str(), &sync_msg);
-            }
-
             let events = reg.tick(identity.as_str(), Some(local_feed.sessions()));
             for event in events {
                 match event {
@@ -977,6 +967,16 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                     }
                 }
             }
+            // #455: the dialling side's only sync trigger. A distillation here
+            // reaches the host on the next tick rather than immediately, which
+            // is the cost of the broadcast channel being process-global.
+            #[cfg(feature = "hive")]
+            for (target, sync_msg) in
+                hive.sync_if_due(std::time::Instant::now(), reg.connected_peers())
+            {
+                let _ = reg.send_to(target.as_str(), &sync_msg);
+            }
+
             let events = reg.tick(identity.as_str(), Some(local_feed.sessions()));
             for event in events {
                 match event {

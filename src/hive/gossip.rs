@@ -322,6 +322,25 @@ impl GossipEngine {
     pub fn all_sync_states(&self) -> &HashMap<String, PeerSyncState> {
         &self.sync_states
     }
+
+    /// Forget what we believe a peer has, so the next sync re-offers all of it.
+    ///
+    /// `units_sent` is recorded the moment a sync message is *built*, because
+    /// there is no acknowledgement to wait for. That is fine until the peer
+    /// refuses the batch — a membership gate turning it away (#434, #435) —
+    /// whereupon we have recorded a delivery that never happened, and
+    /// `load_sync_states` persists that belief across restarts. The peer would
+    /// then never be offered those units again, not even after being approved.
+    ///
+    /// So a `KnowledgeRejected` resets the slate for that peer and the units
+    /// are re-offered on the next tick.
+    pub fn forget_peer(&mut self, peer_id: &str) -> bool {
+        let dropped = self.sync_states.remove(peer_id).is_some();
+        if dropped {
+            let _ = save_sync_states(&self.sync_states);
+        }
+        dropped
+    }
 }
 
 /// True if this unit is allowed to leave the local node, given the user's
@@ -549,6 +568,55 @@ mod tests {
 
     fn empty_store() -> HiveStore {
         HiveStore::load_from(std::path::Path::new("/nonexistent"))
+    }
+
+    #[test]
+    fn a_refused_batch_is_re_offered_after_forget_peer() {
+        // `units_sent` is recorded when the batch is *built*, so a peer that
+        // refuses it (a #434 membership gate turning it away) leaves us
+        // believing it has units it never saw. Before `forget_peer` that
+        // belief was permanent — and persisted — so the peer was never offered
+        // them again, not even once it was admitted.
+        let mut store = empty_store();
+        store.insert(make_unit("ku_1", "Bash", "local"));
+
+        let mut engine = GossipEngine::new_empty("local", 5, 30);
+        let peers = vec![PeerId("peer-a".into())];
+
+        assert_eq!(engine.generate_sync_messages(&store, &peers).len(), 1);
+        assert_eq!(
+            engine.generate_sync_messages(&store, &peers).len(),
+            0,
+            "the engine believes peer-a has it"
+        );
+
+        assert!(engine.forget_peer("peer-a"), "state existed to forget");
+        assert!(engine.get_sync_state("peer-a").is_none());
+
+        let msgs = engine.generate_sync_messages(&store, &peers);
+        assert_eq!(msgs.len(), 1, "the refused unit is offered again");
+        assert_eq!(parse_units_from_payload(&msgs[0].1)[0].id, "ku_1");
+    }
+
+    #[test]
+    fn forgetting_a_peer_we_never_synced_with_is_not_an_error() {
+        let mut engine = GossipEngine::new_empty("local", 5, 30);
+        assert!(!engine.forget_peer("never-seen"));
+    }
+
+    #[test]
+    fn forgetting_one_peer_leaves_the_others_alone() {
+        let mut store = empty_store();
+        store.insert(make_unit("ku_1", "Bash", "local"));
+        let mut engine = GossipEngine::new_empty("local", 5, 30);
+        let both = vec![PeerId("peer-a".into()), PeerId("peer-b".into())];
+        assert_eq!(engine.generate_sync_messages(&store, &both).len(), 2);
+
+        engine.forget_peer("peer-a");
+
+        let msgs = engine.generate_sync_messages(&store, &both);
+        assert_eq!(msgs.len(), 1, "only the forgotten peer is re-offered");
+        assert_eq!(msgs[0].0.as_str(), "peer-a");
     }
 
     #[test]

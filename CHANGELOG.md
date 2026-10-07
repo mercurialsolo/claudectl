@@ -4,6 +4,36 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hive knowledge now actually propagates (#455).** Both ends of a connection
+  sync every 12 seconds, incrementally, in addition to the existing
+  on-distillation push. Previously a peer that dialled out had no gossip code
+  at all — `relay join` built a connection that could not carry knowledge in
+  either direction — and the serving side synced only at the instant it
+  distilled something, with no catch-up, so a peer that connected a minute
+  later never saw that unit.
+- **A refused knowledge batch is re-offered once the gate opens (#455).** The
+  gossip engine records what it has sent a peer when it *builds* the batch,
+  since there is no acknowledgement to wait for. A #434 membership refusal
+  therefore left it believing in a delivery that never happened — persisted to
+  disk, so even a restart kept the false belief, and the peer was never offered
+  those units again. `GossipEngine::forget_peer` resets that on a
+  `KnowledgeRejected`.
+- **A read-only member no longer pushes its own knowledge upstream (#455).**
+  #435 was enforced only at the receiving end; the reader's own side now
+  declines to send, and a peer whose join request is still pending does not
+  send either.
+- Outbound `KnowledgeSync` is logged. Every inbound hive message was logged and
+  no send ever was, which is part of why the above went unnoticed.
+
+### Changed
+
+- The gossip half of both relay loops lives in one module, `relay::hivesync`,
+  rather than inline in `cmd_serve`. The duplication between the serve and
+  connect loops is what let them diverge far enough for the connect loop to end
+  up with no gossip arms at all.
+
 ## [0.66.0] - 2026-10-07
 
 ### Fixed — a relay code of only letters could not be redeemed

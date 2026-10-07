@@ -185,7 +185,15 @@ impl HiveSync {
         let (Some(engine), Some(store)) = (self.engine.as_mut(), self.store.as_ref()) else {
             return Vec::new();
         };
-        engine.generate_sync_messages(store, &targets)
+        let msgs = engine.generate_sync_messages(store, &targets);
+        for (target, _) in &msgs {
+            println!(
+                "[{}] KnowledgeSync to {}",
+                crate::logger::timestamp_now(),
+                target
+            );
+        }
+        msgs
     }
 
     /// `sync`, but only once per [`SYNC_INTERVAL`].
@@ -230,6 +238,21 @@ impl HiveSync {
                     from_peer,
                     super::hivejoin::rejection_reason(&msg.payload)
                 );
+                // The engine recorded those units as delivered when it built
+                // the batch — there is no ack to wait for — so a refusal has
+                // to undo that, or the peer is never offered them again. This
+                // is what made a pre-approval sync permanently poison the pair:
+                // the sync state is persisted, so even a restart kept the false
+                // belief.
+                if let Some(engine) = self.engine.as_mut() {
+                    if engine.forget_peer(from_peer.as_str()) {
+                        eprintln!(
+                            "[{}] will re-offer knowledge to {} once it is admitted",
+                            crate::logger::timestamp_now(),
+                            from_peer
+                        );
+                    }
+                }
                 Some(Vec::new())
             }
             _ => None,
