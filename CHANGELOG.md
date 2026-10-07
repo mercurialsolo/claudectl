@@ -4,6 +4,18 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed — a relay code of only letters could not be redeemed
+
+- `relay join` and `hive join` picked the invite format with a guess — "every
+  dash-separated segment is short and alphabetic" meant a word phrase. Base32
+  codes contain only `A`–`Z` and `2`–`7`, so a code that happened to draw no
+  digits satisfied that too, was handed to the phrase decoder, and failed with
+  `invalid word phrase` — blaming the wrong format. About **1 in 78** codes, and
+  about 1 in 18 before the payload widened.
+- Both formats are fixed-length and the lengths differ (seven groups versus
+  thirteen words), so the choice is now exact rather than guessed, and the
+  predicate lives next to the codec that defines the lengths.
+
 ### Added — read-only hive membership (#435)
 
 - **`hive.read:<hive-name>` grants are issuable, and admit a reader**: a peer that

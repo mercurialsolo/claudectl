@@ -1751,11 +1751,7 @@ pub fn cmd_hive_join(input: &[String], grant: Option<&str>) -> io::Result<()> {
             let (id, addr, psk) = super::invite::parse_invite_link(&input)
                 .map_err(|e| io::Error::other(format!("invalid invite link: {e}")))?;
             (addr, psk, Some(id), None, None)
-        } else if input.contains('-')
-            && input
-                .split('-')
-                .all(|w| w.len() <= 5 && w.chars().all(|c| c.is_ascii_alphabetic()))
-        {
+        } else if super::invite::looks_like_word_phrase(&input) {
             let (addr, psk) = super::invite::decode_words(&input)
                 .map_err(|e| io::Error::other(format!("invalid word phrase: {e}")))?;
             (addr, psk, None, None, None)
@@ -1954,11 +1950,7 @@ fn cmd_join(input: &[String]) -> io::Result<()> {
         let (id, addr, psk) = super::invite::parse_invite_link(&input)
             .map_err(|e| io::Error::other(format!("invalid invite link: {e}")))?;
         (addr, psk, Some(id))
-    } else if input.contains('-')
-        && input
-            .split('-')
-            .all(|w| w.len() <= 5 && w.chars().all(|c| c.is_ascii_alphabetic()))
-    {
+    } else if super::invite::looks_like_word_phrase(&input) {
         // Word phrase (all segments are short alphabetic words)
         let (addr, psk) = super::invite::decode_words(&input)
             .map_err(|e| io::Error::other(format!("invalid word phrase: {e}")))?;
