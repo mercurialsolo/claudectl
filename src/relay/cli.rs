@@ -357,6 +357,87 @@ fn cmd_serve(
         r.store(false, std::sync::atomic::Ordering::Relaxed);
     });
 
+    // LAN discovery. `relay discover` has always *scanned* for announcements,
+    // but nothing ever sent one — `start_announcer` had no callers anywhere, and
+    // `#![allow(dead_code)]` on `relay/mod.rs` kept that quiet. So `discover`
+    // returned "no instances found" even with a relay running next to it, while
+    // telling the operator to start the thing that was already running (#433).
+    //
+    // Note the flag polarity: `start_announcer` takes a *shutdown* flag (it
+    // loops while that is `false`), whereas this function's `running` means the
+    // opposite. Passing `running` directly stops the thread on its first check,
+    // which looks exactly like a working announcer that sends nothing — so the
+    // announcer gets its own flag, set when the serve loop exits.
+    let lan_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // The hive block this machine advertises (#433). Read once at startup, like
+    // the index in `query serve`: a rename takes a relay restart, which is said
+    // plainly in the banner rather than left to be discovered.
+    //
+    // A malformed identity file costs the hive block, not the relay — the
+    // machine is still worth discovering, so the error is printed and
+    // advertisement continues without a hive.
+    let hive_peers = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let hive_units = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    #[cfg(feature = "hive")]
+    let hive_advert = match crate::hive::identity::load() {
+        Ok(Some(id)) => {
+            // `effective_join_policy`, never the stored field: #432 records
+            // consent for `open` in the data precisely so this cannot put an
+            // unconfirmed `open` on the wire.
+            let effective = id.effective_join_policy();
+            println!(
+                "Hive: \"{}\" ({}) advertised as join_policy={}",
+                id.name,
+                id.hive_id,
+                effective.as_str()
+            );
+            if !id.open_is_acknowledged() {
+                println!(
+                    "  (stored policy is `open` but was never confirmed — advertising `{}`)",
+                    effective.as_str()
+                );
+            }
+            Some(super::lan::HiveAdvert {
+                id: id.hive_id,
+                name: id.name,
+                join_policy: effective.as_str().to_string(),
+                peers: Arc::clone(&hive_peers),
+                units: Arc::clone(&hive_units),
+            })
+        }
+        Ok(None) => {
+            println!(
+                "Hive: unnamed, so nothing is advertised (claudectl hive identity set --name X)"
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!("warning: hive identity unreadable, advertising no hive: {e}");
+            None
+        }
+    };
+    #[cfg(not(feature = "hive"))]
+    let hive_advert: Option<super::lan::HiveAdvert> = None;
+
+    let lan_handle = if relay_cfg.lan_announce {
+        println!(
+            "LAN discovery: announcing every {}s on UDP {}",
+            super::lan::ANNOUNCE_INTERVAL_SECS,
+            super::lan::LAN_PORT
+        );
+        Some(super::lan::start_announcer(
+            identity.clone(),
+            port,
+            super::lan::ANNOUNCE_INTERVAL_SECS,
+            Arc::clone(&lan_shutdown),
+            hive_advert,
+        ))
+    } else {
+        println!("LAN discovery: off ([relay] lan_announce = false)");
+        None
+    };
+
     // This machine's sessions, advertised to peers on every heartbeat.
     let mut local_feed = super::advertise::LocalSessionFeed::new();
 
@@ -562,10 +643,30 @@ fn cmd_serve(
             if collected {
                 super::advertise::publish_snapshot(identity.as_str(), &reg);
             }
+
+            // Counts for the LAN hive advertisement (#433). Stored here, where
+            // the registry lock is already held, and read by the announcer
+            // thread through an atomic — so nothing it does can block this loop.
+            hive_peers.store(
+                reg.connected_count() as u32,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+
+        #[cfg(feature = "hive")]
+        if let Some(store) = hive_store.as_ref() {
+            hive_units.store(store.len() as u32, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
     listener.stop();
+    // Tell the announcer to stop, then wait for it so it is not killed
+    // mid-`send_to`. Its sleep is the announce interval, so this can take that
+    // long — which is why it happens after `listener.stop()` rather than before.
+    lan_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(h) = lan_handle {
+        let _ = h.join();
+    }
     println!("\nRelay stopped.");
     Ok(())
 }
@@ -1397,10 +1498,13 @@ fn cmd_join(input: &[String]) -> io::Result<()> {
 fn cmd_discover(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
 
-    println!("Scanning LAN for claudectl instances (3 seconds)...");
+    println!(
+        "Scanning LAN for claudectl instances ({} seconds)...",
+        super::lan::SCAN_DURATION.as_secs()
+    );
     println!();
 
-    let peers = super::lan::scan_lan(std::time::Duration::from_secs(3), identity.as_str());
+    let peers = super::lan::scan_lan(super::lan::SCAN_DURATION, identity.as_str());
 
     if json_mode {
         let json_peers: Vec<serde_json::Value> = peers
@@ -1410,6 +1514,15 @@ fn cmd_discover(json_mode: bool) -> io::Result<()> {
                     "identity": p.identity,
                     "addr": p.relay_addr().to_string(),
                     "version": p.version,
+                    // Null rather than omitted, so a consumer can tell "no hive"
+                    // from "field this build does not emit".
+                    "hive": p.hive.as_ref().map(|h| serde_json::json!({
+                        "id": h.id,
+                        "name": h.name,
+                        "join_policy": h.join_policy,
+                        "peers": h.peers,
+                        "units": h.units,
+                    })),
                 })
             })
             .collect();
@@ -1425,18 +1538,29 @@ fn cmd_discover(json_mode: bool) -> io::Result<()> {
     } else {
         println!("Found {} instance(s):", peers.len());
         println!();
-        println!("  {:<20} {:<24} VERSION", "IDENTITY", "ADDRESS");
-        println!("  {}", "─".repeat(56));
+        println!(
+            "  {:<20} {:<22} {:<16} VERSION",
+            "IDENTITY", "ADDRESS", "HIVE"
+        );
+        println!("  {}", "─".repeat(70));
         for peer in &peers {
             let paired = if load_peer_psk(&peer.identity).is_some() {
                 " (paired)"
             } else {
                 ""
             };
+            // An em-dash for a machine whose hive is unnamed, which is the
+            // default and not a problem.
+            let hive = peer
+                .hive
+                .as_ref()
+                .map(|h| claudectl_core::helpers::truncate_cell(&h.name, 16))
+                .unwrap_or_else(|| "—".to_string());
             println!(
-                "  {:<20} {:<24} {}{}",
+                "  {:<20} {:<22} {:<16} {}{}",
                 peer.identity,
                 peer.relay_addr().to_string(),
+                hive,
                 peer.version,
                 paired,
             );

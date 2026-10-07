@@ -109,6 +109,14 @@ pub struct RelayConfig {
     /// bearer token, so off-machine access belongs behind a tunnel (#426).
     pub http_addr: String,
     pub auth_token: Option<String>,
+    /// Broadcast this machine's presence on UDP 9848 so `relay discover`
+    /// can find it.
+    ///
+    /// Default on, because the documentation has always said `relay serve`
+    /// announces itself — it simply never did (#433). An off switch exists
+    /// all the same: turning on a broadcast that never happened, with no way
+    /// to decline, is not a change to make silently.
+    pub lan_announce: bool,
 }
 
 impl Default for RelayConfig {
@@ -124,6 +132,7 @@ impl Default for RelayConfig {
             auto_connect: Vec::new(),
             http_port: None,
             http_addr: "127.0.0.1".into(),
+            lan_announce: true,
             auth_token: None,
         }
     }
@@ -290,6 +299,7 @@ struct RawRelayConfig {
     listen_addr: Option<String>,
     max_peers: Option<u8>,
     heartbeat_interval_secs: Option<u64>,
+    lan_announce: Option<bool>,
     reconnect_max_secs: Option<u64>,
     auto_connect: Option<Vec<String>>,
     http_port: Option<u16>,
@@ -471,6 +481,9 @@ impl Config {
             }
             if let Some(v) = raw_relay.max_peers {
                 relay.max_peers = v;
+            }
+            if let Some(v) = raw_relay.lan_announce {
+                relay.lan_announce = v;
             }
             if let Some(v) = raw_relay.heartbeat_interval_secs {
                 relay.heartbeat_interval_secs = v;
@@ -1199,6 +1212,9 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     }
                     "heartbeat_interval" | "heartbeat_interval_secs" => {
                         relay.heartbeat_interval_secs = value.parse().ok();
+                    }
+                    "lan_announce" => {
+                        relay.lan_announce = parse_bool(value);
                     }
                     "reconnect_max" | "reconnect_max_secs" => {
                         relay.reconnect_max_secs = value.parse().ok();

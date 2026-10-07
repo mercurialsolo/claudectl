@@ -266,7 +266,16 @@ Found 2 instance(s):
   ci-runner-9d1e       192.168.1.101:9847       v0.40.0
 ```
 
-This sends a UDP broadcast and listens for 3 seconds. Peers running `claudectl relay serve` announce themselves automatically.
+Discovery is **passive**: `relay serve` broadcasts a small announcement on UDP 9848 every 5 seconds, and `relay discover` listens for 6 seconds — one second longer than the interval, so every announcing peer is heard at least once. `discover` sends nothing itself.
+
+Turn the broadcast off with:
+
+```toml
+[relay]
+lan_announce = false
+```
+
+> Before v0.66.0 nothing ever sent an announcement, so `relay discover` always reported "no instances found". If you tried it on an older build and concluded LAN discovery was broken, it was.
 
 ## Hive Identity
 
@@ -330,7 +339,35 @@ Two details worth knowing:
 
 Moving away from `open` drops the acknowledgement, so coming back to it asks again.
 
-> Advertising a named hive on the LAN, and joining one by link, are later phases — this records the identity that work reads.
+### Finding hives on the LAN
+
+Once a hive has a name, `relay serve` advertises it alongside the machine's own announcement, and `hive discover` lists hives rather than machines:
+
+```bash
+claudectl hive discover
+```
+
+```
+Found 1 hive(s):
+
+  HIVE                 POLICY     PEERS   UNITS   MACHINES
+  ──────────────────────────────────────────────────────────────────
+  barrys-hive          invite     3       412     1
+                       hv_3a9f21
+                         laptop-a3f2@192.168.1.50:9847
+```
+
+Rows are grouped by hive id, so several machines in one hive collect under it. `relay discover` also grew a HIVE column, showing `—` for a machine whose hive is unnamed.
+
+Three things to know:
+
+- **An unnamed hive advertises nothing.** No `hive` key is added to the datagram at all, so an unnamed machine sends exactly what it always sent and does not appear in `hive discover` — only in `relay discover`.
+- **The policy advertised is the effective one.** A hand-edited `open` that was never confirmed goes on the wire as `invite`. The consent check lives in the stored record, not in the CLI, precisely so this path cannot leak it.
+- **Renaming takes a relay restart.** The identity is read once at startup, like the index in `query serve`. If you run the launchd agent, `relay install-agent` again (or `launchctl kickstart -k`) picks up the new name.
+
+Peer and unit counts are advisory — they are snapshots from whenever the announcer last ticked, at most one interval old.
+
+> Joining a hive by link is a later phase; this makes one findable.
 
 ## Hive Mind: Knowledge Sharing
 
@@ -514,6 +551,7 @@ address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`.
 | `relay invite [--qr] [--words]` | Generate invite code/link/phrase |
 | `relay join <code>` | Join using any invite format |
 | `relay discover` | Scan LAN for nearby instances |
+| `hive discover` | Scan LAN for named hives, grouped by hive |
 | `relay pair` | Generate a raw PSK code |
 | `relay accept <code> <peer>` | Accept a raw PSK from a peer |
 | `relay connect <host:port>` | Connect to a remote relay |

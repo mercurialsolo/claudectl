@@ -13,7 +13,7 @@
 | 3. Read-only query surface (MCP + HTTP), deterministic | **Shipped** (#429) | `src/query/{mod,core,rank,http,mcp,cli}.rs` |
 | 4. Jev query classification + routing | **Shipped** (#430), off unless `TYPESAFE_API_KEY` is set | `src/query/{jev,thresholds,classify,escalate,spend}.rs` |
 | 5. Query guardrails (rate limit, budget, audit) | **Shipped** (#431) | `src/rate_limit.rs`, `src/access/grant.rs`, `src/query/core.rs` |
-| 5. Named hives + advertise/discover | **Identity shipped** (#432); advertise/discover/join not started | `src/hive/identity.rs`, `src/hive/cli/identity.rs`; still to come: `src/relay/lan.rs`, `src/relay/invite.rs` |
+| 5. Named hives + advertise/discover | **Identity** (#432) and **advertise/discover** (#433) shipped; invite links and `hive.read` grants not started | `src/hive/identity.rs`, `src/hive/cli/identity.rs`, `src/relay/lan.rs`; still to come: `src/relay/invite.rs` |
 | 6. `claudectl.app` (macOS menu-bar shell) | **Not started** | separate artifact, separate toolchain |
 
 ---
