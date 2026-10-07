@@ -214,6 +214,70 @@ Found 2 instance(s):
 
 This sends a UDP broadcast and listens for 3 seconds. Peers running `claudectl relay serve` announce themselves automatically.
 
+## Hive Identity
+
+By default a hive has **no name**. It is whatever your relay peers happen to be — the transitive closure of who you paired with. Nothing is advertised, nothing is discoverable, and that is the state every install starts in.
+
+Naming one is what makes it possible to advertise, find and join a hive *as such*:
+
+```bash
+claudectl hive identity                      # show it, or "unnamed"
+claudectl hive identity set --name barrys-hive \
+  --description "Rust CLI + Claude Code practices"
+claudectl hive identity clear --yes          # back to unnamed
+```
+
+Stored at `~/.claudectl/hive/identity.json`:
+
+```json
+{
+  "hive_id": "hv_3a9f21",
+  "name": "barrys-hive",
+  "description": "Rust CLI + Claude Code practices",
+  "join_policy": "invite",
+  "created_ms": 1791210482180
+}
+```
+
+Renaming keeps the `hive_id` and the creation time — a rename is not a new hive, and peers who know it by id keep recognising it. The name must be usable as a capability scope qualifier (`[A-Za-z0-9._-]`), because a later phase grants `hive.read:<name>`.
+
+### Join policy
+
+| Policy | Meaning |
+|---|---|
+| `invite` | A link or code is required. The default. |
+| `ask` | You approve each join request. |
+| `open` | Anyone who can see your LAN broadcast may join, without approval. |
+
+`open` is allowed, but it asks first:
+
+```bash
+claudectl hive identity set --join-policy open
+```
+
+```
+WARNING: join_policy = open lets ANY machine that can see your LAN broadcast
+join this hive without approval. Joining a hive means receiving your distilled
+preferences and insights — the patterns the brain learned from how you work. On
+a shared or untrusted network (an office, a cafe, a conference) that is everyone
+on it.
+
+  `ask` gives you the same discoverability and still lets you approve each
+  request. Prefer it unless you specifically want hands-off joining on a network
+  you control.
+
+Open this hive to anyone on your LAN? [y/N]
+```
+
+Two details worth knowing:
+
+- **Consent is recorded, not just prompted.** Confirming writes `open_acknowledged_ms` into the record. `identity.json` is an ordinary file you can edit, so a prompt alone would be theatre — hand-editing `"join_policy": "open"` leaves it **not in force**, and claudectl treats it as `invite` until you run the command and confirm. `hive identity` says so plainly when that happens.
+- **No terminal means `--yes` is required**, not assumed. In a script or CI, `--join-policy open` fails without it. Defaulting to yes in a pipe is how a permissive setting gets made by accident.
+
+Moving away from `open` drops the acknowledgement, so coming back to it asks again.
+
+> Advertising a named hive on the LAN, and joining one by link, are later phases — this records the identity that work reads.
+
 ## Hive Mind: Knowledge Sharing
 
 The hive mind is the layer that makes connected brains smarter. It works automatically once peers are connected.

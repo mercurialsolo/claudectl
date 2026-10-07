@@ -4,6 +4,48 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added — hive identity: name, description, join policy (#432)
+- **A hive can be named.** `claudectl hive identity` shows it, `identity set
+  --name X [--description Y] [--join-policy P]` sets it, `identity clear --yes`
+  removes it. Stored at `~/.claudectl/hive/identity.json` (0600, atomic
+  temp+rename), and it is the prerequisite for advertising, discovering or
+  joining a hive *as such* — you cannot advertise what has no name.
+- **Absent is the default and changes nothing.** `identity::load()` returns
+  `Option`, so every future consumer writes `if let Some(id) = load()?` and the
+  unnamed path is the code that already shipped. A user who never names their
+  hive sees no behavioural difference. A *malformed* file is an error rather than
+  a silent "unnamed", because reverting to unnamed would stop advertising without
+  saying so.
+- **Renaming is not re-creating.** `hive_id` and `created_ms` survive a rename,
+  so peers who know a hive by its id keep recognising it.
+- **Names are validated to the capability-scope grammar** (`[A-Za-z0-9._-]`)
+  now, not when #435 needs it — otherwise a hive called `barry's hive` could be
+  named and then never granted `hive.read:` against.
+
+### Decided — RFC Q5: `join_policy: open` is allowed, but warranted
+- `open` keeps its plain meaning rather than being quietly redefined as `ask`: a
+  setting that does not do what it says is worse than one that asks. Choosing it
+  prints what it exposes, points at `ask` as the alternative that keeps
+  discoverability, and requires confirmation — a `y/N` prompt interactively, and
+  `--yes` where there is no terminal. In a pipe the flag is **required**, never
+  assumed.
+- **The consent is recorded, which is what makes it more than a prompt.**
+  `identity.json` is an ordinary editable file, so a hand-written `"open"` has
+  had no confirmation: `effective_join_policy()` returns `invite` for an
+  unacknowledged `open`, and `hive identity` says plainly that the stored policy
+  is not in force. Fail closed — a policy nobody consented to is not the
+  permissive one. Leaving `open` drops the acknowledgement, so returning to it
+  asks again.
+
+### Changed
+- `fmt_ms_at` (relative timestamps like `5m ago`) moved into
+  `claudectl-core::helpers`. Two feature-gated callers need it now — `access`
+  behind `relay`, `hive` not — and the sync-only
+  `--no-default-features --features hive` build has a hive but no grants. The
+  hive name grammar is spelled out in `hive::identity` for the same reason, with
+  a `relay`-gated test asserting it agrees with `access::scope` where both exist.
+
+
 ### Added — acting on an escalation: verdict, caller poll, expiry (#446)
 - **The queue is drainable.** #430 queued a middle-band question and said
   plainly that acting on one was out of scope. `claudectl access escalations
