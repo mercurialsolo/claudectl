@@ -338,6 +338,39 @@ fn verify_reader_grant(token: &str, hive_name: &str) -> Result<String, ()> {
     Ok(grant.grant_id)
 }
 
+/// The refusal a host owes a peer whose knowledge it will not take, or `None`
+/// when the knowledge is welcome.
+///
+/// This is the whole decision the serve loop makes about inbound knowledge, in
+/// one place, so it can be tested as the thing that actually runs rather than as
+/// a reconstruction of it. `roster` is `None` when this machine runs no named
+/// hive, in which case nothing is refused — the pre-#434 behaviour.
+pub fn knowledge_refusal(
+    roster: Option<&Roster>,
+    peer_id: &str,
+    local_identity: &str,
+    payload: &serde_json::Value,
+) -> Option<RelayMessage> {
+    let roster = roster?;
+    if roster.may_contribute(peer_id) {
+        return None;
+    }
+    // A reader is told it is a reader. Someone who is not a member at all is
+    // told that instead, because the two are different problems to fix.
+    let reason = match roster.role(peer_id) {
+        Some(_) => {
+            "this hive admitted you as a reader — readers receive knowledge \
+             but do not contribute it"
+        }
+        None => "you are not a member of this hive",
+    };
+    Some(build_knowledge_rejected(
+        local_identity,
+        reason,
+        count_units(payload),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -653,5 +686,61 @@ mod tests {
             "no reason given",
             "silence on the wire must not become silence on the terminal"
         );
+    }
+
+    #[test]
+    fn the_serve_loop_refuses_a_readers_contribution_and_says_why() {
+        // §7.5's acceptance: rejected at the protocol level, not merely ignored.
+        // This calls the same function the KnowledgeSync arm calls.
+        let (_t, r) = roster();
+        r.admit_as("reader-1", "hv_1", Admission::Grant, Role::Reader, None)
+            .unwrap();
+
+        let sync = serde_json::json!({"units": [{"id": "ku_1"}, {"id": "ku_2"}]});
+        let refusal = knowledge_refusal(Some(&r), "reader-1", "host-1", &sync)
+            .expect("a reader's contribution must be refused, not dropped");
+
+        assert_eq!(refusal.msg_type, MessageType::KnowledgeRejected);
+        assert_eq!(refusal.from_peer, "host-1");
+        let body: KnowledgeRejectedPayload = serde_json::from_value(refusal.payload).unwrap();
+        assert!(body.reason.contains("reader"), "{}", body.reason);
+        assert_eq!(
+            body.units, 2,
+            "the sender should learn how much was dropped"
+        );
+    }
+
+    #[test]
+    fn the_serve_loop_takes_a_contributors_knowledge() {
+        let (_t, r) = roster();
+        r.admit("writer-1", "hv_1", Admission::Policy).unwrap();
+        assert!(
+            knowledge_refusal(Some(&r), "writer-1", "host-1", &serde_json::json!({})).is_none(),
+            "a contributor must not be refused"
+        );
+    }
+
+    #[test]
+    fn a_non_member_is_refused_with_a_different_reason_than_a_reader() {
+        // Different problems to fix, so different messages.
+        let (_t, r) = roster();
+        r.admit_as("reader-1", "hv_1", Admission::Grant, Role::Reader, None)
+            .unwrap();
+
+        let reader = knowledge_refusal(Some(&r), "reader-1", "h", &serde_json::json!({})).unwrap();
+        let stranger =
+            knowledge_refusal(Some(&r), "stranger", "h", &serde_json::json!({})).unwrap();
+
+        let a = rejection_reason(&reader.payload);
+        let b = rejection_reason(&stranger.payload);
+        assert!(a.contains("reader"), "{a}");
+        assert!(b.contains("not a member"), "{b}");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn an_unnamed_hive_refuses_nothing() {
+        // No regression for anyone who never named a hive.
+        assert!(knowledge_refusal(None, "anyone", "h", &serde_json::json!({})).is_none());
     }
 }

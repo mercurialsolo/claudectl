@@ -620,30 +620,21 @@ fn cmd_serve(
                         // much as refusing to send: an `ask` hive that gated
                         // only its own sends would still merge whatever an
                         // unapproved peer pushed.
-                        if !hive_may_contribute(hive_roster.as_ref(), from_peer.as_str()) {
+                        if let Some(rejection) = super::hivejoin::knowledge_refusal(
+                            hive_roster.as_ref(),
+                            from_peer.as_str(),
+                            identity.as_str(),
+                            &msg.payload,
+                        ) {
                             // Refused on the wire, not merely dropped (#435): a
                             // reader that believes it is contributing and is
-                            // silently ignored has no way to find out, and
-                            // silence is indistinguishable from a network fault.
-                            let reason = match hive_roster
-                                .as_ref()
-                                .and_then(|r| r.role(from_peer.as_str()))
-                            {
-                                Some(_) => {
-                                    "this hive admitted you as a reader — \
-                                            readers receive knowledge but do not contribute it"
-                                }
-                                None => "you are not a member of this hive",
-                            };
+                            // silently ignored cannot tell that from a network
+                            // fault.
                             println!(
-                                "[{}] KnowledgeSync from {} refused — {reason}",
+                                "[{}] KnowledgeSync from {} refused — {}",
                                 crate::logger::timestamp_now(),
-                                from_peer
-                            );
-                            let rejection = super::hivejoin::build_knowledge_rejected(
-                                identity.as_str(),
-                                reason,
-                                super::hivejoin::count_units(&msg.payload),
+                                from_peer,
+                                super::hivejoin::rejection_reason(&rejection.payload)
                             );
                             let _ = reg.send_to(from_peer.as_str(), &rejection);
                         } else if let (Some(gossip), Some(hive_store)) =
