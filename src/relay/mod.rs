@@ -8,6 +8,9 @@ pub mod delegation;
 /// The hive join handshake — needs the hive module, which `relay` does not imply.
 #[cfg(feature = "hive")]
 pub mod hivejoin;
+/// The gossip side of both relay loops. Same gating as `hivejoin`.
+#[cfg(feature = "hive")]
+pub mod hivesync;
 pub mod http;
 pub mod invite;
 pub mod lan;

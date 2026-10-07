@@ -323,32 +323,15 @@ fn cmd_serve(
     // Initialize worker for task delegation
     let mut worker = super::worker::RemoteWorker::new(identity.as_str());
 
-    // Initialize hive gossip engine (only when hive feature is enabled)
+    // The distillation signal. `set_broadcast_channel` installs a
+    // process-global sender, so only this loop may create one — the dialling
+    // loop gets its lower-latency equivalent from the periodic tick instead.
     #[cfg(feature = "hive")]
-    let (mut hive_store, mut gossip, broadcast_rx) = {
-        let hive_enabled = crate::hive::is_active(Some(&hive_cfg));
-        let store = hive_enabled.then(crate::hive::store::HiveStore::load);
-        let gossip_engine = hive_enabled.then(|| {
-            let mut engine = crate::hive::gossip::GossipEngine::new(
-                identity.as_str(),
-                hive_cfg.max_propagation,
-                hive_cfg.knowledge_ttl_days,
-            );
-            engine.set_sharing_filter(crate::hive::SharingFilter::from_config(&hive_cfg));
-            if let Some(mode) = crate::hive::exposure::ShareMode::parse(&hive_cfg.share_mode) {
-                engine.set_share_mode(mode);
-            }
-            engine
-        });
-        let rx = if hive_enabled {
-            let (tx, rx) = std::sync::mpsc::channel::<u32>();
-            crate::hive::set_broadcast_channel(tx);
-            Some(rx)
-        } else {
-            None
-        };
-        (store, gossip_engine, rx)
-    };
+    let broadcast_rx = crate::hive::is_active(Some(&hive_cfg)).then(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<u32>();
+        crate::hive::set_broadcast_channel(tx);
+        rx
+    });
 
     // Block on Ctrl+C
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -403,13 +386,12 @@ fn cmd_serve(
                 None
             }
         };
-    // The gate is on only while a hive is named. `None` means every paired peer
-    // is treated exactly as it was before #434, so nobody's existing setup goes
-    // quiet on upgrade.
+    // Store, engine and both membership gates. The gate is on only while a
+    // hive is named: unnamed means every paired peer is treated exactly as it
+    // was before #434, so nobody's existing setup goes quiet on upgrade.
     #[cfg(feature = "hive")]
-    let hive_roster = hive_identity
-        .as_ref()
-        .map(|_| crate::hive::membership::Roster::local());
+    let mut hive =
+        super::hivesync::HiveSync::new(&hive_cfg, identity.as_str(), hive_identity.is_some());
 
     #[cfg(feature = "hive")]
     let hive_advert = hive_identity.as_ref().map(|id| {
@@ -477,7 +459,21 @@ fn cmd_serve(
         // Process incoming messages and tick
         if let Ok(mut reg) = registry.lock() {
             let messages = reg.drain_messages();
+            #[cfg(feature = "hive")]
+            let connected_now = reg.connected_peers();
             for (from_peer, msg) in messages {
+                // #455: the gossip arms live in one module both loops call.
+                // Keeping a copy in each is what let the dialling loop quietly
+                // have none at all.
+                #[cfg(feature = "hive")]
+                if let Some(out) =
+                    hive.handle_inbound(&from_peer, &msg, identity.as_str(), &connected_now)
+                {
+                    for (target, out_msg) in out {
+                        let _ = reg.send_to(target.as_str(), &out_msg);
+                    }
+                    continue;
+                }
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(&from_peer, &msg.payload);
@@ -588,15 +584,6 @@ fn cmd_serve(
                         let _ = reg.send_to(from_peer.as_str(), &reply);
                     }
                     #[cfg(feature = "hive")]
-                    super::MessageType::KnowledgeRejected => {
-                        eprintln!(
-                            "[{}] {} refused our knowledge: {}",
-                            crate::logger::timestamp_now(),
-                            from_peer,
-                            super::hivejoin::rejection_reason(&msg.payload)
-                        );
-                    }
-                    #[cfg(feature = "hive")]
                     super::MessageType::HiveJoinResult => {
                         // We are the joiner: the host has answered, possibly
                         // long after `hive join` exited (an owner approving a
@@ -611,105 +598,6 @@ fn cmd_serve(
                                 "[{}] could not record hive join result: {e}",
                                 crate::logger::timestamp_now()
                             ),
-                        }
-                    }
-                    #[cfg(feature = "hive")]
-                    super::MessageType::KnowledgeSync => {
-                        // #434: a peer that is not in the hive does not get to
-                        // contribute to it. Dropping inbound units matters as
-                        // much as refusing to send: an `ask` hive that gated
-                        // only its own sends would still merge whatever an
-                        // unapproved peer pushed.
-                        if let Some(rejection) = super::hivejoin::knowledge_refusal(
-                            hive_roster.as_ref(),
-                            from_peer.as_str(),
-                            identity.as_str(),
-                            &msg.payload,
-                        ) {
-                            // Refused on the wire, not merely dropped (#435): a
-                            // reader that believes it is contributing and is
-                            // silently ignored cannot tell that from a network
-                            // fault.
-                            println!(
-                                "[{}] KnowledgeSync from {} refused — {}",
-                                crate::logger::timestamp_now(),
-                                from_peer,
-                                super::hivejoin::rejection_reason(&rejection.payload)
-                            );
-                            let _ = reg.send_to(from_peer.as_str(), &rejection);
-                        } else if let (Some(gossip), Some(hive_store)) =
-                            (gossip.as_mut(), hive_store.as_mut())
-                        {
-                            let (stats, accepted) = gossip.handle_sync(hive_store, &msg);
-                            println!(
-                                "[{}] KnowledgeSync from {}: {} accepted, {} rejected",
-                                crate::logger::timestamp_now(),
-                                from_peer,
-                                stats.accepted,
-                                stats.rejected
-                            );
-                            let installed = crate::hive::cli::auto_accept_units(&accepted, None);
-                            if installed > 0 {
-                                println!(
-                                    "[{}] Auto-installed {installed} artifact(s)",
-                                    crate::logger::timestamp_now()
-                                );
-                            }
-                            if !accepted.is_empty() {
-                                let connected = hive_gossip_targets(
-                                    hive_roster.as_ref(),
-                                    reg.connected_peers(),
-                                );
-                                let prop_msgs = gossip.propagate(&accepted, &from_peer, &connected);
-                                for (target, prop_msg) in prop_msgs {
-                                    let _ = reg.send_to(target.as_str(), &prop_msg);
-                                }
-                            }
-                        }
-                    }
-                    #[cfg(feature = "hive")]
-                    super::MessageType::KnowledgeRequest => {
-                        // Asking for a snapshot is *receiving*, so a reader may.
-                        if !hive_may_receive(hive_roster.as_ref(), from_peer.as_str()) {
-                            println!(
-                                "[{}] KnowledgeRequest from {} refused — not a member of this hive",
-                                crate::logger::timestamp_now(),
-                                from_peer
-                            );
-                        } else if let (Some(gossip), Some(hive_store)) =
-                            (gossip.as_ref(), hive_store.as_ref())
-                        {
-                            let snapshots = gossip.handle_request(hive_store, &msg);
-                            for snap in snapshots {
-                                let _ = reg.send_to(from_peer.as_str(), &snap);
-                            }
-                        }
-                    }
-                    #[cfg(feature = "hive")]
-                    super::MessageType::KnowledgeSnapshot => {
-                        if !hive_may_contribute(hive_roster.as_ref(), from_peer.as_str()) {
-                            println!(
-                                "[{}] KnowledgeSnapshot from {} refused — not a contributor to this hive",
-                                crate::logger::timestamp_now(),
-                                from_peer
-                            );
-                        } else if let (Some(gossip), Some(hive_store)) =
-                            (gossip.as_mut(), hive_store.as_mut())
-                        {
-                            let (stats, merged) = gossip.handle_snapshot(hive_store, &msg);
-                            println!(
-                                "[{}] KnowledgeSnapshot from {}: {} accepted",
-                                crate::logger::timestamp_now(),
-                                from_peer,
-                                stats.accepted
-                            );
-                            let installed = crate::hive::cli::auto_accept_units(&merged, None);
-                            if installed > 0 {
-                                println!(
-                                    "[{}] Auto-installed {installed} artifact(s)",
-                                    crate::logger::timestamp_now()
-                                );
-                            }
                         }
                     }
                     _ => {
@@ -729,20 +617,42 @@ fn cmd_serve(
                 let _ = reg.send_to(&target_peer, &msg);
             }
 
-            // Check if brain distillation produced new knowledge to gossip
+            // Brain distillation just produced something: say it now rather
+            // than waiting out the tick below.
             #[cfg(feature = "hive")]
-            if let (Some(broadcast_rx), Some(gossip), Some(hive_store)) =
-                (broadcast_rx.as_ref(), gossip.as_mut(), hive_store.as_ref())
-            {
-                while broadcast_rx.try_recv().is_ok() {
-                    // #434: only hive members are sync targets.
-                    let connected =
-                        hive_gossip_targets(hive_roster.as_ref(), reg.connected_peers());
-                    let sync_msgs = gossip.generate_sync_messages(hive_store, &connected);
-                    for (target, sync_msg) in sync_msgs {
+            if let Some(rx) = broadcast_rx.as_ref() {
+                let mut distilled = false;
+                while rx.try_recv().is_ok() {
+                    distilled = true;
+                }
+                if distilled {
+                    hive.refresh_membership();
+                    for (target, sync_msg) in hive.sync(reg.connected_peers()) {
                         let _ = reg.send_to(target.as_str(), &sync_msg);
                     }
                 }
+            }
+
+            // #455: and offer every eligible peer whatever it has not been sent
+            // yet, on a timer. The engine is incremental, so this is a no-op
+            // when there is nothing new — which is what lets one plain interval
+            // stand in for sync-on-connect, catch-up after a reconnect, and the
+            // units a peer missed while it was still waiting to be approved.
+            #[cfg(feature = "hive")]
+            for (target, sync_msg) in
+                hive.sync_if_due(std::time::Instant::now(), reg.connected_peers())
+            {
+                let _ = reg.send_to(target.as_str(), &sync_msg);
+            }
+
+            // #455: the dialling side's only sync trigger. A distillation here
+            // reaches the host on the next tick rather than immediately, which
+            // is the cost of the broadcast channel being process-global.
+            #[cfg(feature = "hive")]
+            for (target, sync_msg) in
+                hive.sync_if_due(std::time::Instant::now(), reg.connected_peers())
+            {
+                let _ = reg.send_to(target.as_str(), &sync_msg);
             }
 
             let events = reg.tick(identity.as_str(), Some(local_feed.sessions()));
@@ -796,7 +706,7 @@ fn cmd_serve(
         }
 
         #[cfg(feature = "hive")]
-        if let Some(store) = hive_store.as_ref() {
+        if let Some(store) = hive.store() {
             hive_units.store(store.len() as u32, std::sync::atomic::Ordering::Relaxed);
         }
     }
@@ -1000,6 +910,15 @@ fn cmd_accept(code: &str, peer_id: &str) -> io::Result<()> {
 
 /// Shared event loop for a connected peer. Blocks until Ctrl+C.
 fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
+    // #455: this loop used to handle heartbeats and join results and nothing
+    // else, so `relay join` built a connection that could not carry knowledge
+    // in either direction. It gets the same gossip module `relay serve` uses.
+    #[cfg(feature = "hive")]
+    let mut hive = {
+        let cfg = crate::config::Config::load().hive.unwrap_or_default();
+        let named = matches!(crate::hive::identity::load(), Ok(Some(_)));
+        super::hivesync::HiveSync::new(&cfg, identity, named)
+    };
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = Arc::clone(&running);
     let _ = ctrlc::set_handler(move || {
@@ -1016,7 +935,18 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
         let collected = local_feed.collect_if_due(std::time::Instant::now());
         if let Ok(mut reg) = registry.lock() {
             let messages = reg.drain_messages();
+            #[cfg(feature = "hive")]
+            let connected_now = reg.connected_peers();
             for (peer_id, msg) in &messages {
+                #[cfg(feature = "hive")]
+                if let Some(out) =
+                    hive.handle_inbound(peer_id, msg, identity.as_str(), &connected_now)
+                {
+                    for (target, out_msg) in out {
+                        let _ = reg.send_to(target.as_str(), &out_msg);
+                    }
+                    continue;
+                }
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(peer_id, &msg.payload);
@@ -1024,15 +954,6 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                     // #434: the owner of a `join_policy: ask` hive usually
                     // approves long after `hive join` exited, so this is where
                     // most approvals actually land.
-                    #[cfg(feature = "hive")]
-                    super::MessageType::KnowledgeRejected => {
-                        eprintln!(
-                            "[{}] {} refused our knowledge: {}",
-                            crate::logger::timestamp_now(),
-                            peer_id,
-                            super::hivejoin::rejection_reason(&msg.payload)
-                        );
-                    }
                     #[cfg(feature = "hive")]
                     super::MessageType::HiveJoinResult => {
                         match crate::hive::cli::apply_join_result(peer_id.as_str(), &msg.payload) {
@@ -1095,45 +1016,6 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
 /// This is deliberately the *only* place the question is asked, and it is asked
 /// on both directions: gating what we send without gating what we accept would
 /// let an unapproved peer still push units into the hive.
-/// May this peer be *sent* hive knowledge?
-///
-/// Any member, readers included — receiving without contributing is the whole
-/// point of a reader (#435, §7.5).
-#[cfg(feature = "hive")]
-fn hive_may_receive(roster: Option<&crate::hive::membership::Roster>, peer_id: &str) -> bool {
-    match roster {
-        None => true,
-        Some(r) => r.may_receive(peer_id),
-    }
-}
-
-/// May this peer *contribute* hive knowledge?
-///
-/// Members whose role is contributor. A reader is refused here and allowed in
-/// `hive_may_receive`, and that asymmetry is the feature.
-#[cfg(feature = "hive")]
-fn hive_may_contribute(roster: Option<&crate::hive::membership::Roster>, peer_id: &str) -> bool {
-    match roster {
-        None => true,
-        Some(r) => r.may_contribute(peer_id),
-    }
-}
-
-/// The subset of `connected` that may receive hive knowledge.
-#[cfg(feature = "hive")]
-fn hive_gossip_targets(
-    roster: Option<&crate::hive::membership::Roster>,
-    connected: Vec<super::PeerId>,
-) -> Vec<super::PeerId> {
-    let Some(r) = roster else {
-        return connected;
-    };
-    connected
-        .into_iter()
-        .filter(|p| r.may_receive(p.as_str()))
-        .collect()
-}
-
 fn try_connect(
     addr: SocketAddr,
     psk: &[u8; 32],
@@ -2114,168 +1996,5 @@ mod tests {
                 "{host} joined to {joined} should parse"
             );
         }
-    }
-}
-
-/// The hive membership gate (#434).
-///
-/// These are the teeth of `join_policy`: a peer that is only *pending* must
-/// neither receive knowledge nor be able to push any. Policy correctness is
-/// tested in `relay::hivejoin`; what is tested here is that the gate the serve
-/// loop actually calls agrees with the roster.
-#[cfg(all(test, feature = "hive"))]
-mod hive_gate_tests {
-    use super::*;
-    use crate::hive::membership::{Admission, Roster};
-
-    fn peers(ids: &[&str]) -> Vec<super::super::PeerId> {
-        ids.iter()
-            .map(|s| super::super::PeerId(s.to_string()))
-            .collect()
-    }
-
-    fn names(v: &[super::super::PeerId]) -> Vec<&str> {
-        v.iter().map(|p| p.as_str()).collect()
-    }
-
-    #[test]
-    fn an_unnamed_hive_gates_nothing() {
-        // The no-regression case: everyone who never named a hive keeps the
-        // pre-#434 behaviour exactly.
-        let connected = peers(&["a-1", "b-2"]);
-        assert_eq!(
-            names(&hive_gossip_targets(None, connected.clone())),
-            vec!["a-1", "b-2"]
-        );
-        assert!(hive_may_contribute(None, "a-1"));
-        assert!(hive_may_receive(None, "a-1"));
-        assert!(hive_may_contribute(None, "nobody-ever-heard-of"));
-    }
-
-    #[test]
-    fn a_named_hive_sends_only_to_members() {
-        let tmp = tempfile::tempdir().unwrap();
-        let r = Roster::at(tmp.path());
-        r.admit("a-1", "hv_1", Admission::Policy).unwrap();
-
-        let connected = peers(&["a-1", "b-2", "c-3"]);
-        assert_eq!(
-            names(&hive_gossip_targets(Some(&r), connected)),
-            vec!["a-1"],
-            "only the admitted peer is a sync target"
-        );
-    }
-
-    #[test]
-    fn a_pending_peer_is_gated_in_both_directions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let r = Roster::at(tmp.path());
-        r.record_request("b-2", "hv_1", None).unwrap();
-
-        // Outbound: not a target.
-        assert!(
-            hive_gossip_targets(Some(&r), peers(&["b-2"])).is_empty(),
-            "a pending peer must not be sent knowledge"
-        );
-        // Inbound: its units are dropped. Gating only one direction would let an
-        // unapproved peer poison the hive while receiving nothing.
-        assert!(
-            !hive_may_contribute(Some(&r), "b-2"),
-            "a pending peer must not be able to contribute either"
-        );
-    }
-
-    #[test]
-    fn approving_opens_the_gate_the_serve_loop_reads() {
-        let tmp = tempfile::tempdir().unwrap();
-        let r = Roster::at(tmp.path());
-        let entry = r.record_request("b-2", "hv_1", None).unwrap();
-        assert!(!hive_may_contribute(Some(&r), "b-2"));
-
-        r.admit(&entry.peer_id, "hv_1", Admission::Approved)
-            .unwrap();
-
-        assert!(hive_may_contribute(Some(&r), "b-2"));
-        assert_eq!(
-            names(&hive_gossip_targets(Some(&r), peers(&["b-2"]))),
-            vec!["b-2"]
-        );
-    }
-
-    #[test]
-    fn a_denied_peer_stays_gated() {
-        let tmp = tempfile::tempdir().unwrap();
-        let r = Roster::at(tmp.path());
-        let entry = r.record_request("b-2", "hv_1", None).unwrap();
-        r.deny(&entry).unwrap();
-        assert!(!hive_may_contribute(Some(&r), "b-2"));
-        assert!(hive_gossip_targets(Some(&r), peers(&["b-2"])).is_empty());
-    }
-
-    #[test]
-    fn a_reader_receives_but_may_not_contribute() {
-        let tmp = tempfile::tempdir().unwrap();
-        let r = Roster::at(tmp.path());
-        r.admit_as(
-            "reader-1",
-            "hv_1",
-            crate::hive::membership::Admission::Grant,
-            crate::hive::membership::Role::Reader,
-            Some("g_abc".into()),
-        )
-        .unwrap();
-
-        // This asymmetry is §7.5: participation without symmetry.
-        assert!(
-            hive_may_receive(Some(&r), "reader-1"),
-            "a reader must receive knowledge — that is what it is for"
-        );
-        assert!(
-            !hive_may_contribute(Some(&r), "reader-1"),
-            "a reader must never be able to contribute"
-        );
-        // And it is a sync target, unlike a pending peer.
-        assert_eq!(
-            names(&hive_gossip_targets(Some(&r), peers(&["reader-1"]))),
-            vec!["reader-1"]
-        );
-    }
-
-    #[test]
-    fn a_contributor_and_a_reader_are_both_targets_but_only_one_may_push() {
-        let tmp = tempfile::tempdir().unwrap();
-        let r = Roster::at(tmp.path());
-        r.admit(
-            "writer-1",
-            "hv_1",
-            crate::hive::membership::Admission::Policy,
-        )
-        .unwrap();
-        r.admit_as(
-            "reader-1",
-            "hv_1",
-            crate::hive::membership::Admission::Grant,
-            crate::hive::membership::Role::Reader,
-            None,
-        )
-        .unwrap();
-
-        let selected = hive_gossip_targets(Some(&r), peers(&["writer-1", "reader-1", "stranger"]));
-        let mut targets = names(&selected);
-        targets.sort();
-        assert_eq!(targets, vec!["reader-1", "writer-1"]);
-
-        assert!(hive_may_contribute(Some(&r), "writer-1"));
-        assert!(!hive_may_contribute(Some(&r), "reader-1"));
-    }
-
-    #[test]
-    fn an_unknown_peer_is_gated_by_a_named_hive() {
-        // A peer may be paired without ever having asked to join — pairing is
-        // not membership.
-        let tmp = tempfile::tempdir().unwrap();
-        let r = Roster::at(tmp.path());
-        assert!(!hive_may_contribute(Some(&r), "never-asked"));
-        assert!(!hive_may_receive(Some(&r), "never-asked"));
     }
 }
