@@ -261,6 +261,10 @@ fn cmd_serve(
 
     println!("Relay listening on {} as {}", listener.addr, identity);
 
+    // #464: listening is not enough. Two machines that both only serve would
+    // each wait for the other forever, so dial the peers we already know.
+    spawn_startup_dials(Arc::clone(&registry), identity.clone());
+
     // Start HTTP coordinator server if configured
     let http_port = http_port.or(relay_cfg.http_port);
     let auth_token_str = auth_token
@@ -1072,6 +1076,104 @@ pub fn send_message_to_peer(
     // Let the frame flush to the peer before the connection drops at scope end.
     std::thread::sleep(std::time::Duration::from_millis(250));
     Ok(remote_id)
+}
+
+/// The dialable address in a peer meta record, if it has one.
+///
+/// `save_peer_meta` writes whatever the dialling path connected to, which is
+/// always an already-parsed `SocketAddr` today — but a record can predate a
+/// field, be hand-edited, or hold a hostname, and none of those are dialable
+/// here without a resolver. A peer with no usable address is simply not dialled.
+fn dialable_addr(meta: &serde_json::Value) -> Option<SocketAddr> {
+    meta.get("addr")?.as_str()?.parse().ok()
+}
+
+/// Dial every peer we have both a PSK and a stored address for (#464).
+///
+/// Without this, two machines that both run only `relay serve` never connect:
+/// each listens, neither dials, and the registry's `ReconnectNeeded` event
+/// cannot fire because a fresh process has no peers in it yet.
+///
+/// Runs on its own thread. `PeerConnection::connect` carries a 10s connect
+/// timeout plus a blocking handshake, so dialling inline would hold the banner
+/// for 10s per powered-off peer. The hive sync tick picks up whatever
+/// connections appear, so nothing needs to be notified when this finishes.
+///
+/// Only a peer we once dialled ourselves has a stored address — `save_peer_meta`
+/// is called from the dialling paths, never from the listener, and an inbound
+/// connection's source port is ephemeral anyway. Giving a peer a durable set of
+/// dialable addresses is the epic's next item (#478), not this function's job.
+///
+/// No dial/wait tie-break: when both ends have an address, both dial and both
+/// accept, and `PeerRegistry::add_peer` closes the connection it displaces
+/// (#459). That costs one connection teardown, not corrupt state.
+fn spawn_startup_dials(registry: Arc<Mutex<PeerRegistry>>, identity: super::PeerId) {
+    let targets: Vec<(String, SocketAddr)> = list_known_peers()
+        .into_iter()
+        .filter_map(|id| {
+            let addr = dialable_addr(&super::load_peer_meta(&id)?)?;
+            Some((id, addr))
+        })
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        for (id, addr) in targets {
+            let peer_id = super::PeerId(id.clone());
+
+            // The peer may have dialled us while we were working through this
+            // list. Displacing a live inbound connection with our own would be
+            // pure churn.
+            let (already, tx) = match registry.lock() {
+                Ok(reg) => (reg.get_peer(&id).is_some(), reg.message_tx()),
+                Err(_) => return,
+            };
+            if already {
+                continue;
+            }
+
+            let psk = match load_peer_psk(&id) {
+                Some(psk) => psk,
+                None => continue,
+            };
+
+            // Connect with the lock released: it would otherwise be held for
+            // the whole 10s connect timeout, stalling the serve loop's tick.
+            let conn = match PeerConnection::connect(addr, &psk, &identity, tx) {
+                Ok(c) => c,
+                Err(e) => {
+                    // The stored address is the peer's address as of pairing;
+                    // say so, or a stale address is indistinguishable from a
+                    // host that is simply off.
+                    println!("Peer {id} not reachable at its last known address {addr}: {e}");
+                    continue;
+                }
+            };
+            if conn.peer_id != peer_id {
+                println!(
+                    "Peer {id} not dialled: {addr} answered as {} — the stored address \
+                     now belongs to another host",
+                    conn.peer_id
+                );
+                conn.shutdown();
+                continue;
+            }
+
+            match registry.lock() {
+                Ok(mut reg) => {
+                    if reg.get_peer(&id).is_some() {
+                        conn.shutdown();
+                        continue;
+                    }
+                    reg.add_peer(conn);
+                    println!("Connected to {id} ({addr})");
+                }
+                Err(_) => return,
+            }
+        }
+    });
 }
 
 /// Reconnect an existing peer in a registry using its stored PSK.
@@ -1996,5 +2098,50 @@ mod tests {
                 "{host} joined to {joined} should parse"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod startup_dial_targets {
+    use super::dialable_addr;
+    use serde_json::json;
+
+    // A peer we dialled before: `save_peer_meta` recorded the listening
+    // address we reached it on, and that is what a startup dial reuses.
+    #[test]
+    fn a_stored_address_is_dialable() {
+        let addr = dialable_addr(&json!({"addr": "10.33.226.19:7777", "last_seen": 1}));
+        assert_eq!(
+            addr.map(|a| a.to_string()),
+            Some("10.33.226.19:7777".to_string())
+        );
+    }
+
+    // A peer that has only ever dialled IN has a `.key` but no `addr`: the
+    // listener never calls `save_peer_meta`. It must be skipped, not guessed at.
+    #[test]
+    fn a_record_without_an_address_is_not_dialled() {
+        assert!(dialable_addr(&json!({"last_seen": 1})).is_none());
+    }
+
+    #[test]
+    fn a_hostname_is_not_dialled_because_nothing_here_resolves_it() {
+        assert!(dialable_addr(&json!({"addr": "mini.local:7777"})).is_none());
+    }
+
+    #[test]
+    fn an_address_without_a_port_is_not_dialled() {
+        assert!(dialable_addr(&json!({"addr": "10.33.226.19"})).is_none());
+    }
+
+    #[test]
+    fn a_non_string_address_is_not_dialled() {
+        assert!(dialable_addr(&json!({"addr": 7777})).is_none());
+    }
+
+    #[test]
+    fn an_ipv6_address_is_dialable() {
+        let addr = dialable_addr(&json!({"addr": "[::1]:7777"}));
+        assert_eq!(addr.map(|a| a.port()), Some(7777));
     }
 }
