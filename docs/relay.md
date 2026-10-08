@@ -607,16 +607,15 @@ is sent back on the wire rather than silently dropped, and the refused batch is
 re-offered once the gate opens, so approving a queued request does not lose the
 knowledge that was turned away before it.
 
-Two limits worth knowing:
+One limit worth knowing: **`relay serve` does not dial out.** It redials a peer
+it has *lost*, but it does not connect to known peers at startup. Somebody has
+to dial.
 
-- **`relay serve` does not dial out.** It redials a peer it has *lost*, but it
-  does not connect to known peers at startup. Somebody has to dial.
-- **A second connection from the same machine displaces the first.**
-  `claudectl hive join` opens its own short-lived connection, so running it
-  while `relay join` holds a durable one from the same machine leaves the host
-  sending into the closed socket until the durable connection is
-  re-established. Run `hive join` first, or restart `relay join` afterwards.
-  [#459](https://github.com/mercurialsolo/claudectl/issues/459) tracks it.
+A second connection from the same machine — `claudectl hive join` opens its own
+while `relay join` holds a durable one — displaces the first, which then closes
+and is redialled within about ten seconds. Knowledge flows either way round
+(#459); you may see one `Peer ... disconnected` and `Reconnected to ...` pair in
+the log while that happens.
 
 ### How it works once it does fire
 

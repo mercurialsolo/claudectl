@@ -139,6 +139,22 @@ impl PeerConnection {
         Ok(conn)
     }
 
+    /// Close this connection's socket.
+    ///
+    /// `stream` is an `Arc` shared with the reader thread, which holds its own
+    /// `try_clone` of the same socket, so dropping a `PeerConnection` closes
+    /// nothing — the reader keeps reading and the socket stays open with no
+    /// way to write to it. `shutdown(Both)` acts on the socket rather than on
+    /// one descriptor, so it ends the reader's blocking read and sends a FIN to
+    /// the other end.
+    pub fn shutdown(&self) {
+        if let Some(stream) = self.stream.as_ref() {
+            if let Ok(guard) = stream.lock() {
+                let _ = guard.shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+
     /// Send a message to this peer.
     pub fn send(&self, msg: &RelayMessage) -> io::Result<()> {
         let stream = self
@@ -181,6 +197,14 @@ impl PeerConnection {
     /// Returns false if 3 heartbeats have been missed.
     pub fn check_alive(&mut self, heartbeat_interval: Duration) -> bool {
         if self.state != PeerState::Connected {
+            return false;
+        }
+        // The reader thread breaks out of its loop on EOF or a socket error,
+        // so a finished handle *is* the connection being gone — known the
+        // moment it happens, where the heartbeat threshold below takes three
+        // intervals (90s by default) to reach the same conclusion.
+        if self.reader_handle.as_ref().is_some_and(|h| h.is_finished()) {
+            self.missed_heartbeats = 3;
             return false;
         }
         let elapsed = self.last_heartbeat_recv.elapsed();

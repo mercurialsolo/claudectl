@@ -49,11 +49,24 @@ impl PeerRegistry {
         self.tx.clone()
     }
 
-    /// Add a peer connection to the registry.
+    /// Add a peer connection to the registry, replacing any existing one.
+    ///
+    /// Newest-wins is right for a reconnect. What was wrong (#459) is that the
+    /// displaced connection was only *forgotten*: its socket is shared with its
+    /// reader thread through an `Arc`, so dropping the registry entry left the
+    /// socket open — still delivering inbound messages, with nothing able to
+    /// send on it. `claudectl hive join` dials its own short-lived connection,
+    /// so running it beside a `relay join` from the same machine left the host
+    /// reading from a peer it could no longer answer, and hive knowledge
+    /// stopped flowing one way with nothing logged.
+    ///
+    /// Closing it makes both ends agree: the reader thread exits, and the other
+    /// end sees a FIN and reconnects, since the dialling side is the initiator.
     pub fn add_peer(&mut self, conn: PeerConnection) {
         let id = conn.peer_id.0.clone();
-        // If there's an existing connection to this peer, remove it
-        self.peers.remove(&id);
+        if let Some(old) = self.peers.remove(&id) {
+            old.shutdown();
+        }
         self.peers.insert(id, conn);
     }
 
@@ -396,5 +409,97 @@ mod tests {
         });
         registry.handle_heartbeat(&peer_id, &payload2);
         assert_eq!(registry.all_worker_states()["worker-01"].sessions.len(), 3);
+    }
+
+    /// #459: displacing a connection must close it, not just forget it.
+    ///
+    /// Real loopback sockets, because the whole bug was that the `Arc`-shared
+    /// stream outlived the registry entry — a struct-literal `PeerConnection`
+    /// with `stream: None` cannot express it.
+    mod displaced_connections {
+        use super::super::*;
+        use std::io::Read;
+        use std::net::{TcpListener, TcpStream};
+
+        /// An accepted connection plus the remote end of the same socket.
+        fn socket_pair(listener: &TcpListener) -> (TcpStream, TcpStream) {
+            let remote = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (accepted, _) = listener.accept().unwrap();
+            (accepted, remote)
+        }
+
+        /// Is this socket's peer gone? `read` returning 0 is EOF.
+        fn reads_eof(stream: &mut TcpStream) -> bool {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buf = [0u8; 1];
+            matches!(stream.read(&mut buf), Ok(0))
+        }
+
+        #[test]
+        fn a_second_connection_from_the_same_peer_closes_the_first() {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut reg = PeerRegistry::new(30);
+            let tx = reg.message_tx();
+
+            let (first, mut first_remote) = socket_pair(&listener);
+            let (second, _second_remote) = socket_pair(&listener);
+
+            let id = PeerId("same-peer".into());
+            reg.add_peer(PeerConnection::from_authenticated(
+                id.clone(),
+                first,
+                tx.clone(),
+            ));
+            assert_eq!(reg.connected_count(), 1);
+
+            // `hive join` dialling in beside a `relay join` from the same
+            // machine is exactly this.
+            reg.add_peer(PeerConnection::from_authenticated(id.clone(), second, tx));
+
+            assert_eq!(reg.connected_count(), 1, "still one entry for the peer");
+            assert!(
+                reads_eof(&mut first_remote),
+                "the displaced socket must be closed, or the host keeps reading \
+                 from a peer it can no longer answer"
+            );
+        }
+
+        #[test]
+        fn a_closed_socket_is_noticed_without_waiting_for_missed_heartbeats() {
+            // The reader thread exits on EOF immediately; before #459 nothing
+            // asked it, so a dead connection stayed `Connected` for three
+            // heartbeat intervals (90s by default).
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let reg = PeerRegistry::new(30);
+            let (accepted, remote) = socket_pair(&listener);
+
+            let mut conn = PeerConnection::from_authenticated(
+                PeerId("gone".into()),
+                accepted,
+                reg.message_tx(),
+            );
+            assert!(
+                conn.check_alive(Duration::from_secs(30)),
+                "alive while the socket is open"
+            );
+
+            drop(remote);
+
+            // The reader thread needs a moment to see the EOF and exit.
+            let mut dead = false;
+            for _ in 0..50 {
+                if !conn.check_alive(Duration::from_secs(30)) {
+                    dead = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(
+                dead,
+                "a closed socket must be noticed well inside the 90s heartbeat threshold"
+            );
+        }
     }
 }

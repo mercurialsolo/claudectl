@@ -4,6 +4,24 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A second connection from the same peer no longer silently kills the first
+  (#459).** `PeerRegistry::add_peer` replaces an existing connection, which is
+  right for a reconnect — but it only *forgot* the old one. Its socket is shared
+  with its reader thread through an `Arc`, so dropping the registry entry closed
+  nothing: the socket stayed open, still delivering inbound messages, with
+  nothing able to send on it. Since `claudectl hive join` dials its own
+  short-lived connection, running it beside a `relay join` from the same machine
+  left the host reading from a peer it could no longer answer, and hive
+  knowledge stopped flowing one way with nothing logged. The displaced
+  connection is now closed, so its reader exits, the other end sees the close
+  and redials, and gossip resumes in about ten seconds instead of never.
+- **An abruptly closed connection is noticed at once rather than after 90
+  seconds.** The reader thread already exited on EOF; nothing asked it, so
+  liveness rested entirely on three missed 30-second heartbeats. `check_alive`
+  now also treats a finished reader thread as the connection being gone.
+
 ## [0.67.0] - 2026-10-07
 
 ### Fixed
