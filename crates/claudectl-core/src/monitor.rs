@@ -13,6 +13,7 @@ struct UsageRollup {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_write_tokens: u64,
+    cache_write_1h_tokens: u64,
     cost_usd: f64,
     usage_metrics_available: bool,
     cost_estimate_unverified: bool,
@@ -63,6 +64,8 @@ pub fn update_tokens(session: &mut ClaudeSession) {
                     session.own_output_tokens = 0;
                     session.own_cache_read_tokens = 0;
                     session.own_cache_write_tokens = 0;
+                    session.own_cache_write_1h_tokens = 0;
+                    session.last_usage_msg_id = None;
                     // Reset persisted inference state on file truncation
                     last_type.clear();
                     last_stop_reason.clear();
@@ -133,12 +136,37 @@ pub fn update_tokens(session: &mut ClaudeSession) {
                                     let input = usage.input_tokens;
                                     let cache_read = usage.cache_read_input_tokens;
                                     let cache_create = usage.cache_creation_input_tokens;
+                                    let cache_create_1h = usage.cache_creation_1h_input_tokens;
                                     let output = usage.output_tokens;
 
-                                    session.own_input_tokens += input + cache_read + cache_create;
-                                    session.own_output_tokens += output;
-                                    session.own_cache_read_tokens += cache_read;
-                                    session.own_cache_write_tokens += cache_create;
+                                    // One assistant turn becomes several JSONL
+                                    // lines — one per content block — and every
+                                    // one repeats the turn's whole `usage`.
+                                    // Adding each line charged the same tokens
+                                    // two or three times: on a real session
+                                    // that was 614M input tokens against an
+                                    // actual 349M, and $1467 against $786.
+                                    //
+                                    // Totals are therefore counted once per
+                                    // message id. `context_tokens` and `model`
+                                    // below are *not* gated, because they are
+                                    // assignments rather than sums and a repeat
+                                    // carries the same values.
+                                    let repeat = match (&message.id, &session.last_usage_msg_id) {
+                                        (Some(id), Some(prev)) => id == prev,
+                                        _ => false,
+                                    };
+                                    if !repeat {
+                                        session.own_input_tokens +=
+                                            input + cache_read + cache_create;
+                                        session.own_output_tokens += output;
+                                        session.own_cache_read_tokens += cache_read;
+                                        session.own_cache_write_tokens += cache_create;
+                                        session.own_cache_write_1h_tokens += cache_create_1h;
+                                        if message.id.is_some() {
+                                            session.last_usage_msg_id = message.id.clone();
+                                        }
+                                    }
                                     saw_parent_usage = true;
 
                                     // Track context window: the input_tokens of the LAST API call
@@ -273,6 +301,7 @@ fn finalize_usage(
     session.subagent_output_tokens = subagent_rollup.output_tokens;
     session.subagent_cache_read_tokens = subagent_rollup.cache_read_tokens;
     session.subagent_cache_write_tokens = subagent_rollup.cache_write_tokens;
+    session.subagent_cache_write_1h_tokens = subagent_rollup.cache_write_1h_tokens;
     session.subagent_count = session.subagent_rollups.len();
 
     session.total_input_tokens = session.own_input_tokens + session.subagent_input_tokens;
@@ -292,6 +321,7 @@ fn finalize_usage(
         session.own_output_tokens,
         session.own_cache_read_tokens,
         session.own_cache_write_tokens,
+        session.own_cache_write_1h_tokens,
     );
     session.cost_usd = own_cost + subagent_rollup.cost_usd;
     session.usage_metrics_available =
@@ -401,6 +431,7 @@ pub fn estimate_cost(session: &ClaudeSession) -> f64 {
         session.total_output_tokens,
         session.cache_read_tokens,
         session.cache_write_tokens,
+        session.own_cache_write_1h_tokens + session.subagent_cache_write_1h_tokens,
     )
     .0
 }
@@ -466,6 +497,7 @@ fn refresh_subagent_rollups(session: &mut ClaudeSession) -> UsageRollup {
         totals.output_tokens += rollup.output_tokens;
         totals.cache_read_tokens += rollup.cache_read_tokens;
         totals.cache_write_tokens += rollup.cache_write_tokens;
+        totals.cache_write_1h_tokens += rollup.cache_write_1h_tokens;
         totals.cost_usd += rollup.cost_usd;
         totals.usage_metrics_available |= rollup.usage_metrics_available;
         totals.cost_estimate_unverified |= rollup.cost_estimate_unverified;
@@ -521,10 +553,26 @@ fn update_subagent_rollup(
             continue;
         };
 
+        // Subagent transcripts have the same shape as the parent's: one turn,
+        // several lines, the same `usage` repeated on each. One sampled agent
+        // transcript held 76 usage lines across 25 turns, so counting per line
+        // tripled its cost.
+        let repeat = match (&message.id, &rollup.last_usage_msg_id) {
+            (Some(id), Some(prev)) => id == prev,
+            _ => false,
+        };
+        if repeat {
+            continue;
+        }
+        if message.id.is_some() {
+            rollup.last_usage_msg_id = message.id.clone();
+        }
+
         rollup.input_tokens += usage.input_tokens;
         rollup.output_tokens += usage.output_tokens;
         rollup.cache_read_tokens += usage.cache_read_input_tokens;
         rollup.cache_write_tokens += usage.cache_creation_input_tokens;
+        rollup.cache_write_1h_tokens += usage.cache_creation_1h_input_tokens;
         rollup.usage_metrics_available = true;
 
         let input_with_cache =
@@ -540,6 +588,7 @@ fn update_subagent_rollup(
             usage.output_tokens,
             usage.cache_read_input_tokens,
             usage.cache_creation_input_tokens,
+            usage.cache_creation_1h_input_tokens,
         );
         rollup.cost_usd += delta_cost;
         rollup.cost_estimate_unverified |= unverified;
@@ -554,16 +603,25 @@ fn estimate_cost_components(
     total_output_tokens: u64,
     cache_read_tokens: u64,
     cache_write_tokens: u64,
+    cache_write_1h_tokens: u64,
 ) -> (f64, bool) {
     let plain_input = total_input_tokens
         .saturating_sub(cache_read_tokens)
         .saturating_sub(cache_write_tokens);
     let resolved = models::resolve(model);
 
+    // Cache writes split by TTL: the 1-hour slice bills at 2x base input, the
+    // rest at the 5-minute 1.25x. A transcript with no TTL breakdown reports
+    // zero 1-hour tokens, so it is priced entirely at the 5-minute rate, which
+    // is the documented default.
+    let write_1h = cache_write_1h_tokens.min(cache_write_tokens);
+    let write_5m = cache_write_tokens.saturating_sub(write_1h);
+
     let cost = (plain_input as f64 / 1_000_000.0) * resolved.profile.input_per_m
         + (total_output_tokens as f64 / 1_000_000.0) * resolved.profile.output_per_m
         + (cache_read_tokens as f64 / 1_000_000.0) * resolved.profile.cache_read_per_m
-        + (cache_write_tokens as f64 / 1_000_000.0) * resolved.profile.cache_write_per_m;
+        + (write_5m as f64 / 1_000_000.0) * resolved.profile.cache_write_per_m
+        + (write_1h as f64 / 1_000_000.0) * resolved.profile.cache_write_1h_per_m();
 
     (
         cost,

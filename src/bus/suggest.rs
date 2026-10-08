@@ -350,6 +350,7 @@ mod tests {
 
     fn user_text(s: &str) -> claudectl_core::transcript::TranscriptMessage {
         claudectl_core::transcript::TranscriptMessage {
+            id: None,
             role: TranscriptRole::User,
             model: None,
             stop_reason: None,
@@ -362,6 +363,7 @@ mod tests {
         input: serde_json::Value,
     ) -> claudectl_core::transcript::TranscriptMessage {
         claudectl_core::transcript::TranscriptMessage {
+            id: None,
             role: TranscriptRole::Assistant,
             model: None,
             stop_reason: None,

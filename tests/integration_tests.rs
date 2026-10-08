@@ -222,11 +222,11 @@ fn cost_opus_tokens() {
     s.cache_write_tokens = 200_000;
 
     let cost = monitor::estimate_cost(&s);
+    // Opus 4.6: $5 in / $25 out, cache read $0.50, 5m cache write $6.25.
     // plain_input = 1M - 500k - 200k = 300k
-    // cost = 300k/1M * 15 + 100k/1M * 75 + 500k/1M * 1.875 + 200k/1M * 18.75
-    //      = 0.3 * 15 + 0.1 * 75 + 0.5 * 1.875 + 0.2 * 18.75
-    //      = 4.5 + 7.5 + 0.9375 + 3.75 = 16.6875
-    let expected = 16.6875;
+    // cost = 0.3 * 5 + 0.1 * 25 + 0.5 * 0.50 + 0.2 * 6.25
+    //      = 1.5 + 2.5 + 0.25 + 1.25 = 5.5
+    let expected = 5.5;
     assert!(
         (cost - expected).abs() < 0.001,
         "opus cost={cost}, expected={expected}"
@@ -255,16 +255,18 @@ fn cost_sonnet_tokens() {
 #[test]
 fn cost_haiku_tokens() {
     let mut s = make_session(0.0, 0);
-    s.model = "haiku".into();
+    // A bare "haiku" no longer resolves — see
+    // `an_unversioned_family_name_does_not_borrow_a_siblings_prices`.
+    s.model = "haiku-4.5".into();
     s.total_input_tokens = 100_000;
     s.total_output_tokens = 50_000;
     s.cache_read_tokens = 0;
     s.cache_write_tokens = 0;
 
     let cost = monitor::estimate_cost(&s);
-    // plain_input = 100k
-    // cost = 100k/1M * 0.80 + 50k/1M * 4.0 = 0.08 + 0.2 = 0.28
-    let expected = 0.28;
+    // Haiku 4.5: $1 in / $5 out.
+    // cost = 100k/1M * 1.0 + 50k/1M * 5.0 = 0.1 + 0.25 = 0.35
+    let expected = 0.35;
     assert!(
         (cost - expected).abs() < 0.001,
         "haiku cost={cost}, expected={expected}"
@@ -272,7 +274,7 @@ fn cost_haiku_tokens() {
 }
 
 #[test]
-fn cost_unknown_model_defaults_to_opus() {
+fn cost_unknown_model_uses_the_labelled_fallback() {
     let mut s = make_session(0.0, 0);
     s.model = "some-future-model".into();
     s.total_input_tokens = 1_000_000;
@@ -281,11 +283,49 @@ fn cost_unknown_model_defaults_to_opus() {
     s.cache_write_tokens = 0;
 
     let cost = monitor::estimate_cost(&s);
-    // Should use opus pricing: 1M/1M * 15 = 15.0
-    let expected = 15.0;
+    // The fallback is current Opus 5 input pricing, $5/MTok, and the estimate
+    // is flagged unverified so the number is never passed off as exact.
+    let expected = 5.0;
     assert!(
         (cost - expected).abs() < 0.001,
         "unknown model cost={cost}, expected={expected}"
+    );
+}
+
+/// A 1-hour cache write bills at 2x base input, a 5-minute one at 1.25x.
+///
+/// Every cache write in a long Claude Code session is 1-hour TTL, so pricing
+/// them all at the 5-minute rate understated the cache-write line by a third.
+#[test]
+fn one_hour_cache_writes_bill_at_twice_base_input() {
+    let jsonl = r#"{"type":"assistant","message":{"id":"msg_1h","model":"claude-opus-5","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":1000000,"cache_creation":{"ephemeral_1h_input_tokens":1000000,"ephemeral_5m_input_tokens":0}}}}"#;
+
+    let (mut s, _file) = make_session_with_jsonl(jsonl);
+    monitor::update_tokens(&mut s);
+
+    // Opus 5 base input is $5/MTok, so 1M tokens of 1-hour write is $10.
+    assert_eq!(s.cache_write_tokens, 1_000_000);
+    assert!(
+        (s.cost_usd - 10.0).abs() < 0.001,
+        "1h write should be 2x base input ($10), got {}",
+        s.cost_usd
+    );
+}
+
+/// A transcript with no TTL breakdown prices everything at the 5-minute rate,
+/// which is the documented default — old transcripts must not be re-priced.
+#[test]
+fn cache_writes_without_a_ttl_breakdown_use_the_five_minute_rate() {
+    let jsonl = r#"{"type":"assistant","message":{"id":"msg_5m","model":"claude-opus-5","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":1000000}}}"#;
+
+    let (mut s, _file) = make_session_with_jsonl(jsonl);
+    monitor::update_tokens(&mut s);
+
+    // 1M tokens at the 5-minute rate of $6.25/MTok.
+    assert!(
+        (s.cost_usd - 6.25).abs() < 0.001,
+        "no breakdown should price at 1.25x base ($6.25), got {}",
+        s.cost_usd
     );
 }
 
@@ -303,17 +343,25 @@ fn cost_zero_tokens() {
 #[test]
 fn context_max_opus() {
     assert_eq!(monitor::model_context_max("opus-4.6"), 1_000_000);
-    assert_eq!(monitor::model_context_max("opus"), 1_000_000);
+    assert_eq!(monitor::model_context_max("opus-5"), 1_000_000);
+    // A bare family name resolves to the fallback, which is conservative.
+    assert_eq!(monitor::model_context_max("opus"), 200_000);
 }
 
 #[test]
 fn context_max_sonnet() {
-    assert_eq!(monitor::model_context_max("sonnet-4.6"), 200_000);
+    // "Claude 4.6 and later models include the full 1M token context window
+    // at standard pricing" — so 4.6 and Sonnet 5 are 1M, not 200k. Reporting
+    // 200k understated saturation fivefold for every Sonnet 5 session.
+    assert_eq!(monitor::model_context_max("sonnet-4.6"), 1_000_000);
+    assert_eq!(monitor::model_context_max("sonnet-5"), 1_000_000);
+    assert_eq!(monitor::model_context_max("sonnet-4.5"), 200_000);
     assert_eq!(monitor::model_context_max("sonnet"), 200_000);
 }
 
 #[test]
 fn context_max_haiku() {
+    assert_eq!(monitor::model_context_max("haiku-4.5"), 200_000);
     assert_eq!(monitor::model_context_max("haiku"), 200_000);
 }
 
@@ -354,7 +402,58 @@ fn shorten_model_sonnet_generic() {
 
 #[test]
 fn shorten_model_haiku() {
-    assert_eq!(monitor::shorten_model("claude-haiku-4-5-20251001"), "haiku");
+    assert_eq!(
+        monitor::shorten_model("claude-haiku-4-5-20251001"),
+        "haiku-4.5"
+    );
+}
+
+/// The regression that mispriced every Claude 5 session (#471).
+///
+/// `shorten_model` used to collapse any unrecognised id to the bare family
+/// name, so `claude-opus-5` became `opus`, matched the price table's `"opus"`
+/// arm, and was billed at retired Opus 4.1 rates — $15/MTok against a real $5.
+#[test]
+fn shorten_model_keeps_the_version_for_the_claude_5_family() {
+    assert_eq!(monitor::shorten_model("claude-opus-5"), "opus-5");
+    assert_eq!(monitor::shorten_model("claude-sonnet-5"), "sonnet-5");
+    assert_eq!(monitor::shorten_model("claude-fable-5-1"), "fable-5.1");
+    assert_eq!(
+        monitor::shorten_model("claude-opus-4-8-20260501"),
+        "opus-4.8"
+    );
+}
+
+/// Opus 5 is $5/MTok. Getting this wrong overstated every session 3x.
+#[test]
+fn opus_5_is_priced_as_opus_5_and_not_as_retired_opus_41() {
+    let mut s = make_session(0.0, 0);
+    s.model = monitor::shorten_model("claude-opus-5");
+    s.total_input_tokens = 1_000_000;
+    s.total_output_tokens = 0;
+
+    let cost = monitor::estimate_cost(&s);
+    assert!(
+        (cost - 5.0).abs() < 0.001,
+        "opus-5 input should bill at $5/MTok, got {cost}"
+    );
+    // And the window really is 1M for Claude 4.6 and later.
+    assert_eq!(monitor::model_context_max("opus-5"), 1_000_000);
+}
+
+/// A family name with no version must not inherit a sibling's rates — that
+/// silent inheritance is exactly what mispriced Opus 5.
+#[test]
+fn an_unversioned_family_name_does_not_borrow_a_siblings_prices() {
+    let mut s = make_session(0.0, 0);
+    s.model = "opus".into();
+    s.total_input_tokens = 1_000_000;
+
+    monitor::update_tokens(&mut s);
+    assert_eq!(
+        s.model_profile_source, "fallback",
+        "a bare family name must resolve as an unverified fallback"
+    );
 }
 
 #[test]
@@ -424,6 +523,105 @@ fn jsonl_parse_token_usage() {
     assert_eq!(s.cache_write_tokens, 5000);
     assert_eq!(s.model, "opus-4.6");
     assert_eq!(s.context_max, 1_000_000);
+}
+
+/// One assistant turn, three JSONL lines (#471).
+///
+/// Claude Code writes a line per content block — `thinking`, `text`,
+/// `tool_use` — and repeats the turn's whole `usage` on each one. Summing per
+/// line charged the same tokens three times. On a real session that was 614M
+/// input tokens against an actual 349M, and $1467 against $786.
+#[test]
+fn repeated_usage_lines_for_one_turn_are_counted_once() {
+    let jsonl = concat!(
+        r#"{"type":"assistant","message":{"id":"msg_01A","model":"claude-opus-4-6-20260401","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50000,"cache_creation_input_tokens":1000}}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"id":"msg_01A","model":"claude-opus-4-6-20260401","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50000,"cache_creation_input_tokens":1000}}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"id":"msg_01A","model":"claude-opus-4-6-20260401","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50000,"cache_creation_input_tokens":1000}}}"#,
+    );
+
+    let (mut s, _file) = make_session_with_jsonl(jsonl);
+    monitor::update_tokens(&mut s);
+
+    assert_eq!(s.total_input_tokens, 51_100, "100 + 50000 + 1000, once");
+    assert_eq!(s.total_output_tokens, 200);
+    assert_eq!(s.cache_read_tokens, 50_000);
+    assert_eq!(s.cache_write_tokens, 1_000);
+    // Context is the last call's prompt size, and a repeat carries the same
+    // value, so it is unaffected either way.
+    assert_eq!(s.context_tokens, 51_100);
+}
+
+/// Distinct turns still accumulate — the dedup must key on the id, not merely
+/// collapse adjacent lines with equal usage.
+#[test]
+fn distinct_turns_still_accumulate_even_with_identical_usage() {
+    let line = |id: &str| {
+        format!(
+            r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-opus-4-6-20260401","usage":{{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
+        )
+    };
+    let jsonl = format!(
+        "{}\n{}\n{}",
+        line("msg_01A"),
+        line("msg_01B"),
+        line("msg_01C")
+    );
+
+    let (mut s, _file) = make_session_with_jsonl(&jsonl);
+    monitor::update_tokens(&mut s);
+
+    assert_eq!(s.total_input_tokens, 3_000, "three separate turns");
+    assert_eq!(s.total_output_tokens, 1_500);
+}
+
+/// A transcript with no `id` on its messages counts every line, exactly as
+/// before. Old transcripts and hand-written fixtures must not change meaning.
+#[test]
+fn messages_without_an_id_are_counted_per_line_as_before() {
+    let line = r#"{"type":"assistant","message":{"model":"claude-opus-4-6-20260401","usage":{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+    let jsonl = format!("{line}\n{line}");
+
+    let (mut s, _file) = make_session_with_jsonl(&jsonl);
+    monitor::update_tokens(&mut s);
+
+    assert_eq!(s.total_input_tokens, 2_000, "no id to dedup on");
+}
+
+/// The dedup marker has to survive incremental parsing: a turn's lines can be
+/// split across two reads, because the file is appended to while it is read.
+#[test]
+fn dedup_survives_a_turn_split_across_two_incremental_reads() {
+    let line = r#"{"type":"assistant","message":{"id":"msg_01A","model":"claude-opus-4-6-20260401","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50000,"cache_creation_input_tokens":1000}}}"#;
+
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    writeln!(file, "{line}").unwrap();
+    file.flush().unwrap();
+
+    let raw = RawSession {
+        pid: 1,
+        session_id: "test".into(),
+        cwd: "/tmp/test".into(),
+        started_at: 0,
+    };
+    let mut s = ClaudeSession::from_raw(raw);
+    s.jsonl_path = Some(file.path().to_path_buf());
+
+    monitor::update_tokens(&mut s);
+    assert_eq!(s.total_input_tokens, 51_100, "first block of the turn");
+
+    // The rest of the same turn arrives in a later read.
+    writeln!(file, "{line}").unwrap();
+    writeln!(file, "{line}").unwrap();
+    file.flush().unwrap();
+    monitor::update_tokens(&mut s);
+
+    assert_eq!(
+        s.total_input_tokens, 51_100,
+        "the same turn must not be charged again across reads"
+    );
+    assert_eq!(s.total_output_tokens, 200);
 }
 
 #[test]
@@ -589,7 +787,7 @@ fn jsonl_rolls_up_subagent_tokens_and_cost() {
 
     let expected = expected_cost("sonnet-4.6", 100_000, 50_000)
         + expected_cost("opus-4.6", 200_000, 50_000)
-        + expected_cost("haiku", 50_000, 10_000);
+        + expected_cost("haiku-4.5", 50_000, 10_000);
     assert!((s.cost_usd - expected).abs() < 0.0001);
     assert!(!s.cost_estimate_unverified);
 

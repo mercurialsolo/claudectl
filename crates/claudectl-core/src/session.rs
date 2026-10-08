@@ -104,10 +104,25 @@ pub struct ClaudeSession {
     pub own_output_tokens: u64,
     pub own_cache_read_tokens: u64,
     pub own_cache_write_tokens: u64,
+    /// The subset of `own_cache_write_tokens` written with a 1-hour TTL, which
+    /// bills at 2x base input rather than 1.25x.
+    pub own_cache_write_1h_tokens: u64,
+    /// The message id whose usage was counted most recently.
+    ///
+    /// Claude Code writes one JSONL line per content block of an assistant
+    /// turn — `thinking`, `text`, `tool_use` — and repeats the turn's whole
+    /// `usage` on each. Counting every line charged the same tokens two or
+    /// three times over. Duplicate lines are always adjacent (verified across
+    /// 4814 turns in 25 transcripts), so remembering one id is enough, and it
+    /// has to live on the session because parsing is incremental and a turn's
+    /// lines can straddle two reads.
+    pub last_usage_msg_id: Option<String>,
     pub subagent_input_tokens: u64,
     pub subagent_output_tokens: u64,
     pub subagent_cache_read_tokens: u64,
     pub subagent_cache_write_tokens: u64,
+    /// 1-hour-TTL subset of `subagent_cache_write_tokens`.
+    pub subagent_cache_write_1h_tokens: u64,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub model: String,
@@ -199,6 +214,11 @@ pub struct SubagentRollup {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    /// The 1-hour-TTL subset of `cache_write_tokens`, billed at 2x base input.
+    pub cache_write_1h_tokens: u64,
+    /// The last turn counted, so a turn written as several JSONL lines is not
+    /// charged once per line. Same reason as `ClaudeSession::last_usage_msg_id`.
+    pub last_usage_msg_id: Option<String>,
     pub cost_usd: f64,
     pub model: String,
     pub cost_estimate_unverified: bool,
@@ -315,10 +335,13 @@ impl ClaudeSession {
             own_output_tokens: 0,
             own_cache_read_tokens: 0,
             own_cache_write_tokens: 0,
+            own_cache_write_1h_tokens: 0,
+            last_usage_msg_id: None,
             subagent_input_tokens: 0,
             subagent_output_tokens: 0,
             subagent_cache_read_tokens: 0,
             subagent_cache_write_tokens: 0,
+            subagent_cache_write_1h_tokens: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
             model: String::new(),

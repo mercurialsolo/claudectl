@@ -10,7 +10,13 @@ pub enum TranscriptRole {
 pub struct TranscriptUsage {
     pub input_tokens: u64,
     pub cache_read_input_tokens: u64,
+    /// Total cache-write tokens, whatever their TTL.
     pub cache_creation_input_tokens: u64,
+    /// The subset of the above written with a 1-hour TTL, which bills at 2x
+    /// base input instead of 1.25x. Zero when the transcript carries no
+    /// `cache_creation` breakdown, which prices everything at the 5-minute
+    /// rate — the documented default.
+    pub cache_creation_1h_input_tokens: u64,
     pub output_tokens: u64,
 }
 
@@ -24,6 +30,10 @@ pub enum TranscriptBlock {
 #[derive(Debug, Clone)]
 pub struct TranscriptMessage {
     pub role: TranscriptRole,
+    /// The API message id. One assistant turn is written as one JSONL line per
+    /// content block, every line repeating the same `usage`, so this is what
+    /// tells those lines apart from genuinely separate turns.
+    pub id: Option<String>,
     pub model: Option<String>,
     pub stop_reason: Option<String>,
     pub usage: Option<TranscriptUsage>,
@@ -54,6 +64,10 @@ pub fn parse_line(line: &str) -> Option<TranscriptEvent> {
 
     Some(TranscriptEvent::Message(TranscriptMessage {
         role,
+        id: msg
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         model: msg
             .get("model")
             .and_then(|v| v.as_str())
@@ -105,6 +119,11 @@ fn parse_usage(value: &Value) -> Option<TranscriptUsage> {
             .unwrap_or(0),
         cache_creation_input_tokens: value
             .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        cache_creation_1h_input_tokens: value
+            .get("cache_creation")
+            .and_then(|v| v.get("ephemeral_1h_input_tokens"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
         output_tokens: value

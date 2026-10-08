@@ -1358,6 +1358,9 @@ mod tests {
             total_error_count: 0,
             decay_score: 0,
             worker_origin: None,
+            last_usage_msg_id: None,
+            own_cache_write_1h_tokens: 0,
+            subagent_cache_write_1h_tokens: 0,
         };
 
         let ctx = snapshot_context(&session);
