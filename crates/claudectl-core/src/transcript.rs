@@ -24,6 +24,10 @@ pub enum TranscriptBlock {
 #[derive(Debug, Clone)]
 pub struct TranscriptMessage {
     pub role: TranscriptRole,
+    /// The API message id. One assistant turn is written as one JSONL line per
+    /// content block, every line repeating the same `usage`, so this is what
+    /// tells those lines apart from genuinely separate turns.
+    pub id: Option<String>,
     pub model: Option<String>,
     pub stop_reason: Option<String>,
     pub usage: Option<TranscriptUsage>,
@@ -54,6 +58,10 @@ pub fn parse_line(line: &str) -> Option<TranscriptEvent> {
 
     Some(TranscriptEvent::Message(TranscriptMessage {
         role,
+        id: msg
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         model: msg
             .get("model")
             .and_then(|v| v.as_str())

@@ -1358,6 +1358,7 @@ mod tests {
             total_error_count: 0,
             decay_score: 0,
             worker_origin: None,
+            last_usage_msg_id: None,
         };
 
         let ctx = snapshot_context(&session);

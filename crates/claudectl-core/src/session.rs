@@ -104,6 +104,16 @@ pub struct ClaudeSession {
     pub own_output_tokens: u64,
     pub own_cache_read_tokens: u64,
     pub own_cache_write_tokens: u64,
+    /// The message id whose usage was counted most recently.
+    ///
+    /// Claude Code writes one JSONL line per content block of an assistant
+    /// turn — `thinking`, `text`, `tool_use` — and repeats the turn's whole
+    /// `usage` on each. Counting every line charged the same tokens two or
+    /// three times over. Duplicate lines are always adjacent (verified across
+    /// 4814 turns in 25 transcripts), so remembering one id is enough, and it
+    /// has to live on the session because parsing is incremental and a turn's
+    /// lines can straddle two reads.
+    pub last_usage_msg_id: Option<String>,
     pub subagent_input_tokens: u64,
     pub subagent_output_tokens: u64,
     pub subagent_cache_read_tokens: u64,
@@ -315,6 +325,7 @@ impl ClaudeSession {
             own_output_tokens: 0,
             own_cache_read_tokens: 0,
             own_cache_write_tokens: 0,
+            last_usage_msg_id: None,
             subagent_input_tokens: 0,
             subagent_output_tokens: 0,
             subagent_cache_read_tokens: 0,

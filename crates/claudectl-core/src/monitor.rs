@@ -63,6 +63,7 @@ pub fn update_tokens(session: &mut ClaudeSession) {
                     session.own_output_tokens = 0;
                     session.own_cache_read_tokens = 0;
                     session.own_cache_write_tokens = 0;
+                    session.last_usage_msg_id = None;
                     // Reset persisted inference state on file truncation
                     last_type.clear();
                     last_stop_reason.clear();
@@ -135,10 +136,33 @@ pub fn update_tokens(session: &mut ClaudeSession) {
                                     let cache_create = usage.cache_creation_input_tokens;
                                     let output = usage.output_tokens;
 
-                                    session.own_input_tokens += input + cache_read + cache_create;
-                                    session.own_output_tokens += output;
-                                    session.own_cache_read_tokens += cache_read;
-                                    session.own_cache_write_tokens += cache_create;
+                                    // One assistant turn becomes several JSONL
+                                    // lines — one per content block — and every
+                                    // one repeats the turn's whole `usage`.
+                                    // Adding each line charged the same tokens
+                                    // two or three times: on a real session
+                                    // that was 614M input tokens against an
+                                    // actual 349M, and $1467 against $786.
+                                    //
+                                    // Totals are therefore counted once per
+                                    // message id. `context_tokens` and `model`
+                                    // below are *not* gated, because they are
+                                    // assignments rather than sums and a repeat
+                                    // carries the same values.
+                                    let repeat = match (&message.id, &session.last_usage_msg_id) {
+                                        (Some(id), Some(prev)) => id == prev,
+                                        _ => false,
+                                    };
+                                    if !repeat {
+                                        session.own_input_tokens +=
+                                            input + cache_read + cache_create;
+                                        session.own_output_tokens += output;
+                                        session.own_cache_read_tokens += cache_read;
+                                        session.own_cache_write_tokens += cache_create;
+                                        if message.id.is_some() {
+                                            session.last_usage_msg_id = message.id.clone();
+                                        }
+                                    }
                                     saw_parent_usage = true;
 
                                     // Track context window: the input_tokens of the LAST API call

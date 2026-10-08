@@ -426,6 +426,105 @@ fn jsonl_parse_token_usage() {
     assert_eq!(s.context_max, 1_000_000);
 }
 
+/// One assistant turn, three JSONL lines (#471).
+///
+/// Claude Code writes a line per content block — `thinking`, `text`,
+/// `tool_use` — and repeats the turn's whole `usage` on each one. Summing per
+/// line charged the same tokens three times. On a real session that was 614M
+/// input tokens against an actual 349M, and $1467 against $786.
+#[test]
+fn repeated_usage_lines_for_one_turn_are_counted_once() {
+    let jsonl = concat!(
+        r#"{"type":"assistant","message":{"id":"msg_01A","model":"claude-opus-4-6-20260401","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50000,"cache_creation_input_tokens":1000}}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"id":"msg_01A","model":"claude-opus-4-6-20260401","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50000,"cache_creation_input_tokens":1000}}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"id":"msg_01A","model":"claude-opus-4-6-20260401","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50000,"cache_creation_input_tokens":1000}}}"#,
+    );
+
+    let (mut s, _file) = make_session_with_jsonl(jsonl);
+    monitor::update_tokens(&mut s);
+
+    assert_eq!(s.total_input_tokens, 51_100, "100 + 50000 + 1000, once");
+    assert_eq!(s.total_output_tokens, 200);
+    assert_eq!(s.cache_read_tokens, 50_000);
+    assert_eq!(s.cache_write_tokens, 1_000);
+    // Context is the last call's prompt size, and a repeat carries the same
+    // value, so it is unaffected either way.
+    assert_eq!(s.context_tokens, 51_100);
+}
+
+/// Distinct turns still accumulate — the dedup must key on the id, not merely
+/// collapse adjacent lines with equal usage.
+#[test]
+fn distinct_turns_still_accumulate_even_with_identical_usage() {
+    let line = |id: &str| {
+        format!(
+            r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-opus-4-6-20260401","usage":{{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
+        )
+    };
+    let jsonl = format!(
+        "{}\n{}\n{}",
+        line("msg_01A"),
+        line("msg_01B"),
+        line("msg_01C")
+    );
+
+    let (mut s, _file) = make_session_with_jsonl(&jsonl);
+    monitor::update_tokens(&mut s);
+
+    assert_eq!(s.total_input_tokens, 3_000, "three separate turns");
+    assert_eq!(s.total_output_tokens, 1_500);
+}
+
+/// A transcript with no `id` on its messages counts every line, exactly as
+/// before. Old transcripts and hand-written fixtures must not change meaning.
+#[test]
+fn messages_without_an_id_are_counted_per_line_as_before() {
+    let line = r#"{"type":"assistant","message":{"model":"claude-opus-4-6-20260401","usage":{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+    let jsonl = format!("{line}\n{line}");
+
+    let (mut s, _file) = make_session_with_jsonl(&jsonl);
+    monitor::update_tokens(&mut s);
+
+    assert_eq!(s.total_input_tokens, 2_000, "no id to dedup on");
+}
+
+/// The dedup marker has to survive incremental parsing: a turn's lines can be
+/// split across two reads, because the file is appended to while it is read.
+#[test]
+fn dedup_survives_a_turn_split_across_two_incremental_reads() {
+    let line = r#"{"type":"assistant","message":{"id":"msg_01A","model":"claude-opus-4-6-20260401","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50000,"cache_creation_input_tokens":1000}}}"#;
+
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    writeln!(file, "{line}").unwrap();
+    file.flush().unwrap();
+
+    let raw = RawSession {
+        pid: 1,
+        session_id: "test".into(),
+        cwd: "/tmp/test".into(),
+        started_at: 0,
+    };
+    let mut s = ClaudeSession::from_raw(raw);
+    s.jsonl_path = Some(file.path().to_path_buf());
+
+    monitor::update_tokens(&mut s);
+    assert_eq!(s.total_input_tokens, 51_100, "first block of the turn");
+
+    // The rest of the same turn arrives in a later read.
+    writeln!(file, "{line}").unwrap();
+    writeln!(file, "{line}").unwrap();
+    file.flush().unwrap();
+    monitor::update_tokens(&mut s);
+
+    assert_eq!(
+        s.total_input_tokens, 51_100,
+        "the same turn must not be charged again across reads"
+    );
+    assert_eq!(s.total_output_tokens, 200);
+}
+
 #[test]
 fn jsonl_parse_multiple_entries() {
     let jsonl = concat!(
