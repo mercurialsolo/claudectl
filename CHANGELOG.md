@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.70.0] - 2026-10-08
+
 ### Fixed
 
 - **A session whose process had exited was reported as `Idle`, not `Finished`.**
