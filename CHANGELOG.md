@@ -4,6 +4,30 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A session whose process had exited was reported as `Idle`, not `Finished`.**
+  `process::fetch_and_enrich` reads liveness from `ps` and marks an exited
+  session `Finished` — then `monitor::update_tokens` ran afterwards and
+  `infer_status` reassigned on every path, the last being `Idle`. The verdict
+  was computed correctly and thrown away two steps later, so a dead session was
+  indistinguishable from a live idle one until its pointer file aged out 24
+  hours later. `infer_status` now preserves it, and `fetch_and_enrich` clears a
+  stale `Finished` when `ps` says the pid is alive, so liveness is re-decided
+  each tick in both directions.
+- **The budget hook judged the wrong session.** `budget-check.sh` pulled the
+  first `cost_usd` out of `claudectl --json` and compared *that* to the budget,
+  whichever session it belonged to; `PROJECT_DIR="$PWD"` was assigned and never
+  read. With six sessions open, a project at $3.58 was denied because an
+  unrelated one sat at $263.52, and an over-budget session passed whenever a
+  cheap one came first. Matching a hook process to a session means walking the
+  process tree, which `sed` cannot do, so it now lives in
+  `claudectl --budget-check <pid>` and the hook is a thin shim over it. The
+  pid's ancestors are searched too, since a hook may run under an intermediate
+  shell.
+
+The TUI's own budget enforcement was already per-session and is unchanged.
+
 ## [0.69.0] - 2026-10-08
 
 ### Fixed

@@ -339,6 +339,15 @@ pub(crate) struct Cli {
     #[arg(long, help_heading = "Budget & Notifications")]
     pub(crate) kill_on_budget: bool,
 
+    /// Answer a PreToolUse budget check for one session and exit.
+    ///
+    /// Prints the hook verdict as JSON and always exits 0, so a failure here
+    /// can never block Claude Code. Takes the pid of the session to judge —
+    /// the hook passes `$PPID`; an ancestor is accepted too, since a hook may
+    /// run under an intermediate shell.
+    #[arg(long, value_name = "PID", help_heading = "Budget & Notifications")]
+    pub(crate) budget_check: Option<u32>,
+
     /// Enable desktop notifications on NeedsInput transitions
     #[arg(long, help_heading = "Budget & Notifications")]
     pub(crate) notify: bool,
@@ -1121,6 +1130,10 @@ fn run_main(cli: Cli) -> io::Result<()> {
 
     if cli.headless {
         return commands::run_headless(Duration::from_millis(cfg.interval), &cfg, cli.json);
+    }
+
+    if let Some(pid) = cli.budget_check {
+        return commands::print_budget_check(pid, cli.budget.or(cfg.budget));
     }
 
     if cli.json && !cli.watch {

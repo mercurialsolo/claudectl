@@ -343,6 +343,20 @@ pub fn infer_status(
     last_stop_reason: &str,
     is_waiting_for_task: bool,
 ) {
+    // A process that has exited is not merely idle.
+    //
+    // `process::fetch_and_enrich` establishes this from `ps` before the
+    // transcript is read, and nothing in a transcript can contradict it — the
+    // transcript is a record of what already happened. Without this guard the
+    // verdict was computed correctly and then thrown away two steps later,
+    // because every path below assigns a status and the last one assigns
+    // `Idle`. A session whose Claude Code had exited therefore appeared as
+    // `Idle`, indistinguishable from a live one, until its pointer file aged
+    // out 24 hours later.
+    if session.status == SessionStatus::Finished {
+        return;
+    }
+
     // CPU is the strongest real-time signal — if the process is burning CPU,
     // it's processing regardless of what the JSONL says (JSONL can lag).
     if session.cpu_percent > 5.0 {
