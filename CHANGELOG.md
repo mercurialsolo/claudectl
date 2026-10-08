@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-10-08
+
 ### Fixed
 
 - **Session cost was overstated 6x.** Two independent faults, both measured
