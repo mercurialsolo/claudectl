@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.68.0] - 2026-10-07
+
 ### Fixed
 
 - **A second connection from the same peer no longer silently kills the first
