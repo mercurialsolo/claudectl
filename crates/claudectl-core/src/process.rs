@@ -19,10 +19,30 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
         Ok(o) => o,
         Err(e) => {
             crate::logger::log("ERROR", &format!("ps command failed: {e}"));
-            // ps failed — mark all as Finished (will show tombstone for 30s)
+            // `ps` being unavailable means liveness is *unknown*, not that
+            // everything died. This used to mark every session `Finished`,
+            // which was survivable only because `infer_status` immediately
+            // overwrote it; now that the verdict is sticky (#473) it would
+            // report a whole machine's sessions as dead.
+            //
+            // It is not hypothetical: busybox `ps` accepts neither `-o` nor
+            // `-p`, so on Alpine and other minimal images — a normal place to
+            // run an agent — this branch is the only one ever taken. Verified
+            // in a container: `ps -o pid=,tty=,%cpu=,rss=,command= -p <pid>`
+            // exits non-zero there while procps answers fine.
+            //
+            // `kill(pid, 0)` needs no external binary and answers the one
+            // question that matters. CPU and memory stay unknown, which is
+            // what they are.
             for s in sessions.iter_mut() {
-                s.status = SessionStatus::Finished;
                 s.cpu_percent = 0.0;
+                if pid_alive(s.pid) {
+                    if s.status == SessionStatus::Finished {
+                        s.status = SessionStatus::Unknown;
+                    }
+                } else {
+                    s.status = SessionStatus::Finished;
+                }
             }
             return;
         }
@@ -102,6 +122,25 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
             session.cpu_percent = 0.0;
         }
     }
+}
+
+/// Does this pid exist?
+///
+/// Public because it is the liveness primitive the rest of the tree needs
+/// when `ps` is unavailable, and because it is worth testing directly.
+///
+/// `kill(pid, 0)` sends no signal and only checks reachability. `EPERM` means
+/// the process exists but belongs to another user — alive, not dead — so the
+/// errno is distinguished rather than testing `== 0`.
+pub fn pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 fn extract_session_meta(cmd: &[&str], session: &mut ClaudeSession) {

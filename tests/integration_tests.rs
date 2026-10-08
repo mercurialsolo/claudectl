@@ -32,6 +32,37 @@ fn make_session(cpu: f32, last_message_age_secs: u64) -> ClaudeSession {
 // Status Inference Tests
 // ────────────────────────────────────────────────────────────────────────────
 
+/// The liveness primitive used when `ps` is unavailable.
+///
+/// busybox `ps` accepts neither `-o` nor `-p`, so on Alpine and other minimal
+/// images `fetch_and_enrich` can only take its failure branch. That branch
+/// used to mark every session `Finished` — survivable while `infer_status`
+/// overwrote it, but once the verdict became sticky it would report a whole
+/// machine as dead. It now asks this instead, which needs no external binary.
+#[test]
+fn pid_alive_answers_for_a_live_and_a_reaped_process() {
+    assert!(
+        claudectl_core::process::pid_alive(std::process::id()),
+        "this process is running"
+    );
+
+    // A pid that definitely no longer exists: spawn, wait, then ask.
+    let mut child = std::process::Command::new("true")
+        .spawn()
+        .expect("spawn /usr/bin/true");
+    let reaped = child.id();
+    let _ = child.wait();
+    assert!(
+        !claudectl_core::process::pid_alive(reaped),
+        "pid {reaped} was reaped and must read as dead"
+    );
+
+    assert!(
+        !claudectl_core::process::pid_alive(0),
+        "pid 0 is not a process"
+    );
+}
+
 #[test]
 fn a_dead_process_is_finished_not_idle() {
     // `process::fetch_and_enrich` reads liveness from `ps` and marks an exited
