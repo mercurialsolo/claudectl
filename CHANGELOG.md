@@ -4,6 +4,26 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **On a system whose `ps` cannot answer `-o`/`-p`, every session read as
+  dead.** busybox `ps` — Alpine and other minimal images, a normal place to run
+  an agent — rejects those flags but still *runs*, so the call returns with a
+  non-zero status and nothing on stdout rather than failing outright. The parse
+  then found no rows and marked every session `Finished`. That was survivable
+  until 0.70.0 made the verdict sticky, at which point a whole machine reported
+  dead. A non-zero exit is ambiguous, since procps means "no such process", so
+  `ps -o pid= -p 1` now distinguishes a crippled `ps` from a genuinely absent
+  process, and only then does liveness fall back to `kill(pid, 0)`. `EPERM` is
+  also no longer read as death — a process owned by another user exists.
+
+  Verified by running the shipped Linux musl artifact in Debian and Alpine
+  containers on an arm64 Linux VM: Debian reported a live session as `Idle` and
+  its cost as $7.50 throughout, while Alpine previously could not see processes
+  at all.
+
+## [0.71.0] - 2026-10-08
+
 ## [0.70.0] - 2026-10-08
 
 ### Fixed
