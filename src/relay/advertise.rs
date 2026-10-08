@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn workers_from_an_empty_registry_is_empty() {
-        let registry = PeerRegistry::new(30);
+        let registry = PeerRegistry::new(30, "local-test");
         assert!(workers_from(&registry).is_empty());
     }
 
@@ -156,7 +156,7 @@ mod tests {
     /// fleet worker, and comes back out as a displayable remote session.
     #[test]
     fn heartbeat_sessions_reach_the_fleet_snapshot() {
-        let mut registry = PeerRegistry::new(30);
+        let mut registry = PeerRegistry::new(30, "local-test");
         let peer = super::super::PeerId("mini".to_string());
         registry.handle_heartbeat(
             &peer,

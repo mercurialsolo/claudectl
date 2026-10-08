@@ -251,6 +251,7 @@ fn cmd_serve(
 
     let registry = Arc::new(Mutex::new(PeerRegistry::new(
         relay_cfg.heartbeat_interval_secs,
+        identity.as_str(),
     )));
     let listener = RelayListener::start(
         addr,
@@ -1025,7 +1026,7 @@ fn try_connect(
     psk: &[u8; 32],
     identity: &super::PeerId,
 ) -> Result<(String, Arc<Mutex<PeerRegistry>>), String> {
-    let registry = Arc::new(Mutex::new(PeerRegistry::new(30)));
+    let registry = Arc::new(Mutex::new(PeerRegistry::new(30, identity.as_str())));
     let tx = {
         let reg = registry.lock().unwrap();
         reg.message_tx()
@@ -1123,20 +1124,24 @@ fn spawn_startup_dials(registry: Arc<Mutex<PeerRegistry>>, identity: super::Peer
         for (id, addr) in targets {
             let peer_id = super::PeerId(id.clone());
 
-            // The peer may have dialled us while we were working through this
-            // list. Displacing a live inbound connection with our own would be
-            // pure churn.
-            let (already, tx) = match registry.lock() {
-                Ok(reg) => (reg.get_peer(&id).is_some(), reg.message_tx()),
+            // Dial unconditionally, even if the peer appears to be connected
+            // already. Checking first looks like a cheap way to avoid a
+            // redundant socket, but it is a race: the peer is doing the same
+            // thing at the same time, and both sides skipping on what the
+            // other just did leaves the pair with no agreed connection.
+            // `add_peer` resolves a genuine collision deterministically, so
+            // the worst case here is one extra handshake per peer at startup.
+            let tx = match registry.lock() {
+                Ok(reg) => reg.message_tx(),
                 Err(_) => return,
             };
-            if already {
-                continue;
-            }
 
             let psk = match load_peer_psk(&id) {
                 Some(psk) => psk,
-                None => continue,
+                None => {
+                    println!("Peer {id} has no pairing key on disk; not dialling");
+                    continue;
+                }
             };
 
             // Connect with the lock released: it would otherwise be held for
@@ -1163,12 +1168,14 @@ fn spawn_startup_dials(registry: Arc<Mutex<PeerRegistry>>, identity: super::Peer
 
             match registry.lock() {
                 Ok(mut reg) => {
-                    if reg.get_peer(&id).is_some() {
-                        conn.shutdown();
-                        continue;
+                    if reg.add_peer(conn) {
+                        println!("Connected to {id} ({addr})");
+                    } else {
+                        // We and the peer dialled each other at the same
+                        // moment and the rule kept theirs. Still connected,
+                        // just not over our socket.
+                        println!("Connected to {id} (it dialled us at the same moment)");
                     }
-                    reg.add_peer(conn);
-                    println!("Connected to {id} ({addr})");
                 }
                 Err(_) => return,
             }

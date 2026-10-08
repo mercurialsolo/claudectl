@@ -147,6 +147,15 @@ impl PeerConnection {
     /// way to write to it. `shutdown(Both)` acts on the socket rather than on
     /// one descriptor, so it ends the reader's blocking read and sends a FIN to
     /// the other end.
+    /// Whether this connection's reader thread is still running.
+    ///
+    /// The reader exits on EOF, so a finished reader means the socket is gone
+    /// even if `state` still says `Connected` and no heartbeats have been
+    /// missed yet.
+    pub fn reader_alive(&self) -> bool {
+        !self.reader_handle.as_ref().is_some_and(|h| h.is_finished())
+    }
+
     pub fn shutdown(&self) {
         if let Some(stream) = self.stream.as_ref() {
             if let Ok(guard) = stream.lock() {
