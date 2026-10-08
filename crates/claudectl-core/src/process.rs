@@ -87,8 +87,17 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
 
     // Mark dead PIDs as Finished instead of removing them immediately.
     // They'll be displayed briefly so the user can see what exited.
+    //
+    // Liveness is re-decided from `ps` on every tick, in both directions. The
+    // clearing half matters because `Finished` is now sticky — `infer_status`
+    // will not overwrite it — so a session marked dead by a transient `ps`
+    // failure above would otherwise stay dead for the life of the process.
     for session in sessions.iter_mut() {
-        if !alive_pids.contains(&session.pid) {
+        if alive_pids.contains(&session.pid) {
+            if session.status == crate::session::SessionStatus::Finished {
+                session.status = crate::session::SessionStatus::Unknown;
+            }
+        } else {
             session.status = crate::session::SessionStatus::Finished;
             session.cpu_percent = 0.0;
         }

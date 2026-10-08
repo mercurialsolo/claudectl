@@ -804,6 +804,80 @@ fn make_app(demo: bool, filters: &ViewFilters) -> App {
     app
 }
 
+/// Answer a PreToolUse budget check for the session owning `pid`.
+///
+/// The plugin hook used to do this itself, in `sed`: it pulled the first
+/// `cost_usd` out of `claudectl --json` and compared *that* to the budget,
+/// whichever session it belonged to. `PROJECT_DIR="$PWD"` was assigned and
+/// never read. So with six sessions open, a project at $3.58 was denied
+/// because an unrelated one sat at $263.52, and an over-budget session passed
+/// whenever a cheap one happened to come first.
+///
+/// Matching a session to a process is not a thing `sed` can do, so it is done
+/// here. Always prints a verdict and always returns `Ok`: a budget check that
+/// errors must not block the tool call.
+pub(crate) fn print_budget_check(pid: u32, budget: Option<f64>) -> io::Result<()> {
+    let Some(budget) = budget.filter(|b| *b > 0.0) else {
+        println!("{{}}");
+        return Ok(());
+    };
+
+    let mut sessions = discovery::scan_sessions();
+    process::fetch_and_enrich(&mut sessions);
+    discovery::resolve_jsonl_paths(&mut sessions);
+    for s in &mut sessions {
+        claudectl_core::monitor::update_tokens(s);
+    }
+
+    // The hook's own pid is a child of Claude Code, and may be a grandchild if
+    // a shell sits between, so walk up until a pid matches a known session.
+    let Some(session) = find_session_for_process(&sessions, pid) else {
+        println!("{{}}");
+        return Ok(());
+    };
+
+    if session.cost_usd >= budget {
+        let reason = format!(
+            "claudectl: session cost (${:.2}) exceeds budget (${:.2})",
+            session.cost_usd, budget
+        );
+        let verdict = serde_json::json!({ "decision": "deny", "reason": reason });
+        println!("{verdict}");
+    } else {
+        println!("{{}}");
+    }
+    Ok(())
+}
+
+/// Find the session whose process is `pid` or one of its ancestors.
+fn find_session_for_process(
+    sessions: &[session::ClaudeSession],
+    pid: u32,
+) -> Option<&session::ClaudeSession> {
+    let mut current = pid;
+    // Bounded: a hook is a handful of levels below Claude Code, and the loop
+    // must terminate even if `ps` reports a cycle.
+    for _ in 0..8 {
+        if current == 0 || current == 1 {
+            break;
+        }
+        if let Some(s) = sessions.iter().find(|s| s.pid == current) {
+            return Some(s);
+        }
+        current = parent_pid(current)?;
+    }
+    None
+}
+
+fn parent_pid(pid: u32) -> Option<u32> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .env_clear()
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
 pub(crate) fn print_json(demo: bool, filters: &ViewFilters) -> io::Result<()> {
     let app = make_app(demo, filters);
     let values: Vec<serde_json::Value> = app
@@ -2397,6 +2471,69 @@ mod digest_parser_tests {
     fn returns_none_for_blank_input() {
         assert!(digest_from_hook_payload("Edit", "   ").is_none());
         assert!(digest_from_hook_payload("Edit", "").is_none());
+    }
+
+    #[test]
+    fn budget_check_matches_a_session_by_its_own_pid() {
+        // The hook used to take the first `cost_usd` in `claudectl --json`,
+        // whichever session it belonged to, and compare that to the budget.
+        // With six sessions open a project at $3.58 was denied because an
+        // unrelated one sat at $263.52.
+        let mk = |pid: u32, cost: f64| {
+            let mut s = session::ClaudeSession::from_raw(session::RawSession {
+                pid,
+                session_id: format!("s{pid}"),
+                cwd: format!("/tmp/p{pid}"),
+                started_at: 0,
+            });
+            s.cost_usd = cost;
+            s
+        };
+        let sessions = vec![mk(111, 263.52), mk(222, 3.58)];
+
+        let cheap = super::find_session_for_process(&sessions, 222).expect("222 is present");
+        assert_eq!(cheap.pid, 222);
+        assert!(
+            (cheap.cost_usd - 3.58).abs() < 0.001,
+            "must be judged on its own cost, not the first session's"
+        );
+
+        let pricey = super::find_session_for_process(&sessions, 111).expect("111 is present");
+        assert_eq!(pricey.pid, 111);
+    }
+
+    #[test]
+    fn budget_check_walks_up_to_the_owning_session() {
+        // A PreToolUse hook is a child of Claude Code, and may be a grandchild
+        // when a shell sits between, so a direct pid match is not enough.
+        // This test process is itself a descendant of something, so its parent
+        // standing in for the session is the realistic shape.
+        let parent = super::parent_pid(std::process::id()).expect("this process has a parent");
+        let mut s = session::ClaudeSession::from_raw(session::RawSession {
+            pid: parent,
+            session_id: "owner".into(),
+            cwd: "/tmp/owner".into(),
+            started_at: 0,
+        });
+        s.cost_usd = 10.0;
+
+        let found = super::find_session_for_process(std::slice::from_ref(&s), std::process::id());
+        assert!(
+            found.is_some(),
+            "a hook process must resolve to the session that owns it"
+        );
+    }
+
+    #[test]
+    fn budget_check_finds_nothing_for_an_unrelated_process() {
+        let s = session::ClaudeSession::from_raw(session::RawSession {
+            pid: 999_999,
+            session_id: "other".into(),
+            cwd: "/tmp/other".into(),
+            started_at: 0,
+        });
+        // pid 1 is init; it is nobody's Claude session and the walk stops there.
+        assert!(super::find_session_for_process(std::slice::from_ref(&s), 1).is_none());
     }
 
     #[test]

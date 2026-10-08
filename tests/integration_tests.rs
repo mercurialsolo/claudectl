@@ -33,6 +33,57 @@ fn make_session(cpu: f32, last_message_age_secs: u64) -> ClaudeSession {
 // ────────────────────────────────────────────────────────────────────────────
 
 #[test]
+fn a_dead_process_is_finished_not_idle() {
+    // `process::fetch_and_enrich` reads liveness from `ps` and marks an exited
+    // session `Finished`, but `infer_status` ran afterwards and reassigned on
+    // every path — the last one being `Idle`. So a session whose Claude Code
+    // had exited was reported as `Idle`, indistinguishable from a live one,
+    // until its pointer file aged out 24 hours later.
+    let mut s = make_session(0.0, 0);
+    s.status = claudectl_core::session::SessionStatus::Finished;
+
+    monitor::infer_status(&mut s, "assistant", "end_turn", false);
+
+    assert_eq!(
+        s.status,
+        claudectl_core::session::SessionStatus::Finished,
+        "a transcript cannot bring a dead process back to life"
+    );
+}
+
+#[test]
+fn a_dead_process_stays_finished_even_while_burning_cpu_on_paper() {
+    // CPU is the strongest live signal and short-circuits first, so the guard
+    // has to sit above it: stale `cpu_percent` from an earlier tick must not
+    // resurrect an exited session.
+    let mut s = make_session(99.0, 0);
+    s.status = claudectl_core::session::SessionStatus::Finished;
+
+    monitor::infer_status(&mut s, "assistant", "", false);
+
+    assert_eq!(s.status, claudectl_core::session::SessionStatus::Finished);
+}
+
+#[test]
+fn a_live_process_is_not_pinned_to_a_stale_finished_verdict() {
+    // The other direction. `Finished` is now sticky through `infer_status`, so
+    // `fetch_and_enrich` has to clear it when `ps` says the pid is alive —
+    // otherwise one transient `ps` failure, which marks every session
+    // `Finished`, would pin them all dead for the life of the process.
+    let mut s = make_session(0.0, 0);
+    s.pid = std::process::id();
+    s.status = claudectl_core::session::SessionStatus::Finished;
+
+    claudectl_core::process::fetch_and_enrich(std::slice::from_mut(&mut s));
+
+    assert_ne!(
+        s.status,
+        claudectl_core::session::SessionStatus::Finished,
+        "this very process is alive, so the stale verdict must be cleared"
+    );
+}
+
+#[test]
 fn status_high_cpu_always_processing() {
     let mut s = make_session(50.0, 0);
     monitor::infer_status(&mut s, "", "", false);
