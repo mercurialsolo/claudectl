@@ -485,6 +485,13 @@ mod tests {
         }
 
         /// An outbound connection: the one we opened by dialling.
+        ///
+        /// `is_initiator` is the only field `replaces` reads, so building this
+        /// from the listener's constructor and flipping that one flag is
+        /// faithful for this test and nothing more. A real dialled connection
+        /// also carries `addr`, which the registry's reconnect path uses as a
+        /// direction proxy — if `replaces` ever consults that instead, these
+        /// fixtures would keep passing while the rule broke.
         fn outbound(
             id: &PeerId,
             s: TcpStream,
