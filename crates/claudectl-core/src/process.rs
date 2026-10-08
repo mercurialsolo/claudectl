@@ -48,6 +48,29 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
         }
     };
 
+    // busybox `ps` takes neither `-o` nor `-p`. It still *runs*, so this is an
+    // `Ok(output)` with a non-zero status and empty stdout — indistinguishable
+    // from "every one of those pids is gone" unless we ask separately. On
+    // Alpine and other minimal images that is the only outcome there is, so
+    // without this check every session on the machine reads as dead.
+    if !output.status.success() && !ps_supports_query() {
+        crate::logger::log(
+            "WARN",
+            "ps cannot answer -o/-p (busybox?); falling back to kill(pid, 0) for liveness",
+        );
+        for s in sessions.iter_mut() {
+            s.cpu_percent = 0.0;
+            if pid_alive(s.pid) {
+                if s.status == SessionStatus::Finished {
+                    s.status = SessionStatus::Unknown;
+                }
+            } else {
+                s.status = SessionStatus::Finished;
+            }
+        }
+        return;
+    }
+
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Collect alive PIDs from ps output
@@ -122,6 +145,23 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
             session.cpu_percent = 0.0;
         }
     }
+}
+
+/// Can `ps` answer the query `fetch_and_enrich` needs?
+///
+/// A non-zero exit from `ps -p <pids>` is ambiguous: it means "no matching
+/// process" on procps, and "I do not understand `-o` or `-p`" on busybox. Both
+/// arrive as `Ok(output)` with empty stdout, so the exit status alone cannot
+/// tell a dead session from a crippled `ps`.
+///
+/// pid 1 exists on every running Unix, so asking about it separates the two.
+fn ps_supports_query() -> bool {
+    std::process::Command::new("ps")
+        .args(["-o", "pid=", "-p", "1"])
+        .env_clear()
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(false)
 }
 
 /// Does this pid exist?
