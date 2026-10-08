@@ -19,14 +19,57 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
         Ok(o) => o,
         Err(e) => {
             crate::logger::log("ERROR", &format!("ps command failed: {e}"));
-            // ps failed — mark all as Finished (will show tombstone for 30s)
+            // `ps` being unavailable means liveness is *unknown*, not that
+            // everything died. This used to mark every session `Finished`,
+            // which was survivable only because `infer_status` immediately
+            // overwrote it; now that the verdict is sticky (#473) it would
+            // report a whole machine's sessions as dead.
+            //
+            // It is not hypothetical: busybox `ps` accepts neither `-o` nor
+            // `-p`, so on Alpine and other minimal images — a normal place to
+            // run an agent — this branch is the only one ever taken. Verified
+            // in a container: `ps -o pid=,tty=,%cpu=,rss=,command= -p <pid>`
+            // exits non-zero there while procps answers fine.
+            //
+            // `kill(pid, 0)` needs no external binary and answers the one
+            // question that matters. CPU and memory stay unknown, which is
+            // what they are.
             for s in sessions.iter_mut() {
-                s.status = SessionStatus::Finished;
                 s.cpu_percent = 0.0;
+                if pid_alive(s.pid) {
+                    if s.status == SessionStatus::Finished {
+                        s.status = SessionStatus::Unknown;
+                    }
+                } else {
+                    s.status = SessionStatus::Finished;
+                }
             }
             return;
         }
     };
+
+    // busybox `ps` takes neither `-o` nor `-p`. It still *runs*, so this is an
+    // `Ok(output)` with a non-zero status and empty stdout — indistinguishable
+    // from "every one of those pids is gone" unless we ask separately. On
+    // Alpine and other minimal images that is the only outcome there is, so
+    // without this check every session on the machine reads as dead.
+    if !output.status.success() && !ps_supports_query() {
+        crate::logger::log(
+            "WARN",
+            "ps cannot answer -o/-p (busybox?); falling back to kill(pid, 0) for liveness",
+        );
+        for s in sessions.iter_mut() {
+            s.cpu_percent = 0.0;
+            if pid_alive(s.pid) {
+                if s.status == SessionStatus::Finished {
+                    s.status = SessionStatus::Unknown;
+                }
+            } else {
+                s.status = SessionStatus::Finished;
+            }
+        }
+        return;
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -102,6 +145,42 @@ pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
             session.cpu_percent = 0.0;
         }
     }
+}
+
+/// Can `ps` answer the query `fetch_and_enrich` needs?
+///
+/// A non-zero exit from `ps -p <pids>` is ambiguous: it means "no matching
+/// process" on procps, and "I do not understand `-o` or `-p`" on busybox. Both
+/// arrive as `Ok(output)` with empty stdout, so the exit status alone cannot
+/// tell a dead session from a crippled `ps`.
+///
+/// pid 1 exists on every running Unix, so asking about it separates the two.
+fn ps_supports_query() -> bool {
+    std::process::Command::new("ps")
+        .args(["-o", "pid=", "-p", "1"])
+        .env_clear()
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(false)
+}
+
+/// Does this pid exist?
+///
+/// Public because it is the liveness primitive the rest of the tree needs
+/// when `ps` is unavailable, and because it is worth testing directly.
+///
+/// `kill(pid, 0)` sends no signal and only checks reachability. `EPERM` means
+/// the process exists but belongs to another user — alive, not dead — so the
+/// errno is distinguished rather than testing `== 0`.
+pub fn pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 fn extract_session_meta(cmd: &[&str], session: &mut ClaudeSession) {
