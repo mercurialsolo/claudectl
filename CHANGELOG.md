@@ -4,6 +4,36 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Session cost was overstated 6x.** Two independent faults, both measured
+  against a live session recomputed from its own transcript ($1463.67 reported,
+  $248.79 actual):
+  - **A turn's tokens were counted once per content block (1.87x).** Claude Code
+    writes one assistant turn as several JSONL lines — `thinking`, `text`,
+    `tool_use` — each repeating the turn's entire `usage`. Totals are now counted
+    once per `message.id`. The subagent rollup had the same fault.
+  - **The price table was a model generation behind (3.3x).** `shorten_model`
+    collapsed any unrecognised id to its bare family name, so `claude-opus-5`
+    matched the `"opus"` arm and billed at retired Opus 4.1 rates, $15/MTok
+    against a real $5. Versions are now extracted from the id, rates come from
+    `docs/pricing-source.md`, and an unversioned family name resolves to a
+    labelled fallback instead of inheriting a sibling's prices.
+- **1-hour cache writes are priced at 2x base input**, not the 5-minute 1.25x.
+  Every cache write in a long session is 1-hour TTL, so that line was understated
+  by a third. Transcripts with no TTL breakdown still price at the 5-minute rate,
+  which is the documented default.
+- **`context_max` for Sonnet 4.6 and Sonnet 5 was 200k**, understating context
+  saturation fivefold. Claude 4.6 and later carry the full 1M window.
+
+Status and context reporting were checked against the same live sessions and
+were already correct; `context_pct` is unchanged by this work.
+
+**Known limitation:** `history.rs` persists computed dollars and token counts
+without the cache-read/cache-write split, so rows recorded before this release
+cannot be recomputed. Past figures in `claudectl history` and `stats` stay as
+they were recorded.
+
 ## [0.68.0] - 2026-10-07
 
 ### Fixed
