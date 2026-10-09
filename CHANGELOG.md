@@ -6,6 +6,38 @@ All notable changes to claudectl are documented here.
 
 ### Fixed
 
+- **A peer that had only ever dialled in was undialable, and peer records
+  held one address that every write overwrote.** `save_peer_meta` is called
+  from the four dialling paths and never from the listener, so the host of an
+  invite held a pairing key and nothing to connect to; and because each write
+  rewrote the whole record, a laptop that paired on a LAN and later moved
+  networks had no other address to try.
+
+  The handshake now carries the dialler's listening port, and the acceptor
+  records the peer at the IP it observed plus that port — after authentication
+  succeeds, so an unauthenticated connection cannot write to the address book.
+  The port has to come from the peer and the address from us, since neither
+  side knows both. It is sent only when bound to a wildcard address, because a
+  port bound to one specific address is not reachable where the peer sees us
+  from. Older peers send no such field, which means "nothing learned" rather
+  than an error.
+
+  Peer records now hold an ordered list of addresses, most recent first,
+  deduplicated and capped. Both dial paths try them in turn and stop at the
+  first that answers as the expected peer, so losing one address no longer
+  costs the connection. Records written by earlier versions read as a
+  single-address list.
+
+  Verified on two machines: as invite host, the Mac mini recorded the
+  laptop's listening address rather than an ephemeral port; both then dialled
+  on restart and held with no disconnects; and with a dead address ahead of
+  the mini's Tailscale address, the laptop logged the dead one once and
+  connected on the next.
+
+## [0.73.0] - 2026-10-08
+
+### Fixed
+
 - **Two machines that both ran only `relay serve` never connected.** Each
   listened and neither dialled: the registry's reconnect event needs a peer
   already present and already marked disconnected, and a fresh process starts
