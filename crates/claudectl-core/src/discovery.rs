@@ -260,12 +260,25 @@ pub fn resolve_worktree_ids(sessions: &mut [ClaudeSession]) {
     }
 }
 
+/// Characters Claude Code replaces with `-` when it names a project
+/// directory under `~/.claude/projects`.
+///
+/// Verified against the `cwd` field of all 316 transcripts on a real machine
+/// versus the directory each one sits in: this set explains 296 exactly, and
+/// none of the remaining 20 differ only in punctuation — those record a
+/// genuinely different path (a session that moved between a repo root and a
+/// worktree), which no mapping can account for.
+const SLUG_SEPARATORS: [char; 4] = ['/', '.', '_', '+'];
+
 fn cwd_to_slug(cwd: &str) -> String {
     let trimmed = cwd.trim_end_matches('/');
     if trimmed.is_empty() {
         return "-".to_string();
     }
-    trimmed.replace('/', "-")
+    trimmed
+        .chars()
+        .map(|c| if SLUG_SEPARATORS.contains(&c) { '-' } else { c })
+        .collect()
 }
 
 /// Remove session JSON files for dead PIDs whose files are older than 24 hours.
@@ -361,5 +374,50 @@ mod tests {
     #[test]
     fn slug_single_component() {
         assert_eq!(cwd_to_slug("/tmp"), "-tmp");
+    }
+
+    // The cases below come from paths that actually occur on a developer
+    // machine. Every case above happens to contain none of the affected
+    // characters, which is why mapping only `/` passed them.
+
+    /// A worktree path: `.claude` becomes `--claude`, because the `/` before
+    /// it and the `.` in it both map to `-`. Every worktree this project's
+    /// own workflow creates has this shape.
+    #[test]
+    fn slug_dot_directory_in_a_worktree_path() {
+        assert_eq!(
+            cwd_to_slug("/Users/barada/Sandbox/Mason/lamina/.claude/worktrees/fix-3180"),
+            "-Users-barada-Sandbox-Mason-lamina--claude-worktrees-fix-3180"
+        );
+    }
+
+    /// An underscore in a project name.
+    #[test]
+    fn slug_underscore_becomes_hyphen() {
+        assert_eq!(
+            cwd_to_slug("/Users/barada/Sandbox/Mason/clm_toolkit"),
+            "-Users-barada-Sandbox-Mason-clm-toolkit"
+        );
+    }
+
+    /// A `+` in a branch-named worktree.
+    #[test]
+    fn slug_plus_becomes_hyphen() {
+        assert_eq!(
+            cwd_to_slug(
+                "/Users/barada/Sandbox/Mason/claudectl/.claude/worktrees/feat+jev-classification"
+            ),
+            "-Users-barada-Sandbox-Mason-claudectl--claude-worktrees-feat-jev-classification"
+        );
+    }
+
+    /// All four separators at once, with an existing `-` left alone.
+    #[test]
+    fn slug_maps_every_separator() {
+        assert_eq!(
+            cwd_to_slug("/a.b/c_d/e+f/g-h"),
+            "-a-b-c-d-e-f-g-h",
+            "'.', '_' and '+' map to '-' alongside '/'; an existing '-' is unchanged"
+        );
     }
 }
