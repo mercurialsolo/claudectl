@@ -6,6 +6,43 @@ All notable changes to claudectl are documented here.
 
 ### Fixed
 
+- **`relay delegate` reported success and did nothing whenever the two peers
+  already held a live connection.** A regression in 0.72.0, and the normal
+  case rather than an edge one since 0.73.0 made a live link ordinary for any
+  pair that has connected once.
+
+  `relay delegate` is a one-shot process: it dials, sends, and exits. That
+  connection authenticated as the same peer as the lasting link, so the
+  accepting side saw two connections for one peer and applied 0.72.0's
+  collision rule, closing the new one before its message was read. The rule is
+  right for two serving peers and wrong here — it was being asked a question
+  about the wrong kind of connection.
+
+  The handshake now says which kind it is, and the accepting side delivers a
+  one-shot's messages without registering it as a peer link, so it can neither
+  displace the link nor be displaced by it. Older peers omit the field and are
+  treated as peer links exactly as before.
+
+  Two things that kept this invisible are fixed with it: sending treated a
+  successful write as delivery and now reports an error when the peer closes
+  without accepting the message, so this failure exits non-zero instead of
+  printing "delegated"; and it consulted only the newest stored address rather
+  than all of them, so sending to a peer that had moved could fail with a
+  working address on record.
+
+  Verified on two machines in both directions, since the broken behaviour
+  depended on how the two peer ids sort: the delegation reaches the worker,
+  the task runs, status and completion both come back, and neither side
+  reports a disconnect. With the far side stopped, the command exits non-zero
+  and names the error.
+
+  This also makes delegated tasks report their completion back to the host for
+  the first time, which had never worked.
+
+## [0.74.0] - 2026-10-09
+
+### Fixed
+
 - **A peer that had only ever dialled in was undialable, and peer records
   held one address that every write overwrote.** `save_peer_meta` is called
   from the four dialling paths and never from the listener, so the host of an
