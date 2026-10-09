@@ -1540,7 +1540,7 @@ pub(crate) fn format_session(fmt: &str, s: &session::ClaudeSession) -> String {
 
 /// Path to the brain gate mode state file.
 pub(crate) fn brain_gate_mode_path() -> std::path::PathBuf {
-    claudectl::brain::gate_mode_path()
+    crate::brain::gate_mode_path()
 }
 
 /// Read the current brain gate mode from disk. Returns "on" if no file exists.

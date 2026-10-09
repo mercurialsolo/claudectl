@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::brain::client::BrainSuggestion;
@@ -306,7 +306,22 @@ pub(super) fn decisions_dir() -> PathBuf {
 }
 
 fn decisions_path() -> PathBuf {
-    decisions_dir().join("decisions.jsonl")
+    decisions_path_in(&decisions_dir())
+}
+
+/// The decisions log inside an explicitly given brain directory.
+///
+/// Every reader and writer below comes in two forms: a no-argument one that
+/// resolves `~/.claudectl/brain`, and an `_in` one that takes the directory.
+/// The `_in` form holds the body and the no-argument form is a one-line
+/// wrapper, so a test that passes a temporary directory still exercises the
+/// production path rather than a parallel copy of it.
+///
+/// This exists because the tests used to redirect `HOME` for the whole
+/// process instead, which is a data race against every other test in the
+/// same binary (#468).
+fn decisions_path_in(root: &Path) -> PathBuf {
+    root.join("decisions.jsonl")
 }
 
 /// Convert a project name to a filesystem-safe slug.
@@ -737,13 +752,18 @@ pub fn forget() -> Result<(), String> {
 }
 
 pub fn read_all_decisions() -> Vec<DecisionRecord> {
-    let path = decisions_path();
+    read_all_decisions_in(&decisions_dir())
+}
+
+/// `read_all_decisions` against an explicit brain directory.
+pub fn read_all_decisions_in(root: &Path) -> Vec<DecisionRecord> {
+    let path = decisions_path_in(root);
     let content = match fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
 
-    let canonical_set = read_canonical_ids();
+    let canonical_set = read_canonical_ids_in(root);
 
     content
         .lines()
@@ -859,13 +879,22 @@ pub fn read_all_decisions() -> Vec<DecisionRecord> {
 // ────────────────────────────────────────────────────────────────────────────
 
 fn canonical_path() -> PathBuf {
-    decisions_dir().join("canonical.jsonl")
+    canonical_path_in(&decisions_dir())
+}
+
+fn canonical_path_in(root: &Path) -> PathBuf {
+    root.join("canonical.jsonl")
 }
 
 /// Persist a canonical mark for the given decision id.
 /// Idempotent: appending the same id twice is harmless — the set dedupes on read.
 pub fn mark_canonical(decision_id: &str, note: Option<&str>) -> Result<(), String> {
-    let path = canonical_path();
+    mark_canonical_in(&decisions_dir(), decision_id, note)
+}
+
+/// `mark_canonical` against an explicit brain directory.
+pub fn mark_canonical_in(root: &Path, decision_id: &str, note: Option<&str>) -> Result<(), String> {
+    let path = canonical_path_in(root);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -903,6 +932,16 @@ pub fn record_correction(
     corrected_action: &str,
     note: Option<&str>,
 ) -> Result<String, String> {
+    record_correction_in(&decisions_dir(), original, corrected_action, note)
+}
+
+/// `record_correction` against an explicit brain directory.
+pub fn record_correction_in(
+    root: &Path,
+    original: &DecisionRecord,
+    corrected_action: &str,
+    note: Option<&str>,
+) -> Result<String, String> {
     let decision_id = gen_decision_id();
     let reasoning = match note {
         Some(n) if !n.trim().is_empty() => {
@@ -930,7 +969,7 @@ pub fn record_correction(
         "corrected_from": original.decision_id,
     });
 
-    let path = decisions_path();
+    let path = decisions_path_in(root);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -947,13 +986,18 @@ pub fn record_correction(
     .map_err(|e| format!("write correction: {e}"))?;
 
     // Mark the corrected example canonical so it gets the retrieval boost.
-    mark_canonical(&decision_id, note)?;
+    mark_canonical_in(root, &decision_id, note)?;
     Ok(decision_id)
 }
 
 /// Read the set of decision ids that have been marked canonical.
 pub fn read_canonical_ids() -> std::collections::HashSet<String> {
-    let path = canonical_path();
+    read_canonical_ids_in(&decisions_dir())
+}
+
+/// `read_canonical_ids` against an explicit brain directory.
+pub fn read_canonical_ids_in(root: &Path) -> std::collections::HashSet<String> {
+    let path = canonical_path_in(root);
     let content = match fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return std::collections::HashSet::new(),
@@ -1110,28 +1154,20 @@ mod tests {
 
     #[test]
     fn record_correction_appends_canonical_example() {
-        // Override HOME so we write to a clean tmp ~/.claudectl/brain.
+        // A brain directory of this test's own. The `_in` entry points take
+        // it explicitly, so nothing here depends on process-wide `HOME`.
         let tmp = tempfile::tempdir().unwrap();
-        let original_home = std::env::var("HOME").ok();
-        // SAFETY: cargo test in this crate runs sequentially for env mutation.
-        unsafe { std::env::set_var("HOME", tmp.path()) };
+        let root = tmp.path();
 
         let mut original = make_decision("Bash", "acme", "reject");
         original.brain_action = "approve".into();
         original.decision_id = Some("dec_orig".into());
 
-        let result = record_correction(&original, "deny", Some("this deletes prod data"));
+        let new_id = record_correction_in(root, &original, "deny", Some("this deletes prod data"))
+            .expect("correction recorded");
 
-        let all = read_all_decisions();
-        let canon = read_canonical_ids();
-
-        if let Some(h) = original_home {
-            unsafe { std::env::set_var("HOME", h) };
-        } else {
-            unsafe { std::env::remove_var("HOME") };
-        }
-
-        let new_id = result.expect("correction recorded");
+        let all = read_all_decisions_in(root);
+        let canon = read_canonical_ids_in(root);
         let corrected = all
             .iter()
             .find(|d| d.decision_id.as_deref() == Some(new_id.as_str()))
