@@ -28,10 +28,12 @@ pub struct PeerRegistry {
     last_heartbeat_tick: Instant,
     /// Session state received from each connected peer's heartbeat.
     worker_states: HashMap<String, WorkerState>,
+    /// Our own peer id, for resolving simultaneous-dial collisions.
+    identity: String,
 }
 
 impl PeerRegistry {
-    pub fn new(heartbeat_interval_secs: u64) -> Self {
+    pub fn new(heartbeat_interval_secs: u64, identity: &str) -> Self {
         let (tx, rx) = channel();
         PeerRegistry {
             peers: HashMap::new(),
@@ -41,6 +43,7 @@ impl PeerRegistry {
             heartbeat_interval: Duration::from_secs(heartbeat_interval_secs),
             last_heartbeat_tick: Instant::now(),
             worker_states: HashMap::new(),
+            identity: identity.to_string(),
         }
     }
 
@@ -62,12 +65,53 @@ impl PeerRegistry {
     ///
     /// Closing it makes both ends agree: the reader thread exits, and the other
     /// end sees a FIN and reconnects, since the dialling side is the initiator.
-    pub fn add_peer(&mut self, conn: PeerConnection) {
+    /// Returns whether `conn` is the connection now in the registry. A `false`
+    /// means the collision rule below kept the existing one and closed this
+    /// one — the caller has a dead socket and should not report a new link.
+    pub fn add_peer(&mut self, conn: PeerConnection) -> bool {
         let id = conn.peer_id.0.clone();
         if let Some(old) = self.peers.remove(&id) {
+            if old.reader_alive() && !self.replaces(&old, &conn) {
+                // Keep what we have. The peer applies the same rule to the
+                // same two ids and keeps the other end of this same socket.
+                conn.shutdown();
+                self.peers.insert(id, old);
+                return false;
+            }
             old.shutdown();
         }
         self.peers.insert(id, conn);
+        true
+    }
+
+    /// Should `new` displace the live connection `old` for the same peer?
+    ///
+    /// Two peers that dial each other at the same moment end up holding two
+    /// authenticated sockets for the one pair — an inbound and an outbound at
+    /// each end. Both ends must agree on which survives, and only an
+    /// asymmetric rule gives agreement: "always keep mine" and "always keep
+    /// theirs" both close one socket at each end, and the two survivors are
+    /// then opposite ends of *different* sockets, so both die and neither peer
+    /// reconnects. That was observed, not theorised.
+    ///
+    /// So: the connection opened by the lower peer id wins. We opened an
+    /// outbound one, the peer opened an inbound one, so each end compares the
+    /// same pair of ids and reaches the same verdict.
+    fn replaces(&self, old: &PeerConnection, new: &PeerConnection) -> bool {
+        // Same direction is not a collision — it is a replacement, which is
+        // what #459 is about: the newer socket is the live one.
+        if old.is_initiator == new.is_initiator {
+            return true;
+        }
+        // Past that check the two are opposite directions for the same peer,
+        // so the two openers are exactly us and them.
+        let ours = self.identity.as_str();
+        let theirs = new.peer_id.as_str();
+        if new.is_initiator {
+            ours < theirs
+        } else {
+            theirs < ours
+        }
     }
 
     /// Remove a peer from the registry.
@@ -288,7 +332,7 @@ mod tests {
 
     #[test]
     fn dedup_filters_duplicate_ids() {
-        let mut registry = PeerRegistry::new(30);
+        let mut registry = PeerRegistry::new(30, "local-test");
 
         // Manually push messages through the channel
         let tx = registry.message_tx();
@@ -305,7 +349,7 @@ mod tests {
 
     #[test]
     fn dedup_evicts_oldest_beyond_capacity() {
-        let mut registry = PeerRegistry::new(30);
+        let mut registry = PeerRegistry::new(30, "local-test");
 
         // Fill the dedup buffer
         for i in 0..DEDUP_CAPACITY + 5 {
@@ -325,7 +369,7 @@ mod tests {
 
     #[test]
     fn connected_peers_filters_by_state() {
-        let registry = PeerRegistry::new(30);
+        let registry = PeerRegistry::new(30, "local-test");
         // Empty registry
         assert_eq!(registry.connected_peers().len(), 0);
         assert_eq!(registry.connected_count(), 0);
@@ -334,7 +378,7 @@ mod tests {
 
     #[test]
     fn broadcast_and_send_to_empty_registry() {
-        let registry = PeerRegistry::new(30);
+        let registry = PeerRegistry::new(30, "local-test");
         let msg = make_msg("test");
         // Should not panic on empty registry
         registry.broadcast(&msg);
@@ -343,7 +387,7 @@ mod tests {
 
     #[test]
     fn handle_heartbeat_stores_worker_state() {
-        let mut registry = PeerRegistry::new(30);
+        let mut registry = PeerRegistry::new(30, "local-test");
         let peer_id = PeerId("worker-01".into());
         let payload = serde_json::json!({
             "worker_id": "worker-01",
@@ -364,7 +408,7 @@ mod tests {
 
     #[test]
     fn handle_heartbeat_empty_payload_is_liveness_only() {
-        let mut registry = PeerRegistry::new(30);
+        let mut registry = PeerRegistry::new(30, "local-test");
         let peer_id = PeerId("worker-02".into());
         let payload = serde_json::json!({});
         registry.handle_heartbeat(&peer_id, &payload);
@@ -374,7 +418,7 @@ mod tests {
 
     #[test]
     fn expire_stale_workers_removes_old_entries() {
-        let mut registry = PeerRegistry::new(30);
+        let mut registry = PeerRegistry::new(30, "local-test");
         let peer_id = PeerId("stale-worker".into());
         let payload = serde_json::json!({
             "worker_id": "stale-worker",
@@ -393,7 +437,7 @@ mod tests {
 
     #[test]
     fn handle_heartbeat_updates_existing_worker() {
-        let mut registry = PeerRegistry::new(30);
+        let mut registry = PeerRegistry::new(30, "local-test");
         let peer_id = PeerId("worker-01".into());
 
         let payload1 = serde_json::json!({
@@ -416,6 +460,156 @@ mod tests {
     /// Real loopback sockets, because the whole bug was that the `Arc`-shared
     /// stream outlived the registry entry — a struct-literal `PeerConnection`
     /// with `stream: None` cannot express it.
+    /// Both ends dial at once, so each holds an inbound and an outbound socket
+    /// for the one peer. Whichever order the two arrive in, and whichever way
+    /// the ids compare, the two ends must keep opposite ends of the SAME
+    /// socket — otherwise both survivors are half-dead and the pair never
+    /// recovers. That is what #464's startup dial made reachable.
+    mod simultaneous_dial {
+        use super::super::*;
+        use std::io::Read;
+        use std::net::{TcpListener, TcpStream};
+
+        fn socket_pair(listener: &TcpListener) -> (TcpStream, TcpStream) {
+            let remote = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (accepted, _) = listener.accept().unwrap();
+            (accepted, remote)
+        }
+
+        fn reads_eof(stream: &mut TcpStream) -> bool {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buf = [0u8; 1];
+            matches!(stream.read(&mut buf), Ok(0))
+        }
+
+        /// An outbound connection: the one we opened by dialling.
+        ///
+        /// `is_initiator` is the only field `replaces` reads, so building this
+        /// from the listener's constructor and flipping that one flag is
+        /// faithful for this test and nothing more. A real dialled connection
+        /// also carries `addr`, which the registry's reconnect path uses as a
+        /// direction proxy — if `replaces` ever consults that instead, these
+        /// fixtures would keep passing while the rule broke.
+        fn outbound(
+            id: &PeerId,
+            s: TcpStream,
+            tx: Sender<(PeerId, RelayMessage)>,
+        ) -> PeerConnection {
+            let mut c = PeerConnection::from_authenticated(id.clone(), s, tx);
+            c.is_initiator = true;
+            c
+        }
+
+        /// An inbound connection: the one the peer opened, as the listener builds it.
+        fn inbound(
+            id: &PeerId,
+            s: TcpStream,
+            tx: Sender<(PeerId, RelayMessage)>,
+        ) -> PeerConnection {
+            PeerConnection::from_authenticated(id.clone(), s, tx)
+        }
+
+        /// Returns (our outbound socket survived, their inbound socket survived).
+        fn resolve(us: &str, them: &str, outbound_first: bool) -> (bool, bool) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut reg = PeerRegistry::new(30, us);
+            let tx = reg.message_tx();
+            let id = PeerId(them.into());
+
+            let (out_sock, mut out_remote) = socket_pair(&listener);
+            let (in_sock, mut in_remote) = socket_pair(&listener);
+
+            if outbound_first {
+                reg.add_peer(outbound(&id, out_sock, tx.clone()));
+                reg.add_peer(inbound(&id, in_sock, tx));
+            } else {
+                reg.add_peer(inbound(&id, in_sock, tx.clone()));
+                reg.add_peer(outbound(&id, out_sock, tx));
+            }
+
+            assert_eq!(reg.connected_count(), 1, "one entry per peer, always");
+            (!reads_eof(&mut out_remote), !reads_eof(&mut in_remote))
+        }
+
+        #[test]
+        fn when_our_id_is_lower_the_connection_we_opened_survives() {
+            // Arrival order must not change the verdict: the two ends race, so
+            // each sees a different order.
+            for outbound_first in [true, false] {
+                let (ours, theirs) = resolve("aaa-lower", "zzz-higher", outbound_first);
+                assert!(
+                    ours,
+                    "our outbound must survive (outbound_first={outbound_first})"
+                );
+                assert!(
+                    !theirs,
+                    "their inbound must be closed (outbound_first={outbound_first})"
+                );
+            }
+        }
+
+        #[test]
+        fn when_our_id_is_higher_the_connection_they_opened_survives() {
+            for outbound_first in [true, false] {
+                let (ours, theirs) = resolve("zzz-higher", "aaa-lower", outbound_first);
+                assert!(
+                    !ours,
+                    "our outbound must be closed (outbound_first={outbound_first})"
+                );
+                assert!(
+                    theirs,
+                    "their inbound must survive (outbound_first={outbound_first})"
+                );
+            }
+        }
+
+        /// The two ends of one pair reach opposite verdicts about their own
+        /// socket, which is the point: between them exactly one socket lives.
+        #[test]
+        fn the_two_ends_agree_on_which_socket_lives() {
+            let (low_keeps_own, _) = resolve("aaa-lower", "zzz-higher", true);
+            let (high_keeps_own, high_keeps_theirs) = resolve("zzz-higher", "aaa-lower", true);
+            assert!(low_keeps_own, "the lower id keeps the socket it opened");
+            assert!(!high_keeps_own, "the higher id drops the socket it opened");
+            assert!(
+                high_keeps_theirs,
+                "and keeps the lower id's socket — the same one the lower id kept"
+            );
+        }
+
+        /// #459's case must still work. A higher-id peer that crashed and
+        /// reconnected has to be able to replace the zombie a lower-id peer
+        /// still holds; the id rule alone would keep the zombie forever.
+        #[test]
+        fn a_dead_connection_is_displaced_whatever_the_ids_say() {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut reg = PeerRegistry::new(30, "zzz-higher");
+            let tx = reg.message_tx();
+            let id = PeerId("aaa-lower".into());
+
+            // We dialled them once; their end then vanished.
+            let (out_sock, out_remote) = socket_pair(&listener);
+            reg.add_peer(outbound(&id, out_sock, tx.clone()));
+            drop(out_remote);
+            // Let the reader thread notice the EOF.
+            std::thread::sleep(Duration::from_millis(200));
+
+            // They come back, dialling in. Our id is higher, so the plain rule
+            // would keep what we have — which is dead.
+            let (in_sock, mut in_remote) = socket_pair(&listener);
+            reg.add_peer(inbound(&id, in_sock, tx));
+
+            assert_eq!(reg.connected_count(), 1);
+            assert!(
+                !reads_eof(&mut in_remote),
+                "the live inbound connection must replace the zombie, or the \
+                 peer can never reconnect to us"
+            );
+        }
+    }
+
     mod displaced_connections {
         use super::super::*;
         use std::io::Read;
@@ -440,7 +634,7 @@ mod tests {
         #[test]
         fn a_second_connection_from_the_same_peer_closes_the_first() {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let mut reg = PeerRegistry::new(30);
+            let mut reg = PeerRegistry::new(30, "local-test");
             let tx = reg.message_tx();
 
             let (first, mut first_remote) = socket_pair(&listener);
@@ -472,7 +666,7 @@ mod tests {
             // asked it, so a dead connection stayed `Connected` for three
             // heartbeat intervals (90s by default).
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let reg = PeerRegistry::new(30);
+            let reg = PeerRegistry::new(30, "local-test");
             let (accepted, remote) = socket_pair(&listener);
 
             let mut conn = PeerConnection::from_authenticated(
