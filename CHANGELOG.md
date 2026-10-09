@@ -6,6 +6,29 @@ All notable changes to claudectl are documented here.
 
 ### Fixed
 
+- **Only two of the offered feature combinations actually built.** A report
+  that `--no-default-features --features relay` would not compile turned out
+  to understate it: *every* build without `hive` failed, including
+  `--no-default-features` with no features at all. The two that worked —
+  `hive` alone and the default set — were precisely the two CI checked.
+
+  So anyone installing with non-default features could not build at all. Five
+  unconditional references to the hive had crept in, the worst of them in
+  config parsing, which every build performs.
+
+  `--brain-baseline` now reports that it needs the `hive` feature instead of
+  the build failing, since its ranking comes from the hive distiller and an
+  empty table would read as "no data".
+
+  CI gains a job per feature — none, `hive`, `relay`, `coord`, `bus` — running
+  the linter and the tests for each, so a combination that is offered is now
+  one that is built. Each feature is exercised on its own, which is the
+  strictest case and the one that had broken.
+
+## [0.77.0] - 2026-10-09
+
+### Fixed
+
 - **A delegated task's cost and token count were always reported as zero**,
   on a tool whose premise is cost tracking. The worker's counters were
   initialised to zero and only ever read, so a task running a real Claude
