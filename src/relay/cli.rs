@@ -509,10 +509,40 @@ fn cmd_serve(
                                     from_peer.as_str(),
                                 ) {
                                     Ok(status_msg) => {
-                                        let _ = reg.send_to(from_peer.as_str(), &status_msg);
+                                        if let Err(e) = reg.send_to(from_peer.as_str(), &status_msg)
+                                        {
+                                            eprintln!("  Could not acknowledge {task_id}: {e}");
+                                        }
                                     }
                                     Err(e) => {
+                                        // #491: this used to print and send
+                                        // nothing, so a task that could not
+                                        // start — an unreadable cwd, `claude`
+                                        // missing from PATH — left the
+                                        // delegating host waiting forever, with
+                                        // the reason on the wrong machine's
+                                        // console. Every other outcome travels
+                                        // back over the relay; this one must too.
                                         eprintln!("  Failed to accept task: {e}");
+                                        let msg = super::delegation::build_report_message(
+                                            &task_id,
+                                            &super::delegation::TaskReport {
+                                                failed: true,
+                                                summary: super::outcome::cap_summary(&format!(
+                                                    "Could not start the task: {e}"
+                                                )),
+                                                total_cost_usd: 0.0,
+                                                total_tokens: 0,
+                                                model: None,
+                                                usage: serde_json::json!({}),
+                                            },
+                                            identity.as_str(),
+                                        );
+                                        if let Err(e) = reg.send_to(from_peer.as_str(), &msg) {
+                                            eprintln!(
+                                                "  Could not report the failure of {task_id}: {e}"
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -651,10 +681,17 @@ fn cmd_serve(
                 }
             }
 
-            // Tick worker — send status updates back to controllers
+            // Tick worker — send status updates back to controllers.
+            // A discarded error here is how a lost handoff stayed invisible:
+            // the task finished, the reply went nowhere, and nothing said so.
             let worker_msgs = worker.tick();
             for (target_peer, msg) in worker_msgs {
-                let _ = reg.send_to(&target_peer, &msg);
+                if let Err(e) = reg.send_to(&target_peer, &msg) {
+                    eprintln!(
+                        "  Could not deliver {:?} to {target_peer}: {e}",
+                        msg.msg_type
+                    );
+                }
             }
 
             // Brain distillation just produced something: say it now rather

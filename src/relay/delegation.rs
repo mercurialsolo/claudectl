@@ -214,6 +214,42 @@ pub fn build_handoff_message(
     }
 }
 
+/// What a delegated run cost and produced, as the worker reports it (#493).
+///
+/// The older two-builder split — one for success, one for failure — forced the
+/// cost and token arguments to be positional alongside five others, and had no
+/// room for the model or the usage breakdown. One struct names them instead.
+pub struct TaskReport {
+    pub failed: bool,
+    pub summary: String,
+    pub total_cost_usd: f64,
+    pub total_tokens: u64,
+    /// Which model ran it. Otherwise unknowable from the delegating side.
+    pub model: Option<String>,
+    /// The `usage` object verbatim, so the token breakdown survives the trip.
+    pub usage: serde_json::Value,
+}
+
+/// Build the TaskHandoff for a finished task, either way it went.
+pub fn build_report_message(task_id: &str, report: &TaskReport, identity: &str) -> RelayMessage {
+    RelayMessage {
+        id: gen_msg_id(),
+        msg_type: MessageType::TaskHandoff,
+        from_peer: identity.to_string(),
+        timestamp: epoch_ms(),
+        payload: serde_json::json!({
+            "task_id": task_id,
+            "state": if report.failed { "failed" } else { "completed" },
+            "summary": report.summary,
+            "artifacts": [],
+            "total_cost_usd": report.total_cost_usd,
+            "total_tokens": report.total_tokens,
+            "model": report.model,
+            "usage": report.usage,
+        }),
+    }
+}
+
 /// Build a TaskHandoff for a failed task.
 pub fn build_failure_message(
     task_id: &str,

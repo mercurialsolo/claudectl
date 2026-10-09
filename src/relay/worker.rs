@@ -1,13 +1,13 @@
 // Remote worker: accepts delegated tasks, spawns local claude sessions, reports status.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Instant;
 
 use super::RelayMessage;
 use super::delegation::{
-    DelegationContext, TaskStats, build_failure_message, build_handoff_message,
-    build_status_message,
+    DelegationContext, TaskReport, TaskStats, build_report_message, build_status_message,
 };
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -35,6 +35,16 @@ pub struct WorkerTask {
     pub tokens_used: u64,
     pub cost_usd: f64,
     pub from_peer: String,
+    /// Where the run's stdout and stderr were sent (#493). A file rather than a
+    /// pipe: the poll loop deliberately never reads the child, and a child that
+    /// fills a pipe buffer with nobody reading blocks forever.
+    pub out_path: PathBuf,
+    pub err_path: PathBuf,
+}
+
+/// Where a run's captured output lives while it runs.
+fn worker_output_dir() -> PathBuf {
+    super::relay_dir().join("worker")
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -71,15 +81,48 @@ impl RemoteWorker {
         let work_dir = cwd.unwrap_or(".");
         let now = Instant::now();
 
-        // Spawn claude --print with the prompt
+        // `--output-format json` is what makes a delegated task's cost
+        // knowable (#493): it reports `total_cost_usd`, the token breakdown,
+        // which model ran, and `is_error` — all of which the worker used to
+        // report as zero or guess from the exit status.
+        //
+        // Captured to files, not pipes. The poll loop below never reads the
+        // child, and a child that fills a pipe buffer with nobody reading
+        // blocks forever. A file is also complete the moment the child exits,
+        // so there is no reader thread to join.
+        let dir = worker_output_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create worker dir: {e}"))?;
+        let out_path = dir.join(format!("{task_id}.out"));
+        let err_path = dir.join(format!("{task_id}.err"));
+        let out_file = std::fs::File::create(&out_path)
+            .map_err(|e| format!("create {}: {e}", out_path.display()))?;
+        let err_file = std::fs::File::create(&err_path)
+            .map_err(|e| format!("create {}: {e}", err_path.display()))?;
+
         let child = Command::new("claude")
-            .args(["--print", prompt])
+            .args(["--print", "--output-format", "json", prompt])
             .current_dir(work_dir)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::from(out_file))
+            .stderr(Stdio::from(err_file))
             .spawn()
-            .map_err(|e| format!("spawn claude: {e}"))?;
+            .map_err(|e| {
+                // The captures exist before the spawn, so a spawn that fails
+                // would otherwise leave two files behind for a task that never
+                // ran and is never tracked.
+                let _ = std::fs::remove_file(&out_path);
+                let _ = std::fs::remove_file(&err_path);
+                // `spawn` reports a missing working directory as the same
+                // ENOENT as a missing binary, so the bare message reads
+                // "spawn claude: No such file or directory" and sends whoever
+                // delegated the task looking for a Claude Code install that is
+                // in fact fine. Name the real cause while we still can.
+                if !std::path::Path::new(work_dir).is_dir() {
+                    format!("working directory does not exist on this host: {work_dir}")
+                } else {
+                    format!("spawn claude in {work_dir}: {e}")
+                }
+            })?;
 
         let pid = child.id();
 
@@ -96,6 +139,8 @@ impl RemoteWorker {
             tokens_used: 0,
             cost_usd: 0.0,
             from_peer: from_peer.to_string(),
+            out_path,
+            err_path,
         };
 
         self.tasks.insert(task_id.to_string(), task);
@@ -143,37 +188,69 @@ impl RemoteWorker {
             let peer = task.from_peer.clone();
 
             match exited {
-                Some(true) => {
-                    // Task completed successfully
-                    task.state = WorkerTaskState::Completed;
+                Some(ok) => {
                     task.child = None;
                     task.pid = None;
 
-                    let msg = build_handoff_message(
-                        &task_id,
-                        "Task completed successfully",
-                        &[],
-                        None,
-                        task.cost_usd,
-                        task.tokens_used,
-                        &self.identity,
-                    );
-                    messages.push((peer, msg));
-                }
-                Some(false) => {
-                    // Task failed
-                    task.state = WorkerTaskState::Failed;
-                    task.child = None;
-                    task.pid = None;
+                    // What the run actually cost and produced. `is_error` in
+                    // the JSON is authoritative over the exit status: a
+                    // not-logged-in run exits non-zero *and* says so in
+                    // `result`, and only the latter is worth repeating to
+                    // whoever delegated the task.
+                    let captured = std::fs::read_to_string(&task.out_path).unwrap_or_default();
+                    let parsed = super::outcome::parse(&captured);
 
-                    let msg = build_failure_message(
-                        &task_id,
-                        "Task exited with non-zero status",
-                        task.cost_usd,
-                        task.tokens_used,
-                        &self.identity,
-                    );
-                    messages.push((peer, msg));
+                    let (failed, summary, cost, tokens, model, usage) = match &parsed {
+                        Some(o) => (
+                            o.failed,
+                            o.summary.clone(),
+                            o.total_cost_usd,
+                            o.total_tokens,
+                            o.model.clone(),
+                            o.usage.clone(),
+                        ),
+                        // No result JSON at all: claude never got far enough to
+                        // write it. The exit status is all we have, and stderr
+                        // is the only clue worth forwarding.
+                        None => {
+                            let err = std::fs::read_to_string(&task.err_path).unwrap_or_default();
+                            let why = if err.trim().is_empty() {
+                                "Task produced no result and no error output".to_string()
+                            } else {
+                                super::outcome::cap_summary(&err)
+                            };
+                            (!ok, why, 0.0, 0, None, serde_json::json!({}))
+                        }
+                    };
+
+                    task.cost_usd = cost;
+                    task.tokens_used = tokens;
+                    task.state = if failed {
+                        WorkerTaskState::Failed
+                    } else {
+                        WorkerTaskState::Completed
+                    };
+
+                    // Keep the capture only when it could not be read, so there
+                    // is something to diagnose; otherwise every delegated task
+                    // would leak two files on the worker forever.
+                    if parsed.is_some() {
+                        let _ = std::fs::remove_file(&task.out_path);
+                        let _ = std::fs::remove_file(&task.err_path);
+                    }
+
+                    let report = TaskReport {
+                        failed,
+                        summary,
+                        total_cost_usd: cost,
+                        total_tokens: tokens,
+                        model,
+                        usage,
+                    };
+                    messages.push((
+                        peer,
+                        build_report_message(&task_id, &report, &self.identity),
+                    ));
                 }
                 None => {
                     // Still running — send periodic status (every 30s)
@@ -211,11 +288,20 @@ impl RemoteWorker {
                 }
                 task.state = WorkerTaskState::Failed;
                 task.pid = None;
-                Some(build_failure_message(
+                // A killed run never wrote its result JSON, so there is no cost
+                // to report — zero here is honest rather than missing.
+                let _ = std::fs::remove_file(&task.out_path);
+                let _ = std::fs::remove_file(&task.err_path);
+                Some(build_report_message(
                     task_id,
-                    "Stopped by controller",
-                    task.cost_usd,
-                    task.tokens_used,
+                    &TaskReport {
+                        failed: true,
+                        summary: "Stopped by controller".to_string(),
+                        total_cost_usd: 0.0,
+                        total_tokens: 0,
+                        model: None,
+                        usage: serde_json::json!({}),
+                    },
                     &self.identity,
                 ))
             }
@@ -289,6 +375,10 @@ mod tests {
                 tokens_used: 0,
                 cost_usd: 0.0,
                 from_peer: "peer-a".into(),
+                // No child is spawned in these fixtures, so there is
+                // no captured output to point at.
+                out_path: PathBuf::new(),
+                err_path: PathBuf::new(),
             },
         );
 
@@ -317,6 +407,10 @@ mod tests {
                 tokens_used: 0,
                 cost_usd: 0.0,
                 from_peer: "peer-a".into(),
+                // No child is spawned in these fixtures, so there is
+                // no captured output to point at.
+                out_path: PathBuf::new(),
+                err_path: PathBuf::new(),
             },
         );
         assert_eq!(worker.running_count(), 1);
@@ -343,6 +437,10 @@ mod tests {
                 tokens_used: 100,
                 cost_usd: 0.05,
                 from_peer: "peer-a".into(),
+                // No child is spawned in these fixtures, so there is
+                // no captured output to point at.
+                out_path: PathBuf::new(),
+                err_path: PathBuf::new(),
             },
         );
 
@@ -378,6 +476,10 @@ mod tests {
                 tokens_used: 500,
                 cost_usd: 0.10,
                 from_peer: "peer-a".into(),
+                // No child is spawned in these fixtures, so there is
+                // no captured output to point at.
+                out_path: PathBuf::new(),
+                err_path: PathBuf::new(),
             },
         );
 
@@ -410,6 +512,10 @@ mod tests {
                 tokens_used: 0,
                 cost_usd: 0.0,
                 from_peer: "peer-a".into(),
+                // No child is spawned in these fixtures, so there is
+                // no captured output to point at.
+                out_path: PathBuf::new(),
+                err_path: PathBuf::new(),
             },
         );
 

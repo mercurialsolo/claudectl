@@ -16,6 +16,7 @@ pub mod invite;
 pub mod lan;
 pub mod listener;
 pub mod mesh;
+pub mod outcome;
 pub mod peer;
 pub mod protocol;
 pub mod tasks;
