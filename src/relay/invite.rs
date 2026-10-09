@@ -158,6 +158,10 @@ pub fn parse_invite_link(link: &str) -> Result<(String, SocketAddr, [u8; 32]), S
 /// so `hive join` can print it before connecting. The host re-decides both from
 /// its own identity file; a link cannot talk its way into a policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    not(feature = "hive"),
+    allow(dead_code, reason = "the hive invite flow is the only caller")
+)]
 pub struct HiveInvite {
     pub hive_id: String,
     pub identity: String,
@@ -174,6 +178,10 @@ pub struct HiveInvite {
 /// connect to. The address is therefore carried in `a=`, exactly the
 /// `identity@host:port` the peer link already puts before `/k/`. The path shape
 /// is the spec's, so a hive link is still recognisable at a glance.
+#[cfg_attr(
+    not(feature = "hive"),
+    allow(dead_code, reason = "the hive invite flow is the only caller")
+)]
 pub fn build_hive_invite_link(
     hive_id: &str,
     identity: &str,
@@ -197,12 +205,20 @@ pub fn build_hive_invite_link(
 ///
 /// The two are unambiguous: a peer link always has `<identity>@` before its
 /// `/k/`, and a hive link's first path segment is the literal `hive`.
+#[cfg_attr(
+    not(feature = "hive"),
+    allow(dead_code, reason = "the hive invite flow is the only caller")
+)]
 pub fn is_hive_invite_link(link: &str) -> bool {
     link.strip_prefix("cctl://")
         .is_some_and(|rest| rest.starts_with("hive/"))
 }
 
 /// Parse a hive invite link.
+#[cfg_attr(
+    not(feature = "hive"),
+    allow(dead_code, reason = "the hive invite flow is the only caller")
+)]
 pub fn parse_hive_invite_link(link: &str) -> Result<HiveInvite, String> {
     let rest = link
         .strip_prefix("cctl://hive/")

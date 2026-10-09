@@ -23,10 +23,6 @@ pub enum WorkerTaskState {
 }
 
 pub struct WorkerTask {
-    pub task_id: String,
-    pub prompt: String,
-    pub cwd: String,
-    pub context: DelegationContext,
     pub state: WorkerTaskState,
     pub child: Option<Child>,
     pub pid: Option<u32>,
@@ -71,7 +67,12 @@ impl RemoteWorker {
         task_id: &str,
         prompt: &str,
         cwd: Option<&str>,
-        context: DelegationContext,
+        // Received and then dropped: the worker spawns `claude` in
+        // `work_dir` and consults none of `git_remote`, `git_ref`,
+        // `git_commit`, `relevant_files` or the brain summary. So
+        // `relay delegate --git-ref X` is accepted, sent, and silently
+        // ignored. Tracked separately; found by the #465 audit.
+        _context: DelegationContext,
         from_peer: &str,
     ) -> Result<RelayMessage, String> {
         if self.tasks.contains_key(task_id) {
@@ -127,10 +128,6 @@ impl RemoteWorker {
         let pid = child.id();
 
         let task = WorkerTask {
-            task_id: task_id.to_string(),
-            prompt: prompt.to_string(),
-            cwd: work_dir.to_string(),
-            context,
             state: WorkerTaskState::Running,
             child: Some(child),
             pid: Some(pid),
@@ -325,14 +322,6 @@ impl RemoteWorker {
         }
     }
 
-    /// Number of currently running tasks.
-    pub fn running_count(&self) -> usize {
-        self.tasks
-            .values()
-            .filter(|t| t.state == WorkerTaskState::Running)
-            .count()
-    }
-
     /// Clean up completed/failed tasks older than the given age.
     pub fn cleanup_finished(&mut self, max_age_secs: u64) {
         self.tasks.retain(|_, task| {
@@ -352,97 +341,81 @@ impl RemoteWorker {
 mod tests {
     use super::*;
 
+    /// A task in a given state. No child is spawned in these fixtures, so
+    /// there is no captured output to point at.
+    fn task(state: WorkerTaskState) -> WorkerTask {
+        WorkerTask {
+            state,
+            child: None,
+            pid: None,
+            start_time: Instant::now(),
+            last_status_sent: Instant::now(),
+            tokens_used: 0,
+            cost_usd: 0.0,
+            from_peer: "peer-a".into(),
+            out_path: PathBuf::new(),
+            err_path: PathBuf::new(),
+        }
+    }
+
     #[test]
     fn worker_rejects_duplicate_task() {
         let mut worker = RemoteWorker::new("test-peer");
         // First accept will fail because `claude` binary likely doesn't exist in test,
         // but we can test the duplicate check separately.
-        let ctx = DelegationContext::default();
-
         // Simulate a task already existing
-        worker.tasks.insert(
-            "t_1".into(),
-            WorkerTask {
-                task_id: "t_1".into(),
-                prompt: "test".into(),
-                cwd: ".".into(),
-                context: ctx.clone(),
-                state: WorkerTaskState::Running,
-                child: None,
-                pid: None,
-                start_time: Instant::now(),
-                last_status_sent: Instant::now(),
-                tokens_used: 0,
-                cost_usd: 0.0,
-                from_peer: "peer-a".into(),
-                // No child is spawned in these fixtures, so there is
-                // no captured output to point at.
-                out_path: PathBuf::new(),
-                err_path: PathBuf::new(),
-            },
-        );
+        worker
+            .tasks
+            .insert("t_1".into(), task(WorkerTaskState::Running));
 
-        let result = worker.accept_task("t_1", "test", None, ctx, "peer-a");
+        let result =
+            worker.accept_task("t_1", "test", None, DelegationContext::default(), "peer-a");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("already exists"));
     }
 
+    /// Settled tasks are dropped; running ones are never dropped however old.
+    ///
+    /// Nothing called this before, so `relay serve` kept a `WorkerTask` for
+    /// every task it had ever run (#465). The serve loop now calls it each
+    /// pass.
     #[test]
-    fn worker_running_count() {
+    fn cleanup_finished_drops_only_settled_tasks() {
         let mut worker = RemoteWorker::new("test-peer");
-        assert_eq!(worker.running_count(), 0);
+        worker
+            .tasks
+            .insert("done".into(), task(WorkerTaskState::Completed));
+        worker
+            .tasks
+            .insert("failed".into(), task(WorkerTaskState::Failed));
+        worker
+            .tasks
+            .insert("busy".into(), task(WorkerTaskState::Running));
+        worker
+            .tasks
+            .insert("starting".into(), task(WorkerTaskState::Preparing));
 
-        worker.tasks.insert(
-            "t_1".into(),
-            WorkerTask {
-                task_id: "t_1".into(),
-                prompt: "test".into(),
-                cwd: ".".into(),
-                context: DelegationContext::default(),
-                state: WorkerTaskState::Running,
-                child: None,
-                pid: None,
-                start_time: Instant::now(),
-                last_status_sent: Instant::now(),
-                tokens_used: 0,
-                cost_usd: 0.0,
-                from_peer: "peer-a".into(),
-                // No child is spawned in these fixtures, so there is
-                // no captured output to point at.
-                out_path: PathBuf::new(),
-                err_path: PathBuf::new(),
-            },
+        // Age zero: nothing is older than the limit yet.
+        worker.cleanup_finished(3600);
+        assert_eq!(worker.tasks.len(), 4, "nothing is old enough to drop");
+
+        // Everything is older than zero seconds, so the settled ones go.
+        worker.cleanup_finished(0);
+        let mut left: Vec<&str> = worker.tasks.keys().map(String::as_str).collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec!["busy", "starting"],
+            "a running or preparing task is kept regardless of age"
         );
-        assert_eq!(worker.running_count(), 1);
-
-        worker.tasks.get_mut("t_1").unwrap().state = WorkerTaskState::Completed;
-        assert_eq!(worker.running_count(), 0);
     }
 
     #[test]
     fn handle_stop_interrupt() {
         let mut worker = RemoteWorker::new("test-peer");
-        worker.tasks.insert(
-            "t_1".into(),
-            WorkerTask {
-                task_id: "t_1".into(),
-                prompt: "test".into(),
-                cwd: ".".into(),
-                context: DelegationContext::default(),
-                state: WorkerTaskState::Running,
-                child: None,
-                pid: None,
-                start_time: Instant::now(),
-                last_status_sent: Instant::now(),
-                tokens_used: 100,
-                cost_usd: 0.05,
-                from_peer: "peer-a".into(),
-                // No child is spawned in these fixtures, so there is
-                // no captured output to point at.
-                out_path: PathBuf::new(),
-                err_path: PathBuf::new(),
-            },
-        );
+        worker
+            .tasks
+            .insert("t_1".into(), task(WorkerTaskState::Running));
 
         let msg = worker.handle_interrupt("t_1", "stop", "no longer needed");
         assert!(msg.is_some());
@@ -461,27 +434,9 @@ mod tests {
     #[test]
     fn handle_nudge_interrupt() {
         let mut worker = RemoteWorker::new("test-peer");
-        worker.tasks.insert(
-            "t_1".into(),
-            WorkerTask {
-                task_id: "t_1".into(),
-                prompt: "test".into(),
-                cwd: ".".into(),
-                context: DelegationContext::default(),
-                state: WorkerTaskState::Running,
-                child: None,
-                pid: None,
-                start_time: Instant::now(),
-                last_status_sent: Instant::now(),
-                tokens_used: 500,
-                cost_usd: 0.10,
-                from_peer: "peer-a".into(),
-                // No child is spawned in these fixtures, so there is
-                // no captured output to point at.
-                out_path: PathBuf::new(),
-                err_path: PathBuf::new(),
-            },
-        );
+        worker
+            .tasks
+            .insert("t_1".into(), task(WorkerTaskState::Running));
 
         let msg = worker.handle_interrupt("t_1", "nudge", "dependency resolved");
         assert!(msg.is_some());
@@ -500,22 +455,8 @@ mod tests {
         worker.tasks.insert(
             "t_1".into(),
             WorkerTask {
-                task_id: "t_1".into(),
-                prompt: "test".into(),
-                cwd: ".".into(),
-                context: DelegationContext::default(),
-                state: WorkerTaskState::Completed,
-                child: None,
-                pid: None,
                 start_time: Instant::now() - std::time::Duration::from_secs(3600),
-                last_status_sent: Instant::now(),
-                tokens_used: 0,
-                cost_usd: 0.0,
-                from_peer: "peer-a".into(),
-                // No child is spawned in these fixtures, so there is
-                // no captured output to point at.
-                out_path: PathBuf::new(),
-                err_path: PathBuf::new(),
+                ..task(WorkerTaskState::Completed)
             },
         );
 

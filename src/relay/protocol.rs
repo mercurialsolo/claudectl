@@ -275,17 +275,6 @@ pub fn heartbeat_with_sessions(identity: &str, sessions: &[serde_json::Value]) -
     }
 }
 
-/// Build an ack message for a received message.
-pub fn ack_message(identity: &str, original_id: &str) -> RelayMessage {
-    RelayMessage {
-        id: gen_msg_id(),
-        msg_type: MessageType::Ack,
-        from_peer: identity.to_string(),
-        timestamp: epoch_ms(),
-        payload: serde_json::json!({ "ack_id": original_id }),
-    }
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────────────────────────
@@ -354,16 +343,6 @@ mod tests {
         assert_eq!(msg.msg_type, MessageType::Heartbeat);
         assert_eq!(msg.from_peer, "test-peer");
         assert!(msg.timestamp > 0);
-    }
-
-    #[test]
-    fn ack_message_valid() {
-        let msg = ack_message("test-peer", "msg_123");
-        assert_eq!(msg.msg_type, MessageType::Ack);
-        assert_eq!(
-            msg.payload.get("ack_id").and_then(|v| v.as_str()),
-            Some("msg_123")
-        );
     }
 
     #[test]
