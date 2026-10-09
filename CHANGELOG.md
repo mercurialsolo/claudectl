@@ -4,6 +4,40 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`relay status` reports the tasks you have actually delegated.** It used to
+  print a hardcoded "no active delegated tasks" and a note saying live status
+  needed `relay serve` — a constant, and so wrong in every state.
+
+  A delegated task now gets a record on disk the moment it is sent, which the
+  serve loop updates as the far host reports progress and completion, so
+  `relay status` answers from the ledger and needs no live connection. It has
+  to work this way: `relay delegate` exits within a second while the reply
+  arrives minutes later at a different process, so there is nothing in memory
+  that could connect the two.
+
+  Completion and failure are final, so a report redelivered after a reconnect
+  cannot reopen a finished task; a report for a task this host never delegated
+  is ignored rather than invented.
+
+  Verified across a laptop and a Mac mini: records appear at send time, a real
+  Claude session on the far host moves one to `completed` with its summary, a
+  failing task settles as `failed` with the reason, and `relay status` in a
+  fresh process reads all of it back.
+
+### Known limitations
+
+- A delegated task's cost and token count are reported as zero. The worker
+  never measures them, so the ledger records what it is told. Tracked
+  separately.
+- A delegated task that fails to *start* on the far host — an unreadable
+  working directory, say — reports nothing back, leaving its record open.
+  The error is printed on the worker's own console instead. Tracked
+  separately.
+
+## [0.75.0] - 2026-10-09
+
 ### Fixed
 
 - **`relay delegate` reported success and did nothing whenever the two peers
