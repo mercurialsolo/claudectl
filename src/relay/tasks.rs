@@ -106,6 +106,10 @@ pub enum Report {
         git_ref: Option<String>,
         total_cost_usd: f64,
         total_tokens: u64,
+        /// Which model ran it (#493). `None` from a worker too old to say.
+        model: Option<String>,
+        /// The token breakdown as the worker reported it, kept verbatim.
+        usage: serde_json::Value,
     },
 }
 
@@ -177,6 +181,14 @@ pub fn parse_report(is_handoff: bool, payload: &serde_json::Value) -> Option<(St
                 .get("total_tokens")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0),
+            model: payload
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            usage: payload
+                .get("usage")
+                .cloned()
+                .unwrap_or(serde_json::json!({})),
         },
     ))
 }
@@ -260,6 +272,8 @@ pub fn apply(task_id: &str, report: &Report) -> Applied {
             git_ref,
             total_cost_usd,
             total_tokens,
+            model,
+            usage,
         } => {
             obj.insert("state".into(), serde_json::json!(state));
             obj.insert("summary".into(), serde_json::json!(summary));
@@ -267,6 +281,8 @@ pub fn apply(task_id: &str, report: &Report) -> Applied {
             obj.insert("git_ref".into(), serde_json::json!(git_ref));
             obj.insert("total_cost_usd".into(), serde_json::json!(total_cost_usd));
             obj.insert("total_tokens".into(), serde_json::json!(total_tokens));
+            obj.insert("model".into(), serde_json::json!(model));
+            obj.insert("usage".into(), usage.clone());
             obj.insert("settled_at".into(), serde_json::json!(epoch_ms()));
         }
     }
@@ -328,6 +344,8 @@ mod reports {
                 git_ref: Some("main".into()),
                 total_cost_usd: 0.0123,
                 total_tokens: 456,
+                model: None,
+                usage: serde_json::json!({}),
             }
         );
     }
