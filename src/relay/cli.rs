@@ -539,12 +539,38 @@ fn cmd_serve(
                         }
                     }
                     super::MessageType::TaskStatus | super::MessageType::TaskHandoff => {
-                        println!(
-                            "[{}] {:?} from {}",
-                            crate::logger::timestamp_now(),
-                            msg.msg_type,
-                            from_peer
-                        );
+                        // Until #490 this arm printed the message and dropped
+                        // it, so a delegated task's outcome reached a console
+                        // and nothing else.
+                        let is_handoff = msg.msg_type == super::MessageType::TaskHandoff;
+                        let ts = crate::logger::timestamp_now();
+                        match super::tasks::parse_report(is_handoff, &msg.payload) {
+                            Some((task_id, report)) => {
+                                let what = match super::tasks::apply(&task_id, &report) {
+                                    super::tasks::Applied::Updated => {
+                                        super::tasks::describe(&report)
+                                    }
+                                    // A settled task must not reopen: the mesh
+                                    // dedups by message id, but a reconnect can
+                                    // still replay one.
+                                    super::tasks::Applied::AlreadySettled => {
+                                        "already settled, ignored".to_string()
+                                    }
+                                    // Only tasks this host delegated belong in
+                                    // the ledger; the sender may be stale.
+                                    super::tasks::Applied::Unknown => {
+                                        "not a task we delegated, ignored".to_string()
+                                    }
+                                };
+                                println!("[{ts}] {task_id} from {from_peer}: {what}");
+                            }
+                            None => {
+                                println!(
+                                    "[{ts}] {:?} from {from_peer} carried no task id, ignored",
+                                    msg.msg_type
+                                );
+                            }
+                        }
                     }
                     #[cfg(feature = "hive")]
                     super::MessageType::HiveJoinRequest => {
@@ -1600,6 +1626,16 @@ fn cmd_delegate(
     // callers don't treat a built-but-unsent message as delivered.
     let sent = send_message_to_peer(peer_id, &identity, &msg);
 
+    // Record it only once it is away (#490). A task we could not hand over is
+    // not a task in flight, and this process exits long before any reply
+    // arrives, so the ledger on disk is the only thing that can connect the
+    // two.
+    if let Ok(remote) = &sent {
+        if let Err(e) = super::tasks::record_delegated(&task_id, remote, prompt, cwd) {
+            eprintln!("Warning: task {task_id} was delegated but not recorded: {e}");
+        }
+    }
+
     if json_mode {
         let output = serde_json::json!({
             "task_id": task_id,
@@ -1630,26 +1666,82 @@ fn cmd_delegate(
 
 /// `claudectl relay status`
 /// Show status of delegated tasks.
+///
+/// This used to print `active_delegated_tasks: 0` and a note saying live status
+/// needed `relay serve` — a constant, and so wrong in every state (#490). The
+/// records are written by `relay delegate` and updated by the serve loop as
+/// reports come back, so reading them here needs no live connection: that is
+/// the whole point of the ledger being on disk.
 fn cmd_task_status(json_mode: bool) -> io::Result<()> {
-    // In standalone CLI mode, we don't have a live relay connection.
-    // Show info about the delegation subsystem.
     let identity = load_or_create_identity();
+    let tasks = super::tasks::list();
+    let active = tasks
+        .iter()
+        .filter(|t| {
+            !super::tasks::is_settled(t.get("state").and_then(|v| v.as_str()).unwrap_or_default())
+        })
+        .count();
 
     if json_mode {
         let output = serde_json::json!({
             "identity": identity.as_str(),
-            "active_delegated_tasks": 0,
-            "note": "Live task status requires relay serve or TUI mode",
+            "active_delegated_tasks": active,
+            "tasks": tasks,
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
-    } else {
-        println!("Relay identity: {}", identity);
-        println!();
-        println!("No active delegated tasks.");
-        println!("Live task status requires `claudectl relay serve` or TUI mode.");
+        return Ok(());
     }
 
+    println!("Relay identity: {}", identity);
+    println!();
+    if tasks.is_empty() {
+        println!("No delegated tasks on record.");
+        println!("Delegate one with `claudectl relay delegate <peer> \"<prompt>\"`.");
+        return Ok(());
+    }
+
+    println!("{:<28} {:<10} {:<22} DETAIL", "TASK", "STATE", "PEER");
+    println!("{}", "─".repeat(92));
+    for t in &tasks {
+        let str_of = |k: &str| t.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let state = str_of("state");
+        // A settled task's summary says what happened; an open one's prompt is
+        // the only thing there is to show.
+        let detail = if super::tasks::is_settled(&state) {
+            let cost = t
+                .get("total_cost_usd")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let summary = str_of("summary");
+            if cost > 0.0 {
+                format!("{summary} (${cost:.4})")
+            } else {
+                summary
+            }
+        } else {
+            str_of("prompt")
+        };
+        println!(
+            "{:<28} {:<10} {:<22} {}",
+            truncate(&str_of("task_id"), 28),
+            state,
+            truncate(&str_of("peer"), 22),
+            truncate(&detail, 36)
+        );
+    }
+    println!();
+    println!("{active} active, {} on record.", tasks.len());
+
     Ok(())
+}
+
+/// Clip a cell so one long prompt cannot break the table.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let keep: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{keep}…")
 }
 
 /// `claudectl relay interrupt <task_id> <type> [reason]`
