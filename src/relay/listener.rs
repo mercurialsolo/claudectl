@@ -287,6 +287,25 @@ fn handle_incoming(
         return false;
     };
 
+    // The peer is authenticated, so remember where we could dial it back
+    // (#484). Before this, only the dialling side recorded an address, so the
+    // host of an invite could never dial its guest: it held a key and nothing
+    // to connect to. The port has to come from the peer — the source port we
+    // observe is ephemeral — while the address has to come from us, since the
+    // peer cannot know how it looks from here.
+    //
+    // Recording only after auth is what keeps an unauthenticated connection
+    // from writing to the address book.
+    if let Some(port) = protocol::handshake_listen_port(&handshake_msg) {
+        let dialable = std::net::SocketAddr::new(peer_addr.ip(), port);
+        if let Err(e) = super::save_peer_meta(&remote_peer_id, &dialable.to_string()) {
+            crate::logger::log(
+                "RELAY",
+                &format!("could not record address {dialable} for {remote_peer_id}: {e}"),
+            );
+        }
+    }
+
     // Step 4: Send ack
     if let Err(e) = protocol::send_handshake_ack(&mut write_stream, identity.as_str(), "ok") {
         crate::logger::log("RELAY", &format!("ack send failed to {peer_addr}: {e}"));

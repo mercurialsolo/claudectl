@@ -128,24 +128,48 @@ pub fn compute_proof(nonce: &str, psk: &[u8; 32]) -> String {
 }
 
 /// Client: send a handshake response with the HMAC proof.
+///
+/// `listen_port` is the port we accept connections on, so the peer can record
+/// an address it could dial us back at (#484). It is `None` when we have no
+/// listener — `relay connect` and `relay join` — and when we are bound to a
+/// specific address rather than a wildcard, since such a port is not reachable
+/// at the address the peer observes us from. A peer too old to read the field
+/// simply ignores it.
 pub fn send_handshake(
     stream: &mut TcpStream,
     identity: &str,
     nonce: &str,
     psk: &[u8; 32],
+    listen_port: Option<u16>,
 ) -> io::Result<()> {
     let proof = compute_proof(nonce, psk);
+    let mut payload = serde_json::json!({
+        "proof": proof,
+        "version": env!("CARGO_PKG_VERSION"),
+    });
+    if let Some(port) = listen_port {
+        payload["listen_port"] = serde_json::json!(port);
+    }
     let msg = RelayMessage {
         id: gen_msg_id(),
         msg_type: MessageType::Handshake,
         from_peer: identity.to_string(),
         timestamp: epoch_ms(),
-        payload: serde_json::json!({
-            "proof": proof,
-            "version": env!("CARGO_PKG_VERSION"),
-        }),
+        payload,
     };
     write_message(stream, &msg)
+}
+
+/// Server: the port the dialling peer says it listens on, if it said.
+///
+/// Absent on anything older than 0.73.0 and on a dialler with no listener, so
+/// `None` means "nothing learned", never an error.
+pub fn handshake_listen_port(msg: &RelayMessage) -> Option<u16> {
+    let port = msg.payload.get("listen_port")?.as_u64()?;
+    if port == 0 || port > u16::MAX as u64 {
+        return None;
+    }
+    Some(port as u16)
 }
 
 /// Client: wait for and parse the handshake ack. Returns Ok(()) on success.
@@ -316,5 +340,79 @@ mod tests {
         let sessions = msg.payload.get("sessions").and_then(|v| v.as_array());
         assert!(sessions.is_some());
         assert_eq!(sessions.unwrap().len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod advertised_listen_port {
+    use super::super::{MessageType, RelayMessage};
+    use super::handshake_listen_port;
+
+    fn handshake(payload: serde_json::Value) -> RelayMessage {
+        RelayMessage {
+            id: "m1".into(),
+            msg_type: MessageType::Handshake,
+            from_peer: "peer-1".into(),
+            timestamp: 0,
+            payload,
+        }
+    }
+
+    #[test]
+    fn a_advertised_port_is_read() {
+        assert_eq!(
+            handshake_listen_port(&handshake(
+                serde_json::json!({"proof": "ab", "version": "0.73.0", "listen_port": 9847})
+            )),
+            Some(9847)
+        );
+    }
+
+    // Every peer built before #484 sends only proof and version, and a dialler
+    // with no listener sends no port either. Both mean "nothing learned", so
+    // neither may look like an error.
+    #[test]
+    fn an_absent_port_is_not_an_error() {
+        assert_eq!(
+            handshake_listen_port(&handshake(
+                serde_json::json!({"proof": "ab", "version": "0.72.0"})
+            )),
+            None
+        );
+    }
+
+    // Port 0 means "any port" to bind(2) and is never something to dial, so it
+    // must not be recorded as an address.
+    #[test]
+    fn port_zero_is_refused() {
+        assert_eq!(
+            handshake_listen_port(&handshake(serde_json::json!({"listen_port": 0}))),
+            None
+        );
+    }
+
+    #[test]
+    fn a_port_outside_the_range_is_refused() {
+        assert_eq!(
+            handshake_listen_port(&handshake(serde_json::json!({"listen_port": 65536}))),
+            None
+        );
+        assert_eq!(
+            handshake_listen_port(&handshake(serde_json::json!({"listen_port": -1}))),
+            None
+        );
+        assert_eq!(
+            handshake_listen_port(&handshake(serde_json::json!({"listen_port": "9847"}))),
+            None,
+            "a string is not a port we should trust into an address"
+        );
+    }
+
+    #[test]
+    fn the_highest_valid_port_is_accepted() {
+        assert_eq!(
+            handshake_listen_port(&handshake(serde_json::json!({"listen_port": 65535}))),
+            Some(65535)
+        );
     }
 }

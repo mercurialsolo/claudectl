@@ -264,7 +264,16 @@ fn cmd_serve(
 
     // #464: listening is not enough. Two machines that both only serve would
     // each wait for the other forever, so dial the peers we already know.
-    spawn_startup_dials(Arc::clone(&registry), identity.clone());
+    // Advertise our listening port so peers can dial us back (#484), but
+    // only when we are bound to a wildcard address. Bound to one specific
+    // address, the port is not reachable at the address a peer observes us
+    // from, and advertising it would hand out an address that cannot work.
+    let advertised_port = if addr.ip().is_unspecified() {
+        Some(listener.addr.port())
+    } else {
+        None
+    };
+    spawn_startup_dials(Arc::clone(&registry), identity.clone(), advertised_port);
 
     // Start HTTP coordinator server if configured
     let http_port = http_port.or(relay_cfg.http_port);
@@ -661,7 +670,7 @@ fn cmd_serve(
                     }
                     super::mesh::MeshEvent::ReconnectNeeded(id, addr) => {
                         println!("Reconnecting to {} ...", id);
-                        match reconnect_peer(&mut reg, &id, addr, &identity) {
+                        match reconnect_peer(&mut reg, &id, addr, &identity, advertised_port) {
                             Ok(()) => println!("Reconnected to {}", id),
                             Err(e) => println!("Reconnect to {} failed: {}", id, e),
                         }
@@ -993,7 +1002,7 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                     }
                     super::mesh::MeshEvent::ReconnectNeeded(id, addr) => {
                         println!("Reconnecting to {} ...", id);
-                        match reconnect_peer(&mut reg, &id, addr, &identity) {
+                        match reconnect_peer(&mut reg, &id, addr, &identity, None) {
                             Ok(()) => println!("Reconnected to {}", id),
                             Err(e) => println!("Reconnect to {} failed: {}", id, e),
                         }
@@ -1032,7 +1041,9 @@ fn try_connect(
         reg.message_tx()
     };
 
-    let conn = PeerConnection::connect(addr, psk, identity, tx)?;
+    // `relay connect` / `relay join` have no listener, so there is no port
+    // to teach the peer. It learns an address for us from our own `serve` dials.
+    let conn = PeerConnection::connect(addr, psk, identity, tx, None)?;
     let remote_id = conn.peer_id.0.clone();
     if let Ok(mut reg) = registry.lock() {
         reg.add_peer(conn);
@@ -1079,14 +1090,30 @@ pub fn send_message_to_peer(
     Ok(remote_id)
 }
 
-/// The dialable address in a peer meta record, if it has one.
+/// Every address we could dial this peer at, most-recently-seen first (#484).
 ///
-/// `save_peer_meta` writes whatever the dialling path connected to, which is
-/// always an already-parsed `SocketAddr` today — but a record can predate a
-/// field, be hand-edited, or hold a hostname, and none of those are dialable
-/// here without a resolver. A peer with no usable address is simply not dialled.
-fn dialable_addr(meta: &serde_json::Value) -> Option<SocketAddr> {
-    meta.get("addr")?.as_str()?.parse().ok()
+/// A peer appears on more than one address — a LAN address and a VPN address,
+/// say — and which of them works depends on where *we* are. Trying them in
+/// order is what lets a pair survive one of them going away.
+fn dial_candidates(peer_id: &str) -> Vec<SocketAddr> {
+    parse_candidates(super::load_peer_meta(peer_id).as_ref())
+}
+
+/// The dialable addresses in a peer record, in the order they are recorded.
+///
+/// Split from `dial_candidates` so it can be tested without a HOME to read
+/// from. Anything that is not a literal `address:port` is dropped: there is no
+/// resolver on this path, so a hostname is not something we could dial.
+fn parse_candidates(meta: Option<&serde_json::Value>) -> Vec<SocketAddr> {
+    let mut out: Vec<SocketAddr> = Vec::new();
+    for known in super::peer_addrs(meta) {
+        if let Ok(addr) = known.addr.parse::<SocketAddr>() {
+            if !out.contains(&addr) {
+                out.push(addr);
+            }
+        }
+    }
+    out
 }
 
 /// Dial every peer we have both a PSK and a stored address for (#464).
@@ -1100,28 +1127,34 @@ fn dialable_addr(meta: &serde_json::Value) -> Option<SocketAddr> {
 /// for 10s per powered-off peer. The hive sync tick picks up whatever
 /// connections appear, so nothing needs to be notified when this finishes.
 ///
-/// Only a peer we once dialled ourselves has a stored address — `save_peer_meta`
-/// is called from the dialling paths, never from the listener, and an inbound
-/// connection's source port is ephemeral anyway. Giving a peer a durable set of
-/// dialable addresses is the epic's next item (#478), not this function's job.
+/// Each peer's addresses are tried in turn, newest first, stopping at the
+/// first that answers as the peer we expect (#484). A peer that has moved
+/// networks fails on its old address and may answer on an older one we still
+/// hold, which is the point of keeping more than one.
 ///
-/// No dial/wait tie-break: when both ends have an address, both dial and both
-/// accept, and `PeerRegistry::add_peer` closes the connection it displaces
-/// (#459). That costs one connection teardown, not corrupt state.
-fn spawn_startup_dials(registry: Arc<Mutex<PeerRegistry>>, identity: super::PeerId) {
-    let targets: Vec<(String, SocketAddr)> = list_known_peers()
+/// No dial/wait tie-break: both ends having an address is now the normal case,
+/// since the listener records one too, so both dial and both accept.
+/// `PeerRegistry::add_peer` resolves that collision deterministically (#480),
+/// keeping the connection opened by the lower peer id.
+fn spawn_startup_dials(
+    registry: Arc<Mutex<PeerRegistry>>,
+    identity: super::PeerId,
+    listen_port: Option<u16>,
+) {
+    let targets: Vec<(String, Vec<SocketAddr>)> = list_known_peers()
         .into_iter()
-        .filter_map(|id| {
-            let addr = dialable_addr(&super::load_peer_meta(&id)?)?;
-            Some((id, addr))
+        .map(|id| {
+            let addrs = dial_candidates(&id);
+            (id, addrs)
         })
+        .filter(|(_, addrs)| !addrs.is_empty())
         .collect();
     if targets.is_empty() {
         return;
     }
 
     std::thread::spawn(move || {
-        for (id, addr) in targets {
+        for (id, addrs) in targets {
             let peer_id = super::PeerId(id.clone());
 
             // Dial unconditionally, even if the peer appears to be connected
@@ -1144,27 +1177,45 @@ fn spawn_startup_dials(registry: Arc<Mutex<PeerRegistry>>, identity: super::Peer
                 }
             };
 
-            // Connect with the lock released: it would otherwise be held for
-            // the whole 10s connect timeout, stalling the serve loop's tick.
-            let conn = match PeerConnection::connect(addr, &psk, &identity, tx) {
-                Ok(c) => c,
-                Err(e) => {
-                    // The stored address is the peer's address as of pairing;
-                    // say so, or a stale address is indistinguishable from a
-                    // host that is simply off.
-                    println!("Peer {id} not reachable at its last known address {addr}: {e}");
+            // Try each address in turn, stopping at the first that answers as
+            // the peer we expect. Connecting with the lock released: it would
+            // otherwise be held for the whole 10s timeout per address,
+            // stalling the serve loop's tick.
+            let mut connected = None;
+            let mut addr_used = None;
+            for addr in &addrs {
+                let conn = match PeerConnection::connect(
+                    *addr,
+                    &psk,
+                    &identity,
+                    tx.clone(),
+                    listen_port,
+                ) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        // Name the address as one we saw the peer at, or a
+                        // peer that has simply moved is indistinguishable
+                        // from a host that is off.
+                        println!("Peer {id} not reachable at {addr}: {e}");
+                        continue;
+                    }
+                };
+                if conn.peer_id != peer_id {
+                    println!(
+                        "Peer {id} not dialled: {addr} answered as {} — that address \
+                         now belongs to another host",
+                        conn.peer_id
+                    );
+                    conn.shutdown();
                     continue;
                 }
-            };
-            if conn.peer_id != peer_id {
-                println!(
-                    "Peer {id} not dialled: {addr} answered as {} — the stored address \
-                     now belongs to another host",
-                    conn.peer_id
-                );
-                conn.shutdown();
-                continue;
+                addr_used = Some(*addr);
+                connected = Some(conn);
+                break;
             }
+            let (Some(conn), Some(addr)) = (connected, addr_used) else {
+                continue;
+            };
 
             match registry.lock() {
                 Ok(mut reg) => {
@@ -1189,19 +1240,45 @@ fn reconnect_peer(
     peer_id: &super::PeerId,
     addr: Option<SocketAddr>,
     identity: &super::PeerId,
+    listen_port: Option<u16>,
 ) -> Result<(), String> {
-    let addr = addr.ok_or("missing reconnect address")?;
     let psk = load_peer_psk(peer_id.as_str()).ok_or("missing peer PSK")?;
-    let tx = reg.message_tx();
-    let conn = PeerConnection::connect(addr, &psk, identity, tx)?;
-    if conn.peer_id != *peer_id {
-        return Err(format!(
-            "remote identity mismatch: expected {}, got {}",
-            peer_id, conn.peer_id
-        ));
+
+    // The address the connection was last up on first, then every other
+    // address we have seen this peer at (#484). A peer that moved networks
+    // will fail on the first and may well answer on a later one.
+    let mut candidates: Vec<SocketAddr> = addr.into_iter().collect();
+    for known in dial_candidates(peer_id.as_str()) {
+        if !candidates.contains(&known) {
+            candidates.push(known);
+        }
     }
-    reg.add_peer(conn);
-    Ok(())
+    if candidates.is_empty() {
+        return Err("no known address for peer".into());
+    }
+
+    let tx = reg.message_tx();
+    let mut last_err = String::new();
+    for addr in candidates {
+        let conn = match PeerConnection::connect(addr, &psk, identity, tx.clone(), listen_port) {
+            Ok(c) => c,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        if conn.peer_id != *peer_id {
+            last_err = format!(
+                "remote identity mismatch at {addr}: expected {}, got {}",
+                peer_id, conn.peer_id
+            );
+            conn.shutdown();
+            continue;
+        }
+        reg.add_peer(conn);
+        return Ok(());
+    }
+    Err(last_err)
 }
 
 /// `claudectl relay connect <host:port>`
@@ -2110,45 +2187,87 @@ mod tests {
 
 #[cfg(test)]
 mod startup_dial_targets {
-    use super::dialable_addr;
+    use super::parse_candidates;
     use serde_json::json;
 
-    // A peer we dialled before: `save_peer_meta` recorded the listening
-    // address we reached it on, and that is what a startup dial reuses.
+    fn strs(meta: serde_json::Value) -> Vec<String> {
+        parse_candidates(Some(&meta))
+            .iter()
+            .map(|a| a.to_string())
+            .collect()
+    }
+
+    // A record written before #484 has one bare `addr` and no list. It must
+    // still be dialled, or this change would strand every existing pairing.
     #[test]
-    fn a_stored_address_is_dialable() {
-        let addr = dialable_addr(&json!({"addr": "10.33.226.19:7777", "last_seen": 1}));
+    fn a_pre_list_record_is_still_dialled() {
         assert_eq!(
-            addr.map(|a| a.to_string()),
-            Some("10.33.226.19:7777".to_string())
+            strs(json!({"addr": "10.33.226.19:7777", "last_seen": 1})),
+            vec!["10.33.226.19:7777"]
         );
     }
 
-    // A peer that has only ever dialled IN has a `.key` but no `addr`: the
-    // listener never calls `save_peer_meta`. It must be skipped, not guessed at.
+    // A peer seen on a LAN and over a VPN: both, in recorded order, so the
+    // most recent is tried first and the other remains as a fallback.
+    #[test]
+    fn every_recorded_address_is_dialled_in_order() {
+        assert_eq!(
+            strs(json!({
+                "addr": "100.85.22.1:9847",
+                "addrs": [
+                    {"addr": "100.85.22.1:9847", "last_seen": 20},
+                    {"addr": "192.168.4.24:9847", "last_seen": 10},
+                ]
+            })),
+            vec!["100.85.22.1:9847", "192.168.4.24:9847"]
+        );
+    }
+
+    // A peer with no address at all — a `.key` and nothing else, which is what
+    // the acceptor used to be left with. Skipped, not guessed at.
     #[test]
     fn a_record_without_an_address_is_not_dialled() {
-        assert!(dialable_addr(&json!({"last_seen": 1})).is_none());
+        assert!(parse_candidates(Some(&json!({"last_seen": 1}))).is_empty());
+        assert!(parse_candidates(None).is_empty());
+    }
+
+    // Nothing on this path resolves names, so a hostname is not dialable here.
+    #[test]
+    fn unusable_addresses_are_dropped_without_dropping_the_rest() {
+        assert_eq!(
+            strs(json!({"addrs": [
+                {"addr": "mini.local:7777"},
+                {"addr": "10.33.226.19"},
+                {"addr": 7777},
+                {"addr": "192.168.4.39:9847"},
+            ]})),
+            vec!["192.168.4.39:9847"],
+            "one bad entry must not cost us the good one behind it"
+        );
     }
 
     #[test]
-    fn a_hostname_is_not_dialled_because_nothing_here_resolves_it() {
-        assert!(dialable_addr(&json!({"addr": "mini.local:7777"})).is_none());
+    fn a_repeated_address_is_dialled_once() {
+        assert_eq!(
+            strs(json!({"addrs": [
+                {"addr": "192.168.4.39:9847", "last_seen": 20},
+                {"addr": "192.168.4.39:9847", "last_seen": 10},
+            ]})),
+            vec!["192.168.4.39:9847"]
+        );
+    }
+
+    // An `addrs` key holding nothing usable must not hide a good `addr`.
+    #[test]
+    fn an_empty_list_falls_back_to_the_single_address() {
+        assert_eq!(
+            strs(json!({"addr": "192.168.4.39:9847", "addrs": []})),
+            vec!["192.168.4.39:9847"]
+        );
     }
 
     #[test]
-    fn an_address_without_a_port_is_not_dialled() {
-        assert!(dialable_addr(&json!({"addr": "10.33.226.19"})).is_none());
-    }
-
-    #[test]
-    fn a_non_string_address_is_not_dialled() {
-        assert!(dialable_addr(&json!({"addr": 7777})).is_none());
-    }
-
-    #[test]
-    fn an_ipv6_address_is_dialable() {
-        let addr = dialable_addr(&json!({"addr": "[::1]:7777"}));
-        assert_eq!(addr.map(|a| a.port()), Some(7777));
+    fn an_ipv6_address_is_dialled() {
+        assert_eq!(strs(json!({"addr": "[::1]:7777"})), vec!["[::1]:7777"]);
     }
 }

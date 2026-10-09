@@ -232,20 +232,99 @@ pub fn save_peer_psk(peer_id: &str, psk: &[u8; 32]) -> Result<(), String> {
     Ok(())
 }
 
-/// Save peer metadata (addr, last_seen, etc).
+/// How many addresses to remember per peer. A machine realistically appears on
+/// a handful at once — a LAN address, a VPN address, maybe a second interface —
+/// and an unbounded list would mean dialling through every address the peer has
+/// ever had before reaching the one it is on now.
+const MAX_PEER_ADDRS: usize = 8;
+
+/// Record that we have seen this peer at `addr`, keeping the addresses we saw
+/// it at before (#484).
+///
+/// This used to rewrite the whole record, so the newest address replaced every
+/// earlier one and a laptop that moved networks had nothing left to try. The
+/// addresses are now a list, most-recent first, so a peer reachable on a LAN
+/// and over a VPN accumulates both and either can be dialled.
+///
+/// `addr` keeps its old meaning — the newest address — so every existing
+/// reader is unaffected; `addrs` carries the history. A record written before
+/// this change has no `addrs` and reads as a single-address list.
 pub fn save_peer_meta(peer_id: &str, addr: &str) -> Result<(), String> {
     let path = peer_meta_path(peer_id).ok_or_else(|| format!("invalid peer id: {peer_id}"))?;
     let dir = peers_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("create peers dir: {e}"))?;
+
+    let now = epoch_ms();
+    let mut addrs = vec![serde_json::json!({ "addr": addr, "last_seen": now })];
+    for known in peer_addrs(load_peer_meta(peer_id).as_ref()) {
+        if known.addr == addr {
+            continue; // already at the front, with a fresher timestamp
+        }
+        addrs.push(serde_json::json!({
+            "addr": known.addr,
+            "last_seen": known.last_seen,
+        }));
+    }
+    addrs.truncate(MAX_PEER_ADDRS);
+
     let meta = serde_json::json!({
         "addr": addr,
-        "last_seen": epoch_ms(),
+        "last_seen": now,
+        "addrs": addrs,
     });
     fs::write(
         &path,
         serde_json::to_string_pretty(&meta).unwrap_or_default(),
     )
     .map_err(|e| format!("write meta: {e}"))
+}
+
+/// One address we have seen a peer at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerAddr {
+    pub addr: String,
+    pub last_seen: u64,
+}
+
+/// Every address recorded for a peer, most-recently-seen first.
+///
+/// Reads both shapes: the `addrs` list this version writes, and the lone
+/// `addr` string written before #484. Takes the loaded record rather than a
+/// peer id so it can be tested without a HOME to read from.
+pub fn peer_addrs(meta: Option<&serde_json::Value>) -> Vec<PeerAddr> {
+    let Some(meta) = meta else {
+        return Vec::new();
+    };
+    let last_seen_of = |v: &serde_json::Value| v.get("last_seen").and_then(|t| t.as_u64());
+
+    if let Some(list) = meta.get("addrs").and_then(|v| v.as_array()) {
+        let mut out: Vec<PeerAddr> = Vec::new();
+        for entry in list {
+            let Some(addr) = entry.get("addr").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if out.iter().any(|a| a.addr == addr) {
+                continue;
+            }
+            out.push(PeerAddr {
+                addr: addr.to_string(),
+                last_seen: last_seen_of(entry).unwrap_or(0),
+            });
+        }
+        if !out.is_empty() {
+            return out;
+        }
+        // An `addrs` key that holds nothing usable: fall through to `addr`
+        // rather than reporting a peer as having no addresses at all.
+    }
+
+    match meta.get("addr").and_then(|v| v.as_str()) {
+        Some(addr) => vec![PeerAddr {
+            addr: addr.to_string(),
+            last_seen: last_seen_of(meta).unwrap_or(0),
+        }],
+        None => Vec::new(),
+    }
 }
 
 /// Load peer metadata.
@@ -374,5 +453,85 @@ mod tests {
         assert!(!is_valid_peer_id("../peer"));
         assert!(!is_valid_peer_id("peer/key"));
         assert!(!is_valid_peer_id(""));
+    }
+}
+
+#[cfg(test)]
+mod peer_address_records {
+    use super::{PeerAddr, peer_addrs};
+    use serde_json::json;
+
+    fn addrs(meta: serde_json::Value) -> Vec<String> {
+        peer_addrs(Some(&meta))
+            .into_iter()
+            .map(|a| a.addr)
+            .collect()
+    }
+
+    // Records written before #484 carry one `addr` and no list. They have to
+    // keep working, or this change strands every pairing made so far.
+    #[test]
+    fn a_record_from_before_the_list_reads_as_one_address() {
+        assert_eq!(
+            peer_addrs(Some(&json!({"addr": "192.168.4.39:9847", "last_seen": 42}))),
+            vec![PeerAddr {
+                addr: "192.168.4.39:9847".into(),
+                last_seen: 42
+            }]
+        );
+    }
+
+    #[test]
+    fn the_list_is_returned_in_the_order_it_is_stored() {
+        assert_eq!(
+            addrs(json!({
+                "addr": "100.85.22.1:9847",
+                "addrs": [
+                    {"addr": "100.85.22.1:9847", "last_seen": 20},
+                    {"addr": "192.168.4.24:9847", "last_seen": 10},
+                ]
+            })),
+            vec!["100.85.22.1:9847", "192.168.4.24:9847"]
+        );
+    }
+
+    #[test]
+    fn a_repeated_address_appears_once() {
+        assert_eq!(
+            addrs(json!({"addrs": [
+                {"addr": "a:1", "last_seen": 2},
+                {"addr": "a:1", "last_seen": 1},
+                {"addr": "b:2", "last_seen": 1},
+            ]})),
+            vec!["a:1", "b:2"]
+        );
+    }
+
+    // A list that parses but holds nothing usable must not mask the `addr`
+    // alongside it — otherwise a malformed write loses a working address.
+    #[test]
+    fn an_unusable_list_falls_back_to_the_single_address() {
+        assert_eq!(
+            addrs(json!({"addr": "192.168.4.39:9847", "addrs": [{"last_seen": 1}]})),
+            vec!["192.168.4.39:9847"]
+        );
+        assert_eq!(
+            addrs(json!({"addr": "192.168.4.39:9847", "addrs": []})),
+            vec!["192.168.4.39:9847"]
+        );
+    }
+
+    #[test]
+    fn nothing_recorded_is_no_addresses_rather_than_a_guess() {
+        assert!(peer_addrs(None).is_empty());
+        assert!(peer_addrs(Some(&json!({"last_seen": 1}))).is_empty());
+        assert!(peer_addrs(Some(&json!({"addr": 9847}))).is_empty());
+    }
+
+    #[test]
+    fn a_missing_timestamp_reads_as_zero_rather_than_dropping_the_address() {
+        let got = peer_addrs(Some(&json!({"addrs": [{"addr": "a:1"}]})));
+        assert_eq!(got.len(), 1, "the address still counts");
+        assert_eq!(got[0].last_seen, 0);
     }
 }
