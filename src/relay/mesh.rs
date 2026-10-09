@@ -115,21 +115,17 @@ impl PeerRegistry {
     }
 
     /// Remove a peer from the registry.
-    pub fn remove_peer(&mut self, id: &str) {
-        self.peers.remove(id);
-    }
-
     /// Get a reference to a peer connection.
     pub fn get_peer(&self, id: &str) -> Option<&PeerConnection> {
         self.peers.get(id)
     }
 
     /// Get a mutable reference to a peer connection.
-    pub fn get_peer_mut(&mut self, id: &str) -> Option<&mut PeerConnection> {
-        self.peers.get_mut(id)
-    }
-
     /// List all connected peer IDs.
+    #[cfg_attr(
+        not(feature = "hive"),
+        allow(dead_code, reason = "only the hive gossip engine asks for this")
+    )]
     pub fn connected_peers(&self) -> Vec<PeerId> {
         self.peers
             .values()
@@ -139,14 +135,14 @@ impl PeerRegistry {
     }
 
     /// List all peer IDs regardless of state.
-    pub fn all_peers(&self) -> Vec<(PeerId, PeerState)> {
-        self.peers
-            .values()
-            .map(|p| (p.peer_id.clone(), p.state))
-            .collect()
-    }
-
     /// Broadcast a message to all connected peers.
+    /// Send to every connected peer.
+    ///
+    /// No production caller: heartbeats go out through `tick` and both hive
+    /// gossip and conversation transfer address a single peer with `send_to`.
+    /// Kept because it is the registry's natural counterpart to `send_to` and
+    /// the tests exercise it; audited under #465.
+    #[allow(dead_code, reason = "exercised by tests; no production caller")]
     pub fn broadcast(&self, msg: &RelayMessage) {
         for peer in self.peers.values() {
             if peer.state == PeerState::Connected {
@@ -299,6 +295,8 @@ impl PeerRegistry {
     }
 
     /// Total number of tracked peers (any state).
+    /// How many peers the registry knows, connected or not.
+    #[allow(dead_code, reason = "exercised by tests; no production caller")]
     pub fn total_count(&self) -> usize {
         self.peers.len()
     }

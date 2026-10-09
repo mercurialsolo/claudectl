@@ -81,6 +81,19 @@ impl HttpServer {
     }
 }
 
+/// Stop the accept loop when the handle goes away.
+///
+/// The thread already checked this flag every pass, but nothing could set it:
+/// `stop` had no caller, so the listener thread outlived its handle and ran
+/// until the process exited. `cmd_serve` holds the handle for the life of the
+/// process, so in practice this changes nothing there — it makes the server
+/// usable anywhere else, and means the flag is no longer decoration (#465).
+impl Drop for HttpServer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 /// Handle a single HTTP connection.
 fn handle_connection(
     mut stream: TcpStream,

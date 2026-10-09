@@ -388,9 +388,11 @@ fn cmd_serve(
 
     // LAN discovery. `relay discover` has always *scanned* for announcements,
     // but nothing ever sent one — `start_announcer` had no callers anywhere, and
-    // `#![allow(dead_code)]` on `relay/mod.rs` kept that quiet. So `discover`
-    // returned "no instances found" even with a relay running next to it, while
-    // telling the operator to start the thing that was already running (#433).
+    // the module-level `#![allow(dead_code)]` that used to sit on
+    // `relay/mod.rs` kept that quiet. So `discover` returned "no instances
+    // found" even with a relay running next to it, while telling the operator
+    // to start the thing that was already running (#433). That allow is gone
+    // as of #465, so the next one of these is a build failure.
     //
     // Note the flag polarity: `start_announcer` takes a *shutdown* flag (it
     // loops while that is `false`), whereas this function's `running` means the
@@ -819,6 +821,13 @@ fn cmd_serve(
                     );
                 }
             }
+
+            // #465: settled tasks were never dropped from the worker's map, so
+            // `relay serve` grew by one `WorkerTask` — strings, paths and a
+            // `Child` handle — for every task it had ever run. An hour is well
+            // past the point where a reply has been sent and the on-disk
+            // ledger in `relay/tasks` has taken over as the record.
+            worker.cleanup_finished(WORKER_TASK_RETENTION_SECS);
 
             // Brain distillation just produced something: say it now rather
             // than waiting out the tick below.
@@ -2244,6 +2253,11 @@ pub fn cmd_hive_invite(show_qr: bool, show_words: bool, json_mode: bool) -> io::
 
     Ok(())
 }
+
+/// How long a settled task stays in the worker's in-memory map before it is
+/// dropped. The durable record is `relay/tasks/<id>.json` (#490), so this
+/// only bounds memory.
+const WORKER_TASK_RETENTION_SECS: u64 = 3600;
 
 /// How long `hive join` waits for the host to answer before giving up.
 ///

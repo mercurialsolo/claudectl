@@ -14,18 +14,15 @@ use super::{PeerId, RelayMessage};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerState {
     Disconnected,
+    /// Never constructed: `connect` blocks for up to ten seconds and returns
+    /// an already-`Connected` peer, and `from_authenticated` starts connected
+    /// too, so nothing observes a peer mid-dial. Surfaced by the #465 audit
+    /// when `PeerState::label` — its only other reader — was removed; kept
+    /// because the dial path is where this should be set, not deleted to
+    /// silence the warning.
+    #[allow(dead_code, reason = "no dial path sets it yet; see the note above")]
     Connecting,
     Connected,
-}
-
-impl PeerState {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Disconnected => "disconnected",
-            Self::Connecting => "connecting",
-            Self::Connected => "connected",
-        }
-    }
 }
 
 /// A connection to a single remote peer.
@@ -298,12 +295,6 @@ impl PeerConnection {
         self.next_reconnect_at = Some(Instant::now() + self.reconnect_delay());
     }
 
-    /// Reset reconnect state after a successful connection.
-    pub fn reset_reconnect(&mut self) {
-        self.reconnect_attempts = 0;
-        self.next_reconnect_at = None;
-    }
-
     /// Spawn a reader thread that reads messages and sends them to the channel.
     fn spawn_reader(&mut self, stream: Arc<Mutex<TcpStream>>, tx: Sender<(PeerId, RelayMessage)>) {
         let peer_id = self.peer_id.clone();
@@ -352,13 +343,6 @@ impl PeerConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn peer_state_labels() {
-        assert_eq!(PeerState::Disconnected.label(), "disconnected");
-        assert_eq!(PeerState::Connecting.label(), "connecting");
-        assert_eq!(PeerState::Connected.label(), "connected");
-    }
 
     #[test]
     fn reconnect_delay_exponential_backoff() {

@@ -8,6 +8,15 @@ use super::PeerId;
 
 pub const LAN_PORT: u16 = 9848;
 const ANNOUNCE_MAGIC: &[u8; 4] = b"CCTL";
+/// How long a discovered peer stays in `start_listener`'s map.
+///
+/// Only `start_listener` accumulates peers over time — `scan_lan`, which
+/// `relay discover` uses, returns what it heard in one window and keeps
+/// nothing. Since `start_listener` has no caller, neither does this.
+#[allow(
+    dead_code,
+    reason = "only start_listener expires peers; see the audit note on it"
+)]
 const STALE_AFTER: Duration = Duration::from_secs(30);
 
 /// How often `relay serve` broadcasts its presence.
@@ -35,12 +44,23 @@ pub struct DiscoveredPeer {
     pub addr: SocketAddr,
     pub relay_port: u16,
     pub version: String,
+    /// When this peer was last heard from. Read only by `is_stale`, so it
+    /// shares that method's fate until continuous discovery is wired.
+    #[allow(
+        dead_code,
+        reason = "read only by is_stale; see the audit note on start_listener"
+    )]
     pub last_seen: Instant,
     /// The hive this machine advertises, if it named one.
     pub hive: Option<HiveAd>,
 }
 
 impl DiscoveredPeer {
+    /// Whether this entry is old enough to drop from a long-lived map.
+    #[allow(
+        dead_code,
+        reason = "only start_listener expires peers; see the audit note on it"
+    )]
     pub fn is_stale(&self) -> bool {
         self.last_seen.elapsed() > STALE_AFTER
     }
@@ -295,6 +315,20 @@ pub fn scan_lan(duration: Duration, own_identity: &str) -> Vec<DiscoveredPeer> {
 
 /// Start a background listener that accumulates discovered peers.
 /// Returns a shared peer map that the main loop can read.
+///
+/// **No caller.** This is continuous discovery: unlike `scan_lan`, which
+/// listens for one window and is what `relay discover` uses, this keeps a map
+/// up to date for as long as it runs. That is what would let a peer whose
+/// address changed be found again without a re-invite — the gap #478 item 1
+/// describes, where a laptop changing network silently partitions the mesh.
+///
+/// Kept rather than deleted because it is most of the answer to that, and
+/// flagged here rather than left under a module-wide allow, which is how the
+/// same shape of bug reached users three times (#433, #434, #455).
+#[allow(
+    dead_code,
+    reason = "continuous LAN discovery is written but not yet wired; see #478 item 1"
+)]
 pub fn start_listener(
     own_identity: String,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,

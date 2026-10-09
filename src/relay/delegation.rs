@@ -165,55 +165,6 @@ pub fn build_status_message(
     }
 }
 
-/// Parse a TaskStatus message payload.
-pub fn parse_status_message(msg: &RelayMessage) -> Result<(String, String, TaskStats), String> {
-    let task_id = msg
-        .payload
-        .get("task_id")
-        .and_then(|v| v.as_str())
-        .ok_or("missing task_id")?
-        .to_string();
-    let state = msg
-        .payload
-        .get("state")
-        .and_then(|v| v.as_str())
-        .ok_or("missing state")?
-        .to_string();
-    let stats: TaskStats = msg
-        .payload
-        .get("stats")
-        .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
-        .unwrap_or_default();
-    Ok((task_id, state, stats))
-}
-
-/// Build a TaskHandoff message (worker completed the task).
-pub fn build_handoff_message(
-    task_id: &str,
-    summary: &str,
-    artifacts: &[String],
-    git_ref: Option<&str>,
-    total_cost_usd: f64,
-    total_tokens: u64,
-    identity: &str,
-) -> RelayMessage {
-    RelayMessage {
-        id: gen_msg_id(),
-        msg_type: MessageType::TaskHandoff,
-        from_peer: identity.to_string(),
-        timestamp: epoch_ms(),
-        payload: serde_json::json!({
-            "task_id": task_id,
-            "state": "completed",
-            "summary": summary,
-            "artifacts": artifacts,
-            "git_ref": git_ref,
-            "total_cost_usd": total_cost_usd,
-            "total_tokens": total_tokens,
-        }),
-    }
-}
-
 /// What a delegated run cost and produced, as the worker reports it (#493).
 ///
 /// The older two-builder split — one for success, one for failure — forced the
@@ -246,30 +197,6 @@ pub fn build_report_message(task_id: &str, report: &TaskReport, identity: &str) 
             "total_tokens": report.total_tokens,
             "model": report.model,
             "usage": report.usage,
-        }),
-    }
-}
-
-/// Build a TaskHandoff for a failed task.
-pub fn build_failure_message(
-    task_id: &str,
-    reason: &str,
-    total_cost_usd: f64,
-    total_tokens: u64,
-    identity: &str,
-) -> RelayMessage {
-    RelayMessage {
-        id: gen_msg_id(),
-        msg_type: MessageType::TaskHandoff,
-        from_peer: identity.to_string(),
-        timestamp: epoch_ms(),
-        payload: serde_json::json!({
-            "task_id": task_id,
-            "state": "failed",
-            "summary": reason,
-            "artifacts": [],
-            "total_cost_usd": total_cost_usd,
-            "total_tokens": total_tokens,
         }),
     }
 }
@@ -368,33 +295,63 @@ mod tests {
             ..Default::default()
         };
         let msg = build_status_message("t_1", "running", &stats, "peer-b");
-        let (task_id, state, parsed_stats) = parse_status_message(&msg).unwrap();
+        assert_eq!(msg.msg_type, MessageType::TaskStatus);
+
+        // Through the consumer the serve loop uses, rather than a parser that
+        // existed only to match this builder (#465).
+        let (task_id, report) = crate::relay::tasks::parse_report(false, &msg.payload)
+            .expect("the serve loop can read a status message");
         assert_eq!(task_id, "t_1");
-        assert_eq!(state, "running");
-        assert_eq!(parsed_stats.tokens_used, 8000);
-        assert_eq!(parsed_stats.context_pct, 35);
+        match report {
+            crate::relay::tasks::Report::Progress { state, stats } => {
+                assert_eq!(state, "running");
+                assert_eq!(
+                    stats.get("tokens_used").and_then(|v| v.as_u64()),
+                    Some(8000)
+                );
+                assert_eq!(stats.get("context_pct").and_then(|v| v.as_u64()), Some(35));
+            }
+            other => panic!("a TaskStatus should read as progress, got {other:?}"),
+        }
     }
 
+    fn report(failed: bool, summary: &str) -> TaskReport {
+        TaskReport {
+            failed,
+            summary: summary.to_string(),
+            total_cost_usd: 1.23,
+            total_tokens: 50000,
+            model: Some("claude-opus-5".into()),
+            usage: serde_json::json!({"input_tokens": 10, "output_tokens": 20}),
+        }
+    }
+
+    /// A finished task, read back by the arm that records it.
     #[test]
-    fn handoff_message_fields() {
-        let msg = build_handoff_message(
-            "t_1",
-            "Tests pass",
-            &["src/auth.rs".into()],
-            Some("feat/done"),
-            1.23,
-            50000,
-            "peer-b",
-        );
+    fn a_completed_report_reaches_the_ledger_intact() {
+        let msg = build_report_message("t_1", &report(false, "Tests pass"), "peer-b");
         assert_eq!(msg.msg_type, MessageType::TaskHandoff);
-        assert_eq!(
-            msg.payload.get("summary").and_then(|v| v.as_str()),
-            Some("Tests pass")
-        );
-        assert_eq!(
-            msg.payload.get("git_ref").and_then(|v| v.as_str()),
-            Some("feat/done")
-        );
+
+        let (task_id, parsed) = crate::relay::tasks::parse_report(true, &msg.payload)
+            .expect("the serve loop can read a handoff");
+        assert_eq!(task_id, "t_1");
+        match parsed {
+            crate::relay::tasks::Report::Settled {
+                state,
+                summary,
+                total_cost_usd,
+                total_tokens,
+                model,
+                ..
+            } => {
+                assert_eq!(state, "completed");
+                assert_eq!(summary, "Tests pass");
+                assert_eq!(total_cost_usd, 1.23);
+                assert_eq!(total_tokens, 50000);
+                assert_eq!(model.as_deref(), Some("claude-opus-5"));
+            }
+            other => panic!("a TaskHandoff should read as settled, got {other:?}"),
+        }
     }
 
     #[test]
@@ -406,17 +363,24 @@ mod tests {
         assert_eq!(reason, "dependency resolved");
     }
 
+    /// A failed task says so, and still carries what it spent.
     #[test]
-    fn failure_message_fields() {
-        let msg = build_failure_message("t_2", "exit code 1", 0.15, 3000, "peer-b");
-        assert_eq!(
-            msg.payload.get("state").and_then(|v| v.as_str()),
-            Some("failed")
-        );
-        assert_eq!(
-            msg.payload.get("summary").and_then(|v| v.as_str()),
-            Some("exit code 1")
-        );
+    fn a_failed_report_is_settled_as_failed() {
+        let msg = build_report_message("t_2", &report(true, "exit code 1"), "peer-b");
+        let (_, parsed) = crate::relay::tasks::parse_report(true, &msg.payload).unwrap();
+        match parsed {
+            crate::relay::tasks::Report::Settled {
+                state,
+                summary,
+                total_cost_usd,
+                ..
+            } => {
+                assert_eq!(state, "failed");
+                assert_eq!(summary, "exit code 1");
+                assert_eq!(total_cost_usd, 1.23, "a failure still reports its cost");
+            }
+            other => panic!("expected settled, got {other:?}"),
+        }
     }
 
     #[test]
