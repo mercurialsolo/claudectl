@@ -168,6 +168,42 @@ impl PeerConnection {
         }
     }
 
+    /// Half-close the sending side and wait for the peer to finish consuming
+    /// what was written.
+    ///
+    /// `write_all` returning means the kernel took the bytes, not that the
+    /// peer read them. That difference is exactly how #487 stayed invisible:
+    /// the write succeeded, the peer hung up, and the caller was told the
+    /// message had been delivered. A fixed sleep cannot stand in for this
+    /// once the payload is megabytes rather than one frame.
+    ///
+    /// Shutting down only the write half leaves the peer's reader able to
+    /// drain every frame still in flight; it sees EOF after the last one,
+    /// exits, and drops its socket handle. That close is what ends this
+    /// side's reader thread, so this thread finishing is the signal that the
+    /// peer consumed the whole stream.
+    pub fn finish_sending(&self, timeout: std::time::Duration) -> Result<(), String> {
+        if let Some(stream) = self.stream.as_ref() {
+            if let Ok(guard) = stream.lock() {
+                guard
+                    .shutdown(std::net::Shutdown::Write)
+                    .map_err(|e| format!("half-close: {e}"))?;
+            }
+        }
+        let Some(handle) = self.reader_handle.as_ref() else {
+            // No reader to wait on; nothing can be confirmed either way.
+            return Ok(());
+        };
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if handle.is_finished() {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        Err(format!("peer did not finish reading within {:?}", timeout))
+    }
+
     /// Send a message to this peer.
     pub fn send(&self, msg: &RelayMessage) -> io::Result<()> {
         let stream = self

@@ -114,6 +114,25 @@ pub enum RelayCommand {
         git_ref: Option<String>,
     },
 
+    /// Move a conversation to a paired peer, so it can be resumed there
+    SendSession {
+        /// Target peer ID
+        peer: String,
+        /// Session ID to send (the one `claude` reports as `session_id`)
+        session: String,
+        /// Working directory the session belongs to. Defaults to the current
+        /// directory, which is where its transcript is looked for.
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Where the receiving host should place it. Defaults to `--cwd`,
+        /// which will not exist on a peer running another OS.
+        #[arg(long)]
+        remote_cwd: Option<String>,
+    },
+
+    /// Show conversations this host has sent to peers
+    Sessions,
+
     /// Show remote task status
     Status,
 
@@ -196,6 +215,19 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
             cwd,
             git_ref,
         } => cmd_delegate(peer, prompt, cwd.as_deref(), git_ref.clone(), json_mode),
+        RelayCommand::SendSession {
+            peer,
+            session,
+            cwd,
+            remote_cwd,
+        } => cmd_send_session(
+            peer,
+            session,
+            cwd.as_deref(),
+            remote_cwd.as_deref(),
+            json_mode,
+        ),
+        RelayCommand::Sessions => cmd_sessions(json_mode),
         RelayCommand::Status => cmd_task_status(json_mode),
         RelayCommand::Interrupt {
             peer,
@@ -601,6 +633,97 @@ fn cmd_serve(
                                 println!(
                                     "[{ts}] {:?} from {from_peer} carried no task id, ignored",
                                     msg.msg_type
+                                );
+                            }
+                        }
+                    }
+                    // #478 item 3: a transcript arrives in chunks, because a
+                    // median one is 5.5 MB against a 1 MiB frame cap.
+                    super::MessageType::SessionTransfer => {
+                        let ts = crate::logger::timestamp_now();
+                        match super::transfer::parse_chunk(&msg.payload) {
+                            Some(chunk) => {
+                                // Placement decides whether the transcript can
+                                // be resumed at all, so a missing target
+                                // directory is reported, not guessed at. Same
+                                // wording the worker uses for a delegated task
+                                // with a cwd this host does not have.
+                                if !std::path::Path::new(&chunk.cwd).is_dir() {
+                                    println!(
+                                        "[{ts}] session {} from {from_peer}: working directory does not exist on this host: {} (sender can pass --remote-cwd)",
+                                        chunk.session_id, chunk.cwd
+                                    );
+                                } else {
+                                    match super::transfer::accept_chunk(&chunk, &chunk.cwd) {
+                                        Ok(super::transfer::Accepted::More { have, of }) => {
+                                            println!(
+                                                "[{ts}] session {} from {from_peer}: chunk {have}/{of}",
+                                                chunk.session_id
+                                            );
+                                        }
+                                        Ok(super::transfer::Accepted::Placed(path))
+                                        | Ok(super::transfer::Accepted::AlreadyPresent(path)) => {
+                                            println!(
+                                                "[{ts}] session {} from {from_peer}: placed at {}",
+                                                chunk.session_id,
+                                                path.display()
+                                            );
+                                            println!(
+                                                "       resume with: {}",
+                                                super::transfer::resume_hint(
+                                                    &chunk.cwd,
+                                                    &chunk.session_id
+                                                )
+                                            );
+                                            // The sender has no other way to
+                                            // learn where it landed.
+                                            let ack = super::transfer::build_received_message(
+                                                &chunk.session_id,
+                                                &path,
+                                                &chunk.cwd,
+                                                identity.as_str(),
+                                            );
+                                            if let Err(e) = reg.send_to(from_peer.as_str(), &ack) {
+                                                println!(
+                                                    "[{ts}] could not acknowledge session {} to {from_peer}: {e}",
+                                                    chunk.session_id
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            println!(
+                                                "[{ts}] session {} from {from_peer}: {e}",
+                                                chunk.session_id
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            None => {
+                                println!(
+                                    "[{ts}] SessionTransfer from {from_peer} was malformed, ignored"
+                                );
+                            }
+                        }
+                    }
+                    super::MessageType::SessionReceived => {
+                        let ts = crate::logger::timestamp_now();
+                        match super::transfer::parse_received(&msg.payload) {
+                            Some((session_id, path, resume)) => {
+                                if super::transfer::record_received(&session_id, &path, &resume) {
+                                    println!(
+                                        "[{ts}] {from_peer} has session {session_id} at {path}"
+                                    );
+                                    println!("       resume there with: {resume}");
+                                } else {
+                                    println!(
+                                        "[{ts}] {from_peer} acknowledged session {session_id}, which this host did not send — ignored"
+                                    );
+                                }
+                            }
+                            None => {
+                                println!(
+                                    "[{ts}] SessionReceived from {from_peer} carried no session id, ignored"
                                 );
                             }
                         }
@@ -1139,6 +1262,174 @@ fn try_connect(
 /// PSK + address, independent of any running `relay serve` daemon. Returns the
 /// resolved remote id on success; an `Err` here must surface as a non-zero exit
 /// so scripts never mistake a built-but-unsent message for a delivered one.
+/// Move a conversation to a peer (#478 item 3).
+///
+/// One-shot like `relay delegate`: this process sends and exits. The
+/// receiver's acknowledgement — which carries the path it chose and the
+/// command to resume there — arrives at whatever process is serving, so it is
+/// written to the ledger rather than printed here. `relay sessions` reads it.
+fn cmd_send_session(
+    peer: &str,
+    session: &str,
+    cwd: Option<&str>,
+    remote_cwd: Option<&str>,
+    json_mode: bool,
+) -> io::Result<()> {
+    let identity = load_or_create_identity();
+
+    // Where the transcript is on this host.
+    let source_cwd = match cwd {
+        Some(c) => c.to_string(),
+        None => std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .map_err(|e| io::Error::other(format!("current directory: {e}")))?,
+    };
+    let path = super::transfer::transcript_path(&source_cwd, session)
+        .ok_or_else(|| io::Error::other(format!("'{session}' is not a usable session id")))?;
+    let contents = std::fs::read(&path).map_err(|e| {
+        io::Error::other(format!(
+            "no transcript for session '{session}' at {}: {e}",
+            path.display()
+        ))
+    })?;
+
+    // Where it should land over there. The sender's own path is the default
+    // and is usually wrong across operating systems, hence --remote-cwd.
+    let target_cwd = remote_cwd.unwrap_or(&source_cwd).to_string();
+
+    let chunks =
+        super::transfer::split(session, &target_cwd, &contents).map_err(io::Error::other)?;
+
+    // On disk before the wire: the acknowledgement lands at a different
+    // process, and has nothing to attach to if this was never recorded (#490).
+    super::transfer::record_sent(session, peer, &target_cwd, contents.len() as u64)
+        .map_err(io::Error::other)?;
+
+    let psk = load_peer_psk(peer).ok_or_else(|| {
+        io::Error::other(format!(
+            "peer '{peer}' is not paired — run `claudectl relay pair` first"
+        ))
+    })?;
+    let candidates = dial_candidates(peer);
+    if candidates.is_empty() {
+        return Err(io::Error::other(format!(
+            "no stored address for peer '{peer}' — pair or connect first"
+        )));
+    }
+
+    let intent = super::protocol::DialIntent::one_shot();
+    let mut last_err = String::new();
+    for addr in candidates {
+        let (remote_id, registry) = match try_connect_with(addr, &psk, &identity, &intent) {
+            Ok(v) => v,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        if remote_id != peer {
+            return Err(io::Error::other(format!(
+                "remote identity mismatch at {addr}: expected {peer}, got {remote_id}"
+            )));
+        }
+
+        for chunk in &chunks {
+            let msg = super::transfer::build_chunk_message(chunk, identity.as_str());
+            registry
+                .lock()
+                .map_err(|_| io::Error::other("registry lock poisoned"))?
+                .send_to(&remote_id, &msg)
+                .map_err(|e| {
+                    io::Error::other(format!(
+                        "sending chunk {} of {}: {e}",
+                        chunk.seq + 1,
+                        chunk.total
+                    ))
+                })?;
+        }
+
+        // A written frame is not a read one. Half-close and wait for the peer
+        // to drain the whole stream; a fixed sleep cannot stand in for this
+        // when the payload is megabytes (#487 is the same mistake at one
+        // frame). Allow a second per megabyte, floor of ten.
+        let budget = std::time::Duration::from_secs(10 + (contents.len() as u64 / 1_048_576));
+        let drained = registry
+            .lock()
+            .map_err(|_| io::Error::other("registry lock poisoned"))?
+            .get_peer(&remote_id)
+            .map(|c| c.finish_sending(budget));
+        if let Some(Err(e)) = drained {
+            return Err(io::Error::other(format!(
+                "peer '{peer}' did not take the whole transcript: {e}"
+            )));
+        }
+
+        let bytes = contents.len();
+        if json_mode {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "session_id": session,
+                    "peer": remote_id,
+                    "bytes": bytes,
+                    "chunks": chunks.len(),
+                    "remote_cwd": target_cwd,
+                })
+            );
+        } else {
+            println!(
+                "Sent session {session} to {remote_id}: {:.2} MB in {} chunk(s)",
+                bytes as f64 / 1_048_576.0,
+                chunks.len()
+            );
+            println!("Target directory on {remote_id}: {target_cwd}");
+            println!(
+                "It will confirm to this host's `relay serve`; see `claudectl relay sessions`."
+            );
+        }
+        return Ok(());
+    }
+    Err(io::Error::other(last_err))
+}
+
+/// What this host has sent, and what came back (#478 item 3).
+fn cmd_sessions(json_mode: bool) -> io::Result<()> {
+    let records = super::transfer::list();
+    if json_mode {
+        println!("{}", serde_json::json!({ "transfers": records }));
+        return Ok(());
+    }
+    if records.is_empty() {
+        println!("No conversations sent from this host.");
+        return Ok(());
+    }
+    println!(
+        "{:<38} {:<16} {:<10} {:>10}  WHERE",
+        "SESSION", "PEER", "STATE", "SIZE"
+    );
+    for r in &records {
+        let get = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("-").to_string();
+        let bytes = r.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+        println!(
+            "{:<38} {:<16} {:<10} {:>9.2}M  {}",
+            truncate(&get("session_id"), 37),
+            truncate(&get("peer"), 15),
+            get("state"),
+            bytes as f64 / 1_048_576.0,
+            r.get("remote_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&get("cwd"))
+        );
+    }
+    for r in &records {
+        if let Some(cmd) = r.get("resume").and_then(|v| v.as_str()) {
+            println!("\nResume on the peer: {cmd}");
+            break;
+        }
+    }
+    Ok(())
+}
+
 pub fn send_message_to_peer(
     peer_id: &str,
     identity: &super::PeerId,

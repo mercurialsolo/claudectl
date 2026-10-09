@@ -270,6 +270,16 @@ pub fn resolve_worktree_ids(sessions: &mut [ClaudeSession]) {
 /// worktree), which no mapping can account for.
 const SLUG_SEPARATORS: [char; 4] = ['/', '.', '_', '+'];
 
+/// The project directory Claude Code keeps a session's transcript in, for a
+/// session whose working directory is `cwd`.
+///
+/// Public because conversation transfer (#478 item 3) has to write a
+/// transcript to exactly this path: `claude --resume` looks only here and
+/// does not search, so a transcript placed anywhere else is not resumable.
+pub fn project_dir_for(cwd: &str) -> PathBuf {
+    projects_dir().join(cwd_to_slug(cwd))
+}
+
 fn cwd_to_slug(cwd: &str) -> String {
     let trimmed = cwd.trim_end_matches('/');
     if trimmed.is_empty() {

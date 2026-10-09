@@ -20,6 +20,8 @@ pub mod outcome;
 pub mod peer;
 pub mod protocol;
 pub mod tasks;
+/// Moving a conversation to another host (#478 item 3).
+pub mod transfer;
 pub mod worker;
 
 use std::fs;
@@ -86,6 +88,15 @@ pub enum MessageType {
     /// of its units vanishing into a silence it cannot tell from a network
     /// fault.
     KnowledgeRejected,
+
+    // Layer 2: conversation transfer (#478 item 3)
+    /// One chunk of a session transcript. A transcript is median 5.5 MB and
+    /// `protocol::MAX_LINE_SIZE` is 1 MiB, so it never fits in one message.
+    SessionTransfer,
+    /// The receiver placed a transferred transcript and says where, plus the
+    /// command to resume it. Sent because placement is load-bearing and only
+    /// the receiver knows the path it chose.
+    SessionReceived,
 }
 
 static MSG_COUNTER: AtomicU64 = AtomicU64::new(0);
