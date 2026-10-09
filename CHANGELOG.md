@@ -4,6 +4,69 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **A conversation can be moved to another host and resumed there** (#478
+  item 3). `claudectl relay send-session <peer> <session-id>` copies a
+  session transcript to a paired peer and reports the command that resumes it
+  on the far side; `claudectl relay sessions` lists what this host has sent
+  and what came back.
+
+  What this preserves is stated and tested: the full message history,
+  including tool calls and their results. What it does not is the working tree
+  and git state, subagent transcripts, running processes, local hooks and
+  environment, and the session id itself — the receiver forks rather than
+  continuing the same id, so the two hosts can never diverge on one session.
+
+  Verified by moving a real conversation between two relay processes and
+  recalling, on the receiving side, a codeword planted before the move.
+
+  Transcripts are chunked because a median one is 5.5 MB against a 1 MiB frame
+  cap. Transfers above 64 MB are refused with the measured size rather than
+  attempted; whether to compress instead is open.
+
+### Fixed
+
+- **`cwd_to_slug` mapped only `/`**, so it missed any project path containing
+  `.`, `_` or `+` — which includes every `.claude/worktrees/...` path. Checked
+  against all 316 transcripts on one machine: 275 matched before, 296 after,
+  and no remaining mismatch differs only in punctuation. Session discovery had
+  been silently correcting this with a full directory scan, so nothing broke;
+  conversation transfer *writes* to that path and has no such fallback.
+
+- **Brain tests repointed `HOME` for the whole process** (#468). Five test
+  sites did it, two of them asserting in a `SAFETY` comment that `cargo test`
+  runs single-threaded, which it does not. Selecting just those tests failed
+  every run; the full suite only flaked because a thousand other tests diluted
+  the scheduling. Every reader and writer now comes in two forms, one taking
+  the directory explicitly, so a test passes a temporary path instead of
+  changing the environment out from under its neighbours.
+
+- **A settled delegated task was never dropped from the worker's map**, so
+  `relay serve` grew by one task record — strings, paths and a child handle —
+  for every task it had ever run. Found by the dead-code audit below.
+
+- **The relay HTTP server's listener thread outlived its handle.** The accept
+  loop checked a shutdown flag nothing could set.
+
+### Changed
+
+- **`src/relay/` no longer carries a module-level `#![allow(dead_code)]`**
+  (#465). That allow is what let three features ship as types and builders
+  with no handler (#433, #434, #455). Sixteen items were triaged: nine
+  deleted as superseded or never load-bearing, two wired up, and the rest
+  narrowed to per-item allowances that each name the condition excusing them —
+  a feature whose consumer is not compiled, a platform whose code path is a
+  stub, or an item only the tests reach — so the excuse expires instead of
+  hiding the next one.
+
+  The audit surfaced three further gaps, filed rather than silenced: a
+  complete continuous LAN-discovery thread with no callers, a delegated task's
+  git context being accepted and discarded, and a peer state that is never
+  constructed.
+
+## [0.78.0] - 2026-10-09
+
 ### Fixed
 
 - **Only two of the offered feature combinations actually built.** A report
