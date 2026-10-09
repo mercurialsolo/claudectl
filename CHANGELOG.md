@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-10-09
+
 ### Added
 
 - **A conversation can be moved to another host and resumed there** (#478
@@ -65,7 +67,7 @@ All notable changes to claudectl are documented here.
   git context being accepted and discarded, and a peer state that is never
   constructed.
 
-## [0.78.0] - 2026-10-09
+## [0.77.0] - 2026-10-09
 
 ### Fixed
 
@@ -88,7 +90,7 @@ All notable changes to claudectl are documented here.
   one that is built. Each feature is exercised on its own, which is the
   strictest case and the one that had broken.
 
-## [0.77.0] - 2026-10-09
+## [0.76.0] - 2026-10-09
 
 ### Fixed
 
@@ -123,7 +125,7 @@ All notable changes to claudectl are documented here.
 - Failures to deliver a worker's reply are no longer discarded. A finished
   task whose reply went nowhere previously produced no sign of it anywhere.
 
-## [0.76.0] - 2026-10-09
+## [0.75.0] - 2026-10-09
 
 ### Added
 
@@ -157,7 +159,7 @@ All notable changes to claudectl are documented here.
   The error is printed on the worker's own console instead. Tracked
   separately.
 
-## [0.75.0] - 2026-10-09
+## [0.74.0] - 2026-10-09
 
 ### Fixed
 
@@ -194,7 +196,7 @@ All notable changes to claudectl are documented here.
   This also makes delegated tasks report their completion back to the host for
   the first time, which had never worked.
 
-## [0.74.0] - 2026-10-09
+## [0.73.0] - 2026-10-08
 
 ### Fixed
 
@@ -226,7 +228,7 @@ All notable changes to claudectl are documented here.
   the mini's Tailscale address, the laptop logged the dead one once and
   connected on the next.
 
-## [0.73.0] - 2026-10-08
+## [0.72.0] - 2026-10-08
 
 ### Fixed
 
@@ -260,7 +262,7 @@ All notable changes to claudectl are documented here.
   the higher id deferred to it, and the link stood for 464 seconds — more
   than fifteen heartbeat intervals — with zero disconnects on either side.
 
-## [0.72.0] - 2026-10-08
+## [0.71.0] - 2026-10-08
 
 ### Fixed
 
@@ -279,8 +281,6 @@ All notable changes to claudectl are documented here.
   containers on an arm64 Linux VM: Debian reported a live session as `Idle` and
   its cost as $7.50 throughout, while Alpine previously could not see processes
   at all.
-
-## [0.71.0] - 2026-10-08
 
 ## [0.70.0] - 2026-10-08
 
