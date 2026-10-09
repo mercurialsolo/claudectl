@@ -4,6 +4,41 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A delegated task's cost and token count were always reported as zero**,
+  on a tool whose premise is cost tracking. The worker's counters were
+  initialised to zero and only ever read, so a task running a real Claude
+  session on another machine looked free, and 0.75.0's ledger faithfully
+  recorded that.
+
+  The worker now runs the session with `--output-format json` and reports what
+  Claude Code itself accounts for: the cost, the token breakdown, and which
+  model ran. That is preferred over re-deriving the figures locally, so the two
+  cannot disagree and there is no second pricing table to keep current.
+
+  A completed task's summary is now what the session actually produced rather
+  than the fixed phrase "Task completed successfully".
+
+  Verified across a laptop and a Mac mini: a delegated question came back
+  `completed: 42 ($0.1994)`, with 36,639 tokens and the model recorded.
+
+- **A delegated task that could not start reported nothing**, leaving the
+  delegating host waiting indefinitely while the reason sat on the other
+  machine's console. It is now sent back like every other outcome. A missing
+  working directory also said "spawn claude: No such file or directory", which
+  pointed at a Claude Code install that was in fact fine; it now names the
+  directory.
+
+- **A failed delegation reaching the far host now explains itself.** A worker
+  that is not logged in reports "Not logged in · Please run /login" to
+  whoever delegated the task, rather than failing silently.
+
+- Failures to deliver a worker's reply are no longer discarded. A finished
+  task whose reply went nowhere previously produced no sign of it anywhere.
+
+## [0.76.0] - 2026-10-09
+
 ### Added
 
 - **`relay status` reports the tasks you have actually delegated.** It used to
