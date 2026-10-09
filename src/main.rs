@@ -1038,7 +1038,14 @@ fn run_main(cli: Cli) -> io::Result<()> {
     }
 
     if cli.brain_baseline {
+        #[cfg(feature = "hive")]
         return commands::run_brain_baseline(&cli);
+        // The ranking is produced by the hive distiller, so say so rather than
+        // printing an empty table that looks like "no data" (#482).
+        #[cfg(not(feature = "hive"))]
+        return Err(io::Error::other(
+            "--brain-baseline needs the 'hive' feature, which this build does not have",
+        ));
     }
 
     if let Some(ref mode) = cli.mode {

@@ -375,6 +375,9 @@ fn cmd_serve(
     // machine is still worth discovering, so the error is printed and
     // advertisement continues without a hive.
     let hive_peers = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    // Only ever stored to and read under `hive`, unlike `hive_peers` above,
+    // which the serve loop updates in every build.
+    #[cfg(feature = "hive")]
     let hive_units = Arc::new(std::sync::atomic::AtomicU32::new(0));
     // #434: the owner approving a queued join request is not necessarily at this
     // terminal, so a pending request fires a hook as well as printing.
