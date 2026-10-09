@@ -6,6 +6,40 @@ All notable changes to claudectl are documented here.
 
 ### Fixed
 
+- **Two machines that both ran only `relay serve` never connected.** Each
+  listened and neither dialled: the registry's reconnect event needs a peer
+  already present and already marked disconnected, and a fresh process starts
+  empty. `relay serve` now dials, at startup, every peer it holds both a
+  pairing key and a stored address for — on its own thread, since a connect
+  carries a 10s timeout and dialling inline would hold the banner for 10s per
+  powered-off peer. A stale address is one quiet log line naming it as the
+  peer's address *as of pairing*, so it can be told apart from a host that is
+  simply off.
+
+  Verified by pairing two servers the real way and restarting both with
+  nothing running `join`, on one machine and then across two.
+
+- **Simultaneous dials killed both connections.** Letting both ends dial made
+  a new case reachable: each end holds two authenticated sockets for the one
+  peer, an inbound and an outbound. Both dial threads saw the peer already
+  present — installed by their own listener — and discarded the socket they
+  had just opened, so each was left holding the connection the other had just
+  closed. Both died, and neither reconnected, because an inbound connection
+  carries no address to re-dial.
+
+  Only an asymmetric rule lets two ends agree, so the registry now keeps the
+  connection opened by the lower peer id. A dead connection is still always
+  displaced, whatever the ids say, or a peer that crashed and reconnected
+  could never replace the zombie the other side holds.
+
+  Verified on two physical machines: the lower id kept the socket it opened,
+  the higher id deferred to it, and the link stood for 464 seconds — more
+  than fifteen heartbeat intervals — with zero disconnects on either side.
+
+## [0.72.0] - 2026-10-08
+
+### Fixed
+
 - **On a system whose `ps` cannot answer `-o`/`-p`, every session read as
   dead.** busybox `ps` — Alpine and other minimal images, a normal place to run
   an agent — rejects those flags but still *runs*, so the call returns with a
