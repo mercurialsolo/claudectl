@@ -127,28 +127,68 @@ pub fn compute_proof(nonce: &str, psk: &[u8; 32]) -> String {
     crypto::hex_encode(&mac)
 }
 
+/// What a dialler tells the acceptor about itself during the handshake.
+///
+/// Two kinds of connection reach a listener and they are not interchangeable:
+/// a lasting link between two peers, and a one-shot that carries a single
+/// message and closes. Treating the second as the first is #487 — the registry
+/// saw a message delivery as a rival connection and the collision rule, asked
+/// a question about the wrong kind of connection, closed it before its frame
+/// was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DialIntent {
+    /// The port we accept connections on, so the peer can record an address it
+    /// could dial us back at (#484). `None` when we have no listener, and when
+    /// we are bound to a specific address rather than a wildcard, since such a
+    /// port is not reachable at the address the peer observes us from.
+    pub listen_port: Option<u16>,
+    /// This connection carries one message and closes. The acceptor must
+    /// deliver its messages without registering it as the peer link.
+    pub transient: bool,
+}
+
+impl DialIntent {
+    /// A lasting link between two peers.
+    pub fn peer_link(listen_port: Option<u16>) -> Self {
+        DialIntent {
+            listen_port,
+            transient: false,
+        }
+    }
+
+    /// A connection that carries one message and closes.
+    ///
+    /// It advertises no listening port: a one-shot sender has no listener, and
+    /// nothing should learn an address from a connection that is about to go
+    /// away.
+    pub fn one_shot() -> Self {
+        DialIntent {
+            listen_port: None,
+            transient: true,
+        }
+    }
+}
+
 /// Client: send a handshake response with the HMAC proof.
 ///
-/// `listen_port` is the port we accept connections on, so the peer can record
-/// an address it could dial us back at (#484). It is `None` when we have no
-/// listener — `relay connect` and `relay join` — and when we are bound to a
-/// specific address rather than a wildcard, since such a port is not reachable
-/// at the address the peer observes us from. A peer too old to read the field
-/// simply ignores it.
+/// A peer too old to read the extra fields ignores them, so both are additive.
 pub fn send_handshake(
     stream: &mut TcpStream,
     identity: &str,
     nonce: &str,
     psk: &[u8; 32],
-    listen_port: Option<u16>,
+    intent: &DialIntent,
 ) -> io::Result<()> {
     let proof = compute_proof(nonce, psk);
     let mut payload = serde_json::json!({
         "proof": proof,
         "version": env!("CARGO_PKG_VERSION"),
     });
-    if let Some(port) = listen_port {
+    if let Some(port) = intent.listen_port {
         payload["listen_port"] = serde_json::json!(port);
+    }
+    if intent.transient {
+        payload["transient"] = serde_json::json!(true);
     }
     let msg = RelayMessage {
         id: gen_msg_id(),
@@ -158,6 +198,16 @@ pub fn send_handshake(
         payload,
     };
     write_message(stream, &msg)
+}
+
+/// Server: does the dialling peer say this connection is a one-shot?
+///
+/// Absent on anything older than 0.74.0, which is why the default is `false`:
+/// an older peer's one-shot still looks like a link, as it did before #487.
+/// Only an explicit `true` counts, so a malformed value cannot turn a real
+/// peer link into a delivery that is never registered.
+pub fn handshake_is_transient(msg: &RelayMessage) -> bool {
+    msg.payload.get("transient").and_then(|v| v.as_bool()) == Some(true)
 }
 
 /// Server: the port the dialling peer says it listens on, if it said.
@@ -414,5 +464,71 @@ mod advertised_listen_port {
             handshake_listen_port(&handshake(serde_json::json!({"listen_port": 65535}))),
             Some(65535)
         );
+    }
+}
+
+#[cfg(test)]
+mod one_shot_connections {
+    use super::super::{MessageType, RelayMessage};
+    use super::{DialIntent, handshake_is_transient};
+
+    fn handshake(payload: serde_json::Value) -> RelayMessage {
+        RelayMessage {
+            id: "m1".into(),
+            msg_type: MessageType::Handshake,
+            from_peer: "peer-1".into(),
+            timestamp: 0,
+            payload,
+        }
+    }
+
+    #[test]
+    fn a_one_shot_says_so_and_advertises_no_port() {
+        let intent = DialIntent::one_shot();
+        assert!(intent.transient);
+        assert_eq!(
+            intent.listen_port, None,
+            "a connection about to close must not teach an address"
+        );
+    }
+
+    #[test]
+    fn a_peer_link_does_not_claim_to_be_transient() {
+        assert!(!DialIntent::peer_link(Some(9847)).transient);
+        assert!(!DialIntent::peer_link(None).transient);
+    }
+
+    #[test]
+    fn the_flag_is_read_when_present() {
+        assert!(handshake_is_transient(&handshake(
+            serde_json::json!({"proof": "ab", "transient": true})
+        )));
+    }
+
+    // Every peer built before #487 omits the field. Defaulting to "not
+    // transient" keeps such a connection a link, as it was — the safe
+    // direction, since the alternative would stop registering real peers.
+    #[test]
+    fn an_absent_flag_means_a_peer_link() {
+        assert!(!handshake_is_transient(&handshake(
+            serde_json::json!({"proof": "ab", "version": "0.73.0"})
+        )));
+    }
+
+    // Only an explicit `true` counts, so a malformed value cannot turn a real
+    // peer link into a delivery that is never registered.
+    #[test]
+    fn anything_other_than_true_means_a_peer_link() {
+        for v in [
+            serde_json::json!(false),
+            serde_json::json!("true"),
+            serde_json::json!(1),
+            serde_json::json!(null),
+        ] {
+            assert!(
+                !handshake_is_transient(&handshake(serde_json::json!({"transient": v.clone()}))),
+                "{v} must not be read as transient"
+            );
+        }
     }
 }

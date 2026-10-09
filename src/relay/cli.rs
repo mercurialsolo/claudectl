@@ -1030,10 +1030,11 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
 /// This is deliberately the *only* place the question is asked, and it is asked
 /// on both directions: gating what we send without gating what we accept would
 /// let an unapproved peer still push units into the hive.
-fn try_connect(
+fn try_connect_with(
     addr: SocketAddr,
     psk: &[u8; 32],
     identity: &super::PeerId,
+    intent: &super::protocol::DialIntent,
 ) -> Result<(String, Arc<Mutex<PeerRegistry>>), String> {
     let registry = Arc::new(Mutex::new(PeerRegistry::new(30, identity.as_str())));
     let tx = {
@@ -1041,14 +1042,29 @@ fn try_connect(
         reg.message_tx()
     };
 
-    // `relay connect` / `relay join` have no listener, so there is no port
-    // to teach the peer. It learns an address for us from our own `serve` dials.
-    let conn = PeerConnection::connect(addr, psk, identity, tx, None)?;
+    let conn = PeerConnection::connect(addr, psk, identity, tx, intent)?;
     let remote_id = conn.peer_id.0.clone();
     if let Ok(mut reg) = registry.lock() {
         reg.add_peer(conn);
     }
     Ok((remote_id, registry))
+}
+
+/// Dial a peer for a lasting link. `relay connect` and `relay join` both go
+/// on to run a loop on the connection, so neither is a one-shot.
+fn try_connect(
+    addr: SocketAddr,
+    psk: &[u8; 32],
+    identity: &super::PeerId,
+) -> Result<(String, Arc<Mutex<PeerRegistry>>), String> {
+    // No listener in either command, so there is no port to teach the peer; it
+    // learns an address for us from our own `serve` dials instead.
+    try_connect_with(
+        addr,
+        psk,
+        identity,
+        &super::protocol::DialIntent::peer_link(None),
+    )
 }
 
 /// Open a one-shot authenticated connection to `peer_id`, send `msg`, and close
@@ -1065,29 +1081,59 @@ pub fn send_message_to_peer(
     let psk = load_peer_psk(peer_id).ok_or_else(|| {
         format!("peer '{peer_id}' is not paired — run `claudectl relay pair` first")
     })?;
-    let meta = load_peer_meta(peer_id)
-        .ok_or_else(|| format!("no stored address for peer '{peer_id}' — pair or connect first"))?;
-    let addr_str = meta
-        .get("addr")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("peer '{peer_id}' metadata has no address"))?;
-    let addr: SocketAddr = addr_str
-        .parse()
-        .map_err(|e| format!("invalid stored address '{addr_str}' for '{peer_id}': {e}"))?;
-
-    let (remote_id, registry) = try_connect(addr, &psk, identity)?;
-    if remote_id != peer_id {
+    // Every address we have seen the peer at, not just the newest (#484):
+    // sending to a peer that has moved should not fail when a working address
+    // is on record.
+    let candidates = dial_candidates(peer_id);
+    if candidates.is_empty() {
         return Err(format!(
-            "remote identity mismatch at {addr}: expected {peer_id}, got {remote_id}"
+            "no stored address for peer '{peer_id}' — pair or connect first"
         ));
     }
-    registry
-        .lock()
-        .map_err(|_| "registry lock poisoned".to_string())?
-        .send_to(&remote_id, msg)?;
-    // Let the frame flush to the peer before the connection drops at scope end.
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    Ok(remote_id)
+
+    // A one-shot: this connection carries `msg` and closes. Saying so keeps the
+    // acceptor from treating it as a rival to an existing peer link and closing
+    // it before reading the message, which is #487.
+    let intent = super::protocol::DialIntent::one_shot();
+
+    let mut last_err = String::new();
+    for addr in candidates {
+        let (remote_id, registry) = match try_connect_with(addr, &psk, identity, &intent) {
+            Ok(v) => v,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        if remote_id != peer_id {
+            return Err(format!(
+                "remote identity mismatch at {addr}: expected {peer_id}, got {remote_id}"
+            ));
+        }
+        registry
+            .lock()
+            .map_err(|_| "registry lock poisoned".to_string())?
+            .send_to(&remote_id, msg)?;
+
+        // Let the frame flush before the connection drops at scope end.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+
+        // A written frame is not a delivered one. If the peer closed on us in
+        // that window, it did not read the message — which is exactly how #487
+        // stayed invisible: the write succeeded, the peer hung up, and the
+        // caller was told the task had been delegated.
+        let delivered = registry
+            .lock()
+            .map(|reg| reg.get_peer(&remote_id).is_none_or(|c| c.reader_alive()))
+            .unwrap_or(true);
+        if !delivered {
+            return Err(format!(
+                "peer '{peer_id}' closed the connection without accepting the message"
+            ));
+        }
+        return Ok(remote_id);
+    }
+    Err(last_err)
 }
 
 /// Every address we could dial this peer at, most-recently-seen first (#484).
@@ -1189,7 +1235,7 @@ fn spawn_startup_dials(
                     &psk,
                     &identity,
                     tx.clone(),
-                    listen_port,
+                    &super::protocol::DialIntent::peer_link(listen_port),
                 ) {
                     Ok(c) => c,
                     Err(e) => {
@@ -1260,7 +1306,13 @@ fn reconnect_peer(
     let tx = reg.message_tx();
     let mut last_err = String::new();
     for addr in candidates {
-        let conn = match PeerConnection::connect(addr, &psk, identity, tx.clone(), listen_port) {
+        let conn = match PeerConnection::connect(
+            addr,
+            &psk,
+            identity,
+            tx.clone(),
+            &super::protocol::DialIntent::peer_link(listen_port),
+        ) {
             Ok(c) => c,
             Err(e) => {
                 last_err = e;

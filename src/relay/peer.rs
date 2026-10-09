@@ -75,15 +75,15 @@ impl PeerConnection {
     }
 
     /// Connect to a remote peer (client-side).
-    /// Dial a peer. `listen_port` is passed to the handshake so the peer can
-    /// learn an address for us; see `protocol::send_handshake` for when it is
-    /// `None`.
+    /// Dial a peer. `intent` tells the acceptor what kind of connection this
+    /// is — a lasting link or a one-shot delivery — and what address it could
+    /// dial us back at. See `protocol::DialIntent`.
     pub fn connect(
         addr: SocketAddr,
         psk: &[u8; 32],
         identity: &PeerId,
         tx: Sender<(PeerId, RelayMessage)>,
-        listen_port: Option<u16>,
+        intent: &protocol::DialIntent,
     ) -> Result<Self, String> {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10))
             .map_err(|e| format!("connect to {addr}: {e}"))?;
@@ -115,14 +115,8 @@ impl PeerConnection {
         let mut write_stream = stream
             .try_clone()
             .map_err(|e| format!("clone for write: {e}"))?;
-        protocol::send_handshake(
-            &mut write_stream,
-            identity.as_str(),
-            nonce,
-            psk,
-            listen_port,
-        )
-        .map_err(|e| format!("send handshake: {e}"))?;
+        protocol::send_handshake(&mut write_stream, identity.as_str(), nonce, psk, intent)
+            .map_err(|e| format!("send handshake: {e}"))?;
 
         // Await ack
         let remote_peer_id =
@@ -149,14 +143,6 @@ impl PeerConnection {
         Ok(conn)
     }
 
-    /// Close this connection's socket.
-    ///
-    /// `stream` is an `Arc` shared with the reader thread, which holds its own
-    /// `try_clone` of the same socket, so dropping a `PeerConnection` closes
-    /// nothing — the reader keeps reading and the socket stays open with no
-    /// way to write to it. `shutdown(Both)` acts on the socket rather than on
-    /// one descriptor, so it ends the reader's blocking read and sends a FIN to
-    /// the other end.
     /// Whether this connection's reader thread is still running.
     ///
     /// The reader exits on EOF, so a finished reader means the socket is gone
@@ -166,6 +152,14 @@ impl PeerConnection {
         !self.reader_handle.as_ref().is_some_and(|h| h.is_finished())
     }
 
+    /// Close this connection's socket.
+    ///
+    /// `stream` is an `Arc` shared with the reader thread, which holds its own
+    /// `try_clone` of the same socket, so dropping a `PeerConnection` closes
+    /// nothing — the reader keeps reading and the socket stays open with no
+    /// way to write to it. `shutdown(Both)` acts on the socket rather than on
+    /// one descriptor, so it ends the reader's blocking read and sends a FIN to
+    /// the other end.
     pub fn shutdown(&self) {
         if let Some(stream) = self.stream.as_ref() {
             if let Ok(guard) = stream.lock() {
