@@ -74,6 +74,15 @@ pub enum ExposureState {
 }
 
 /// What a missing entry means. Same semantics as `hive::exposure::ShareMode`.
+///
+/// Without `hive` there is no configured share mode to read, so
+/// `mode_from_config` answers `Auto` outright and `Manual` is unreachable —
+/// but this is still that function's return type and is re-exported, so the
+/// type stays and only the unreachable variant is excused (#482).
+#[cfg_attr(
+    not(feature = "hive"),
+    allow(dead_code, reason = "no configured share mode to reach Manual through")
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShareMode {
     Auto,
@@ -81,6 +90,10 @@ pub enum ShareMode {
 }
 
 impl ShareMode {
+    /// Gated on `hive`: `mode_from_config` only consults a configured share
+    /// mode when the hive is compiled, and answers `Auto` outright otherwise,
+    /// so without that feature there is nothing here to parse (#482).
+    #[cfg(feature = "hive")]
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
             "auto" => Some(ShareMode::Auto),
@@ -356,6 +369,7 @@ mod tests {
         assert_eq!(Category::parse("nonsense"), None);
     }
 
+    #[cfg(feature = "hive")]
     #[test]
     fn share_mode_parses_like_the_hive_one() {
         assert_eq!(ShareMode::parse("auto"), Some(ShareMode::Auto));

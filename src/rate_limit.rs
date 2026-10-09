@@ -66,6 +66,16 @@ pub struct RateLimiter {
     buckets: Mutex<HashMap<String, Bucket>>,
 }
 
+// Two consumers, each behind a different feature: `bus/mcp.rs` uses the
+// fixed-capacity entry points, and `query/core.rs` — gated on `relay` — uses
+// the per-grant ones. So any build with only one of the two leaves the other's
+// half unused, which `-D warnings` rejects (#482). Stated as a condition
+// rather than a blanket allow, so the day both are always compiled the
+// attribute stops applying instead of hiding something real.
+#[cfg_attr(
+    not(all(feature = "bus", feature = "relay")),
+    allow(dead_code, reason = "the other feature's consumer is not compiled")
+)]
 impl RateLimiter {
     pub fn new(capacity: u32, window_secs: u32) -> Self {
         Self {

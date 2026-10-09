@@ -1898,6 +1898,11 @@ pub(crate) fn run_brain_outcomes(cli: &Cli) -> io::Result<()> {
 }
 
 /// Rank approaches by outcome data: success_rate * sample_count.
+///
+/// Gated on `hive`: the ranking comes out of `hive::distiller`, so without
+/// that feature there is nothing for this to report rather than a degraded
+/// version of it (#482).
+#[cfg(feature = "hive")]
 pub(crate) fn run_brain_baseline(cli: &Cli) -> io::Result<()> {
     let _ = brain::outcomes::reap();
     let decisions = brain::decisions::read_all_decisions();

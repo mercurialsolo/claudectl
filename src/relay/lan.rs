@@ -463,13 +463,33 @@ mod tests {
         assert_eq!(parse_announcement(&partial).unwrap().hive, None);
     }
 
+    /// Must equal `hive::identity::MAX_NAME_LEN`, which a relay-only build
+    /// cannot see. Pinned by the test below.
+    const MAX_HIVE_NAME_LEN: usize = 64;
+
+    #[cfg(feature = "hive")]
+    #[test]
+    fn the_name_cap_matches_the_hive_one() {
+        assert_eq!(
+            MAX_HIVE_NAME_LEN,
+            crate::hive::identity::MAX_NAME_LEN,
+            "the local copy has drifted, so the worst-case payload test below \
+             is no longer testing the worst case"
+        );
+    }
+
     #[test]
     fn the_worst_case_payload_fits_the_receive_buffer() {
         // The scanner reads into a 1 KB buffer, so a datagram larger than that is
         // silently truncated and then fails to parse. Check the largest thing
         // this code can emit, rather than assuming a name and two integers are
         // small.
-        let name = "n".repeat(crate::hive::identity::MAX_NAME_LEN);
+        // `hive::identity::MAX_NAME_LEN` is not reachable in a relay-only
+        // build, but a relay-only peer still receives ads from hive-enabled
+        // ones, so the worst case matters here too and the test must not be
+        // gated away. `the_name_cap_matches_the_hive_one` keeps the two in step
+        // wherever both are compiled.
+        let name = "n".repeat(MAX_HIVE_NAME_LEN);
         let ad = HiveAd {
             id: "hv_ffffff".into(),
             name,

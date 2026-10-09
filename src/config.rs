@@ -169,6 +169,21 @@ impl Default for QueryConfig {
     }
 }
 
+/// The share modes `[hive] share_mode` accepts.
+///
+/// Spelled out here rather than asked of `hive::exposure::ShareMode`, because
+/// config is parsed in every build and `hive` is a feature — reaching into it
+/// made *every* build without `hive` fail to compile (#482), including builds
+/// with no features at all. `context::exposure` already redefines these same
+/// wire values locally for the same reason, so this follows the established
+/// pattern rather than inventing one. `share_mode_matches_hive` pins them
+/// together wherever both are compiled.
+const SHARE_MODES: [&str; 2] = ["auto", "manual"];
+
+fn is_share_mode(s: &str) -> bool {
+    SHARE_MODES.contains(&s.trim().to_lowercase().as_str())
+}
+
 /// Configuration for hive mind knowledge sharing.
 #[derive(Debug, Clone)]
 pub struct HiveConfig {
@@ -572,7 +587,7 @@ impl Config {
                 hive.stale_peer_days = v;
             }
             if let Some(v) = raw_hive.share_mode {
-                if crate::hive::exposure::ShareMode::parse(&v).is_some() {
+                if is_share_mode(&v) {
                     hive.share_mode = v.trim().to_lowercase();
                 }
             }
@@ -2195,5 +2210,47 @@ auto_deny_file_conflicts = true
         let config = Config::default();
         assert!(config.file_conflicts); // on by default
         assert!(!config.auto_deny_file_conflicts); // off by default
+    }
+}
+
+#[cfg(test)]
+mod share_mode_agreement {
+    use super::is_share_mode;
+
+    // The two legal values are spelled out in config so that a build without
+    // the `hive` feature still compiles (#482). This pins the local copy to the
+    // real parser wherever both are compiled, so the duplication cannot drift
+    // into config accepting a value the hive rejects, or the reverse.
+    #[cfg(feature = "hive")]
+    #[test]
+    fn the_local_list_matches_what_the_hive_parses() {
+        for m in super::SHARE_MODES {
+            assert!(
+                crate::hive::exposure::ShareMode::parse(m).is_some(),
+                "config accepts {m:?} but the hive does not parse it"
+            );
+        }
+        // And nothing outside the list parses, so the list is complete rather
+        // than merely a subset.
+        for other in ["on", "off", "curated", "", "AUTOMATIC"] {
+            assert!(
+                crate::hive::exposure::ShareMode::parse(other).is_none(),
+                "the hive parses {other:?}, which config would reject"
+            );
+        }
+    }
+
+    #[test]
+    fn the_accepted_values_are_matched_case_and_space_insensitively() {
+        for s in ["auto", "AUTO", " Auto ", "manual", "MANUAL"] {
+            assert!(is_share_mode(s), "{s:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn anything_else_is_refused_so_a_typo_does_not_become_a_setting() {
+        for s in ["", "autoo", "man", "on", "true"] {
+            assert!(!is_share_mode(s), "{s:?} should be refused");
+        }
     }
 }
