@@ -296,6 +296,8 @@ fn handle_incoming(
     //
     // Recording only after auth is what keeps an unauthenticated connection
     // from writing to the address book.
+    let transient = protocol::handshake_is_transient(&handshake_msg);
+
     if let Some(port) = protocol::handshake_listen_port(&handshake_msg) {
         let dialable = std::net::SocketAddr::new(peer_addr.ip(), port);
         if let Err(e) = super::save_peer_meta(&remote_peer_id, &dialable.to_string()) {
@@ -325,7 +327,24 @@ fn handle_incoming(
         reg.message_tx()
     };
 
+    // A one-shot delivery is not a peer link, so it must not go into the
+    // registry (#487). Its reader thread takes its own handle on the socket and
+    // owns the message sender, so dropping the connection here still delivers
+    // every frame to the serve loop; the thread then exits on EOF when the
+    // sender closes. Registering it instead put two connections under one peer
+    // id, and the collision rule — correct for two serving peers, wrong here —
+    // closed one of them before its message was read.
+    //
+    // Never registered, not "only when a link already exists": a rule that
+    // depends on what else is connected is a race, which is how #487 happened.
     let conn = PeerConnection::from_authenticated(peer_id.clone(), stream, tx);
+    if transient {
+        crate::logger::log(
+            "RELAY",
+            &format!("delivery from {peer_id} at {peer_addr} (one-shot, not a link)"),
+        );
+        return true;
+    }
 
     if let Ok(mut reg) = registry.lock() {
         reg.add_peer(conn);
