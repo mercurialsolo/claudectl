@@ -67,6 +67,10 @@ impl AgentConfig {
     /// Built as a `Vec` rather than a command string because a plist takes an
     /// argv array — which also means a path containing a space needs no quoting
     /// and cannot be re-split.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(dead_code, reason = "only the launchd agent path renders a plist")
+    )]
     pub fn argv(&self, binary: &Path) -> Vec<String> {
         let mut args = vec![
             binary.display().to_string(),
@@ -126,6 +130,10 @@ pub fn log_paths_in(home: &Path) -> (PathBuf, PathBuf) {
 /// A home directory can contain `&` or `<`, and an unescaped one produces a
 /// plist `launchd` silently refuses to load — the failure mode being an agent
 /// that is "installed" and never runs.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the launchd agent path renders a plist")
+)]
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -138,11 +146,19 @@ fn xml_escape(s: &str) -> String {
 ///
 /// Pure: path in, XML out, no filesystem. That is what makes the interesting
 /// part testable without touching a real `launchd`.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the launchd agent path renders a plist")
+)]
 pub fn render_plist(binary: &Path, cfg: &AgentConfig) -> String {
     render_plist_in(binary, cfg, &claudectl_core::helpers::dirs_home())
 }
 
 /// [`render_plist`] under an explicit home. See [`plist_path_in`] for why.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the launchd agent path renders a plist")
+)]
 pub fn render_plist_in(binary: &Path, cfg: &AgentConfig, home: &Path) -> String {
     let (out_log, err_log) = log_paths_in(home);
     let args: String = cfg
@@ -191,6 +207,10 @@ pub fn render_plist_in(binary: &Path, cfg: &AgentConfig, home: &Path) -> String 
 /// directory; resolving it would bake `.../claudectl/0.65.0/bin/claudectl` into
 /// the plist, and the next `brew upgrade` would leave `launchd` restarting a
 /// path that no longer exists. The stable symlink is the right thing to record.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the launchd agent path renders a plist")
+)]
 pub fn resolve_binary() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|e| format!("cannot find this binary's own path: {e}"))
 }
