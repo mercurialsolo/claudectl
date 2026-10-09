@@ -18,6 +18,7 @@ pub mod listener;
 pub mod mesh;
 pub mod peer;
 pub mod protocol;
+pub mod tasks;
 pub mod worker;
 
 use std::fs;
