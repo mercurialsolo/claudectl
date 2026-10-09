@@ -106,7 +106,23 @@ impl RemoteWorker {
             .stdout(Stdio::from(out_file))
             .stderr(Stdio::from(err_file))
             .spawn()
-            .map_err(|e| format!("spawn claude: {e}"))?;
+            .map_err(|e| {
+                // The captures exist before the spawn, so a spawn that fails
+                // would otherwise leave two files behind for a task that never
+                // ran and is never tracked.
+                let _ = std::fs::remove_file(&out_path);
+                let _ = std::fs::remove_file(&err_path);
+                // `spawn` reports a missing working directory as the same
+                // ENOENT as a missing binary, so the bare message reads
+                // "spawn claude: No such file or directory" and sends whoever
+                // delegated the task looking for a Claude Code install that is
+                // in fact fine. Name the real cause while we still can.
+                if !std::path::Path::new(work_dir).is_dir() {
+                    format!("working directory does not exist on this host: {work_dir}")
+                } else {
+                    format!("spawn claude in {work_dir}: {e}")
+                }
+            })?;
 
         let pid = child.id();
 
