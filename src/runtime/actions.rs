@@ -1,6 +1,9 @@
 //! Bind `Actions` (the runtime write surface) to the binary's real
 //! subsystems: brain decisions store, terminal backends, process kill.
 
+// Only the coord-gated drain marker writes files now that
+// `set_gate_mode` delegates to `brain::write_gate_mode`.
+#[cfg(feature = "coord")]
 use std::fs;
 
 use claudectl_core::discovery;
@@ -29,11 +32,7 @@ impl Actions for LiveActions {
     }
 
     fn set_gate_mode(&self, mode: BrainGateMode) -> Result<(), String> {
-        let path = brain::gate_mode_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("create gate-mode dir: {e}"))?;
-        }
-        fs::write(&path, gate_mode_label(mode)).map_err(|e| format!("write gate-mode: {e}"))
+        brain::write_gate_mode(gate_mode_label(mode))
     }
 
     fn log_observation(&self, observation: ObservationInput) -> Result<(), String> {
@@ -242,28 +241,24 @@ mod tests {
         }
     }
 
-    /// Set-then-read against a temporary HOME confirms the file actually
-    /// lands at the expected path and the binary's `brain::read_gate_mode`
-    /// picks it up.
+    /// A set-then-read round-trip in a temporary brain directory: the writer
+    /// and the reader agree on where the gate-mode file goes, and the label
+    /// `set_gate_mode` picks is the one `read_gate_mode` gives back.
+    ///
+    /// `set_gate_mode` itself goes through `brain::write_gate_mode`, which
+    /// resolves the real `~/.claudectl/brain`, so this drives the pair of
+    /// `_in` functions underneath it rather than the trait method (#468).
     #[test]
     fn set_gate_mode_persists_to_file() {
         let dir = tempfile::tempdir().unwrap();
-        let original = std::env::var("HOME").ok();
-        // Tests in this crate run serially per-thread, but this still races
-        // with anything else that touches HOME. Acceptable for a smoke test.
-        unsafe { std::env::set_var("HOME", dir.path()) };
 
-        let actions = LiveActions;
-        actions.set_gate_mode(BrainGateMode::Off).unwrap();
-        assert_eq!(brain::read_gate_mode().trim(), "off");
-
-        actions.set_gate_mode(BrainGateMode::Auto).unwrap();
-        assert_eq!(brain::read_gate_mode().trim(), "auto");
-
-        if let Some(home) = original {
-            unsafe { std::env::set_var("HOME", home) };
-        } else {
-            unsafe { std::env::remove_var("HOME") };
+        for mode in [BrainGateMode::Off, BrainGateMode::Auto, BrainGateMode::On] {
+            brain::write_gate_mode_in(dir.path(), gate_mode_label(mode)).unwrap();
+            assert_eq!(
+                brain::read_gate_mode_in(dir.path()),
+                gate_mode_label(mode),
+                "round-trip for {mode:?}"
+            );
         }
     }
 }

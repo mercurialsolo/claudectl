@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::decisions::{DecisionRecord, decisions_dir};
 use super::detectors::extract_command_keyword;
@@ -115,12 +115,23 @@ impl AntiPattern {
 // ────────────────────────────────────────────────────────────────────────────
 
 fn antipatterns_path() -> PathBuf {
-    decisions_dir().join("decisions").join("antipatterns.json")
+    antipatterns_path_in(&decisions_dir())
+}
+
+/// The anti-pattern library inside an explicitly given brain directory.
+/// See `decisions::decisions_path_in` for why the `_in` form holds the body.
+fn antipatterns_path_in(root: &Path) -> PathBuf {
+    root.join("decisions").join("antipatterns.json")
 }
 
 /// Persist the discovered library. Stable JSON layout for inspection and tests.
 pub fn save_library(library: &[AntiPattern]) -> Result<(), String> {
-    let path = antipatterns_path();
+    save_library_in(&decisions_dir(), library)
+}
+
+/// `save_library` against an explicit brain directory.
+pub(super) fn save_library_in(root: &Path, library: &[AntiPattern]) -> Result<(), String> {
+    let path = antipatterns_path_in(root);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -136,7 +147,12 @@ pub fn save_library(library: &[AntiPattern]) -> Result<(), String> {
 }
 
 pub fn load_library() -> Vec<AntiPattern> {
-    let path = antipatterns_path();
+    load_library_in(&decisions_dir())
+}
+
+/// `load_library` against an explicit brain directory.
+pub(super) fn load_library_in(root: &Path) -> Vec<AntiPattern> {
+    let path = antipatterns_path_in(root);
     let content = match fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
@@ -553,19 +569,11 @@ mod tests {
             last_seen: 12345,
             avg_downstream_cost: 0.42,
         }];
+        // A brain directory of this test's own, passed explicitly, so the
+        // round-trip does not depend on process-wide `HOME`.
         let tmp = tempfile::tempdir().unwrap();
-        // Redirect HOME so antipatterns_path() points into the temp dir.
-        let original_home = std::env::var("HOME").ok();
-        // SAFETY: tests are single-threaded by Cargo default for cfg-controlled
-        // env mutation here; we restore HOME below.
-        unsafe { std::env::set_var("HOME", tmp.path()) };
-        save_library(&lib).expect("save");
-        let loaded = load_library();
-        if let Some(h) = original_home {
-            unsafe { std::env::set_var("HOME", h) };
-        } else {
-            unsafe { std::env::remove_var("HOME") };
-        }
+        save_library_in(tmp.path(), &lib).expect("save");
+        let loaded = load_library_in(tmp.path());
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].steps.len(), 2);
         assert_eq!(loaded[0].total_occurrences, 7);

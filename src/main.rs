@@ -661,7 +661,24 @@ fn maybe_print_star_prompt(is_demo: bool) {
 /// `claudectl` entries). When either is present, we assume the operator
 /// knows what they're doing and stay quiet.
 fn is_first_run() -> bool {
-    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+    is_first_run_in(
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .as_deref(),
+    )
+}
+
+/// `is_first_run` against an explicitly given home directory.
+///
+/// `None` is "the process has no `HOME`", which is not first-run because
+/// there is nowhere to put the markers and so no nudge to give. Taking an
+/// `Option` rather than a `&Path` is what lets a test reach that branch
+/// without removing the variable from the whole process (#468).
+///
+/// Note this root is `$HOME` itself, not the brain directory: both
+/// `.claudectl/` and `.claude/` are looked up beneath it.
+fn is_first_run_in(home: Option<&std::path::Path>) -> bool {
+    let Some(home) = home else {
         return false;
     };
     let marker = home.join(".claudectl").join("onboarding.json");
@@ -1503,45 +1520,29 @@ fn run_tui<W: io::Write>(
 mod first_run_tests {
     use super::*;
     use std::fs;
-    use std::sync::Mutex;
-
-    // is_first_run reads HOME and the filesystem; serialize so concurrent
-    // tests don't clobber each other when they set HOME.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn set_home(p: &std::path::Path) {
-        // Cargo's test harness shares a process; reset HOME after each test
-        // by calling this with the original value (we just leak temp dirs
-        // since they're under /tmp anyway).
-        // SAFETY: tests are serialized via ENV_LOCK above; nothing else
-        // here races on env reads inside the lock window.
-        unsafe { std::env::set_var("HOME", p) };
-    }
 
     #[test]
     fn first_run_when_neither_marker_nor_hooks_present() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        set_home(tmp.path());
-        assert!(is_first_run(), "fresh home should be first-run");
+        assert!(
+            is_first_run_in(Some(tmp.path())),
+            "fresh home should be first-run"
+        );
     }
 
     #[test]
     fn not_first_run_when_onboarding_marker_present() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join(".claudectl")).unwrap();
         fs::write(tmp.path().join(".claudectl").join("onboarding.json"), "{}").unwrap();
-        set_home(tmp.path());
         assert!(
-            !is_first_run(),
+            !is_first_run_in(Some(tmp.path())),
             "onboarding marker present should suppress first-run"
         );
     }
 
     #[test]
     fn not_first_run_when_settings_mentions_claudectl() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join(".claude")).unwrap();
         fs::write(
@@ -1549,21 +1550,16 @@ mod first_run_tests {
             r#"{"hooks":{"PostToolUse":[{"hooks":[{"command":"claudectl --json"}]}]}}"#,
         )
         .unwrap();
-        set_home(tmp.path());
         assert!(
-            !is_first_run(),
+            !is_first_run_in(Some(tmp.path())),
             "hook install should suppress first-run even without onboarding marker"
         );
     }
 
     #[test]
     fn not_first_run_when_home_missing() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: serialized via ENV_LOCK; nothing else reads HOME inside
-        // this critical section.
-        unsafe { std::env::remove_var("HOME") };
         assert!(
-            !is_first_run(),
+            !is_first_run_in(None),
             "no HOME should be treated as not-first-run (no nudge possible)"
         );
     }

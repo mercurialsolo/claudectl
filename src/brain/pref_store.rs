@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
 use std::fs;
+use std::path::Path;
 
-use super::decisions::{DecisionRecord, decisions_dir, project_slug, read_all_decisions};
+use super::decisions::{DecisionRecord, decisions_dir, project_slug, read_all_decisions_in};
 use super::preferences::{
     DistilledPreferences, PreferenceCondition, PreferencePattern, TemporalPattern, ToolAccuracy,
     distill_preferences,
@@ -13,15 +14,23 @@ use super::preferences::{
 // ────────────────────────────────────────────────────────────────────────────
 
 fn preferences_path() -> std::path::PathBuf {
-    decisions_dir().join("preferences.json")
+    preferences_path_in(&decisions_dir())
+}
+
+/// Global preferences inside an explicitly given brain directory.
+/// See `decisions::decisions_path_in` for why the `_in` form holds the body.
+fn preferences_path_in(root: &Path) -> std::path::PathBuf {
+    root.join("preferences.json")
 }
 
 /// Path for per-project preference files.
 fn project_preferences_path(project: &str) -> std::path::PathBuf {
+    project_preferences_path_in(&decisions_dir(), project)
+}
+
+fn project_preferences_path_in(root: &Path, project: &str) -> std::path::PathBuf {
     let slug = project_slug(project);
-    decisions_dir()
-        .join("preferences")
-        .join(format!("{slug}.json"))
+    root.join("preferences").join(format!("{slug}.json"))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -49,7 +58,16 @@ pub(super) fn save_project_preferences(
     project: &str,
     prefs: &DistilledPreferences,
 ) -> Result<(), String> {
-    let path = project_preferences_path(project);
+    save_project_preferences_in(&decisions_dir(), project, prefs)
+}
+
+/// `save_project_preferences` against an explicit brain directory.
+pub(super) fn save_project_preferences_in(
+    root: &Path,
+    project: &str,
+    prefs: &DistilledPreferences,
+) -> Result<(), String> {
+    let path = project_preferences_path_in(root, project);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -174,7 +192,12 @@ fn parse_preferences_json(json: &serde_json::Value) -> Option<DistilledPreferenc
 
 /// Load distilled preferences from disk.
 pub fn load_preferences() -> Option<DistilledPreferences> {
-    let path = preferences_path();
+    load_preferences_in(&decisions_dir())
+}
+
+/// `load_preferences` against an explicit brain directory.
+pub(super) fn load_preferences_in(root: &Path) -> Option<DistilledPreferences> {
+    let path = preferences_path_in(root);
     let content = fs::read_to_string(&path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
     parse_preferences_json(&json)
@@ -187,8 +210,16 @@ const MIN_PROJECT_DECISIONS: usize = 10;
 /// Falls back to global preferences when the project has fewer than
 /// `MIN_PROJECT_DECISIONS` decisions.
 pub fn load_preferences_for_project(project: &str) -> Option<DistilledPreferences> {
+    load_preferences_for_project_in(&decisions_dir(), project)
+}
+
+/// `load_preferences_for_project` against an explicit brain directory.
+pub(super) fn load_preferences_for_project_in(
+    root: &Path,
+    project: &str,
+) -> Option<DistilledPreferences> {
     // Try loading persisted per-project preferences first
-    let proj_path = project_preferences_path(project);
+    let proj_path = project_preferences_path_in(root, project);
     if let Ok(content) = fs::read_to_string(&proj_path) {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(prefs) = parse_preferences_json(&json) {
@@ -200,7 +231,7 @@ pub fn load_preferences_for_project(project: &str) -> Option<DistilledPreference
     }
 
     // Try distilling on-the-fly from project-specific decisions
-    let all = read_all_decisions();
+    let all = read_all_decisions_in(root);
     let project_decisions: Vec<DecisionRecord> = all
         .into_iter()
         .filter(|d| d.project.to_lowercase() == project.to_lowercase())
@@ -209,12 +240,12 @@ pub fn load_preferences_for_project(project: &str) -> Option<DistilledPreference
     if project_decisions.len() >= MIN_PROJECT_DECISIONS {
         let prefs = distill_preferences(&project_decisions);
         // Save for future use
-        let _ = save_project_preferences(project, &prefs);
+        let _ = save_project_preferences_in(root, project, &prefs);
         return Some(prefs);
     }
 
     // Not enough project data — fall back to global
-    load_preferences()
+    load_preferences_in(root)
 }
 
 /// Get the adaptive confidence threshold for a specific tool.

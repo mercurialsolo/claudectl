@@ -10,13 +10,11 @@
 
 use std::path::Path;
 
-use super::decisions::{DecisionRecord, read_all_decisions};
+use super::decisions::{DecisionRecord, decisions_dir, read_all_decisions_in};
 use super::garden::find_claude_md;
-use super::preferences::{
-    DistilledPreferences, PreferencePattern, format_preference_summary,
-    load_preferences_for_project,
-};
-use super::sequences::{AntiPattern, load_library};
+use super::pref_store::{load_preferences_for_project_in, load_preferences_in};
+use super::preferences::{DistilledPreferences, PreferencePattern, format_preference_summary};
+use super::sequences::{AntiPattern, load_library_in};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Tunables — keep the briefing short. SessionStart context is precious.
@@ -41,17 +39,27 @@ pub struct BriefingOptions {
 /// Build a markdown briefing for the given project. Caller decides what to do
 /// with it (print, inject, save).
 pub fn build_briefing(opts: &BriefingOptions, cwd: &Path) -> String {
+    build_briefing_in(opts, cwd, &decisions_dir())
+}
+
+/// `build_briefing` reading the brain from an explicitly given directory.
+///
+/// `cwd` is the working directory the briefing describes — it is where
+/// `CLAUDE.md` is looked for — and is unrelated to `root`, which is where the
+/// accumulated brain state is read from. See `decisions::decisions_path_in`
+/// for why the `_in` form holds the body.
+pub fn build_briefing_in(opts: &BriefingOptions, cwd: &Path, root: &Path) -> String {
     let project = opts.project.as_deref().unwrap_or("(global)");
-    let all = read_all_decisions();
+    let all = read_all_decisions_in(root);
 
     let project_filter = opts.project.as_deref();
     let recent: Vec<&DecisionRecord> = filter_recent_for_project(&all, project_filter);
 
     let prefs = project_filter
-        .and_then(load_preferences_for_project)
-        .or_else(super::preferences::load_preferences);
+        .and_then(|p| load_preferences_for_project_in(root, p))
+        .or_else(|| load_preferences_in(root));
 
-    let library = load_library();
+    let library = load_library_in(root);
     let project_antipatterns = filter_antipatterns_for_project(&library, &recent);
 
     let mut sections: Vec<String> = Vec::new();
@@ -333,24 +341,16 @@ mod tests {
 
     #[test]
     fn briefing_is_self_explanatory_when_empty() {
-        // Override HOME so we read from a clean tmp dir instead of the dev
-        // machine's real ~/.claudectl (which may have decisions/preferences).
+        // An empty brain directory of this test's own, rather than the dev
+        // machine's real ~/.claudectl (which may hold decisions and
+        // preferences). Passed explicitly, so no process-wide `HOME` change.
         let tmp = tempfile::tempdir().unwrap();
-        let original_home = std::env::var("HOME").ok();
-        // SAFETY: cargo test in this crate runs sequentially for env mutation.
-        unsafe { std::env::set_var("HOME", tmp.path()) };
 
         let opts = BriefingOptions {
             project: Some("nonexistent-project-name".into()),
             ..Default::default()
         };
-        let briefing = build_briefing(&opts, tmp.path());
-
-        if let Some(h) = original_home {
-            unsafe { std::env::set_var("HOME", h) };
-        } else {
-            unsafe { std::env::remove_var("HOME") };
-        }
+        let briefing = build_briefing_in(&opts, tmp.path(), tmp.path());
 
         assert!(briefing.contains("Session briefing"));
         assert!(briefing.contains("No accumulated brain data"));
