@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.79.0] - 2026-10-10
+
 ### Added
 
 - **`S` on the dashboard sends the highlighted conversation to another
@@ -49,6 +51,34 @@ All notable changes to claudectl are documented here.
   belonging to a different id — a `--resume` uuid, or simply the newest file
   in the directory — and labelling those bytes with the wrong id would resume
   the wrong conversation on the far side.
+
+### Fixed
+
+- **A one-shot delivery was never acknowledged**, so `relay sessions` could
+  not tell a transfer that landed from one that vanished (#511). Found while
+  verifying the hotkey between two machines: the transcript was placed and
+  resumable, and the row stayed at `sent` forever.
+
+  Not a lost frame — the receiver had nothing to write to. `handle_incoming`
+  drops the `PeerConnection` for a transient dial and keeps only the reader
+  thread, which is #487's fix and is right: registering a one-shot under the
+  sender's peer id put two connections under one id, and the collision rule
+  closed one before its message was read. So the ack was being addressed to a
+  peer that had never been registered. A dial-back is not available either,
+  since a one-shot sender advertises no `listen_port` by design.
+
+  The listener now keeps an independent `try_clone` handle for a transient
+  connection in `TransientReplies` — beside `PeerRegistry`, never in it, so no
+  collision rule can reach it — and the serve loop answers on that handle,
+  falling back to the registry for a peer with a lasting link. The sender
+  waits up to 5s after the drain for the `SessionReceived` frame on the
+  connection it already has a reader on. An ack means placed and resumable,
+  which is stronger than the drain's "read off the socket", so it is honoured
+  even when the drain timed out — the receiver now holds the socket open until
+  it has replied, which lengthens that wait.
+
+  A row left at `sent` now means the ack did not arrive in time, or the peer
+  is 0.78.0 or earlier and never sends one.
 
 ### Changed
 

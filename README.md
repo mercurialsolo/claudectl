@@ -314,7 +314,7 @@ Policy as code (team guardrails): commit a `.claudectl/policy.toml` to the repo 
 
 ## Hive Mind & Relay
 
-The brain distills your decisions into shareable knowledge. Connect instances across machines to build a convergent hive mind.
+The brain distills your decisions into shareable knowledge. Connect instances across machines to build a convergent hive mind — then move work, or a whole conversation, to whichever machine is free.
 
 ```bash
 # Hive knowledge is built-in — view what the brain has learned
@@ -332,6 +332,11 @@ claudectl relay install-agent         # Keep the relay running across logout
 claudectl relay serve                 # leave running on both machines
 claudectl relay fleet                 # every session across the cluster
 claudectl relay delegate mac-mini "run the full test suite" --cwd ~/code/app
+
+# Move a conversation to another machine and carry on there — or press `S`
+# on the session in the TUI and pick the machine from the list
+claudectl relay send-session mac-mini <session-id>
+claudectl relay sessions              # what went where, and how to resume it
 
 # Remote sessions also appear in the TUI as [worker-id] project-name.
 # The coordinator's HTTP API serves the same unified view to a dashboard:

@@ -47,6 +47,9 @@ Multi-signal inference from CPU usage, JSONL events, and timestamps:
 | `b` | Accept brain suggestion for selected session |
 | `B` | Reject brain suggestion |
 | `K` | Open Skills & Hive mode (see below) |
+| `S` | Send this conversation to a paired machine (`relay` feature) |
+| `Ctrl+r` | Bind an agent-bus role to the selected session |
+| `p` | Toggle the peers panel (`relay` feature) |
 | `r` | Force refresh |
 | `?` | Toggle help overlay |
 | `q`/`Esc` | Quit |
@@ -80,6 +83,20 @@ A full-screen mode for discovering Claude Code skills and managing the local hiv
 | `Esc`/`K`/`q` | Return to session table |
 
 Long-running relay subprocesses run detached so the TUI event loop stays responsive. Requires the `relay` feature to be built in.
+
+### Send a conversation to another machine (`S`)
+
+`S` on the highlighted session lists your paired machines, numbered. A digit sends, `Esc` cancels:
+
+```
+ send> claudectl → 1) mac-mini-9f2a1b  2) laptop-a3f2  (Esc to cancel)
+```
+
+The target is captured when the picker opens, so a refresh tick reordering the table while you read the list cannot send the wrong session. It refuses a remote row (send it from the machine it is on), a session with no transcript, and an empty peer list — in each case saying which.
+
+Three things are checked before anything is spawned: the transcript exists, the machine is paired, and there is an address to dial. The transfer itself is detached, because a median transcript is 5.45 MB, so the status line says *sending*; `claudectl relay sessions` reaches `received` with the far-side path and the resume command.
+
+What travels is the message history, tool calls and results included. What does not: the working tree and git state, subagent transcripts, running processes, local hooks and environment, and the session id — the receiver forks. Check out the same commit over there first. See [relay.md](relay.md) for the CLI equivalent and `--remote-cwd`.
 
 ## CLI Reference
 
