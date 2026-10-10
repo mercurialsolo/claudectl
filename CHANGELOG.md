@@ -4,6 +4,53 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`S` on the dashboard sends the highlighted conversation to another
+  machine** (#510). The peer picker lists paired machines numbered; a digit
+  sends, `Esc` cancels. Until now `relay send-session` was CLI-only and the
+  TUI had no peer-targeting action at all — `Actions` could terminate a pid,
+  inject text and bind a bus role, but nothing addressed a peer.
+
+  What is checked before anything is spawned: the transcript exists and names
+  a usable session id, the machine is paired, and there is an address to dial.
+  The transfer itself is detached, because a median transcript is 5.45 MB and
+  the caller is the render loop — so the status line says *sending*, and
+  `claudectl relay sessions` is where delivery lands. A detached child that
+  reported success on spawn would have been indistinguishable from a transfer
+  that worked, which is the wrong shape for this subsystem in particular.
+
+  The picker reads the peer list when it opens rather than from the cached
+  `hive_known_peers`, which is only populated by the Skills & Hive overlay and
+  is empty on a dashboard that has never shown it.
+
+  The session is captured when the picker opens, so a refresh tick reordering
+  the table while the operator reads the peer list cannot move a conversation
+  nobody asked to move. That is the behaviour the test asserts, by reordering
+  the sessions mid-pick.
+
+- **`relay send-session --transcript <path>`** names the transcript instead of
+  deriving its location from `--cwd` and the session id. The derivation
+  misses: #501 took the match rate from 275 to 296 of 316 transcripts on one
+  machine, and session discovery papers over the rest with a full project
+  scan. The TUI passes the path that scan already resolved.
+
+  With an explicit path the session id comes from the file's own stem rather
+  than the caller's belief, because discovery can return a transcript
+  belonging to a different id — a `--resume` uuid, or simply the newest file
+  in the directory — and labelling those bytes with the wrong id would resume
+  the wrong conversation on the far side.
+
+### Changed
+
+- **`ClaudeSession.session_id` no longer carries `#[allow(dead_code)]`.**
+  Nothing read it until the send hotkey did (see #465 for why those allows are
+  supposed to expire).
+
+- **`relay send-session` is documented.** It shipped in 0.78.0 with no mention
+  outside the changelog; `docs/relay.md` now covers both it and the hotkey,
+  including what a moved conversation does not bring with it.
+
 ## [0.78.0] - 2026-10-09
 
 ### Added

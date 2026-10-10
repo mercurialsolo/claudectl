@@ -108,6 +108,39 @@ claudectl relay status                      # how delegated tasks are doing
 claudectl relay interrupt --peer mac-mini-9f2a1b task_123 stop
 ```
 
+### Step 6: Move a conversation to another machine
+
+Delegation starts fresh work over there. To continue *this* conversation on
+another machine instead, send the session itself:
+
+```bash
+claudectl relay send-session mac-mini-9f2a1b <session-id>
+claudectl relay sessions                    # what this host sent, and what came back
+```
+
+From the dashboard, press **`S`** on the highlighted session. It lists your
+paired machines, numbered; a digit sends, `Esc` cancels:
+
+```
+ send> claudectl → 1) mac-mini-9f2a1b  2) laptop-a3f2  (Esc to cancel)
+```
+
+The hotkey checks what it can immediately — that the transcript exists, that
+the machine is paired, that there is an address to dial — and then hands the
+transfer to a background process, because a median transcript is 5.45 MB. So
+the status line says *sending*, not *sent*; `claudectl relay sessions` is
+where delivery shows up.
+
+What arrives is the full message history, tool calls and results included.
+What does not: the working tree and git state, subagent transcripts, running
+processes, local hooks and environment, and the session id itself — the
+receiver forks rather than continuing the same id, so two hosts can never
+diverge on one session. Check out the same commit over there first, or the
+conversation will resume talking about files that aren't where it left them.
+
+The receiving host prints the command that resumes it. Peers on another OS
+need `--remote-cwd`, since the sender's own path won't exist there.
+
 ### How the cluster view works
 
 Each relay advertises its own sessions on every heartbeat (default 30s) and

@@ -8,6 +8,24 @@ use ratatui::{
 
 use crate::app::App;
 
+/// The peer picker's line, or `None` when it isn't open. Split out so the
+/// render path reads the same with the `relay` feature off, where there is no
+/// `peer_send` field to name at all.
+#[cfg(feature = "relay")]
+fn peer_send_prompt(app: &App) -> Option<String> {
+    let target = app.peer_send.as_ref()?;
+    Some(format!(
+        "{} → {}  (Esc to cancel)",
+        target.display_name,
+        crate::app::numbered_peers(&app.peer_send_peers)
+    ))
+}
+
+#[cfg(not(feature = "relay"))]
+fn peer_send_prompt(_app: &App) -> Option<String> {
+    None
+}
+
 pub fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     let t = &app.theme;
     if app.search_mode {
@@ -68,6 +86,19 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             ),
             Span::styled(&*app.role_bind_buffer, Style::default().fg(t.text_primary)),
             Span::styled("_", Style::default().fg(t.text_muted)),
+        ]));
+        frame.render_widget(msg, area);
+    } else if let Some(prompt) = peer_send_prompt(app) {
+        // #510 peer picker. No cursor: a digit picks a machine, there is
+        // nothing to type.
+        let msg = Paragraph::new(Line::from(vec![
+            Span::styled(
+                " send> ",
+                Style::default()
+                    .fg(t.input_accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(prompt, Style::default().fg(t.text_primary)),
         ]));
         frame.render_widget(msg, area);
     } else if app.idle_mode_active {

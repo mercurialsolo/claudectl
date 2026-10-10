@@ -89,7 +89,8 @@ pub struct RawSession {
 #[derive(Debug, Clone)]
 pub struct ClaudeSession {
     pub pid: u32,
-    #[allow(dead_code)]
+    /// Read by the send hotkey (#510), which is why this no longer carries an
+    /// `allow(dead_code)` — see the #465 audit for why those expire.
     pub session_id: String,
     pub cwd: String,
     pub project_name: String,

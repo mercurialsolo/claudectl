@@ -499,6 +499,31 @@ pub trait Actions: Send + Sync {
     /// overriding the verifier that escalated it. `Err` when the task isn't in
     /// NEEDS_HUMAN, or the `coord` feature is compiled out.
     fn approve_task(&self, task_id: &str) -> Result<(), String>;
+
+    /// Move a conversation to a paired peer, so it can be resumed there
+    /// (#510). The TUI calls this from the send hotkey; `transcript` is the
+    /// path session discovery already resolved, which is more reliable than
+    /// re-deriving it from `cwd` and the id.
+    ///
+    /// Returns the session id the transcript actually travels under, which is
+    /// not always `session_id`: discovery can hand back a transcript belonging
+    /// to a different id, and the bytes decide.
+    ///
+    /// Everything checkable without the network — transcript readable, peer
+    /// paired, an address to dial — is checked before returning `Ok`. The
+    /// megabytes themselves go in a detached child, because a median
+    /// transcript is 5.45 MB and the caller is a render loop. So `Ok` means
+    /// "accepted and started", not "delivered"; the ledger behind
+    /// `claudectl relay sessions` is where delivery shows up.
+    ///
+    /// `Err` when the `relay` feature is compiled out.
+    fn send_session_to_peer(
+        &self,
+        session_id: &str,
+        transcript: Option<&std::path::Path>,
+        cwd: &str,
+        peer: &str,
+    ) -> Result<String, String>;
 }
 
 // ============================================================================
@@ -728,6 +753,9 @@ pub struct MockRuntime {
     pub tasks: Vec<TaskSummary>,
     pub agents: Vec<AgentDirectoryEntry>,
     pub roles: Vec<RoleBinding>,
+    /// Paired peers `hive_view_snapshot` reports, so a test can exercise the
+    /// peer picker without a relay on the machine running the suite.
+    pub peers: Vec<(String, Option<String>)>,
     pub actions_log: std::sync::Mutex<Vec<MockAction>>,
 }
 
@@ -765,6 +793,12 @@ pub enum MockAction {
     },
     ApproveTask {
         task_id: String,
+    },
+    SendSessionToPeer {
+        session_id: String,
+        transcript: Option<std::path::PathBuf>,
+        cwd: String,
+        peer: String,
     },
 }
 
@@ -812,6 +846,24 @@ impl MockRuntime {
             arc.clone(),
             arc,
         )
+    }
+
+    /// Like `into_runtime`, but hands back the `Arc` as well so a test can
+    /// read `actions()` after the TUI has driven the runtime. `into_runtime`
+    /// alone moves the mock out of reach.
+    pub fn into_runtime_shared(self) -> (Arc<Self>, Runtime) {
+        let arc = Arc::new(self);
+        let runtime = Runtime::new(
+            arc.clone(),
+            arc.clone(),
+            arc.clone(),
+            arc.clone(),
+            arc.clone(),
+            arc.clone(),
+            arc.clone(),
+            arc.clone(),
+        );
+        (arc, runtime)
     }
 
     pub fn actions(&self) -> Vec<MockAction> {
@@ -894,7 +946,10 @@ impl HiveActions for MockRuntime {
         Err("MockRuntime does not implement skill sharing".into())
     }
     fn hive_view_snapshot(&self) -> HiveViewSnapshot {
-        HiveViewSnapshot::default()
+        HiveViewSnapshot {
+            identity: Some("mock-local".into()),
+            peers: self.peers.clone(),
+        }
     }
 }
 
@@ -992,6 +1047,23 @@ impl Actions for MockRuntime {
                 task_id: task_id.into(),
             });
         Ok(())
+    }
+    fn send_session_to_peer(
+        &self,
+        session_id: &str,
+        transcript: Option<&std::path::Path>,
+        cwd: &str,
+        peer: &str,
+    ) -> Result<String, String> {
+        self.actions_log.lock().expect("actions_log poisoned").push(
+            MockAction::SendSessionToPeer {
+                session_id: session_id.into(),
+                transcript: transcript.map(|p| p.to_path_buf()),
+                cwd: cwd.into(),
+                peer: peer.into(),
+            },
+        );
+        Ok(session_id.to_string())
     }
 }
 
