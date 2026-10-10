@@ -1,7 +1,7 @@
 <p align="center">
   <img src="assets/logo.png" alt="claudectl" width="372">
 </p>
-<p align="center"><strong>A hive of Claude Code agents that learns from you once and remembers everywhere.</strong></p>
+<p align="center"><strong>Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere</strong></p>
 
 [![CI](https://github.com/mercurialsolo/claudectl/actions/workflows/ci.yml/badge.svg)](https://github.com/mercurialsolo/claudectl/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/claudectl)](https://crates.io/crates/claudectl)
@@ -12,9 +12,11 @@
 
 <sub>~6 MB binary (full features, Homebrew bottle). Sub-50ms startup. Zero config required.</sub>
 
-[Website](https://mercurialsolo.github.io/claudectl/) | [Demo](https://asciinema.org/a/AJP33vbmHGFVW6zL) | [Blog: Why a local brain?](blog/local-brain-architecture.md) | [Releases](https://github.com/mercurialsolo/claudectl/releases)
+[Website](https://mercurialsolo.github.io/claudectl/) | [Docs](https://mercurialsolo.github.io/claudectl/quickstart/) | [Blog: Why a local brain?](blog/local-brain-architecture.md) | [Releases](https://github.com/mercurialsolo/claudectl/releases)
 
-<a href="https://asciinema.org/a/AJP33vbmHGFVW6zL?autoplay=1"><img src="https://asciinema.org/a/AJP33vbmHGFVW6zL.svg" alt="claudectl demo" width="100%" /></a>
+<img src="assets/hive-demo.gif" alt="Two Macs forming a hive: discover, ask to join, owner approves, knowledge syncs" width="100%" />
+
+<sub>Real capture, two machines on one LAN: a MacBook discovers the hive hosted on a Mac mini, asks to join, the owner approves, and the brains start exchanging what they learned. Recorded with asciinema — the cast is <a href="assets/hive-demo.cast">assets/hive-demo.cast</a>.</sub>
 
 ## What it does for you
 

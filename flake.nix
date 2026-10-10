@@ -1,5 +1,5 @@
 {
-  description = "A hive of Claude Code agents that learns from you once and remembers everywhere.";
+  description = "Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -19,7 +19,7 @@
           cargoLock.lockFile = ./Cargo.lock;
 
           meta = with pkgs.lib; {
-            description = "A hive of Claude Code agents that learns from you once and remembers everywhere.";
+            description = "Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere";
             homepage = "https://github.com/mercurialsolo/claudectl";
             license = licenses.mit;
             mainProgram = "claudectl";

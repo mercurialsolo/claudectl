@@ -1,9 +1,9 @@
 # claudectl
 
-**A hive of Claude Code agents that learns from you once and remembers everywhere.**
+**Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere**
 
 <p class="hero-tagline">
-Know which agent is blocked, burning budget, waiting for approval, or stalled - and intervene without tab hunting.
+Know which agent is blocked, burning budget, or stalled - on this machine or any machine in your hive - and intervene without tab hunting.
 </p>
 
 <div class="proof-strip">
@@ -13,7 +13,9 @@ Know which agent is blocked, burning budget, waiting for approval, or stalled - 
   <span>macOS &amp; Linux</span>
 </div>
 
-![claudectl dashboard demo](assets/claudectl-demo-hero.gif){ .terminal-screenshot }
+![Two Macs forming a hive: discover, ask to join, owner approves, knowledge syncs](assets/hive-demo.gif){ .terminal-screenshot }
+
+<small>Real capture, two machines on one LAN: a MacBook discovers the hive hosted on a Mac mini, asks to join, the owner approves, and the brains start exchanging what they learned.</small>
 
 ## Install
 

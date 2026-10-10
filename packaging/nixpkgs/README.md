@@ -31,7 +31,7 @@ rustPlatform.buildRustPackage rec {
   cargoHash = lib.fakeHash;
 
   meta = {
-    description = "A hive of Claude Code agents that learns from you once and remembers everywhere.";
+    description = "Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere";
     homepage = "https://github.com/mercurialsolo/claudectl";
     license = lib.licenses.mit;
     mainProgram = "claudectl";

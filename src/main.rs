@@ -246,7 +246,7 @@ pub(crate) enum Command {
 #[command(
     name = "claudectl",
     version,
-    about = "A hive of Claude Code agents that learns from you once and remembers everywhere."
+    about = "Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere"
 )]
 pub(crate) struct Cli {
     // ── Dashboard ───────────────────────────────────────────────────────
