@@ -4,6 +4,92 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.79.0] - 2026-10-10
+
+### Added
+
+- **`S` on the dashboard sends the highlighted conversation to another
+  machine** (#510). The peer picker lists paired machines numbered; a digit
+  sends, `Esc` cancels. Until now `relay send-session` was CLI-only and the
+  TUI had no peer-targeting action at all — `Actions` could terminate a pid,
+  inject text and bind a bus role, but nothing addressed a peer.
+
+  What is checked before anything is spawned: the transcript exists and names
+  a usable session id, the machine is paired, and there is an address to dial.
+  The transfer itself is detached, because a median transcript is 5.45 MB and
+  the caller is the render loop — so the status line says *sending*, and
+  `claudectl relay sessions` is where delivery lands. A detached child that
+  reported success on spawn would have been indistinguishable from a transfer
+  that worked, which is the wrong shape for this subsystem in particular.
+
+  The picker reads the peer list when it opens rather than from the cached
+  `hive_known_peers`, which is only populated by the Skills & Hive overlay and
+  is empty on a dashboard that has never shown it.
+
+  The session is captured when the picker opens, so a refresh tick reordering
+  the table while the operator reads the peer list cannot move a conversation
+  nobody asked to move. That is the behaviour the test asserts, by reordering
+  the sessions mid-pick.
+
+  Verified between two physical machines over the LAN, not just between two
+  relay processes: a codeword planted on one Mac was recalled by
+  `claude --resume` on a Mac mini after the move. The same run found that the
+  slug derivation really does miss in practice — the transcript for a session
+  in `/tmp/...` lands under `-private-tmp-...`, because `/tmp` is a symlink,
+  so the pre-`--transcript` path failed outright on it — and that a one-shot
+  send is never acknowledged (#511), so the status message no longer claims
+  the ledger confirms delivery.
+
+- **`relay send-session --transcript <path>`** names the transcript instead of
+  deriving its location from `--cwd` and the session id. The derivation
+  misses: #501 took the match rate from 275 to 296 of 316 transcripts on one
+  machine, and session discovery papers over the rest with a full project
+  scan. The TUI passes the path that scan already resolved.
+
+  With an explicit path the session id comes from the file's own stem rather
+  than the caller's belief, because discovery can return a transcript
+  belonging to a different id — a `--resume` uuid, or simply the newest file
+  in the directory — and labelling those bytes with the wrong id would resume
+  the wrong conversation on the far side.
+
+### Fixed
+
+- **A one-shot delivery was never acknowledged**, so `relay sessions` could
+  not tell a transfer that landed from one that vanished (#511). Found while
+  verifying the hotkey between two machines: the transcript was placed and
+  resumable, and the row stayed at `sent` forever.
+
+  Not a lost frame — the receiver had nothing to write to. `handle_incoming`
+  drops the `PeerConnection` for a transient dial and keeps only the reader
+  thread, which is #487's fix and is right: registering a one-shot under the
+  sender's peer id put two connections under one id, and the collision rule
+  closed one before its message was read. So the ack was being addressed to a
+  peer that had never been registered. A dial-back is not available either,
+  since a one-shot sender advertises no `listen_port` by design.
+
+  The listener now keeps an independent `try_clone` handle for a transient
+  connection in `TransientReplies` — beside `PeerRegistry`, never in it, so no
+  collision rule can reach it — and the serve loop answers on that handle,
+  falling back to the registry for a peer with a lasting link. The sender
+  waits up to 5s after the drain for the `SessionReceived` frame on the
+  connection it already has a reader on. An ack means placed and resumable,
+  which is stronger than the drain's "read off the socket", so it is honoured
+  even when the drain timed out — the receiver now holds the socket open until
+  it has replied, which lengthens that wait.
+
+  A row left at `sent` now means the ack did not arrive in time, or the peer
+  is 0.78.0 or earlier and never sends one.
+
+### Changed
+
+- **`ClaudeSession.session_id` no longer carries `#[allow(dead_code)]`.**
+  Nothing read it until the send hotkey did (see #465 for why those allows are
+  supposed to expire).
+
+- **`relay send-session` is documented.** It shipped in 0.78.0 with no mention
+  outside the changelog; `docs/relay.md` now covers both it and the hotkey,
+  including what a moved conversation does not bring with it.
+
 ## [0.78.0] - 2026-10-09
 
 ### Added

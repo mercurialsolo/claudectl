@@ -148,6 +148,55 @@ pub fn transcript_path(cwd: &str, session_id: &str) -> Option<PathBuf> {
     Some(claudectl_core::discovery::project_dir_for(cwd).join(format!("{session_id}.jsonl")))
 }
 
+/// Which transcript `send-session` should read, and the id that travels with
+/// its bytes.
+///
+/// Two callers, two situations. The CLI is given a `--cwd` and a session id
+/// and derives the path, which is a slug computation that misses: #501 took
+/// the match rate from 275 to 296 of the 316 transcripts on one machine, and
+/// session discovery papers over the remainder with a full project scan
+/// (`discovery::resolve_jsonl_paths` priority 4). The TUI already holds that
+/// scan's answer in `ClaudeSession.jsonl_path`, so it passes the path and
+/// skips the derivation entirely.
+///
+/// When a path is given, the session id is its **file stem**, not what the
+/// caller believes the session is called. Discovery's priorities 2 and 3 can
+/// return a transcript belonging to a different id — a `--resume` uuid, or
+/// simply the newest file in the project directory — and labelling those
+/// bytes with the caller's id would resume the wrong conversation on the far
+/// side.
+///
+/// Note that an explicit path changes only which bytes are *read*, never
+/// where they are *placed*: the receiver derives the target from the `cwd`
+/// travelling in the chunk (`accept_chunk(&chunk, &chunk.cwd)`) and
+/// `resume_hint` derives the resume command from that same `cwd`, so the far
+/// side stays self-consistent. A sender whose own transcript sits outside
+/// `cwd_to_slug(cwd)` — the priority-4 scan case — is a local-disk artifact
+/// and does not travel.
+pub fn resolve_source(
+    explicit: Option<&Path>,
+    cwd: &str,
+    session_id: &str,
+) -> Result<(String, PathBuf), String> {
+    let Some(path) = explicit else {
+        let path = transcript_path(cwd, session_id)
+            .ok_or_else(|| format!("'{session_id}' is not a usable session id"))?;
+        return Ok((session_id.to_string(), path));
+    };
+
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("{} has no readable file name", path.display()))?;
+    if !is_valid_session_id(stem) {
+        return Err(format!("'{stem}' is not a usable session id"));
+    }
+    if !path.is_file() {
+        return Err(format!("no transcript at {}", path.display()));
+    }
+    Ok((stem.to_string(), path.to_path_buf()))
+}
+
 /// A session id becomes a filename, so it must not be able to escape the
 /// directory or name something else. Same reasoning as `is_valid_peer_id` and
 /// `tasks::is_valid_task_id`; Claude Code's ids are UUIDs, so this is loose
@@ -803,5 +852,68 @@ mod tests {
             resume,
             "cd /home/dev/proj && claude --resume sess-9 --fork-session"
         );
+    }
+
+    // ── resolve_source ──────────────────────────────────────────────────
+
+    /// An explicit path is authoritative, and the id comes from the file
+    /// stem rather than from what the caller believed the session was
+    /// called. Discovery can hand back a transcript belonging to another id
+    /// (a `--resume` uuid, or just the newest file in the directory), and
+    /// labelling those bytes with the wrong id resumes the wrong
+    /// conversation on the far side.
+    #[test]
+    fn explicit_path_takes_its_id_from_the_file_stem() {
+        let dir = std::env::temp_dir().join(format!("cctl-src-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("11111111-2222-3333-4444-555555555555.jsonl");
+        fs::write(&path, b"{}\n").expect("write transcript");
+
+        let (id, resolved) =
+            resolve_source(Some(&path), "/does/not/matter", "a-different-id").expect("resolves");
+
+        assert_eq!(id, "11111111-2222-3333-4444-555555555555");
+        assert_eq!(resolved, path);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A stem that is not a usable session id must be refused rather than
+    /// put on the wire, because the receiver turns it straight back into a
+    /// filename.
+    #[test]
+    fn explicit_path_with_an_unusable_stem_is_refused() {
+        let dir = std::env::temp_dir().join(format!("cctl-bad-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("not a session id.jsonl");
+        fs::write(&path, b"{}\n").expect("write transcript");
+
+        let err = resolve_source(Some(&path), "/cwd", "sess-1").expect_err("refuses");
+
+        assert!(err.contains("not a usable session id"), "got: {err}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A path that does not exist is refused before any peer is dialled —
+    /// the whole point of the preflight.
+    #[test]
+    fn explicit_path_that_is_missing_is_refused() {
+        let missing = std::env::temp_dir().join("cctl-definitely-absent-9bd2.jsonl");
+        let err = resolve_source(Some(&missing), "/cwd", "sess-1").expect_err("refuses");
+        assert!(err.contains("no transcript"), "got: {err}");
+    }
+
+    /// With no explicit path the slug derivation still applies, so the CLI
+    /// keeps the behaviour it shipped with.
+    #[test]
+    fn without_a_path_the_id_and_cwd_derive_the_location() {
+        let (id, path) = resolve_source(None, "/home/dev/proj", "sess-9").expect("resolves");
+        assert_eq!(id, "sess-9");
+        assert_eq!(path, transcript_path("/home/dev/proj", "sess-9").unwrap());
+    }
+
+    #[test]
+    fn without_a_path_an_unusable_id_is_refused() {
+        let err = resolve_source(None, "/home/dev/proj", "../escape").expect_err("refuses");
+        assert!(err.contains("not a usable session id"), "got: {err}");
     }
 }

@@ -210,6 +210,45 @@ impl Actions for LiveActions {
             Err("coord feature not compiled in this build".into())
         }
     }
+
+    fn send_session_to_peer(
+        &self,
+        session_id: &str,
+        transcript: Option<&std::path::Path>,
+        cwd: &str,
+        peer: &str,
+    ) -> Result<String, String> {
+        #[cfg(feature = "relay")]
+        {
+            // Fail here, in the operator's own words, rather than in a
+            // detached child's discarded stderr.
+            let (wire_id, path) =
+                crate::relay::cli::send_session_preflight(peer, transcript, cwd, session_id)?;
+
+            // The transfer itself is a one-shot subprocess, like `relay join`
+            // from the hive overlay: a median transcript is 5.45 MB over TCP
+            // with a drain wait at the end, and this is called from the render
+            // loop. `--transcript` is passed so the child resolves the same
+            // file this preflight just checked, not whatever the slug
+            // derivation would have picked.
+            use std::process::{Command, Stdio};
+            Command::new(std::env::current_exe().unwrap_or_else(|_| "claudectl".into()))
+                .args(["relay", "send-session", peer, &wire_id, "--cwd", cwd])
+                .arg("--transcript")
+                .arg(path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("could not start the transfer: {e}"))?;
+            Ok(wire_id)
+        }
+        #[cfg(not(feature = "relay"))]
+        {
+            let _ = (session_id, transcript, cwd, peer);
+            Err("relay feature not compiled in this build".into())
+        }
+    }
 }
 
 /// Inverse of `crate::runtime::brain::parse_gate_mode` — writes the canonical

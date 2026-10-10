@@ -123,6 +123,14 @@ impl App {
             return true;
         }
 
+        // Peer-send mode: pick which paired machine the captured session goes
+        // to (#510)
+        #[cfg(feature = "relay")]
+        if self.peer_send.is_some() {
+            self.handle_peer_send_key(key);
+            return true;
+        }
+
         // Skills overlay: dedicated keymap (j/k navigate, s share, h serve, r rescan, Esc/K close)
         if self.show_skills {
             self.handle_skills_key(key);
@@ -469,6 +477,12 @@ impl App {
                 self.cancel_pending_auto_approve();
                 self.toggle_session_recording();
             }
+            #[cfg(feature = "relay")]
+            (KeyCode::Char('S'), _) => {
+                self.cancel_pending_kill();
+                self.cancel_pending_auto_approve();
+                self.enter_peer_send_mode();
+            }
             (KeyCode::Char('d'), _) | (KeyCode::Char('x'), _) => {
                 self.cancel_pending_auto_approve();
                 self.handle_kill();
@@ -730,6 +744,114 @@ impl App {
                 self.role_bind_buffer.push(c);
             }
             _ => {}
+        }
+    }
+
+    /// Open the peer picker for the selected session (#510). Captures the
+    /// session's identity at entry time for the same reason role-bind does: a
+    /// refresh tick or a row move while the operator is reading the peer list
+    /// must not change what gets sent.
+    ///
+    /// The peer list is read here rather than from `hive_known_peers`, which
+    /// only gets populated when the Skills & Hive overlay is opened — on a
+    /// dashboard that has never shown it, the cached vec is empty.
+    #[cfg(feature = "relay")]
+    pub(super) fn enter_peer_send_mode(&mut self) {
+        let Some(session) = self.selected_session() else {
+            self.status_msg = "No session selected".into();
+            return;
+        };
+        if session.is_remote() {
+            self.status_msg = "Already on another machine — send from there".into();
+            return;
+        }
+        let Some(transcript) = session.jsonl_path.clone() else {
+            self.status_msg = "No transcript found for this session — nothing to send yet".into();
+            return;
+        };
+        let target = super::PeerSendTarget {
+            session_id: session.session_id.clone(),
+            transcript: Some(transcript),
+            cwd: session.cwd.clone(),
+            display_name: session.display_name().to_string(),
+        };
+
+        let peers: Vec<String> = self
+            .runtime
+            .hive
+            .hive_view_snapshot()
+            .peers
+            .into_iter()
+            .map(|(id, _addr)| id)
+            .collect();
+        if peers.is_empty() {
+            self.status_msg = "No paired machines — run `claudectl relay invite` first".into();
+            return;
+        }
+
+        self.status_msg = format!(
+            "Send {} to: {}  (Esc to cancel)",
+            target.display_name,
+            super::numbered_peers(&peers)
+        );
+        self.peer_send_peers = peers;
+        self.peer_send = Some(target);
+    }
+
+    /// Digit picks a machine, Esc cancels. No text buffer — a peer id is a
+    /// generated string like `mac-mini-9f2a1b`, which nobody should have to
+    /// type to move a session.
+    #[cfg(feature = "relay")]
+    pub(super) fn handle_peer_send_key(&mut self, key: KeyEvent) {
+        let pick = match key.code {
+            KeyCode::Esc => {
+                self.peer_send = None;
+                self.peer_send_peers.clear();
+                self.status_msg = "Send cancelled".into();
+                return;
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => c.to_digit(10).unwrap_or(0) as usize,
+            _ => return,
+        };
+        // Displayed 1-based; 0 is not a row.
+        let Some(peer) = pick
+            .checked_sub(1)
+            .and_then(|i| self.peer_send_peers.get(i))
+        else {
+            self.status_msg = format!(
+                "No machine {pick} — pick one of: {}",
+                super::numbered_peers(&self.peer_send_peers)
+            );
+            return;
+        };
+        let peer = peer.clone();
+        let Some(target) = self.peer_send.take() else {
+            return;
+        };
+        self.peer_send_peers.clear();
+
+        match self.runtime.actions.send_session_to_peer(
+            &target.session_id,
+            target.transcript.as_deref(),
+            &target.cwd,
+            &peer,
+        ) {
+            // "Sending", not "Sent": the bytes go in a detached child, so this
+            // is an accepted transfer, not a delivered one.
+            //
+            // Pointing at the ledger is honest again now that #511 landed: the
+            // receiver answers on the delivery's own connection, so the row
+            // reaches `received` with the remote path and the resume command.
+            // Before that fix it stayed at `sent` forever and this message
+            // promised a confirmation that could never arrive.
+            Ok(wire_id) => {
+                self.status_msg = format!(
+                    "Sending {wire_id} to {peer} — `claudectl relay sessions` for the result"
+                );
+            }
+            Err(e) => {
+                self.status_msg = format!("Send failed: {e}");
+            }
         }
     }
 }

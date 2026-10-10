@@ -273,6 +273,16 @@ pub struct App {
     pub role_bind_buffer: String,
     pub role_bind_target_pid: Option<u32>,
     pub role_bind_target_cwd: Option<String>,
+    // ── Peer-send mode (#510) ────────────────────────────────────────────
+    /// `Some` while the peer picker is open — it is both the mode flag and
+    /// the captured target, so the two cannot disagree. Entered via `S` on
+    /// the dashboard; a digit picks from `peer_send_peers`, Esc cancels.
+    #[cfg(feature = "relay")]
+    pub peer_send: Option<PeerSendTarget>,
+    /// The paired machines on offer, in the order they are numbered on
+    /// screen. Read at entry, not cached across opens.
+    #[cfg(feature = "relay")]
+    pub peer_send_peers: Vec<String>,
     pub notify: bool,
     /// Minimum time between desktop notifications that share the same key.
     /// Suppresses flapping (e.g. a session oscillating in/out of NeedsInput).
@@ -588,6 +598,10 @@ impl App {
             role_bind_buffer: String::new(),
             role_bind_target_pid: None,
             role_bind_target_cwd: None,
+            #[cfg(feature = "relay")]
+            peer_send: None,
+            #[cfg(feature = "relay")]
+            peer_send_peers: Vec::new(),
             input_buffer: String::new(),
             input_target_pid: None,
             notify: false,
@@ -1004,6 +1018,37 @@ impl App {
 // so the future TUI crate (#275) can hold them through the trait surface.
 // ────────────────────────────────────────────────────────────────────────────
 
+/// What the send hotkey captured when it opened (#510).
+///
+/// Held whole rather than as loose fields so a refresh tick or a row move
+/// while the operator is choosing a machine cannot retarget the transfer —
+/// same discipline as role-bind's pid/cwd capture, one struct instead of four
+/// `Option`s.
+#[cfg(feature = "relay")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerSendTarget {
+    /// What discovery called the session.
+    pub session_id: String,
+    /// The transcript discovery resolved, which is what actually gets sent.
+    /// The id on the wire comes from this file's name, not from
+    /// `session_id` — see `relay::transfer::resolve_source`.
+    pub transcript: Option<std::path::PathBuf>,
+    pub cwd: String,
+    pub display_name: String,
+}
+
+/// `1) mac-mini-9f2a1b  2) laptop-a3f2` — the picker's one line, shared by the
+/// prompt and the "no machine 7" correction so they cannot drift apart.
+#[cfg(feature = "relay")]
+pub fn numbered_peers(peers: &[String]) -> String {
+    peers
+        .iter()
+        .enumerate()
+        .map(|(i, p)| format!("{}) {p}", i + 1))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
 /// Detach a `claudectl relay serve` child so the TUI keeps running.
 #[cfg(feature = "relay")]
 fn spawn_relay_serve() -> Result<(), String> {
@@ -1259,6 +1304,188 @@ mod tests {
         assert_eq!(app.launch_form.cwd, ".");
         assert!(app.launch_form.prompt.is_empty());
         assert!(app.launch_form.resume.is_empty());
+    }
+
+    // ── Peer-send hotkey (#510) ─────────────────────────────────────────
+
+    /// An app with two paired machines and transcripts on every session, plus
+    /// the `Arc` to read back what the runtime was asked to do.
+    #[cfg(feature = "relay")]
+    fn app_with_peers(
+        peers: Vec<(String, Option<String>)>,
+    ) -> (App, std::sync::Arc<claudectl_core::runtime::MockRuntime>) {
+        let (mock, runtime) = claudectl_core::runtime::MockRuntime {
+            peers,
+            ..Default::default()
+        }
+        .into_runtime_shared();
+        let mut app = make_test_app();
+        for session in &mut app.sessions {
+            session.jsonl_path = Some(std::path::PathBuf::from(format!(
+                "/t/{}.jsonl",
+                session.session_id
+            )));
+        }
+        app.runtime = runtime;
+        (app, mock)
+    }
+
+    #[cfg(feature = "relay")]
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    /// The one that matters. `S` captures the highlighted session, and a
+    /// refresh tick landing while the operator reads the peer list must not
+    /// change what gets sent. The refresh here is the real hazard: it arrives
+    /// on its own schedule and reorders the table under the cursor, so
+    /// re-reading the selection when the digit lands would move a
+    /// conversation nobody asked to move.
+    #[cfg(feature = "relay")]
+    #[test]
+    fn send_goes_to_the_session_the_picker_opened_on() {
+        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        let opened_on = app
+            .selected_session()
+            .expect("a selection")
+            .session_id
+            .clone();
+
+        press(&mut app, KeyCode::Char('S'));
+
+        // A refresh tick reorders the table; the selected row is now a
+        // different session.
+        app.sessions.reverse();
+        assert_ne!(
+            app.selected_session().map(|s| s.session_id.clone()),
+            Some(opened_on.clone()),
+            "the cursor must really be over a different session for this to prove anything"
+        );
+
+        press(&mut app, KeyCode::Char('1'));
+
+        assert_eq!(
+            mock.actions(),
+            vec![claudectl_core::runtime::MockAction::SendSessionToPeer {
+                session_id: opened_on.clone(),
+                transcript: Some(std::path::PathBuf::from(format!("/t/{opened_on}.jsonl"))),
+                cwd: "/tmp/blocked-api".into(),
+                peer: "mac-mini".into(),
+            }]
+        );
+    }
+
+    /// Normal-mode navigation must not leak through the picker: `j` while it
+    /// is open is not a row move.
+    #[cfg(feature = "relay")]
+    #[test]
+    fn the_picker_swallows_navigation_keys() {
+        let (mut app, _mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        let before = app.table_state.selected();
+
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('j'));
+
+        assert_eq!(app.table_state.selected(), before);
+        assert!(app.peer_send.is_some());
+    }
+
+    /// Digits are 1-based because the picker numbers from 1. `0` and an
+    /// out-of-range pick must leave the picker open rather than send to an
+    /// arbitrary machine.
+    #[cfg(feature = "relay")]
+    #[test]
+    fn a_digit_with_no_machine_behind_it_sends_nothing() {
+        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('0'));
+        press(&mut app, KeyCode::Char('7'));
+
+        assert!(mock.actions().is_empty(), "nothing should have been sent");
+        assert!(app.peer_send.is_some(), "picker should stay open");
+    }
+
+    #[cfg(feature = "relay")]
+    #[test]
+    fn esc_closes_the_picker_without_sending() {
+        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Esc);
+
+        assert!(mock.actions().is_empty());
+        assert!(app.peer_send.is_none());
+        assert!(app.peer_send_peers.is_empty());
+    }
+
+    /// Nothing to send to: the message has to name the fix, because an empty
+    /// picker is indistinguishable from a broken hotkey.
+    #[cfg(feature = "relay")]
+    #[test]
+    fn with_no_paired_machine_the_picker_does_not_open() {
+        let (mut app, _mock) = app_with_peers(vec![]);
+
+        press(&mut app, KeyCode::Char('S'));
+
+        assert!(app.peer_send.is_none());
+        assert!(
+            app.status_msg.contains("relay invite"),
+            "got: {}",
+            app.status_msg
+        );
+    }
+
+    /// A session discovery found no transcript for cannot be moved — there is
+    /// no file. Refuse at the hotkey rather than spawn a transfer that fails
+    /// somewhere the operator never looks.
+    #[cfg(feature = "relay")]
+    #[test]
+    fn a_session_with_no_transcript_is_refused() {
+        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        for session in &mut app.sessions {
+            session.jsonl_path = None;
+        }
+
+        press(&mut app, KeyCode::Char('S'));
+
+        assert!(app.peer_send.is_none());
+        assert!(mock.actions().is_empty());
+        assert!(
+            app.status_msg.contains("No transcript"),
+            "got: {}",
+            app.status_msg
+        );
+    }
+
+    /// A remote row is already on another machine; the TUI's actions act
+    /// locally, so sending it from here would be a no-op at best.
+    #[cfg(feature = "relay")]
+    #[test]
+    fn a_remote_session_is_refused() {
+        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        for session in &mut app.sessions {
+            session.worker_origin = Some("other-box".into());
+        }
+
+        press(&mut app, KeyCode::Char('S'));
+
+        assert!(app.peer_send.is_none());
+        assert!(mock.actions().is_empty());
+        assert!(
+            app.status_msg.contains("send from there"),
+            "got: {}",
+            app.status_msg
+        );
+    }
+
+    #[cfg(feature = "relay")]
+    #[test]
+    fn the_picker_numbers_machines_from_one() {
+        assert_eq!(
+            numbered_peers(&["mac-mini".to_string(), "laptop".to_string()]),
+            "1) mac-mini  2) laptop"
+        );
     }
 
     #[test]

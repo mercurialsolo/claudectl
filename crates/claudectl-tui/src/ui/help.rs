@@ -111,6 +111,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw("  Toggle peers panel (relay feature)"),
         ]),
         Line::from(vec![
+            Span::styled("  S              ", Style::default().fg(t.highlight_key)),
+            Span::raw("  Send this conversation to a paired machine (relay feature)"),
+        ]),
+        Line::from(vec![
             Span::styled("  r              ", Style::default().fg(t.highlight_key)),
             Span::raw("  Force refresh"),
         ]),
