@@ -1,7 +1,7 @@
 <p align="center">
   <img src="assets/logo.png" alt="claudectl" width="372">
 </p>
-<p align="center"><strong>Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.</strong></p>
+<p align="center"><strong>A hive of Claude Code agents that learns from you once and remembers everywhere.</strong></p>
 
 [![CI](https://github.com/mercurialsolo/claudectl/actions/workflows/ci.yml/badge.svg)](https://github.com/mercurialsolo/claudectl/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/claudectl)](https://crates.io/crates/claudectl)

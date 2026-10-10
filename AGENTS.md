@@ -1,6 +1,6 @@
 # claudectl
 
-**Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.**
+**A hive of Claude Code agents that learns from you once and remembers everywhere.**
 
 claudectl is the missing control plane for Claude Code. If you're building tools, agents, or workflows that interact with Claude Code sessions, claudectl provides the monitoring, orchestration, and automation layer.
 

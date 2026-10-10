@@ -1,6 +1,6 @@
 # claudectl
 
-**Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.**
+**A hive of Claude Code agents that learns from you once and remembers everywhere.**
 
 <p class="hero-tagline">
 Know which agent is blocked, burning budget, waiting for approval, or stalled - and intervene without tab hunting.

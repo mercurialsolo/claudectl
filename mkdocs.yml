@@ -1,6 +1,6 @@
 site_name: claudectl
 site_url: https://mercurialsolo.github.io/claudectl/
-site_description: Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.
+site_description: A hive of Claude Code agents that learns from you once and remembers everywhere.
 repo_url: https://github.com/mercurialsolo/claudectl
 repo_name: mercurialsolo/claudectl
 
