@@ -224,13 +224,13 @@ The plugin and the `--init` hooks are complementary:
 
 You can use both. The `--init` hooks notify claudectl of tool completions. The plugin hook queries the brain before tool execution.
 
-## Coordination Layer (--features coord)
+## Coordination Layer
 
-Multi-session coordination on a single machine. Stores events, leases, blockers, handoffs, interrupts, and memory in a local SQLite database at `~/.claudectl/coord.db`. No TOML configuration needed — inspect with `claudectl coord <subcommand>`. See [Reference](reference.md#coordination---features-coord) for all subcommands.
+Multi-session coordination on a single machine. Stores events, leases, blockers, handoffs, interrupts, and memory in a local SQLite database at `~/.claudectl/coord.db`. No TOML configuration needed — inspect with `claudectl coord <subcommand>`. See [Reference](reference.md#coordination) for all subcommands.
 
 ## Relay & Hive Mind Configuration
 
-Cross-machine collaboration. `relay` feature enables task delegation. `hive` feature (depends on relay) enables knowledge sharing. See [Relay & Hive Mind](relay.md) for the full guide.
+Cross-machine collaboration. Both ship in the default build: `relay` carries the transport and task delegation, `hive` (which depends on it) carries knowledge sharing. A `--no-default-features --features hive` build keeps the hive local. See [Relay & Hive Mind](relay.md) for the full guide.
 
 ```toml
 [relay]
@@ -247,7 +247,7 @@ http_addr = "127.0.0.1"     # bind address for the coordinator HTTP API
 # auth_token = "…"          # no default; the API's bearer token
 
 [hive]
-enabled = true              # enable knowledge sharing (requires relay)
+enabled = true              # enable knowledge sharing (sharing across machines needs relay)
 default_trust = 0.5         # trust level for new peers (0.0-1.0)
 auto_trust_drift = true     # adjust trust based on decision concordance
 max_propagation = 5         # max gossip hops
@@ -266,7 +266,7 @@ exclude_commands = []       # never share patterns matching these substrings
 
 `http_port` and `auth_token` have no defaults, and the coordinator HTTP API starts only when both resolve — leave either unset and there is no listener. The bind address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`. Loopback is the default because that API is plaintext HTTP/1.1 with a bearer token, so off-machine access belongs behind a tunnel rather than a wider bind (#426). `listen_addr` governs only the HMAC-authenticated peer transport, where `0.0.0.0` is the intended deployment. See [Security](relay.md#security).
 
-## Query Surface Configuration (--features relay)
+## Query Surface Configuration
 
 Settings for the read-only project query surface. Only `jev_*` is configurable — the grant's own rate limit and daily budget live in the grant record, not here, so tightening one caller never loosens another. See [Capability Grants](access.md).
 

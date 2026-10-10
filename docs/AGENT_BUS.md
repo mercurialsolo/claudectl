@@ -19,9 +19,9 @@
 | 10. Supervisor + long-horizon persistence | **Shipped** via PRs #352–#356 — coord task tables, pure reconciler + actuator, bus-native assignment, verifier gates (`run`/`brain`/`agent`), resume protocol with tree-state drift detection, health-check transition triggers, `claudectl supervisor` CLI tree, v1 NDJSON event schema, Prometheus exporter. See [supervisor section](#10-supervisor--long-horizon-persistence) below. | `src/coord/{supervisor,actuator,verify,resume,events,exporter,supervisor_cli,tasks,session_policy,hook_events}.rs`, `src/ingest.rs` |
 | 11. TUI bus view | **Not started** | — |
 
-**Build / run:** `cargo build --release --features bus`. End-to-end smoke covered: role bind → cwd inference (macOS symlink resolution) → directed send → priority-ordered drain → leading-`/` neutralization → policy rejections. MCP handshake (`initialize` + `notifications/initialized` + `tools/list`) verified end-to-end. **Not yet exercised:** the plugin loaded inside Claude Code driving real cross-session traffic.
+**Build / run:** `cargo build --release` — `bus` is in the default feature set. End-to-end smoke covered: role bind → cwd inference (macOS symlink resolution) → directed send → priority-ordered drain → leading-`/` neutralization → policy rejections. MCP handshake (`initialize` + `notifications/initialized` + `tools/list`) verified end-to-end. **Not yet exercised:** the plugin loaded inside Claude Code driving real cross-session traffic.
 
-The dependency cost of `--features bus` is a 6.4 MB release binary (vs. the default 3.5 MB) and a current-thread Tokio runtime inside `claudectl bus stdio`. The default build is otherwise untouched.
+The dependency cost of the `bus` feature is a ~6 MB release binary (vs. ~3.5 MB for the minimal `--no-default-features --features hive` build) and a current-thread Tokio runtime inside `claudectl bus stdio`. Since the supervisor RFC (§10) it is in the default feature set, so that is what `cargo install` and the Homebrew bottle both ship.
 
 ---
 

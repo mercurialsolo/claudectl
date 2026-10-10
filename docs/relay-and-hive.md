@@ -1,6 +1,12 @@
 # Relay and Hive: Cross-Machine Collaboration for claudectl
 
-Status: Draft
+**Status:** the originating design spec for all three layers, written against the
+code as of #207. Most of it has shipped — transport, pairing, delegation, gossip,
+trust — and the parts that shipped did not always ship as written. For current
+behaviour and commands read the [Relay & Hive Mind guide](relay.md) and
+[Reference](reference.md); read this for *why* the three layers are separate.
+Named hives, join policies and read-only members postdate it and are specified in
+the [Open Cluster spec](open-cluster.md).
 
 This document specifies a relay transport, remote coordination protocol, and hive mind knowledge-sharing system that extends claudectl from a local session supervisor into a distributed collaboration plane across machines, accounts, and teams.
 

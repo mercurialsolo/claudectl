@@ -1,6 +1,10 @@
 # Hive Storage: Tiered Knowledge with Cloud Backends
 
-Status: Draft
+**Status:** design spec. The local three-tier store shipped — hot tier in the
+brain prompt, warm tier in the JSONL store under `max_units`, cold archive with
+`hive archive` / `hive distill` / `hive curriculum`. The cloud backends and the
+training/inference compute sections at the end remain proposed. See
+[Relay & Hive Mind](relay.md#hive-mind-knowledge-sharing) for the shipped surface.
 
 ## Problem
 

@@ -5,11 +5,14 @@ Get claudectl running in under two minutes.
 ## 1. Install
 
 ```bash
-brew install mercurialsolo/tap/claudectl     # Homebrew — ships with bus/coord/relay/hive built in
+brew install mercurialsolo/tap/claudectl     # Homebrew
 # or
-cargo install claudectl                                          # Cargo — default features only (hive)
-cargo install claudectl --features bus,coord,relay,hive          # Cargo with all features
+cargo install claudectl                      # Cargo
 ```
+
+Both ship the same ~6 MB binary with bus, coord, relay and hive enabled — nothing
+in this guide needs a feature flag. The minimal ~3.5 MB sync-only build is the
+opt-*out*: `cargo install claudectl --no-default-features --features hive`.
 
 Verify it works:
 
@@ -79,7 +82,7 @@ You'll see every session in a live table with status, cost, context usage, burn 
 ## 5. Try demo mode (no Claude Code needed)
 
 ```bash
-claudectl --demo
+claudectl demo
 ```
 
 Runs with fake sessions so you can explore the dashboard, keybindings, and features without any live sessions. Press `R` on any session to record a highlight reel — demo mode drip-feeds a scripted coding session (reading files, writing code, fixing errors, running tests) so you can see the session recorder in action.
@@ -216,6 +219,6 @@ cargo uninstall claudectl                    # Cargo
 
 - [Reference](reference.md) -- dashboard features, keybindings, all CLI flags
 - [Configuration](configuration.md) -- TOML config, hooks, rules, model pricing
-- [Relay & Hive Mind](relay.md) -- hive knowledge is built-in; add `--features relay` for cross-machine networking
+- [Relay & Hive Mind](relay.md) -- name a hive, join one from another machine, share what the brain learned
 - [Terminal Support](terminal-support.md) -- compatibility and setup notes
 - [Troubleshooting](troubleshooting.md) -- common issues and FAQ
