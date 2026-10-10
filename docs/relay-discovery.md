@@ -1,6 +1,9 @@
 # Relay Discovery and Pairing UX
 
-Status: Draft
+**Status:** design spec. Invite codes, word phrases, QR, `cctl://` links and UDP
+LAN discovery have shipped; `hive discover` extends the same announcer to named
+hives. See [Relay & Hive Mind](relay.md) for how pairing works today — this
+document is the reasoning behind the four mechanisms, not a status page.
 
 The relay transport works, but connecting two instances requires exchanging PSK codes and IP addresses manually. This document specifies four discovery mechanisms — from zero-config LAN to distributed teams — designed to make pairing as simple as Bluetooth.
 

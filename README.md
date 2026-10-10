@@ -379,7 +379,7 @@ max_units = 500
 max_prompt_units = 20
 ```
 
-> **Propagation is narrower than it sounds today.** Knowledge moves from a machine running `relay serve` to peers connected to it at the moment the brain distills something new. A peer that dials out with `relay join` or `relay connect` does not exchange knowledge at all, and there is no catch-up for a peer that connects later. Being fixed in [#455](https://github.com/mercurialsolo/claudectl/issues/455).
+> **How propagation works.** Both ends of a relay connection offer each other whatever the other has not been sent yet, every 12 seconds, incrementally. One timer covers connect, reconnect, a peer approved after it asked to join, and a unit distilled while the link was down — a machine that joins late catches up on the next tick. Accepted units are re-offered onward up to a hop cap, so knowledge crosses a mesh it was not directly connected to. What it needs is a live relay connection: one machine running `relay serve`, the other dialling it.
 
 See the [full Relay & Hive Mind guide](docs/relay.md).
 
@@ -505,11 +505,20 @@ Press `R` on any session for a highlight reel GIF (edits, commands, errors — i
 | [Configuration](docs/configuration.md) | Config files, hooks, rules |
 | [Relay & Hive Mind](docs/relay.md) | Connect instances, share knowledge |
 | [Capability Grants](docs/access.md) | Scoped read-only access for a third party |
-| [Open Cluster](docs/open-cluster.md) | Query surface design spec |
 | [Terminal Support](docs/terminal-support.md) | Compatibility matrix |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and FAQ |
 | [Contributing](docs/contributing.md) | Setup and guidelines |
 | [Changelog](CHANGELOG.md) | Release history |
+
+Design specs — the reasoning, not the current surface:
+
+| | |
+|---|---|
+| [Open Cluster](docs/open-cluster.md) | Capability grants and the read-only query surface |
+| [Agent Bus](docs/AGENT_BUS.md) | Role directory, mailbox, supervisor |
+| [Relay & Hive](docs/relay-and-hive.md) | Why transport, coordination and knowledge are three layers |
+| [Relay Discovery](docs/relay-discovery.md) | Pairing UX: codes, phrases, QR, LAN |
+| [Hive Storage](docs/hive-storage.md) | Tiered knowledge, archive, distillation |
 
 ## Community
 

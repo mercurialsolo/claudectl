@@ -184,7 +184,7 @@ What travels is the message history, tool calls and results included. What does 
 
 Press `R` on any session to record a per-session highlight reel (edits, commands, errors — idle time stripped). In `--demo` mode, a scripted coding session is drip-fed so recording works without live sessions.
 
-### Coordination (--features coord)
+### Coordination
 
 Inspect multi-session coordination state. Enabled by default since the supervisor RFC (#342).
 
@@ -227,7 +227,7 @@ Coord schema is gated on `PRAGMA user_version`. A binary that meets a newer sche
 |---------|-------------|
 | `ingest --hook <PreToolUse\|PostToolUse\|Stop\|SessionStart\|Notification\|UserPromptSubmit>` | Append the hook's stdin payload to coord `hook_events`. Best-effort by construction — meant to be called from a bash hook with `2>/dev/null \|\| true`. JSONL tail + `ps` stay authoritative; this is a latency optimization for the supervisor's reconciler. |
 
-### Relay (--features relay)
+### Relay
 
 Connect machines, delegate tasks. See the [full relay guide](relay.md).
 
@@ -244,13 +244,14 @@ Connect machines, delegate tasks. See the [full relay guide](relay.md).
 | `relay uninstall-agent` | Remove the `launchd` agent |
 | `relay agent-status` | Whether the agent is installed, loaded, and running |
 
-A peer that dials out with `relay join` or `relay connect` does not currently
-exchange hive knowledge — only a `relay serve` listener does, and only when the
-brain distills something new. See [#455](https://github.com/mercurialsolo/claudectl/issues/455).
+Both ends of a connection gossip: the dialler and the listener each offer the
+other whatever it has not been sent, every 12 seconds, incrementally. A peer that
+joins long after a distillation catches up on the next tick.
 
-### Hive Mind (--features hive)
+### Hive Mind
 
-Share knowledge, distill learnings. Requires relay for transport.
+Share knowledge, distill learnings. Local knowledge needs nothing; sharing it
+across machines goes over the relay.
 
 | Command | Description |
 |---------|-------------|
@@ -386,7 +387,7 @@ Dark, light, and none (`--theme`). Respects `NO_COLOR` environment variable.
 
 ## How It Works
 
-claudectl reads Claude Code's local data — no API keys, no network access, no modifications to Claude Code:
+claudectl reads Claude Code's local data — no API keys, no modifications to Claude Code, and no network traffic until you pair a relay peer or wire up a webhook:
 
 > One exception, opt-in and off by default: the read-only query surface can send a third party's question and one paragraph of `CLAUDE.md` to a hosted classifier. It needs `TYPESAFE_API_KEY` to be set, and `[query] jev_enabled = false` is the hard off. Nothing else in claudectl requires an API key, and no index content, file body or session data is ever sent. See [Capability Grants](access.md).
 
@@ -466,15 +467,25 @@ In `on` mode, low-confidence brain approvals fall through to normal permission p
 
 ## Security
 
-claudectl runs entirely locally. It reads Claude Code's session files from disk and process data from `ps`. It does not:
-- Send data to any server (unless you configure webhooks or the brain feature)
+claudectl reads Claude Code's session files from disk and process data from `ps`. It does not:
 - Modify Claude Code's files or behavior
 - Require API keys or authentication
 - Run with elevated privileges
+- Send anything anywhere you have not wired up yourself
 
-Webhook payloads contain session metadata (project name, cost, status). Review your webhook URL and event filters before enabling.
+Four things can leave the machine, all of them something you turn on: **webhooks**
+(session metadata — project, cost, status), the **relay** (session snapshots and
+delegated tasks, to peers you paired with over an HMAC-authenticated link), the
+**hive** (knowledge units, to members of a hive you named and admitted them to),
+and the **Jev classifier** on the query surface (a third party's question plus one
+paragraph of `CLAUDE.md`, never index contents or session data — it needs
+`TYPESAFE_API_KEY`, and `[query] jev_enabled = false` is the hard off). Pair with
+nobody and set no key, and nothing is sent.
 
-The brain feature sends session context to a **local** LLM endpoint (default `localhost:11434`). No data leaves your machine unless you point `--url` at a remote server.
+The brain sends session context to a **local** LLM endpoint (default
+`localhost:11434`); nothing leaves the machine unless you point `--url` at a
+remote one. Review your webhook URL and event filters before enabling webhooks.
+See [relay security](relay.md#security) for the peer transport's threat model.
 
 ## Comparison
 

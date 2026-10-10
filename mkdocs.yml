@@ -49,10 +49,15 @@ nav:
   - Capability Grants: access.md
   - Policy as Code: policy-as-code.md
   - Team Observability: team-observability.md
-  - Open Cluster: open-cluster.md
   - Terminal Support: terminal-support.md
   - Troubleshooting: troubleshooting.md
   - Contributing: contributing.md
+  - Design specs:
+      - Open Cluster: open-cluster.md
+      - Agent Bus: AGENT_BUS.md
+      - Relay & Hive: relay-and-hive.md
+      - Relay Discovery: relay-discovery.md
+      - Hive Storage: hive-storage.md
 
 markdown_extensions:
   - admonition

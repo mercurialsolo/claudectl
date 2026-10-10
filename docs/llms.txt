@@ -13,9 +13,10 @@ cargo install claudectl
 
 Setup:
 ```
-claudectl --init    # wire up Claude Code hooks (one-time)
+claudectl init      # onboarding wizard: budget, brain, hooks, bus role, skills
+claudectl doctor    # verify install + runtime health
 claudectl           # launch dashboard
-claudectl --demo    # try with fake sessions
+claudectl demo      # try with fake sessions
 ```
 
 ## Key Features
@@ -33,6 +34,7 @@ claudectl --demo    # try with fake sessions
 - Remote task delegation: offload tasks to connected peers with status streaming
 - Discovery: invite codes, word phrases, QR codes, LAN broadcast scanning
 - Named hives: name a hive, advertise it over LAN, find it with hive discover, join it with a cctl://hive/ link, code or phrase
+- Gossip: both ends of a relay connection sync incrementally every 12 seconds, so joins, reconnects and late arrivals all catch up; accepted units propagate onward up to a hop cap
 - Host-enforced join policy: invite / ask / open; ask queues each request for the owner rather than admitting on possession of a link
 - Read-only hive membership: a hive.read capability grant receives the hive knowledge and can never contribute any; refusals are sent on the wire
 - Durable relay: relay install-agent runs it under launchd so it survives logout
@@ -40,7 +42,7 @@ claudectl --demo    # try with fake sessions
 
 ## How It Works
 
-Reads Claude Code's local files (no API keys, no network, read-only):
+Reads Claude Code's local files (no API keys, read-only). Nothing is sent anywhere until you turn it on: webhooks carry session metadata, the relay carries session snapshots and delegated tasks to paired peers, the hive carries knowledge units to hive members, and the optional Jev classifier on the query surface carries a third party's question plus one paragraph of CLAUDE.md (needs TYPESAFE_API_KEY; [query] jev_enabled = false is the hard off). Sources:
 - ~/.claude/sessions/*.json - session metadata
 - ~/.claude/projects/{slug}/*.jsonl - conversation logs with token usage
 - ps - CPU%, memory, TTY per process
@@ -51,14 +53,19 @@ Status inference uses multiple signals: waiting_for_task events, CPU thresholds,
 
 ~6.3 MB binary with default features (bus+coord+relay+hive), ~3.5 MB sync-only. Sub-50ms startup, 7 runtime crates in the sync core, no async runtime except the two MCP stdio servers (claudectl bus stdio, claudectl query stdio), which each build their own current-thread Tokio runtime.
 
-Core: main.rs, app.rs, session.rs, discovery.rs, monitor.rs, process.rs, config.rs, history.rs, hooks.rs, orchestrator.rs, health.rs, rules.rs, launch.rs, models.rs
-Brain: engine.rs, client.rs, context.rs, decisions.rs, agents.rs, mailbox.rs, prompts.rs, evals.rs, insights.rs
-Relay: mod.rs, cli.rs, crypto.rs, protocol.rs, peer.rs, listener.rs, mesh.rs, delegation.rs, worker.rs, invite.rs, lan.rs
-Hive: mod.rs, cli.rs, store.rs, distiller.rs, merger.rs, gossip.rs, trust.rs, injection.rs
+Cargo workspace, dependencies flow strictly downward: claudectl (binary) -> claudectl-tui -> claudectl-core. The UI/runtime contract is a set of traits in crates/claudectl-core/src/runtime.rs, implemented over the real subsystems by src/runtime/.
+
+claudectl-core (crates/claudectl-core/src): session.rs, discovery.rs, monitor.rs, process.rs, transcript.rs, history.rs, fleet.rs, forecast.rs, health.rs, rules.rs, hooks.rs, launch.rs, models.rs, skills.rs, theme.rs, logger.rs, helpers.rs, config.rs, runtime.rs, terminals/
+claudectl-tui (crates/claudectl-tui/src): app/, ui/ (table, detail, help, status_bar, peers, skills, supervisor, demo_tour), recorder.rs, session_recorder.rs, demo.rs
+Binary (src): main.rs, commands.rs, config.rs, orchestrator.rs, doctor.rs, ingest.rs, brain_screen.rs, rate_limit.rs, team_policy.rs, init/, runtime/
+Brain: engine.rs, client.rs, context.rs, decisions.rs, retrieval.rs, preferences.rs, pref_store.rs, outcomes.rs, sequences.rs, detectors.rs, heuristic.rs, risk.rs, review.rs, audit.rs, autopsy.rs, baseline.rs, briefing.rs, garden.rs, health.rs, agents.rs, mailbox.rs, prompts.rs, evals.rs, insights.rs, metrics/
+Coord / supervisor: supervisor.rs (pure reconciler), actuator.rs, verify.rs, resume.rs, tasks.rs, store.rs, events.rs, exporter.rs, session_policy.rs, hook_events.rs, promotion.rs, injection.rs, interrupt_bus.rs, metrics.rs, pr.rs, evals.rs, adapter*.rs, supervisor_cli.rs, cli.rs
+Bus: store.rs, roles.rs, policy.rs, mcp.rs, cli.rs
+Relay: mod.rs, cli.rs, crypto.rs, protocol.rs, peer.rs, listener.rs, mesh.rs, hivesync.rs, hivejoin.rs, delegation.rs, tasks.rs, outcome.rs, worker.rs, transfer.rs, transient.rs, advertise.rs, invite.rs, lan.rs, http.rs, agent.rs
+Hive: mod.rs, cli/, store.rs, archive.rs, distiller.rs, merger.rs, gossip.rs, trust.rs, injection.rs, identity.rs, membership.rs, accept.rs, discovery.rs, exposure.rs, convergence.rs, effectiveness.rs, feedback.rs
 Access: mod.rs, cli.rs, scope.rs, token.rs, grant.rs
 Context index: mod.rs, git.rs, deny.rs, docs.rs, module_map.rs, exposure.rs
 Query: mod.rs, core.rs, rank.rs, http.rs, mcp.rs, cli.rs, jev.rs, classify.rs, thresholds.rs, escalate.rs, spend.rs
-TUI: table.rs, detail.rs, help.rs, status_bar.rs
 Terminals: ghostty, kitty, tmux, wezterm, warp, iterm2, terminal_app, gnome_terminal, windows_terminal
 
 ## Docs
@@ -72,6 +79,13 @@ Terminals: ghostty, kitty, tmux, wezterm, warp, iterm2, terminal_app, gnome_term
 - [Capability Grants](https://mercurialsolo.github.io/claudectl/access/)
 - [Open Cluster](https://mercurialsolo.github.io/claudectl/open-cluster/)
 - [Contributing](https://mercurialsolo.github.io/claudectl/contributing/)
+
+## Design specs
+
+- [Agent Bus](https://mercurialsolo.github.io/claudectl/AGENT_BUS/)
+- [Relay & Hive](https://mercurialsolo.github.io/claudectl/relay-and-hive/)
+- [Relay Discovery](https://mercurialsolo.github.io/claudectl/relay-discovery/)
+- [Hive Storage](https://mercurialsolo.github.io/claudectl/hive-storage/)
 
 ## Links
 

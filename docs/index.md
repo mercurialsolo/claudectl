@@ -32,14 +32,15 @@ Know which agent is blocked, burning budget, waiting for approval, or stalled - 
 Then wire up Claude Code hooks and start the dashboard:
 
 ```bash
-claudectl --init    # one-time setup
+claudectl init      # onboarding wizard (budget, brain, hooks, bus, skills)
+claudectl doctor    # verify install + runtime health
 claudectl           # launch dashboard
 ```
 
 Or try it without Claude Code running:
 
 ```bash
-claudectl --demo
+claudectl demo
 ```
 
 See the [Quick Start](quickstart.md) for the full walkthrough.
@@ -121,7 +122,7 @@ Connect claudectl instances across machines. Share brain learnings, delegate tas
 
 ### Agent Bus (preview)
 
-Durable role directory + persistent mailbox exposed as an MCP server. Running Claude Code instances discover each other, look up their own role, send directed messages, and drain their inbox at turn boundaries. Phases 1-4 of the [design spec](AGENT_BUS.md) are shipped behind `--features bus`.
+Durable role directory + persistent mailbox exposed as an MCP server. Running Claude Code instances discover each other, look up their own role, send directed messages, and drain their inbox at turn boundaries. Phases 1-4 of the [design spec](AGENT_BUS.md) are shipped, and `bus` is in the default build.
 
 </div>
 <div class="feature-item" markdown>
@@ -145,10 +146,6 @@ Post-mortem analysis on completed sessions via `--autopsy`. Inspect what went wr
 Skills & Hive mode (press `K` in the dashboard):
 
 ![claudectl Skills & Hive mode](assets/claudectl-demo-skills.gif){ .terminal-screenshot }
-
-Dashboard health monitoring:
-
-![claudectl health monitoring](assets/demo-health.gif){ .terminal-screenshot }
 
 ## Status Detection
 
@@ -180,7 +177,7 @@ Run `claudectl doctor` to verify your install + terminal support in one command.
 
 ## How It Works
 
-claudectl reads Claude Code's local data - no API keys, no network access, no modifications to Claude Code:
+claudectl reads Claude Code's local data - no API keys, no modifications to Claude Code, and no network traffic until you pair a relay peer or wire up a webhook:
 
 > One exception, opt-in and off by default: the read-only query surface can send a third party's question and one paragraph of `CLAUDE.md` to a hosted classifier. It needs `TYPESAFE_API_KEY` to be set, and `[query] jev_enabled = false` is the hard off. Nothing else in claudectl requires an API key, and no index content, file body or session data is ever sent. See [Capability Grants](access.md).
 
@@ -192,12 +189,21 @@ Status inference combines multiple signals: `waiting_for_task` events, CPU usage
 
 ## Security
 
-claudectl runs entirely locally. It does not:
+claudectl reads Claude Code's local files and `ps`. It does not:
 
-- Send data to any server (unless you configure webhooks)
 - Modify Claude Code's files or behavior
 - Require API keys or authentication
 - Run with elevated privileges
+- Send anything anywhere you have not wired up yourself
+
+Four things can leave the machine, all of them something you turn on: **webhooks**
+(session metadata — project, cost, status), the **relay** (session snapshots and
+delegated tasks, to peers you paired with over an HMAC-authenticated link), the
+**hive** (knowledge units, to members of a hive you named and admitted them to),
+and the **Jev classifier** on the query surface (a third party's question plus one
+paragraph of `CLAUDE.md`, never index contents or session data — it needs
+`TYPESAFE_API_KEY`, and `[query] jev_enabled = false` is the hard off). Pair with
+nobody and set no key, and nothing is sent.
 
 ## Built With
 
