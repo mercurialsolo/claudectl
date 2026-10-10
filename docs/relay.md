@@ -128,8 +128,14 @@ paired machines, numbered; a digit sends, `Esc` cancels:
 The hotkey checks what it can immediately — that the transcript exists, that
 the machine is paired, that there is an address to dial — and then hands the
 transfer to a background process, because a median transcript is 5.45 MB. So
-the status line says *sending*, not *sent*; `claudectl relay sessions` is
-where delivery shows up.
+the status line says *sending*, not *sent*.
+
+`claudectl relay sessions` tracks what this host has sent. Note that a row
+stays at `sent` unless a `relay serve` is running *here* too: the receiver
+acknowledges to the sender's listener, and a one-shot send has already hung up
+by then. A row at `sent` therefore means "handed over", not "failed" — the
+receiving side's log and `~/.claude/projects/` are the authority until
+[#511](https://github.com/mercurialsolo/claudectl/issues/511) closes that gap.
 
 What arrives is the full message history, tool calls and results included.
 What does not: the working tree and git state, subagent transcripts, running

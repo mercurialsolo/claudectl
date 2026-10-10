@@ -836,12 +836,18 @@ impl App {
             &target.cwd,
             &peer,
         ) {
-            // "Sending", not "Sent": the bytes go in a detached child and the
-            // ledger is where delivery actually lands.
+            // "Sending", not "Sent": the bytes go in a detached child, so this
+            // is an accepted transfer, not a delivered one.
+            //
+            // Deliberately not promising that the ledger confirms it. The
+            // receiver acknowledges to the sender's `relay serve`, and a
+            // one-shot send has already disconnected by then — verified
+            // between two machines, where the receiver logged "could not
+            // acknowledge … peer not connected" and the row stayed at `sent`
+            // despite the transcript being in place and resumable. #511.
             Ok(wire_id) => {
-                self.status_msg = format!(
-                    "Sending {wire_id} to {peer} — `claudectl relay sessions` for the result"
-                );
+                self.status_msg =
+                    format!("Sending {wire_id} to {peer} — tracked in `claudectl relay sessions`");
             }
             Err(e) => {
                 self.status_msg = format!("Send failed: {e}");

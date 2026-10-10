@@ -29,6 +29,15 @@ All notable changes to claudectl are documented here.
   nobody asked to move. That is the behaviour the test asserts, by reordering
   the sessions mid-pick.
 
+  Verified between two physical machines over the LAN, not just between two
+  relay processes: a codeword planted on one Mac was recalled by
+  `claude --resume` on a Mac mini after the move. The same run found that the
+  slug derivation really does miss in practice — the transcript for a session
+  in `/tmp/...` lands under `-private-tmp-...`, because `/tmp` is a symlink,
+  so the pre-`--transcript` path failed outright on it — and that a one-shot
+  send is never acknowledged (#511), so the status message no longer claims
+  the ledger confirms delivery.
+
 - **`relay send-session --transcript <path>`** names the transcript instead of
   deriving its location from `--cwd` and the session id. The derivation
   misses: #501 took the match rate from 275 to 296 of 316 transcripts on one
