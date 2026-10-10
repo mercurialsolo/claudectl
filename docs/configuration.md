@@ -232,22 +232,25 @@ Multi-session coordination on a single machine. Stores events, leases, blockers,
 
 Cross-machine collaboration. Both ship in the default build: `relay` carries the transport and task delegation, `hive` (which depends on it) carries knowledge sharing. A `--no-default-features --features hive` build keeps the hive local. See [Relay & Hive Mind](relay.md) for the full guide.
 
+Both `[relay]` and `[hive]` are **off until you turn them on** — `enabled`
+defaults to `false` in each. Every other value below is the real default.
+
 ```toml
 [relay]
-enabled = true              # start relay with TUI/brain
+enabled = true              # OFF by default; true starts the relay with the TUI/brain
 listen_port = 9847          # TCP port for peer connections
 listen_addr = "0.0.0.0"     # bind address — peer transport only, not the HTTP API
 max_peers = 8               # maximum connected peers
 heartbeat_interval_secs = 30
 reconnect_max_secs = 60
 auto_connect = []           # list of "host:port" to auto-connect on startup
-lan_announce = true        # broadcast presence on UDP 9848 so `relay discover` finds this machine
+lan_announce = true        # default; `relay serve` broadcasts on UDP 9848 so `relay discover` finds it
 http_addr = "127.0.0.1"     # bind address for the coordinator HTTP API
 # http_port = 9876          # no default; unset means no HTTP API at all
 # auth_token = "…"          # no default; the API's bearer token
 
 [hive]
-enabled = true              # enable knowledge sharing (sharing across machines needs relay)
+enabled = true              # OFF by default; sharing across machines also needs relay
 default_trust = 0.5         # trust level for new peers (0.0-1.0)
 auto_trust_drift = true     # adjust trust based on decision concordance
 max_propagation = 5         # max gossip hops

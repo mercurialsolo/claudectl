@@ -1,6 +1,6 @@
 # claudectl Open Cluster — Design Specification
 
-**Status:** §§3–6 shipped in v0.65.0 — phases 0 (#426), 1 (#427), 2 (#428), 3 (#429), 4 (#430) and 5 (#431), closing epic #423. Acting on an escalation shipped in #446. The named-hive (#424) and macOS-app (#425) epics remain proposed. Written against the code as of `3e784d7b`.
+**Status:** §§3–6 shipped in v0.65.0 — phases 0 (#426), 1 (#427), 2 (#428), 3 (#429), 4 (#430) and 5 (#431), closing epic #423. Acting on an escalation shipped in #446. The named-hive epic (#424) has since shipped — hive identity (#432), LAN advertisement (#433), invite links and `join_policy` enforcement (#434) and read-only `hive.read` members (#435), in v0.66.0–v0.67.0. The macOS-app epic (#425) remains proposed. Written against the code as of `3e784d7b`.
 **Scope:** Let someone who is *not you* participate in your claudectl world at a reduced trust level — ask read-only questions about one of your projects, join a named hive, or run a node from a Mac app instead of a terminal.
 
 ## Implementation status
