@@ -13,7 +13,9 @@ Know which agent is blocked, burning budget, or stalled - on this machine or any
   <span>macOS &amp; Linux</span>
 </div>
 
-![claudectl dashboard demo](assets/claudectl-demo-hero.gif){ .terminal-screenshot }
+![Two Macs forming a hive: discover, ask to join, owner approves, knowledge syncs](assets/hive-demo.gif){ .terminal-screenshot }
+
+<small>Real capture, two machines on one LAN: a MacBook discovers the hive hosted on a Mac mini, asks to join, the owner approves, and the brains start exchanging what they learned.</small>
 
 ## Install
 
