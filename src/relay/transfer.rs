@@ -165,6 +165,14 @@ pub fn transcript_path(cwd: &str, session_id: &str) -> Option<PathBuf> {
 /// simply the newest file in the project directory — and labelling those
 /// bytes with the caller's id would resume the wrong conversation on the far
 /// side.
+///
+/// Note that an explicit path changes only which bytes are *read*, never
+/// where they are *placed*: the receiver derives the target from the `cwd`
+/// travelling in the chunk (`accept_chunk(&chunk, &chunk.cwd)`) and
+/// `resume_hint` derives the resume command from that same `cwd`, so the far
+/// side stays self-consistent. A sender whose own transcript sits outside
+/// `cwd_to_slug(cwd)` — the priority-4 scan case — is a local-disk artifact
+/// and does not travel.
 pub fn resolve_source(
     explicit: Option<&Path>,
     cwd: &str,
