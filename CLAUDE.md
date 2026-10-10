@@ -1,6 +1,6 @@
 # claudectl
 
-Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.
+A hive of Claude Code agents that learns from you once and remembers everywhere.
 
 ## Build & Test
 

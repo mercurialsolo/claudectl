@@ -1,6 +1,6 @@
 # claudectl
 
-> Orchestrate a swarm of Claude Code agents with a local-LLM brain that learns from you.
+> A hive of Claude Code agents that learns from you once and remembers everywhere.
 
 claudectl is a Rust TUI that monitors all your Claude Code sessions from one terminal. It shows which agent is blocked, burning budget, waiting for approval, or stalled - and lets you intervene without tab hunting.
 

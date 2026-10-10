@@ -3,7 +3,7 @@
 pkgname=claudectl-bin
 pkgver=0.16.0
 pkgrel=1
-pkgdesc='Orchestrate a swarm of Claude Code agents with a learning local-LLM brain'
+pkgdesc='Hive of Claude Code agents that learns from you once and remembers everywhere'
 arch=('x86_64')
 url='https://github.com/mercurialsolo/claudectl'
 license=('MIT')
