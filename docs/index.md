@@ -15,7 +15,7 @@ Know which agent is blocked, burning budget, or stalled - on this machine or any
 
 ![Two Macs forming a hive: discover, ask to join, owner approves, knowledge syncs](assets/hive-demo.gif){ .terminal-screenshot }
 
-<small>Real capture, two machines on one LAN: a MacBook discovers the hive hosted on a Mac mini, asks to join, the owner approves, and the brains start exchanging what they learned.</small>
+![Work delegated across the hive: two tasks pushed from a MacBook, run as headless Claude Code sessions on a Mac mini, results reported back](assets/delegate-demo.gif){ .terminal-screenshot }
 
 ## Install
 
