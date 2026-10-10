@@ -130,12 +130,15 @@ the machine is paired, that there is an address to dial — and then hands the
 transfer to a background process, because a median transcript is 5.45 MB. So
 the status line says *sending*, not *sent*.
 
-`claudectl relay sessions` tracks what this host has sent. Note that a row
-stays at `sent` unless a `relay serve` is running *here* too: the receiver
-acknowledges to the sender's listener, and a one-shot send has already hung up
-by then. A row at `sent` therefore means "handed over", not "failed" — the
-receiving side's log and `~/.claude/projects/` are the authority until
-[#511](https://github.com/mercurialsolo/claudectl/issues/511) closes that gap.
+`claudectl relay sessions` tracks what this host has sent, and reaches
+`received` with the path on the far side and the command that resumes it there
+— the receiver answers on the delivery's own connection, so no listener is
+needed on the sending side.
+
+A row left at `sent` means the acknowledgement did not arrive within five
+seconds. The transfer may still have landed; the receiver's log says. A peer
+running 0.78.0 or earlier never acknowledges, so every row stays at `sent`
+against one of those.
 
 What arrives is the full message history, tool calls and results included.
 What does not: the working tree and git state, subagent transcripts, running

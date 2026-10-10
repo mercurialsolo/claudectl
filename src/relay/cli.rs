@@ -293,11 +293,15 @@ fn cmd_serve(
         relay_cfg.heartbeat_interval_secs,
         identity.as_str(),
     )));
+    // Write handles for in-flight one-shot deliveries (#511). Beside the
+    // registry, never in it.
+    let replies = super::transient::TransientReplies::new();
     let listener = RelayListener::start(
         addr,
         Arc::clone(&registry),
         identity.clone(),
         relay_cfg.max_peers,
+        replies.clone(),
     )?;
 
     println!("Relay listening on {} as {}", listener.addr, identity);
@@ -687,13 +691,26 @@ fn cmd_serve(
                                             );
                                             // The sender has no other way to
                                             // learn where it landed.
+                                            //
+                                            // A one-shot delivery is not in
+                                            // the registry (#487), so the
+                                            // registry cannot answer it —
+                                            // that is what left every
+                                            // transfer unacknowledged until
+                                            // #511. Try the connection it
+                                            // actually arrived on first, and
+                                            // fall back to the registry for a
+                                            // peer that holds a lasting link.
                                             let ack = super::transfer::build_received_message(
                                                 &chunk.session_id,
                                                 &path,
                                                 &chunk.cwd,
                                                 identity.as_str(),
                                             );
-                                            if let Err(e) = reg.send_to(from_peer.as_str(), &ack) {
+                                            let sent_ack = replies
+                                                .reply(&from_peer, &ack)
+                                                .or_else(|_| reg.send_to(from_peer.as_str(), &ack));
+                                            if let Err(e) = sent_ack {
                                                 println!(
                                                     "[{ts}] could not acknowledge session {} to {from_peer}: {e}",
                                                     chunk.session_id
@@ -1413,10 +1430,24 @@ fn cmd_send_session(
             .map_err(|_| io::Error::other("registry lock poisoned"))?
             .get_peer(&remote_id)
             .map(|c| c.finish_sending(budget));
-        if let Some(Err(e)) = drained {
-            return Err(io::Error::other(format!(
-                "peer '{peer}' did not take the whole transcript: {e}"
-            )));
+
+        // Wait for the receiver to say where it landed (#511). It answers on
+        // this same connection and writes the ack *before* dropping its
+        // handle, so the ack is queued ahead of the EOF that ends our reader
+        // — by the time the drain above returns, it is normally already here.
+        //
+        // An ack is a stronger signal than the drain: it means placed and
+        // resumable, not merely read off the socket. So it is checked even
+        // when the drain timed out, and only its absence falls back to
+        // treating the drain as the verdict.
+        let confirmed = await_session_ack(&registry, session, std::time::Duration::from_secs(5));
+
+        if confirmed.is_none() {
+            if let Some(Err(e)) = drained {
+                return Err(io::Error::other(format!(
+                    "peer '{peer}' did not take the whole transcript: {e}"
+                )));
+            }
         }
 
         let bytes = contents.len();
@@ -1437,14 +1468,65 @@ fn cmd_send_session(
                 bytes as f64 / 1_048_576.0,
                 chunks.len()
             );
-            println!("Target directory on {remote_id}: {target_cwd}");
-            println!(
-                "It will confirm to this host's `relay serve`; see `claudectl relay sessions`."
-            );
+            match &confirmed {
+                Some(ack) => {
+                    println!("Placed on {remote_id} at {}", ack.path);
+                    println!("Resume it there with: {}", ack.resume);
+                }
+                None => {
+                    println!("Target directory on {remote_id}: {target_cwd}");
+                    println!(
+                        "Not acknowledged within 5s — the transfer may still have landed. \
+                         Check `claudectl relay sessions` here, or the receiver's log."
+                    );
+                }
+            }
         }
         return Ok(());
     }
     Err(io::Error::other(last_err))
+}
+
+/// Where the receiver put a transcript, as it reported back.
+struct SessionAck {
+    path: String,
+    resume: String,
+}
+
+/// Wait for the receiver's acknowledgement of `session`, recording it in the
+/// ledger when it lands (#511).
+///
+/// Polls rather than blocking on the channel because `PeerRegistry` owns the
+/// `Receiver` and hands out only `try_recv_message` — the serve loop's drain
+/// stays the one place that consumes in a loop.
+///
+/// Messages for other sessions are discarded: this is a one-shot command whose
+/// connection carried exactly one transcript, and nothing else will read them.
+fn await_session_ack(
+    registry: &Arc<Mutex<PeerRegistry>>,
+    session: &str,
+    budget: std::time::Duration,
+) -> Option<SessionAck> {
+    let deadline = std::time::Instant::now() + budget;
+    while std::time::Instant::now() < deadline {
+        let next = registry.lock().ok().and_then(|r| r.try_recv_message());
+        let Some((_, msg)) = next else {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            continue;
+        };
+        if msg.msg_type != super::MessageType::SessionReceived {
+            continue;
+        }
+        let Some((acked, path, resume)) = super::transfer::parse_received(&msg.payload) else {
+            continue;
+        };
+        if acked != session {
+            continue;
+        }
+        super::transfer::record_received(&acked, &path, &resume);
+        return Some(SessionAck { path, resume });
+    }
+    None
 }
 
 /// What this host has sent, and what came back (#478 item 3).

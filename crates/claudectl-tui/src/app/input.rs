@@ -839,15 +839,15 @@ impl App {
             // "Sending", not "Sent": the bytes go in a detached child, so this
             // is an accepted transfer, not a delivered one.
             //
-            // Deliberately not promising that the ledger confirms it. The
-            // receiver acknowledges to the sender's `relay serve`, and a
-            // one-shot send has already disconnected by then — verified
-            // between two machines, where the receiver logged "could not
-            // acknowledge … peer not connected" and the row stayed at `sent`
-            // despite the transcript being in place and resumable. #511.
+            // Pointing at the ledger is honest again now that #511 landed: the
+            // receiver answers on the delivery's own connection, so the row
+            // reaches `received` with the remote path and the resume command.
+            // Before that fix it stayed at `sent` forever and this message
+            // promised a confirmation that could never arrive.
             Ok(wire_id) => {
-                self.status_msg =
-                    format!("Sending {wire_id} to {peer} — tracked in `claudectl relay sessions`");
+                self.status_msg = format!(
+                    "Sending {wire_id} to {peer} — `claudectl relay sessions` for the result"
+                );
             }
             Err(e) => {
                 self.status_msg = format!("Send failed: {e}");

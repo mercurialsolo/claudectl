@@ -52,6 +52,16 @@ impl PeerRegistry {
         self.tx.clone()
     }
 
+    /// Take one inbound message, if the reader threads have delivered any.
+    ///
+    /// `process_messages` is the serve loop's drain; this is for a one-shot
+    /// command that needs a single reply and has no loop. It exists so
+    /// `send-session` can wait for its acknowledgement (#511) without the
+    /// `rx` leaving this type.
+    pub fn try_recv_message(&self) -> Option<(PeerId, RelayMessage)> {
+        self.rx.try_recv().ok()
+    }
+
     /// Add a peer connection to the registry, replacing any existing one.
     ///
     /// Newest-wins is right for a reconnect. What was wrong (#459) is that the

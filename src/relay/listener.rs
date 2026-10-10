@@ -37,6 +37,7 @@ impl RelayListener {
         registry: Arc<Mutex<PeerRegistry>>,
         identity: PeerId,
         max_peers: u8,
+        replies: super::transient::TransientReplies,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(addr)?;
         let local_addr = listener.local_addr()?;
@@ -105,11 +106,13 @@ impl RelayListener {
                         let identity = identity.clone();
                         let thread_count = Arc::clone(&auth_threads);
                         let fail_track = Arc::clone(&fail_tracker);
+                        let replies = replies.clone();
 
                         thread_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                         std::thread::spawn(move || {
-                            let success = handle_incoming(stream, peer_addr, &registry, &identity);
+                            let success =
+                                handle_incoming(stream, peer_addr, &registry, &identity, &replies);
 
                             if !success {
                                 // Track failed auth attempt
@@ -169,6 +172,7 @@ fn handle_incoming(
     peer_addr: SocketAddr,
     registry: &Arc<Mutex<PeerRegistry>>,
     identity: &PeerId,
+    replies: &super::transient::TransientReplies,
 ) -> bool {
     // The accept loop puts the *listening* socket in non-blocking mode so it can
     // poll `shutdown`. On macOS and the BSDs an accepted socket inherits
@@ -337,6 +341,25 @@ fn handle_incoming(
     //
     // Never registered, not "only when a link already exists": a rule that
     // depends on what else is connected is a race, which is how #487 happened.
+    // Keep a way to answer a one-shot delivery before the connection is
+    // dropped (#511). An independent `try_clone` handle, so the reader thread
+    // exiting on EOF does not close it, and held outside `PeerRegistry` so no
+    // collision rule can reach it — registering it there is exactly what #487
+    // forbids.
+    //
+    // A clone that fails is not fatal: the delivery itself still works, and
+    // the sender falls back to the behaviour it had before, which is a row
+    // that stays at `sent`.
+    if transient {
+        match stream.try_clone() {
+            Ok(back_channel) => replies.remember(&peer_id, back_channel),
+            Err(e) => crate::logger::log(
+                "RELAY",
+                &format!("delivery from {peer_id}: cannot keep a reply handle: {e}"),
+            ),
+        }
+    }
+
     let conn = PeerConnection::from_authenticated(peer_id.clone(), stream, tx);
     if transient {
         crate::logger::log(

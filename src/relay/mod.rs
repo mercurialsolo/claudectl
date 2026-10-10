@@ -20,6 +20,7 @@ pub mod protocol;
 pub mod tasks;
 /// Moving a conversation to another host (#478 item 3).
 pub mod transfer;
+pub mod transient;
 pub mod worker;
 
 use std::fs;
