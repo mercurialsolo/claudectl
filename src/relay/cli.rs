@@ -128,6 +128,12 @@ pub enum RelayCommand {
         /// which will not exist on a peer running another OS.
         #[arg(long)]
         remote_cwd: Option<String>,
+        /// Read this transcript instead of deriving its location from `--cwd`
+        /// and the session id. The session id then comes from the file's own
+        /// name. The TUI passes the path session discovery already resolved,
+        /// which is right in cases the slug derivation misses.
+        #[arg(long)]
+        transcript: Option<std::path::PathBuf>,
     },
 
     /// Show conversations this host has sent to peers
@@ -220,11 +226,13 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
             session,
             cwd,
             remote_cwd,
+            transcript,
         } => cmd_send_session(
             peer,
             session,
             cwd.as_deref(),
             remote_cwd.as_deref(),
+            transcript.as_deref(),
             json_mode,
         ),
         RelayCommand::Sessions => cmd_sessions(json_mode),
@@ -1277,11 +1285,43 @@ fn try_connect(
 /// receiver's acknowledgement — which carries the path it chose and the
 /// command to resume there — arrives at whatever process is serving, so it is
 /// written to the ledger rather than printed here. `relay sessions` reads it.
+/// Everything `send-session` can establish without touching the network: that
+/// the transcript exists and names a usable session id, that the peer is
+/// paired, and that there is somewhere to dial it.
+///
+/// Extracted so the TUI's send hotkey (#510) gets these three failures
+/// immediately and in the operator's own words. The hotkey detaches the
+/// transfer itself — megabytes over the wire cannot run on the render thread —
+/// and a detached child that exits 1 reports nothing back, so a spawn that
+/// "succeeded" would otherwise be indistinguishable from a transfer that
+/// worked. Returns the session id the bytes will travel under, which for an
+/// explicit path is the file's own stem rather than the caller's belief.
+pub(crate) fn send_session_preflight(
+    peer: &str,
+    transcript: Option<&std::path::Path>,
+    source_cwd: &str,
+    session: &str,
+) -> Result<(String, std::path::PathBuf), String> {
+    let (session_id, path) = super::transfer::resolve_source(transcript, source_cwd, session)?;
+    if load_peer_psk(peer).is_none() {
+        return Err(format!(
+            "peer '{peer}' is not paired — run `claudectl relay pair` first"
+        ));
+    }
+    if dial_candidates(peer).is_empty() {
+        return Err(format!(
+            "no stored address for peer '{peer}' — pair or connect first"
+        ));
+    }
+    Ok((session_id, path))
+}
+
 fn cmd_send_session(
     peer: &str,
     session: &str,
     cwd: Option<&str>,
     remote_cwd: Option<&str>,
+    transcript: Option<&std::path::Path>,
     json_mode: bool,
 ) -> io::Result<()> {
     let identity = load_or_create_identity();
@@ -1293,8 +1333,14 @@ fn cmd_send_session(
             .map(|p| p.display().to_string())
             .map_err(|e| io::Error::other(format!("current directory: {e}")))?,
     };
-    let path = super::transfer::transcript_path(&source_cwd, session)
-        .ok_or_else(|| io::Error::other(format!("'{session}' is not a usable session id")))?;
+
+    // One place owns these three refusals, so the hotkey and the command say
+    // the same thing. `session` is what the caller asked for; `session_id` is
+    // what the bytes actually are.
+    let (session_id, path) =
+        send_session_preflight(peer, transcript, &source_cwd, session).map_err(io::Error::other)?;
+    let session = session_id.as_str();
+
     let contents = std::fs::read(&path).map_err(|e| {
         io::Error::other(format!(
             "no transcript for session '{session}' at {}: {e}",
