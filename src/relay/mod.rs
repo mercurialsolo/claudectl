@@ -346,6 +346,54 @@ pub fn load_peer_meta(peer_id: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&content).ok()
 }
 
+/// The PSKs to offer a host when joining from an invite, best candidate first.
+///
+/// A host that has already paired with us authenticates the handshake against
+/// the PSK it stored for our peer id and *nothing else* — `listener.rs` step 3
+/// takes the stored-key branch and returns "no matching PSK" rather than
+/// falling through to the invite's pending key. So presenting a freshly minted
+/// invite PSK to a host we are already paired with is refused, even though both
+/// sides are behaving correctly and the invite is genuine.
+///
+/// Trying the pairing we already hold first fixes that without loosening the
+/// host: an invite holder still cannot displace an existing peer's key, which
+/// is exactly what the host's strictness is there to prevent.
+///
+/// The invite PSK stays in the list as the fallback, because it is the only one
+/// that can work for a first-time join.
+/// Pure: the ordering rule, so it is testable without a peer store. `existing`
+/// comes from [`existing_pairing_psk`].
+pub fn invite_psk_candidates(invite_psk: &[u8; 32], existing: Option<[u8; 32]>) -> Vec<[u8; 32]> {
+    match existing {
+        // Identical keys would dial twice with the same secret on a refusal.
+        Some(e) if e != *invite_psk => vec![e, *invite_psk],
+        _ => vec![*invite_psk],
+    }
+}
+
+/// The PSK already stored for the host an invite points at, if any.
+///
+/// Only a hive/invite *link* names the peer; a relay code and a word phrase do
+/// not, so those fall back to matching the recorded address. An address shared
+/// by more than one known peer resolves to nothing rather than to a guess —
+/// presenting the wrong peer's key would be a worse failure than the one this
+/// is fixing.
+pub fn existing_pairing_psk(peer_id: Option<&str>, addr: &str) -> Option<[u8; 32]> {
+    if let Some(id) = peer_id {
+        return load_peer_psk(id);
+    }
+    let mut matches = list_known_peers().into_iter().filter(|id| {
+        load_peer_meta(id)
+            .and_then(|m| m.get("addr").and_then(|v| v.as_str()).map(|a| a == addr))
+            .unwrap_or(false)
+    });
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    load_peer_psk(&first)
+}
+
 /// List all known peer IDs (those with .key files).
 pub fn list_known_peers() -> Vec<String> {
     let dir = peers_dir();
@@ -396,6 +444,31 @@ pub fn forget_peer(peer_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invite_psk_is_the_only_candidate_for_a_first_time_join() {
+        let invite = [7u8; 32];
+        assert_eq!(invite_psk_candidates(&invite, None), vec![invite]);
+    }
+
+    #[test]
+    fn an_existing_pairing_is_tried_before_the_invite() {
+        // The host authenticates against the key it stored for us and does not
+        // fall through to the invite's, so the stored one has to go first or a
+        // second invite from an already-paired host is refused outright.
+        let invite = [7u8; 32];
+        let stored = [9u8; 32];
+        assert_eq!(
+            invite_psk_candidates(&invite, Some(stored)),
+            vec![stored, invite]
+        );
+    }
+
+    #[test]
+    fn a_pairing_equal_to_the_invite_is_not_dialled_twice() {
+        let invite = [7u8; 32];
+        assert_eq!(invite_psk_candidates(&invite, Some(invite)), vec![invite]);
+    }
 
     #[test]
     fn message_type_serde_roundtrip() {
