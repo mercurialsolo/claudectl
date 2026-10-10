@@ -16,7 +16,7 @@
 
 <img src="assets/hive-demo.gif" alt="Two Macs forming a hive: discover, ask to join, owner approves, knowledge syncs" width="100%" />
 
-<sub>Real capture, two machines on one LAN: a MacBook discovers the hive hosted on a Mac mini, asks to join, the owner approves, and the brains start exchanging what they learned. Recorded with asciinema — the cast is <a href="assets/hive-demo.cast">assets/hive-demo.cast</a>.</sub>
+<img src="assets/delegate-demo.gif" alt="Work delegated across the hive: two tasks pushed from a MacBook, run as headless Claude Code sessions on a Mac mini, results and the edit reported back" width="100%" />
 
 ## What it does for you
 
