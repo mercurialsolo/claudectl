@@ -1,9 +1,9 @@
 # claudectl
 
-**A hive of Claude Code agents that learns from you once and remembers everywhere.**
+**Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere**
 
 <p class="hero-tagline">
-Know which agent is blocked, burning budget, waiting for approval, or stalled - and intervene without tab hunting.
+Know which agent is blocked, burning budget, or stalled - on this machine or any machine in your hive - and intervene without tab hunting.
 </p>
 
 <div class="proof-strip">

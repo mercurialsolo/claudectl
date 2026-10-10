@@ -1,8 +1,8 @@
 # claudectl
 
-> A hive of Claude Code agents that learns from you once and remembers everywhere.
+> Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere
 
-claudectl is a Rust TUI that monitors all your Claude Code sessions from one terminal. It shows which agent is blocked, burning budget, waiting for approval, or stalled - and lets you intervene without tab hunting.
+claudectl is a Rust TUI and daemon that supervises every Claude Code session on a machine, and a hive that joins machines together. A local LLM learns which tool calls you approve and deny; naming a hive makes that knowledge joinable, so a second machine starts with what the first one learned. It shows which agent is blocked, burning budget, or stalled, and lets you intervene without tab hunting.
 
 ## Install
 

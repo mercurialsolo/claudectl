@@ -1,6 +1,6 @@
 # claudectl
 
-A hive of Claude Code agents that learns from you once and remembers everywhere.
+Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere
 
 ## Build & Test
 
