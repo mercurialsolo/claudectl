@@ -15,7 +15,7 @@ Know which agent is blocked, burning budget, or stalled - on this machine or any
 
 ![Two Macs forming a hive: discover, ask to join, owner approves, knowledge syncs](assets/hive-demo.gif){ .terminal-screenshot }
 
-![Work delegated across the hive: two tasks pushed from a MacBook, run as headless Claude Code sessions on a Mac mini, results reported back](assets/delegate-demo.gif){ .terminal-screenshot }
+![A migration spread across the hive: three services ported from a blocking thread pool to asyncio, two arms delegated to a Mac mini and one run locally, every test green and 0.9s down to 0.05s](assets/migration-demo.gif){ .terminal-screenshot }
 
 ## Install
 
