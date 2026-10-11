@@ -1273,6 +1273,43 @@ fn try_connect_with(
     Ok((remote_id, registry))
 }
 
+/// What a successful invite dial yields: the resolved peer id, the registry
+/// holding the live connection, and the PSK that actually authenticated.
+type InviteDial = (String, Arc<Mutex<PeerRegistry>>, [u8; 32]);
+
+/// Dial an invite, trying each PSK the host might accept.
+///
+/// Returns the PSK that authenticated alongside the connection, because the
+/// caller must persist *that* one: saving the invite's key after connecting on
+/// an existing pairing would overwrite a working pairing with one the host no
+/// longer accepts, turning a recoverable refusal into a permanent one.
+fn connect_with_invite(
+    addr: SocketAddr,
+    invite_psk: &[u8; 32],
+    peer_id: Option<&str>,
+    identity: &super::PeerId,
+) -> Result<InviteDial, String> {
+    let existing = super::existing_pairing_psk(peer_id, &addr.to_string());
+    let candidates = super::invite_psk_candidates(invite_psk, existing);
+    let mut last = String::new();
+    for psk in &candidates {
+        match try_connect(addr, psk, identity) {
+            Ok((id, reg)) => return Ok((id, reg, *psk)),
+            Err(e) => last = e,
+        }
+    }
+    if candidates.len() > 1 {
+        // Both the stored pairing and the invite were refused, so this is not
+        // the shadowing case — say so, rather than sending the owner to
+        // `relay forget` for a problem it will not fix.
+        Err(format!(
+            "{last} (tried the existing pairing for this host and the invite's own key)"
+        ))
+    } else {
+        Err(last)
+    }
+}
+
 /// Dial a peer for a lasting link. `relay connect` and `relay join` both go
 /// on to run a loop on the connection, so neither is a one-shot.
 fn try_connect(
@@ -2447,8 +2484,9 @@ pub fn cmd_hive_join(input: &[String], grant: Option<&str>) -> io::Result<()> {
         };
 
     println!("Connecting to {addr}...");
-    let (remote_id, registry) = try_connect(addr, &psk, &identity)
-        .map_err(|e| io::Error::other(format!("connection failed: {e}")))?;
+    let (remote_id, registry, used_psk) =
+        connect_with_invite(addr, &psk, expected_identity.as_deref(), &identity)
+            .map_err(|e| io::Error::other(format!("connection failed: {e}")))?;
 
     if let Some(ref expected) = expected_identity {
         if remote_id != *expected {
@@ -2458,8 +2496,9 @@ pub fn cmd_hive_join(input: &[String], grant: Option<&str>) -> io::Result<()> {
     println!("Paired with {remote_id} ({addr})");
 
     // Pairing is worth keeping even if the hive request goes nowhere — it is
-    // what `relay connect` will use next time.
-    let _ = save_peer_psk(&remote_id, &psk);
+    // what `relay connect` will use next time. `used_psk`, not the invite's:
+    // see `connect_with_invite`.
+    let _ = save_peer_psk(&remote_id, &used_psk);
     let _ = super::save_peer_meta(&remote_id, &addr.to_string());
 
     let request = super::hivejoin::build_join_request(
@@ -2650,8 +2689,9 @@ fn cmd_join(input: &[String]) -> io::Result<()> {
     println!("Connecting to {}...", addr);
 
     // Try connecting
-    let (remote_id, registry) = try_connect(addr, &psk, &identity)
-        .map_err(|e| io::Error::other(format!("connection failed: {e}")))?;
+    let (remote_id, registry, used_psk) =
+        connect_with_invite(addr, &psk, remote_identity.as_deref(), &identity)
+            .map_err(|e| io::Error::other(format!("connection failed: {e}")))?;
 
     // Verify identity if provided in the link
     if let Some(ref expected) = remote_identity {
@@ -2665,8 +2705,9 @@ fn cmd_join(input: &[String]) -> io::Result<()> {
 
     println!("Paired with {} ({})", remote_id, addr);
 
-    // Save PSK and metadata
-    let _ = save_peer_psk(&remote_id, &psk);
+    // Save PSK and metadata. `used_psk` rather than the invite's: see
+    // `connect_with_invite`.
+    let _ = save_peer_psk(&remote_id, &used_psk);
     let _ = super::save_peer_meta(&remote_id, &addr.to_string());
 
     // Run the connection loop
