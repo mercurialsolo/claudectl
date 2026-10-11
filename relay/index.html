@@ -1,0 +1,2969 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere">
+      
+      
+      
+        <link rel="canonical" href="https://mercurialsolo.github.io/claudectl/relay/">
+      
+      
+        <link rel="prev" href="../agent-bus/">
+      
+      
+        <link rel="next" href="../access/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Relay & Hive Mind - claudectl</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#relay-hive-mind" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="claudectl" class="md-header__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            claudectl
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Relay & Hive Mind
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="claudectl" class="md-nav__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    claudectl
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent-bus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Bus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive Mind
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive Mind
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is it?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start-connect-two-machines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start: Connect Two Machines
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Start: Connect Two Machines">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-generate-an-invite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Generate an invite
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-join-from-machine-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Join from Machine B
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-start-the-relay-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Start the relay server
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-5-see-the-whole-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: See the whole cluster
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 5: See the whole cluster">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-6-move-a-conversation-to-another-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 6: Move a conversation to another machine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-cluster-view-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the cluster view works
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keeping-the-relay-alive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping the relay alive
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Keeping the relay alive">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#linux" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Linux
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#three-ways-to-share-a-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Three Ways to Share a Code
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Three Ways to Share a Code">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#relay-code-compact-no-ip-visible" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relay Code (compact, no IP visible)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#word-phrase-memorable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Word Phrase (memorable)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invite-link-qr-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Invite Link + QR Code
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lan-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LAN Discovery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hive-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive Identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hive Identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#join-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Join policy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#inviting-someone-into-the-hive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inviting someone into the hive
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#joining-a-hive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Joining a hive
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#approving-who-gets-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Approving who gets in
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#joining-as-a-reader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Joining as a reader
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-membership-actually-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What membership actually gates
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#finding-hives-on-the-lan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Finding hives on the LAN
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hive-mind-knowledge-sharing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive Mind: Knowledge Sharing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hive Mind: Knowledge Sharing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-propagation-actually-does-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What propagation actually does today
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-it-works-once-it-does-fire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works once it does fire
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trust-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trust tiers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#view-and-manage-knowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View and manage knowledge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manage-trust" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manage trust
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remote-task-delegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote Task Delegation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Remote Task Delegation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-file-with-peer-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task file with peer routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-delegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual delegation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#interrupts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interrupts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tui-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TUI Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TUI Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#peers-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peers panel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#brain-prompt-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Brain prompt integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CLI Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#relay-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relay commands
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hive-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive commands
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#peer-transport-tcp-listen_addrlisten_port-default-00009847" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer transport (TCP, listen_addr:listen_port, default 0.0.0.0:9847)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coordinator-http-api-http_addrhttp_port-default-loopback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinator HTTP API (http_addr:http_port, default loopback)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Capability Grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy-as-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy as Code
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../team-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Team Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terminal-support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terminal Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design specs
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design specs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../open-cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Open Cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AGENT_BUS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Bus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay-and-hive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay-discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hive-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hive Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is it?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start-connect-two-machines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start: Connect Two Machines
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Start: Connect Two Machines">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-generate-an-invite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Generate an invite
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-join-from-machine-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Join from Machine B
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-start-the-relay-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Start the relay server
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-5-see-the-whole-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: See the whole cluster
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 5: See the whole cluster">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-6-move-a-conversation-to-another-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 6: Move a conversation to another machine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-cluster-view-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the cluster view works
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keeping-the-relay-alive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping the relay alive
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Keeping the relay alive">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#linux" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Linux
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#three-ways-to-share-a-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Three Ways to Share a Code
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Three Ways to Share a Code">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#relay-code-compact-no-ip-visible" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relay Code (compact, no IP visible)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#word-phrase-memorable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Word Phrase (memorable)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invite-link-qr-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Invite Link + QR Code
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lan-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LAN Discovery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hive-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive Identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hive Identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#join-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Join policy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#inviting-someone-into-the-hive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inviting someone into the hive
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#joining-a-hive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Joining a hive
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#approving-who-gets-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Approving who gets in
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#joining-as-a-reader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Joining as a reader
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-membership-actually-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What membership actually gates
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#finding-hives-on-the-lan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Finding hives on the LAN
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hive-mind-knowledge-sharing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive Mind: Knowledge Sharing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hive Mind: Knowledge Sharing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-propagation-actually-does-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What propagation actually does today
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-it-works-once-it-does-fire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works once it does fire
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trust-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trust tiers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#view-and-manage-knowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View and manage knowledge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manage-trust" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manage trust
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remote-task-delegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote Task Delegation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Remote Task Delegation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-file-with-peer-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task file with peer routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-delegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual delegation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#interrupts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interrupts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tui-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TUI Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TUI Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#peers-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peers panel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#brain-prompt-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Brain prompt integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CLI Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#relay-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relay commands
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hive-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive commands
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Security">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#peer-transport-tcp-listen_addrlisten_port-default-00009847" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer transport (TCP, listen_addr:listen_port, default 0.0.0.0:9847)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coordinator-http-api-http_addrhttp_port-default-loopback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinator HTTP API (http_addr:http_port, default loopback)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="relay-hive-mind">Relay &amp; Hive Mind</h1>
+<p>Share learnings, delegate tasks, and collaborate across machines — all peer-to-peer, all local-first.</p>
+<h2 id="what-is-it">What is it?</h2>
+<p>The relay connects two or more claudectl instances over TCP. Once connected, they can:</p>
+<ul>
+<li><strong>Share brain knowledge</strong> — patterns your brain learns ("always approve <code>cargo test</code>") propagate to <a href="#what-propagation-actually-does-today">hive members</a>, in both directions</li>
+<li><strong>Delegate tasks</strong> — offload work to a remote machine running Claude Code</li>
+<li><strong>Synchronize insights</strong> — friction patterns, error loops, and accuracy data merge across the network</li>
+</ul>
+<p>Every instance stays sovereign. Your local preferences always override peer knowledge. No cloud, no central server.</p>
+<h2 id="quick-start-connect-two-machines">Quick Start: Connect Two Machines</h2>
+<h3 id="step-1-install">Step 1: Install</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>cargo<span class="w"> </span>install<span class="w"> </span>claudectl
+</code></pre></div>
+<p><code>relay</code> and <code>hive</code> are both in the default feature set, so a plain install has cross-machine networking. A build with <code>--no-default-features --features hive</code> keeps hive local: knowledge is distilled, archived, and used by the brain, but never synced to peers.</p>
+<h3 id="step-2-generate-an-invite">Step 2: Generate an invite</h3>
+<p>On Machine A:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>invite
+</code></pre></div>
+<p>Output:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Your identity: laptop-a3f2
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  RELAY CODE:  YEK-AGA-YHK-QAA-BM
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>  INVITE LINK: cctl://laptop-a3f2@192.168.1.50:9847/k/a3f29b1cd4e5f678
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>Share any of the above with your peer. They run:
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>  claudectl relay join YEK-AGA-YHK-QAA-BM
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>  claudectl relay join cctl://laptop-a3f2@192.168.1.50:9847/k/a3f29b1cd4e5f678
+</code></pre></div>
+<h3 id="step-3-join-from-machine-b">Step 3: Join from Machine B</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>join<span class="w"> </span>YEK-AGA-YHK-QAA-BM
+</code></pre></div>
+<p>That's it. Both machines are paired and connected.</p>
+<h3 id="step-4-start-the-relay-server">Step 4: Start the relay server</h3>
+<p>On Machine A (the one that generated the invite):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>serve
+</code></pre></div>
+<p>Machine B connects:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>connect<span class="w"> </span><span class="m">192</span>.168.1.50:9847
+</code></pre></div>
+<p>Leave both running. The relay is what carries session state between machines, so
+the cluster view below is only as live as the relays behind it.</p>
+<h2 id="step-5-see-the-whole-cluster">Step 5: See the whole cluster</h2>
+<p>Once relays are up on both machines, every session on either one shows up on both:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>fleet
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Fleet: 5 session(s) across 2 machine(s)
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>MACHINE              PROJECT                      STATUS         COST
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>────────────────────────────────────────────────────────────────────────
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>barrys-mac-74371c…*  cabal-1                      Waiting        $137.45
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>barrys-mac-74371c…*  claudectl                    Processing     $31.95
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>barrys-mac-74371c…*  staffai                      Waiting        $17.59
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>mac-mini-9f2a1b      claudectl                    Processing     $4.21
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>mac-mini-9f2a1b      nightly-bench                Needs Input    $0.87
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>* = this machine
+</code></pre></div>
+<p>Remote sessions also appear in the dashboard (<code>claudectl</code>) and the plain list
+(<code>claudectl -l</code>), prefixed with the machine they're running on:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>5101    [mac-mini-9f2a1b] claudec… Processing   -        $4.2
+</code></pre></div>
+<p>They're read-only from here — the keys that send input or terminate a session
+act on local sessions only. To put work on another machine, delegate it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>delegate<span class="w"> </span>mac-mini-9f2a1b<span class="w"> </span><span class="s2">"run the full test suite"</span><span class="w"> </span>--cwd<span class="w"> </span>~/code/claudectl
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>status<span class="w">                      </span><span class="c1"># how delegated tasks are doing</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>interrupt<span class="w"> </span>--peer<span class="w"> </span>mac-mini-9f2a1b<span class="w"> </span>task_123<span class="w"> </span>stop
+</code></pre></div>
+<h3 id="step-6-move-a-conversation-to-another-machine">Step 6: Move a conversation to another machine</h3>
+<p>Delegation starts fresh work over there. To continue <em>this</em> conversation on
+another machine instead, send the session itself:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>send-session<span class="w"> </span>mac-mini-9f2a1b<span class="w"> </span>&lt;session-id&gt;
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>sessions<span class="w">                    </span><span class="c1"># what this host sent, and what came back</span>
+</code></pre></div>
+<p>From the dashboard, press <strong><code>S</code></strong> on the highlighted session. It lists your
+paired machines, numbered; a digit sends, <code>Esc</code> cancels:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a> send&gt; claudectl → 1) mac-mini-9f2a1b  2) laptop-a3f2  (Esc to cancel)
+</code></pre></div>
+<p>The hotkey checks what it can immediately — that the transcript exists, that
+the machine is paired, that there is an address to dial — and then hands the
+transfer to a background process, because a median transcript is 5.45 MB. So
+the status line says <em>sending</em>, not <em>sent</em>.</p>
+<p><code>claudectl relay sessions</code> tracks what this host has sent, and reaches
+<code>received</code> with the path on the far side and the command that resumes it there
+— the receiver answers on the delivery's own connection, so no listener is
+needed on the sending side.</p>
+<p>A row left at <code>sent</code> means the acknowledgement did not arrive within five
+seconds. The transfer may still have landed; the receiver's log says. A peer
+running 0.78.0 or earlier never acknowledges, so every row stays at <code>sent</code>
+against one of those.</p>
+<p>What arrives is the full message history, tool calls and results included.
+What does not: the working tree and git state, subagent transcripts, running
+processes, local hooks and environment, and the session id itself — the
+receiver forks rather than continuing the same id, so two hosts can never
+diverge on one session. Check out the same commit over there first, or the
+conversation will resume talking about files that aren't where it left them.</p>
+<p>The receiving host prints the command that resumes it. Peers on another OS
+need <code>--remote-cwd</code>, since the sender's own path won't exist there.</p>
+<h3 id="how-the-cluster-view-works">How the cluster view works</h3>
+<p>Each relay advertises its own sessions on every heartbeat (default 30s) and
+writes what its peers report to <code>~/.claudectl/relay/fleet.json</code>. The dashboard
+and <code>relay fleet</code> read that file, so no port or token is needed for the local
+view.</p>
+<p>Consequences worth knowing:</p>
+<ul>
+<li><strong>A relay must be running on each machine.</strong> <code>relay fleet</code> with no snapshot
+  falls back to local sessions and tells you so. On macOS,
+  <a href="#keeping-the-relay-alive"><code>relay install-agent</code></a> keeps one running across
+  logout and reboot; otherwise <code>relay serve</code> is a foreground process that stops
+  when its terminal does.</li>
+<li><strong>A peer that stops reporting disappears</strong> after 90s rather than lingering as
+  a stale row, and the whole snapshot is ignored after 120s (which is how a
+  stopped relay shows up as "no snapshot" instead of a frozen cluster).</li>
+<li><strong>Remote rows carry what the heartbeat carried</strong>: project, status, cost,
+  tokens, elapsed. Live CPU and memory stay local-only.</li>
+</ul>
+<p>The coordinator's HTTP API serves the same unified view to anything that can
+speak HTTP. It binds <code>127.0.0.1</code> and starts only when both <code>--http-port</code> and
+<code>--auth-token</code> are given:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>serve<span class="w"> </span>--http-port<span class="w"> </span><span class="m">9876</span><span class="w"> </span>--auth-token<span class="w"> </span>secret
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer secret"</span><span class="w"> </span>http://localhost:9876/api/sessions
+</code></pre></div>
+<p>Reaching that API from a dashboard on <em>another</em> machine is a second, deliberate
+step, because the API is plaintext HTTP/1.1 and the bearer token crosses the
+wire in the clear. Forward the loopback port instead of widening the listener —
+from the machine running the dashboard:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>ssh<span class="w"> </span>-L<span class="w"> </span><span class="m">9876</span>:127.0.0.1:9876<span class="w"> </span>user@machine-a
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer secret"</span><span class="w"> </span>http://localhost:9876/api/sessions
+</code></pre></div>
+<p>Cloudflare Tunnel and Tailscale Funnel do the same job without SSH. You can
+bind the API to every interface with <code>--http-addr 0.0.0.0</code>; it works, it prints
+a warning at startup, and <a href="#security">Security</a> says why you probably want the
+tunnel.</p>
+<h2 id="keeping-the-relay-alive">Keeping the relay alive</h2>
+<p><code>relay serve</code> is a foreground process. Close the terminal and the relay stops, which means the cluster view on every peer goes stale — <code>relay fleet</code> falls back to local sessions and says so. On macOS, install a launchd agent instead:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>install-agent<span class="w">                    </span><span class="c1"># port 9847</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>install-agent<span class="w"> </span>--port<span class="w"> </span><span class="m">9850</span><span class="w"> </span>--http-port<span class="w"> </span><span class="m">9876</span><span class="w"> </span>--auth-token<span class="w"> </span>secret
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>agent-status
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>uninstall-agent
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>Installed the relay agent.
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>  plist:  /Users/you/Library/LaunchAgents/io.claudectl.relay.plist
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>  label:  io.claudectl.relay
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>  port:   9847
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>  logs:   /Users/you/.claudectl/relay/agent.out.log
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>          /Users/you/.claudectl/relay/agent.err.log
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>It is running now, starts at login, and restarts if it dies.
+</code></pre></div>
+<p>The agent starts at login (<code>RunAtLoad</code>) and is restarted if it exits (<code>KeepAlive</code>), so a crash or a kill brings it straight back. <code>claudectl doctor</code> reports whether it is running.</p>
+<p>Details worth knowing:</p>
+<ul>
+<li><strong>Re-run <code>install-agent</code> to change anything.</strong> It replaces the plist and reloads the service, so changing a port or picking up a <code>brew upgrade</code> is one command. Running it twice is harmless.</li>
+<li><strong>Uninstall never leaves an orphan.</strong> The plist is removed even if unloading complains — an orphaned plist that keeps resurrecting a service you thought you removed is the usual way this feature goes wrong. <code>agent-status</code> also detects the reverse case (loaded, plist missing) and tells you to run <code>uninstall-agent</code>.</li>
+<li><strong><code>--auth-token</code> lands in the plist</strong>, under <code>~/Library/LaunchAgents</code>, readable by your user. The install output says so when you pass one.</li>
+<li><strong>The relay is killed abruptly on unload</strong>, not asked to shut down. That is safe: <code>fleet.json</code> and the knowledge store are both written atomically, so the worst case is losing the current one-second tick rather than a torn file.</li>
+</ul>
+<h3 id="linux">Linux</h3>
+<p>There is no launchd, and <code>install-agent</code> says so rather than failing silently. The <code>systemd --user</code> equivalent — write <code>~/.config/systemd/user/claudectl-relay.service</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">[Unit]</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="na">Description</span><span class="o">=</span><span class="s">claudectl relay</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="k">[Service]</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="na">ExecStart</span><span class="o">=</span><span class="s">%h/.cargo/bin/claudectl relay serve --port 9847</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="na">Restart</span><span class="o">=</span><span class="s">always</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="k">[Install]</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="na">WantedBy</span><span class="o">=</span><span class="s">default.target</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>systemctl<span class="w"> </span>--user<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>claudectl-relay
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>loginctl<span class="w"> </span>enable-linger<span class="w"> </span><span class="nv">$USER</span><span class="w">     </span><span class="c1"># so it survives logout</span>
+</code></pre></div>
+<h2 id="three-ways-to-share-a-code">Three Ways to Share a Code</h2>
+<p>Every invite generates three formats. Pick whichever fits the situation:</p>
+<h3 id="relay-code-compact-no-ip-visible">Relay Code (compact, no IP visible)</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>YEK-AGA-YHK-QAA-BM
+</code></pre></div>
+<p>15 characters. Speakable over a phone call. Encodes the IP, port, and key without exposing any of them in readable form.</p>
+<h3 id="word-phrase-memorable">Word Phrase (memorable)</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>invite<span class="w"> </span>--words
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>fur-hue-ace-bid-ice-ape-cod-elk-ace
+</code></pre></div>
+<p>9 common English words. Easier to dictate than alphanumeric codes.</p>
+<h3 id="invite-link-qr-code">Invite Link + QR Code</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>invite<span class="w"> </span>--qr
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>cctl://laptop-a3f2@192.168.1.50:9847/k/a3f29b1cd4e5f678
+</code></pre></div>
+<p>Plus a scannable QR code in the terminal (requires <code>qrencode</code> installed).</p>
+<p>The <code>join</code> command auto-detects the format:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>join<span class="w"> </span>YEK-AGA-YHK-QAA-BM<span class="w">           </span><span class="c1"># relay code</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>join<span class="w"> </span>fur-hue-ace-bid-ice-...<span class="s2">"        # word phrase</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="s2">claudectl relay join cctl://laptop-a3f2@..."</span><span class="w">         </span><span class="c1"># invite link</span>
+</code></pre></div>
+<h2 id="lan-discovery">LAN Discovery</h2>
+<p>Find nearby claudectl instances without codes:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>discover
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>Found 2 instance(s):
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>  IDENTITY             ADDRESS                  VERSION
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>  ────────────────────────────────────────────────────────
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>  laptop-a3f2          192.168.1.50:9847        v0.40.0
+<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>  ci-runner-9d1e       192.168.1.101:9847       v0.40.0
+</code></pre></div>
+<p>Discovery is <strong>passive</strong>: <code>relay serve</code> broadcasts a small announcement on UDP 9848 every 5 seconds, and <code>relay discover</code> listens for 6 seconds — one second longer than the interval, so every announcing peer is heard at least once. <code>discover</code> sends nothing itself.</p>
+<p>Turn the broadcast off with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="k">[relay]</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="n">lan_announce</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<blockquote>
+<p>Before v0.66.0 nothing ever sent an announcement, so <code>relay discover</code> always reported "no instances found". If you tried it on an older build and concluded LAN discovery was broken, it was.</p>
+</blockquote>
+<h2 id="hive-identity">Hive Identity</h2>
+<p>By default a hive has <strong>no name</strong>. It is whatever your relay peers happen to be — the transitive closure of who you paired with. Nothing is advertised, nothing is discoverable, and that is the state every install starts in.</p>
+<p>Naming one is what makes it possible to advertise, find and join a hive <em>as such</em>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>identity<span class="w">                      </span><span class="c1"># show it, or "unnamed"</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>identity<span class="w"> </span><span class="nb">set</span><span class="w"> </span>--name<span class="w"> </span>barrys-hive<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="w">  </span>--description<span class="w"> </span><span class="s2">"Rust CLI + Claude Code practices"</span>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>identity<span class="w"> </span>clear<span class="w"> </span>--yes<span class="w">          </span><span class="c1"># back to unnamed</span>
+</code></pre></div>
+<p>Stored at <code>~/.claudectl/hive/identity.json</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="p">{</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="w">  </span><span class="nt">"hive_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"hv_3a9f21"</span><span class="p">,</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"barrys-hive"</span><span class="p">,</span>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="w">  </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Rust CLI + Claude Code practices"</span><span class="p">,</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="w">  </span><span class="nt">"join_policy"</span><span class="p">:</span><span class="w"> </span><span class="s2">"invite"</span><span class="p">,</span>
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="w">  </span><span class="nt">"created_ms"</span><span class="p">:</span><span class="w"> </span><span class="mi">1791210482180</span>
+<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="p">}</span>
+</code></pre></div>
+<p>Renaming keeps the <code>hive_id</code> and the creation time — a rename is not a new hive, and peers who know it by id keep recognising it. The name must be usable as a capability scope qualifier (<code>[A-Za-z0-9._-]</code>), because a later phase grants <code>hive.read:&lt;name&gt;</code>.</p>
+<h3 id="join-policy">Join policy</h3>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>invite</code></td>
+<td>A link or code is required. The default.</td>
+</tr>
+<tr>
+<td><code>ask</code></td>
+<td>You approve each join request.</td>
+</tr>
+<tr>
+<td><code>open</code></td>
+<td>Anyone who can see your LAN broadcast may join, without approval.</td>
+</tr>
+</tbody>
+</table>
+<p><code>open</code> is allowed, but it asks first:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>identity<span class="w"> </span><span class="nb">set</span><span class="w"> </span>--join-policy<span class="w"> </span>open
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>WARNING: join_policy = open lets ANY machine that can see your LAN broadcast
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>join this hive without approval. Joining a hive means receiving your distilled
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>preferences and insights — the patterns the brain learned from how you work. On
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a>a shared or untrusted network (an office, a cafe, a conference) that is everyone
+<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a>on it.
+<a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a>
+<a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a>  `ask` gives you the same discoverability and still lets you approve each
+<a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a>  request. Prefer it unless you specifically want hands-off joining on a network
+<a id="__codelineno-30-9" name="__codelineno-30-9" href="#__codelineno-30-9"></a>  you control.
+<a id="__codelineno-30-10" name="__codelineno-30-10" href="#__codelineno-30-10"></a>
+<a id="__codelineno-30-11" name="__codelineno-30-11" href="#__codelineno-30-11"></a>Open this hive to anyone on your LAN? [y/N]
+</code></pre></div>
+<p>Two details worth knowing:</p>
+<ul>
+<li><strong>Consent is recorded, not just prompted.</strong> Confirming writes <code>open_acknowledged_ms</code> into the record. <code>identity.json</code> is an ordinary file you can edit, so a prompt alone would be theatre — hand-editing <code>"join_policy": "open"</code> leaves it <strong>not in force</strong>, and claudectl treats it as <code>invite</code> until you run the command and confirm. <code>hive identity</code> says so plainly when that happens.</li>
+<li><strong>No terminal means <code>--yes</code> is required</strong>, not assumed. In a script or CI, <code>--join-policy open</code> fails without it. Defaulting to yes in a pipe is how a permissive setting gets made by accident.</li>
+</ul>
+<p>Moving away from <code>open</code> drops the acknowledgement, so coming back to it asks again.</p>
+<h3 id="inviting-someone-into-the-hive">Inviting someone into the hive</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>invite<span class="w">              </span><span class="c1"># link + relay code</span>
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>invite<span class="w"> </span>--words<span class="w">      </span><span class="c1"># also the memorable phrase</span>
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>invite<span class="w"> </span>--qr<span class="w">         </span><span class="c1"># QR of the link</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>Inviting to hive "barrys-hive" (hv_3a9f21), join_policy=ask
+<a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>  Each join will wait for you to approve it (claudectl hive requests).
+<a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>
+<a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a>  HIVE LINK:   cctl://hive/hv_3a9f21?a=laptop-a3f2@192.168.1.50:9847&amp;k=cbc3179ea1a8bb70&amp;n=barrys-hive&amp;p=ask
+<a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a>
+<a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a>  RELAY CODE:  YCU-AIG-B7L-VNU-HAS-MFS-BRA
+<a id="__codelineno-32-7" name="__codelineno-32-7" href="#__codelineno-32-7"></a>    (the code and the phrase pair them with this machine; only
+<a id="__codelineno-32-8" name="__codelineno-32-8" href="#__codelineno-32-8"></a>     the link names the hive — either way they end up asking to join)
+</code></pre></div>
+<p>The invite carries the same address and PSK a peer invite does, because the
+holder still has to reach this machine. <strong>Only the link carries the hive id</strong> —
+the relay code and the word phrase spend all thirteen of their bytes on the
+address and the key. That costs nothing: a code pairs you with the machine, and
+the machine then answers for whichever hive it runs.</p>
+<blockquote>
+<p>The RFC sketched this link as <code>cctl://hive/&lt;hive_id&gt;?k=&lt;psk&gt;&amp;n=&lt;name&gt;</code>, which
+cannot be used — it names a hive but no machine, so a holder has nothing to
+connect to. The address is carried in <code>a=&lt;identity&gt;@&lt;host:port&gt;</code>, the same pair
+the peer link already puts before its <code>/k/</code>.</p>
+</blockquote>
+<p><code>hive invite</code> warns if nothing is listening on the port it is about to hand out,
+because an invite minted while the relay is down cannot be redeemed.</p>
+<h3 id="joining-a-hive">Joining a hive</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>join<span class="w"> </span>cctl://hive/hv_3a9f21?a<span class="o">=</span>...<span class="w">     </span><span class="c1"># link</span>
+<a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>join<span class="w"> </span>YCU-AIG-B7L-VNU-HAS-MFS-BRA<span class="w">     </span><span class="c1"># relay code</span>
+<a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>join<span class="w"> </span>nut-may-aim-bud-era-cow-...<span class="w">     </span><span class="c1"># word phrase</span>
+</code></pre></div>
+<p>All three pair with the machine and then <em>ask</em> to join. What happens next is the
+host's <code>join_policy</code> to decide — holding a link is not the same as being let in:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>Hive "barrys-hive" (hv_3a9f21), join_policy=ask
+<a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>Connecting to 192.168.1.50:9847...
+<a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a>Paired with laptop-a3f2 (192.168.1.50:9847)
+<a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a>Asking to join "barrys-hive"...
+<a id="__codelineno-34-5" name="__codelineno-34-5" href="#__codelineno-34-5"></a>Asked to join "barrys-hive" — waiting for its owner to approve. Nothing is
+<a id="__codelineno-34-6" name="__codelineno-34-6" href="#__codelineno-34-6"></a>shared until they do.
+<a id="__codelineno-34-7" name="__codelineno-34-7" href="#__codelineno-34-7"></a>
+<a id="__codelineno-34-8" name="__codelineno-34-8" href="#__codelineno-34-8"></a>To start exchanging knowledge, connect to the hive:
+<a id="__codelineno-34-9" name="__codelineno-34-9" href="#__codelineno-34-9"></a>
+<a id="__codelineno-34-10" name="__codelineno-34-10" href="#__codelineno-34-10"></a>  claudectl relay connect 192.168.1.50:9847
+</code></pre></div>
+<p>That last line matters: <code>hive join</code> records membership and exits. <code>relay serve</code>
+listens but does not dial out, so the joiner is the side that has to connect for
+knowledge to actually move.</p>
+<p><code>claudectl hive status</code> always says where you stand:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>  Hive membership: asked to join "barrys-hive" via laptop-a3f2 — awaiting owner approval
+</code></pre></div>
+<p>A link that names a <em>different</em> hive is refused, which is what stops an invite
+for someone else's hive from quietly joining yours.</p>
+<h3 id="approving-who-gets-in">Approving who gets in</h3>
+<p>With <code>join_policy: ask</code>, each request waits for you:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>requests<span class="w">                        </span><span class="c1"># who is waiting, and who is in</span>
+<a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>requests<span class="w"> </span>approve<span class="w"> </span>laptop-a3f2
+<a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>requests<span class="w"> </span>deny<span class="w"> </span>laptop-a3f2
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>Hive "barrys-hive" (hv_3a9f21), join_policy=ask
+<a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a>
+<a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a>1 waiting for you:
+<a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a>
+<a id="__codelineno-37-5" name="__codelineno-37-5" href="#__codelineno-37-5"></a>  PEER                         REQUEST                ASKED
+<a id="__codelineno-37-6" name="__codelineno-37-6" href="#__codelineno-37-6"></a>  ────────────────────────────────────────────────────────────────────────
+<a id="__codelineno-37-7" name="__codelineno-37-7" href="#__codelineno-37-7"></a>  laptop-a3f2                  jr_1791349617144_0     just now
+</code></pre></div>
+<p>Approving tells the peer immediately if it is reachable; otherwise it finds out
+the next time it connects or re-runs <code>hive join</code>. Denying leaves the peer
+<em>paired</em> — a denial is about the hive, not the machine — but it gets nothing from
+the hive, and re-asking does not undo it.</p>
+<p><code>hooks.on_hive_join_request</code> fires when a request is queued, so you do not have
+to be watching the terminal:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="k">[hooks.on_hive_join_request]</span>
+<a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="n">run</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"osascript -e 'display notification </span><span class="se">\"</span><span class="s2">$CLAUDECTL_HIVE_JOIN_PEER wants to join</span><span class="se">\"</span><span class="s2">'"</span>
+</code></pre></div>
+<h3 id="joining-as-a-reader">Joining as a reader</h3>
+<p>A reader meshes with the hive and receives its knowledge, and never contributes
+any — the hive analogue of read-only project access. It is the one membership
+tier the owner hands out explicitly, with a capability grant:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="c1"># the owner, once</span>
+<a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>claudectl<span class="w"> </span>access<span class="w"> </span>grant<span class="w"> </span>--scopes<span class="w"> </span>hive.read<span class="w"> </span>--project<span class="w"> </span>barrys-hive<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="s2">"alice, read-only"</span><span class="w"> </span>--expires<span class="w"> </span>30d
+<a id="__codelineno-39-4" name="__codelineno-39-4" href="#__codelineno-39-4"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>invite
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a><span class="c1"># the reader</span>
+<a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>join<span class="w"> </span>cctl://hive/hv_3a9f21?a<span class="o">=</span>...<span class="w"> </span>--grant<span class="w"> </span>cctl_gr_cf827c_9efd83d0…
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>Presenting a hive.read grant — asking to join as a reader.
+<a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a>Joined hive "read-hive" as a reader — you will receive its knowledge, and
+<a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a>nothing of yours is sent.
+</code></pre></div>
+<p><strong>Both halves are needed.</strong> The invite is transport authentication — it pairs the
+two machines. The grant is the hive-level role, and says what the peer may do
+once paired. Neither alone is enough, and <code>--project</code> on <code>access grant</code> names the
+<em>hive</em> here, because <code>hive.read:&lt;hive-name&gt;</code> is the scope.</p>
+<p><strong>A grant admits directly, even on an <code>ask</code> hive.</strong> The owner already decided when
+they minted it; queueing the peer would be asking them the same question twice.
+So a reader is never in the <code>hive requests</code> queue — it appears straight away in
+the members list, with its role:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>  PEER                         ROLE         HOW            ADMITTED
+<a id="__codelineno-42-2" name="__codelineno-42-2" href="#__codelineno-42-2"></a>  barrys-mac-b0ceaa2b          reader       grant          just now
+<a id="__codelineno-42-3" name="__codelineno-42-3" href="#__codelineno-42-3"></a>
+<a id="__codelineno-42-4" name="__codelineno-42-4" href="#__codelineno-42-4"></a>  1 of them are readers: they receive this hive's knowledge and
+<a id="__codelineno-42-5" name="__codelineno-42-5" href="#__codelineno-42-5"></a>  contribute none of their own.
+</code></pre></div>
+<p>What a reader may and may not do:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Reader</th>
+<th>Contributor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Receive knowledge units</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Ask for a snapshot</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Contribute units</td>
+<td><strong>no</strong></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Appear in <code>hive requests</code> queue</td>
+<td>no — the grant is the approval</td>
+<td>only under <code>ask</code></td>
+</tr>
+</tbody>
+</table>
+<p>A reader's attempted contribution is <strong>refused on the wire</strong>, not silently
+dropped. The host answers with a rejection naming the reason and how many units
+it discarded, and the reader prints it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>[2026-10-07T09:17:28Z] barrys-mac-fc78cb5c refused our knowledge:
+<a id="__codelineno-43-2" name="__codelineno-43-2" href="#__codelineno-43-2"></a>  this hive admitted you as a reader — readers receive knowledge but do not
+<a id="__codelineno-43-3" name="__codelineno-43-3" href="#__codelineno-43-3"></a>  contribute it (2 unit(s) dropped)
+</code></pre></div>
+<p>Silently ignoring it would be indistinguishable, at the reader, from a network
+fault.</p>
+<p>Readers need nothing from <code>hive trust</code>: <code>TrustTier</code> weighs how much a peer's
+claims count for, and a reader never makes any, so merging, drift detection and
+concordance checking are unchanged by this tier.</p>
+<p>Three limits worth knowing before you hand out a reader grant:</p>
+<ul>
+<li><strong>The roster is authoritative after admission.</strong> Revoking the grant does
+  <strong>not</strong> demote an existing reader — it only stops <em>new</em> admissions. The grant
+  id is recorded on the member file so you can see the connection. Removing a
+  member is <code>rm ~/.claudectl/hive/members/&lt;peer&gt;.json</code> for now; making revocation
+  reach the roster is a follow-up.</li>
+<li><strong>Renaming the hive invalidates every outstanding reader grant,</strong> because the
+  hive name is the scope qualifier. <code>hive identity set --name</code> warns and lists
+  the grants that will stop working.</li>
+<li><strong>A reader is still a paired peer.</strong> Read-only is about the hive, not about the
+  relay: the two machines can still exchange heartbeats and fleet data.</li>
+</ul>
+<h3 id="what-membership-actually-gates">What membership actually gates</h3>
+<p>Knowledge is exchanged only with hive <strong>members</strong>, and in both directions. A peer
+that is merely pending receives no units <em>and</em> cannot contribute any — gating only
+what you send would let an unapproved peer push into the hive while getting
+nothing back.</p>
+<p>Three things worth knowing:</p>
+<ul>
+<li><strong>An unnamed hive gates nothing.</strong> Membership only exists once a hive has a
+  name, so nothing changes for anyone who has not named one.</li>
+<li><strong>Naming a hive admits everyone you had already paired with.</strong> They were
+  trusted before the hive had a name, and naming it does not withdraw that —
+  otherwise gossip would stop dead until every peer re-joined. The command says
+  who it admitted. A peer you have denied is not admitted this way.</li>
+<li><strong>A reader receives but never contributes</strong>, which is the one case where the
+  two directions differ. See <em>Joining as a reader</em> above.</li>
+<li><strong><code>invite</code> and <code>open</code> are the same rule at the host today.</strong> The PSK is
+  per-host rather than per-invite, so the host genuinely cannot tell which link a
+  peer used — pairing <em>is</em> the credential. The two policies differ in your intent
+  and in what gets advertised on the LAN, not yet in what the host enforces. Only
+  <code>ask</code> currently changes who gets in. Per-invite tokens are the follow-up that
+  would make <code>invite</code> enforce what its name says.</li>
+</ul>
+<p>Membership is stored as one create-only file per peer under
+<code>~/.claudectl/hive/members/</code>, so the gossip gate is a single <code>stat</code> and
+<code>relay serve</code> admitting a peer cannot collide with <code>hive requests approve</code>
+running in another process. A joiner's own standing is in
+<code>~/.claudectl/hive/membership.json</code> — one hive per machine.</p>
+<h3 id="finding-hives-on-the-lan">Finding hives on the LAN</h3>
+<p>Once a hive has a name, <code>relay serve</code> advertises it alongside the machine's own announcement, and <code>hive discover</code> lists hives rather than machines:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>discover
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>Found 1 hive(s):
+<a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a>
+<a id="__codelineno-45-3" name="__codelineno-45-3" href="#__codelineno-45-3"></a>  HIVE                 POLICY     PEERS   UNITS   MACHINES
+<a id="__codelineno-45-4" name="__codelineno-45-4" href="#__codelineno-45-4"></a>  ──────────────────────────────────────────────────────────────────
+<a id="__codelineno-45-5" name="__codelineno-45-5" href="#__codelineno-45-5"></a>  barrys-hive          invite     3       412     1
+<a id="__codelineno-45-6" name="__codelineno-45-6" href="#__codelineno-45-6"></a>                       hv_3a9f21
+<a id="__codelineno-45-7" name="__codelineno-45-7" href="#__codelineno-45-7"></a>                         laptop-a3f2@192.168.1.50:9847
+</code></pre></div>
+<p>Rows are grouped by hive id, so several machines in one hive collect under it. <code>relay discover</code> also grew a HIVE column, showing <code>—</code> for a machine whose hive is unnamed.</p>
+<p>Three things to know:</p>
+<ul>
+<li><strong>An unnamed hive advertises nothing.</strong> No <code>hive</code> key is added to the datagram at all, so an unnamed machine sends exactly what it always sent and does not appear in <code>hive discover</code> — only in <code>relay discover</code>.</li>
+<li><strong>The policy advertised is the effective one.</strong> A hand-edited <code>open</code> that was never confirmed goes on the wire as <code>invite</code>. The consent check lives in the stored record, not in the CLI, precisely so this path cannot leak it.</li>
+<li><strong>Renaming takes a relay restart.</strong> The identity is read once at startup, like the index in <code>query serve</code>. If you run the launchd agent, <code>relay install-agent</code> again (or <code>launchctl kickstart -k</code>) picks up the new name.</li>
+</ul>
+<p>Peer and unit counts are advisory — they are snapshots from whenever the announcer last ticked, at most one interval old.</p>
+<blockquote>
+<p>Joining a hive by link is a later phase; this makes one findable.</p>
+</blockquote>
+<h2 id="hive-mind-knowledge-sharing">Hive Mind: Knowledge Sharing</h2>
+<p>The hive mind is the layer that makes connected brains smarter.</p>
+<h3 id="what-propagation-actually-does-today">What propagation actually does today</h3>
+<p>Both ends of a connection offer each other whatever the other has not seen,
+every 12 seconds, plus immediately when the serving side distills something
+new. It does not matter which machine dialled: <code>relay serve</code> and <code>relay join</code>
+run the same gossip code.</p>
+<p>The offer is incremental — each side records what it has already sent a given
+peer — so a tick with nothing new costs nothing, and one plain interval covers
+every case that would otherwise need its own trigger: connecting, reconnecting,
+being approved after a spell in the pending queue, and a unit distilled while
+the link was down.</p>
+<p>Membership gates it at both ends. The host sends only to peers on its roster
+and merges only from contributors; a peer that joined as a
+<a href="#joining-as-a-reader">reader</a> does not push its own units upstream. A refusal
+is sent back on the wire rather than silently dropped, and the refused batch is
+re-offered once the gate opens, so approving a queued request does not lose the
+knowledge that was turned away before it.</p>
+<p>One limit worth knowing: <strong><code>relay serve</code> does not dial out.</strong> It redials a peer
+it has <em>lost</em>, but it does not connect to known peers at startup. Somebody has
+to dial.</p>
+<p>A second connection from the same machine — <code>claudectl hive join</code> opens its own
+while <code>relay join</code> holds a durable one — displaces the first, which then closes
+and is redialled within about ten seconds. Knowledge flows either way round
+(#459); you may see one <code>Peer ... disconnected</code> and <code>Reconnected to ...</code> pair in
+the log while that happens.</p>
+<h3 id="how-it-works-once-it-does-fire">How it works once it does fire</h3>
+<ol>
+<li>Your brain distills patterns every 10 decisions (e.g., "approve <code>cargo test</code> at 95% confidence")</li>
+<li>These patterns become <strong>knowledge units</strong> stored in <code>~/.claudectl/hive/knowledge.jsonl</code></li>
+<li>When connected to peers, knowledge units sync via <strong>gossip protocol</strong> — new units are sent to all peers</li>
+<li>Incoming knowledge is <strong>merged</strong> using conflict resolution — your local preferences always win</li>
+<li>Peer knowledge appears in the brain prompt with trust labels</li>
+</ol>
+<h3 id="trust-tiers">Trust tiers</h3>
+<p>Each peer has a trust level (0.0 to 1.0) that determines how their knowledge appears in the brain prompt:</p>
+<table>
+<thead>
+<tr>
+<th>Trust</th>
+<th>Tier</th>
+<th>Label in prompt</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>&gt;= 0.8</td>
+<td>Confirmed</td>
+<td><code>[hive]</code></td>
+<td>High confidence, treated as reliable</td>
+</tr>
+<tr>
+<td>&gt;= 0.5</td>
+<td>Suggested</td>
+<td><code>[hive, suggested]</code></td>
+<td>Default for new peers</td>
+</tr>
+<tr>
+<td>&gt;= 0.2</td>
+<td>Unverified</td>
+<td><code>[hive, unverified]</code></td>
+<td>Low confidence, informational only</td>
+</tr>
+<tr>
+<td>&lt; 0.2</td>
+<td>Ignored</td>
+<td>Not shown</td>
+<td>Knowledge excluded from prompts</td>
+</tr>
+</tbody>
+</table>
+<p>Trust adjusts automatically: when your brain makes a decision that agrees with hive knowledge, the source peer's trust drifts up (+0.01). Disagree, it drifts down (-0.01).</p>
+<h3 id="view-and-manage-knowledge">View and manage knowledge</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a><span class="c1"># Overview</span>
+<a id="__codelineno-46-2" name="__codelineno-46-2" href="#__codelineno-46-2"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>status
+<a id="__codelineno-46-3" name="__codelineno-46-3" href="#__codelineno-46-3"></a>
+<a id="__codelineno-46-4" name="__codelineno-46-4" href="#__codelineno-46-4"></a><span class="c1"># List all knowledge units</span>
+<a id="__codelineno-46-5" name="__codelineno-46-5" href="#__codelineno-46-5"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>knowledge
+<a id="__codelineno-46-6" name="__codelineno-46-6" href="#__codelineno-46-6"></a>
+<a id="__codelineno-46-7" name="__codelineno-46-7" href="#__codelineno-46-7"></a><span class="c1"># Filter by source peer</span>
+<a id="__codelineno-46-8" name="__codelineno-46-8" href="#__codelineno-46-8"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>knowledge<span class="w"> </span>--from<span class="w"> </span>ci-runner
+<a id="__codelineno-46-9" name="__codelineno-46-9" href="#__codelineno-46-9"></a>
+<a id="__codelineno-46-10" name="__codelineno-46-10" href="#__codelineno-46-10"></a><span class="c1"># Filter by scope</span>
+<a id="__codelineno-46-11" name="__codelineno-46-11" href="#__codelineno-46-11"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>knowledge<span class="w"> </span>--scope<span class="w"> </span>project:myapp
+<a id="__codelineno-46-12" name="__codelineno-46-12" href="#__codelineno-46-12"></a>
+<a id="__codelineno-46-13" name="__codelineno-46-13" href="#__codelineno-46-13"></a><span class="c1"># Export all knowledge as JSON</span>
+<a id="__codelineno-46-14" name="__codelineno-46-14" href="#__codelineno-46-14"></a>claudectl<span class="w"> </span>hive<span class="w"> </span><span class="nb">export</span><span class="w"> </span>&gt;<span class="w"> </span>team-knowledge.json
+<a id="__codelineno-46-15" name="__codelineno-46-15" href="#__codelineno-46-15"></a>
+<a id="__codelineno-46-16" name="__codelineno-46-16" href="#__codelineno-46-16"></a><span class="c1"># Import knowledge from a file</span>
+<a id="__codelineno-46-17" name="__codelineno-46-17" href="#__codelineno-46-17"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>import<span class="w"> </span>team-knowledge.json
+<a id="__codelineno-46-18" name="__codelineno-46-18" href="#__codelineno-46-18"></a>
+<a id="__codelineno-46-19" name="__codelineno-46-19" href="#__codelineno-46-19"></a><span class="c1"># Remove a specific unit</span>
+<a id="__codelineno-46-20" name="__codelineno-46-20" href="#__codelineno-46-20"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>forget<span class="w"> </span>ku_1745539200_3
+</code></pre></div>
+<h3 id="manage-trust">Manage trust</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a><span class="c1"># Show all peer trust levels</span>
+<a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>trust
+<a id="__codelineno-47-3" name="__codelineno-47-3" href="#__codelineno-47-3"></a>
+<a id="__codelineno-47-4" name="__codelineno-47-4" href="#__codelineno-47-4"></a><span class="c1"># Show trust for one peer</span>
+<a id="__codelineno-47-5" name="__codelineno-47-5" href="#__codelineno-47-5"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>trust<span class="w"> </span>ci-runner
+<a id="__codelineno-47-6" name="__codelineno-47-6" href="#__codelineno-47-6"></a>
+<a id="__codelineno-47-7" name="__codelineno-47-7" href="#__codelineno-47-7"></a><span class="c1"># Manually set trust</span>
+<a id="__codelineno-47-8" name="__codelineno-47-8" href="#__codelineno-47-8"></a>claudectl<span class="w"> </span>hive<span class="w"> </span>trust<span class="w"> </span>ci-runner<span class="w"> </span><span class="m">0</span>.9
+</code></pre></div>
+<h2 id="remote-task-delegation">Remote Task Delegation</h2>
+<p>Delegate orchestrator tasks to connected peers. The remote machine spawns its own Claude Code session and reports status back.</p>
+<h3 id="task-file-with-peer-routing">Task file with peer routing</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a><span class="p">{</span>
+<a id="__codelineno-48-2" name="__codelineno-48-2" href="#__codelineno-48-2"></a><span class="w">  </span><span class="nt">"tasks"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-48-4" name="__codelineno-48-4" href="#__codelineno-48-4"></a><span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fix-tests"</span><span class="p">,</span>
+<a id="__codelineno-48-5" name="__codelineno-48-5" href="#__codelineno-48-5"></a><span class="w">      </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Fix the failing auth tests"</span><span class="p">,</span>
+<a id="__codelineno-48-6" name="__codelineno-48-6" href="#__codelineno-48-6"></a><span class="w">      </span><span class="nt">"cwd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/path/to/project"</span><span class="p">,</span>
+<a id="__codelineno-48-7" name="__codelineno-48-7" href="#__codelineno-48-7"></a><span class="w">      </span><span class="nt">"peer"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ci-runner-9d1e"</span>
+<a id="__codelineno-48-8" name="__codelineno-48-8" href="#__codelineno-48-8"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-48-9" name="__codelineno-48-9" href="#__codelineno-48-9"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-48-10" name="__codelineno-48-10" href="#__codelineno-48-10"></a><span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"update-docs"</span><span class="p">,</span>
+<a id="__codelineno-48-11" name="__codelineno-48-11" href="#__codelineno-48-11"></a><span class="w">      </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Update the API docs"</span><span class="p">,</span>
+<a id="__codelineno-48-12" name="__codelineno-48-12" href="#__codelineno-48-12"></a><span class="w">      </span><span class="nt">"cwd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/path/to/project"</span>
+<a id="__codelineno-48-13" name="__codelineno-48-13" href="#__codelineno-48-13"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-48-14" name="__codelineno-48-14" href="#__codelineno-48-14"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-48-15" name="__codelineno-48-15" href="#__codelineno-48-15"></a><span class="p">}</span>
+</code></pre></div>
+<p>Tasks with <code>"peer"</code> are delegated to the remote machine. Tasks without <code>"peer"</code> run locally. Dependencies work across local and remote tasks.</p>
+<h3 id="manual-delegation">Manual delegation</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>delegate<span class="w"> </span>ci-runner<span class="w"> </span><span class="s1">'Fix the auth tests'</span><span class="w"> </span>--cwd<span class="w"> </span>/project
+</code></pre></div>
+<h3 id="interrupts">Interrupts</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a><span class="c1"># Nudge a remote task (informational)</span>
+<a id="__codelineno-50-2" name="__codelineno-50-2" href="#__codelineno-50-2"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>interrupt<span class="w"> </span>task_123<span class="w"> </span>nudge<span class="w"> </span><span class="s1">'dependency resolved'</span>
+<a id="__codelineno-50-3" name="__codelineno-50-3" href="#__codelineno-50-3"></a>
+<a id="__codelineno-50-4" name="__codelineno-50-4" href="#__codelineno-50-4"></a><span class="c1"># Stop a remote task</span>
+<a id="__codelineno-50-5" name="__codelineno-50-5" href="#__codelineno-50-5"></a>claudectl<span class="w"> </span>relay<span class="w"> </span>interrupt<span class="w"> </span>task_123<span class="w"> </span>stop<span class="w"> </span><span class="s1">'no longer needed'</span>
+</code></pre></div>
+<h2 id="tui-integration">TUI Integration</h2>
+<h3 id="peers-panel">Peers panel</h3>
+<p>Press <code>p</code> in the TUI to toggle the peers panel:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a>┌─ Peers (2) ──────────────────────────────────────────────┐
+<a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a>│ ● laptop-a3f2      connected     trust:0.8  ↑12 ↓8 kb   │
+<a id="__codelineno-51-3" name="__codelineno-51-3" href="#__codelineno-51-3"></a>│ ● ci-runner-9d1e   connected     trust:0.5  ↑42 ↓0 kb   │
+<a id="__codelineno-51-4" name="__codelineno-51-4" href="#__codelineno-51-4"></a>└──────────────────────────────────────────────────────────┘
+</code></pre></div>
+<h3 id="brain-prompt-integration">Brain prompt integration</h3>
+<p>When the brain evaluates a session, hive knowledge appears as a separate section:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a>## Hive Knowledge (2 peers, 15 units)
+<a id="__codelineno-52-2" name="__codelineno-52-2" href="#__codelineno-52-2"></a>- [hive] [Bash, cargo test] approve (95%) — 20 decisions from laptop-a3f2
+<a id="__codelineno-52-3" name="__codelineno-52-3" href="#__codelineno-52-3"></a>- [hive, suggested] [Write, *.lock] deny (88%) — 12 decisions from ci-runner
+</code></pre></div>
+<h2 id="configuration">Configuration</h2>
+<p>Add to <code>.claudectl.toml</code> or <code>~/.config/claudectl/config.toml</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a><span class="k">[relay]</span>
+<a id="__codelineno-53-2" name="__codelineno-53-2" href="#__codelineno-53-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">                    </span><span class="c1"># start relay with TUI/brain</span>
+<a id="__codelineno-53-3" name="__codelineno-53-3" href="#__codelineno-53-3"></a><span class="n">listen_port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">9847</span><span class="w">                </span><span class="c1"># TCP port for peer connections</span>
+<a id="__codelineno-53-4" name="__codelineno-53-4" href="#__codelineno-53-4"></a><span class="n">listen_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"0.0.0.0"</span><span class="w">           </span><span class="c1"># bind address — peer transport only, not the HTTP API</span>
+<a id="__codelineno-53-5" name="__codelineno-53-5" href="#__codelineno-53-5"></a><span class="n">max_peers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="w">                     </span><span class="c1"># maximum connected peers</span>
+<a id="__codelineno-53-6" name="__codelineno-53-6" href="#__codelineno-53-6"></a><span class="n">heartbeat_interval_secs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span><span class="w">      </span><span class="c1"># heartbeat frequency</span>
+<a id="__codelineno-53-7" name="__codelineno-53-7" href="#__codelineno-53-7"></a><span class="n">reconnect_max_secs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">60</span><span class="w">           </span><span class="c1"># max reconnect backoff</span>
+<a id="__codelineno-53-8" name="__codelineno-53-8" href="#__codelineno-53-8"></a><span class="n">auto_connect</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span><span class="w">                 </span><span class="c1"># list of "host:port" to auto-connect</span>
+<a id="__codelineno-53-9" name="__codelineno-53-9" href="#__codelineno-53-9"></a><span class="n">http_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"127.0.0.1"</span><span class="w">           </span><span class="c1"># bind address for the coordinator HTTP API.</span>
+<a id="__codelineno-53-10" name="__codelineno-53-10" href="#__codelineno-53-10"></a><span class="w">                                  </span><span class="c1"># Deliberately loopback, and deliberately</span>
+<a id="__codelineno-53-11" name="__codelineno-53-11" href="#__codelineno-53-11"></a><span class="w">                                  </span><span class="c1"># separate from listen_addr.</span>
+<a id="__codelineno-53-12" name="__codelineno-53-12" href="#__codelineno-53-12"></a><span class="c1"># http_port = 9876                # no default; unset means no HTTP API at all</span>
+<a id="__codelineno-53-13" name="__codelineno-53-13" href="#__codelineno-53-13"></a><span class="c1"># auth_token = "…"                # no default; the API's bearer token</span>
+<a id="__codelineno-53-14" name="__codelineno-53-14" href="#__codelineno-53-14"></a>
+<a id="__codelineno-53-15" name="__codelineno-53-15" href="#__codelineno-53-15"></a><span class="k">[hive]</span>
+<a id="__codelineno-53-16" name="__codelineno-53-16" href="#__codelineno-53-16"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">                    </span><span class="c1"># enable knowledge sharing</span>
+<a id="__codelineno-53-17" name="__codelineno-53-17" href="#__codelineno-53-17"></a><span class="n">default_trust</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.5</span><span class="w">               </span><span class="c1"># trust level for new peers</span>
+<a id="__codelineno-53-18" name="__codelineno-53-18" href="#__codelineno-53-18"></a><span class="n">auto_trust_drift</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">           </span><span class="c1"># adjust trust based on concordance</span>
+<a id="__codelineno-53-19" name="__codelineno-53-19" href="#__codelineno-53-19"></a><span class="n">max_propagation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="w">               </span><span class="c1"># max gossip hops for knowledge units</span>
+<a id="__codelineno-53-20" name="__codelineno-53-20" href="#__codelineno-53-20"></a><span class="n">export_min_evidence</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="w">           </span><span class="c1"># min decisions before sharing a pattern</span>
+<a id="__codelineno-53-21" name="__codelineno-53-21" href="#__codelineno-53-21"></a><span class="n">export_min_tool_decisions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="w">    </span><span class="c1"># min decisions before sharing accuracy</span>
+<a id="__codelineno-53-22" name="__codelineno-53-22" href="#__codelineno-53-22"></a><span class="n">knowledge_ttl_days</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span><span class="w">           </span><span class="c1"># expire unvalidated knowledge after N days</span>
+<a id="__codelineno-53-23" name="__codelineno-53-23" href="#__codelineno-53-23"></a><span class="n">inject_unverified</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">          </span><span class="c1"># include low-trust knowledge in brain prompt</span>
+<a id="__codelineno-53-24" name="__codelineno-53-24" href="#__codelineno-53-24"></a><span class="n">max_units</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">500</span><span class="w">                   </span><span class="c1"># hard cap on stored knowledge units</span>
+<a id="__codelineno-53-25" name="__codelineno-53-25" href="#__codelineno-53-25"></a><span class="n">max_prompt_units</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">20</span><span class="w">             </span><span class="c1"># cap on units injected into brain prompt</span>
+<a id="__codelineno-53-26" name="__codelineno-53-26" href="#__codelineno-53-26"></a><span class="n">stale_peer_days</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">90</span><span class="w">              </span><span class="c1"># prune knowledge from peers gone this long</span>
+<a id="__codelineno-53-27" name="__codelineno-53-27" href="#__codelineno-53-27"></a><span class="n">share_categories</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span><span class="w">             </span><span class="c1"># empty = share all (or: ["best_practice", "technique"])</span>
+<a id="__codelineno-53-28" name="__codelineno-53-28" href="#__codelineno-53-28"></a><span class="n">exclude_tools</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span><span class="w">                </span><span class="c1"># tools to never share (e.g., ["Write"])</span>
+<a id="__codelineno-53-29" name="__codelineno-53-29" href="#__codelineno-53-29"></a><span class="n">exclude_commands</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span><span class="w">             </span><span class="c1"># command patterns to never share</span>
+</code></pre></div>
+<p><code>http_port</code> and <code>auth_token</code> have no defaults, and the HTTP API starts only
+when both resolve — leave either unset and there is no listener. The bind
+address is resolved <code>--http-addr</code> first, then <code>http_addr</code>, then <code>127.0.0.1</code>.</p>
+<h2 id="cli-reference">CLI Reference</h2>
+<h3 id="relay-commands">Relay commands</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>relay serve [--port N]</code></td>
+<td>Start the relay listener</td>
+</tr>
+<tr>
+<td><code>relay serve --http-port N --auth-token T [--http-addr ADDR]</code></td>
+<td>Also start the coordinator HTTP API. <code>--http-addr</code> defaults to <code>127.0.0.1</code></td>
+</tr>
+<tr>
+<td><code>relay install-agent [--port N] [--http-port N] [--http-addr ADDR] [--auth-token T]</code></td>
+<td>macOS: keep the relay alive across logout and reboot</td>
+</tr>
+<tr>
+<td><code>relay agent-status</code></td>
+<td>Whether the launchd agent is installed and running</td>
+</tr>
+<tr>
+<td><code>relay uninstall-agent</code></td>
+<td>Remove the launchd agent</td>
+</tr>
+<tr>
+<td><code>relay invite [--qr] [--words]</code></td>
+<td>Generate invite code/link/phrase</td>
+</tr>
+<tr>
+<td><code>relay join &lt;code&gt;</code></td>
+<td>Join using any invite format</td>
+</tr>
+<tr>
+<td><code>relay discover</code></td>
+<td>Scan LAN for nearby instances</td>
+</tr>
+<tr>
+<td><code>hive discover</code></td>
+<td>Scan LAN for named hives, grouped by hive</td>
+</tr>
+<tr>
+<td><code>relay pair</code></td>
+<td>Generate a raw PSK code</td>
+</tr>
+<tr>
+<td><code>relay accept &lt;code&gt; &lt;peer&gt;</code></td>
+<td>Accept a raw PSK from a peer</td>
+</tr>
+<tr>
+<td><code>relay connect &lt;host:port&gt;</code></td>
+<td>Connect to a remote relay</td>
+</tr>
+<tr>
+<td><code>relay peers</code></td>
+<td>List known peers</td>
+</tr>
+<tr>
+<td><code>relay forget &lt;peer&gt;</code></td>
+<td>Remove a peer</td>
+</tr>
+<tr>
+<td><code>relay identity</code></td>
+<td>Show this instance's relay identity</td>
+</tr>
+<tr>
+<td><code>relay delegate &lt;peer&gt; &lt;prompt&gt;</code></td>
+<td>Delegate a task</td>
+</tr>
+<tr>
+<td><code>relay status</code></td>
+<td>Show remote task status</td>
+</tr>
+<tr>
+<td><code>relay interrupt &lt;task&gt; &lt;type&gt;</code></td>
+<td>Interrupt a remote task</td>
+</tr>
+</tbody>
+</table>
+<h3 id="hive-commands">Hive commands</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hive status</code></td>
+<td>Show knowledge store overview</td>
+</tr>
+<tr>
+<td><code>hive knowledge [--from X] [--scope Y]</code></td>
+<td>List knowledge units</td>
+</tr>
+<tr>
+<td><code>hive export</code></td>
+<td>Export knowledge as JSON</td>
+</tr>
+<tr>
+<td><code>hive import &lt;file&gt;</code></td>
+<td>Import knowledge from JSON</td>
+</tr>
+<tr>
+<td><code>hive forget &lt;unit-id&gt;</code></td>
+<td>Remove a knowledge unit</td>
+</tr>
+<tr>
+<td><code>hive trust [&lt;peer&gt; [&lt;level&gt;]]</code></td>
+<td>Show/set peer trust levels</td>
+</tr>
+<tr>
+<td><code>hive archive [--prune Nd]</code></td>
+<td>Show cold storage archive stats</td>
+</tr>
+<tr>
+<td><code>hive distill</code></td>
+<td>Run distillation pipeline on archive</td>
+</tr>
+<tr>
+<td><code>hive curriculum</code></td>
+<td>Show distilled curriculum</td>
+</tr>
+</tbody>
+</table>
+<h2 id="architecture">Architecture</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a>┌──────────────────────────────────────────────┐
+<a id="__codelineno-54-2" name="__codelineno-54-2" href="#__codelineno-54-2"></a>│                   HIVE MIND                  │
+<a id="__codelineno-54-3" name="__codelineno-54-3" href="#__codelineno-54-3"></a>│  distill → knowledge units → gossip → merge  │
+<a id="__codelineno-54-4" name="__codelineno-54-4" href="#__codelineno-54-4"></a>├──────────────────────────────────────────────┤
+<a id="__codelineno-54-5" name="__codelineno-54-5" href="#__codelineno-54-5"></a>│              REMOTE DELEGATION               │
+<a id="__codelineno-54-6" name="__codelineno-54-6" href="#__codelineno-54-6"></a>│  delegate → remote spawn → status → handoff  │
+<a id="__codelineno-54-7" name="__codelineno-54-7" href="#__codelineno-54-7"></a>├──────────────────────────────────────────────┤
+<a id="__codelineno-54-8" name="__codelineno-54-8" href="#__codelineno-54-8"></a>│                    RELAY                     │
+<a id="__codelineno-54-9" name="__codelineno-54-9" href="#__codelineno-54-9"></a>│  TCP + PSK auth + NDJSON + heartbeats        │
+<a id="__codelineno-54-10" name="__codelineno-54-10" href="#__codelineno-54-10"></a>└──────────────────────────────────────────────┘
+</code></pre></div>
+<ul>
+<li><strong>Relay</strong>: TCP transport with HMAC-SHA256 pre-shared key authentication, NDJSON wire protocol, heartbeats with exponential backoff reconnect</li>
+<li><strong>Delegation</strong>: Remote task execution with periodic status updates, handoffs, and interrupt support</li>
+<li><strong>Hive Mind</strong>: Gossip-based knowledge sharing with conflict resolution (local always wins), trust-weighted brain injection, epidemic propagation with TTL. See <a href="#what-propagation-actually-does-today">what propagation actually does today</a> for the sync interval and the two limits that remain</li>
+</ul>
+<h2 id="security">Security</h2>
+<p>The relay runs two listeners whose authentication and defaults have nothing in
+common, so each claim below is scoped to one of them.</p>
+<h3 id="peer-transport-tcp-listen_addrlisten_port-default-00009847">Peer transport (TCP, <code>listen_addr</code>:<code>listen_port</code>, default <code>0.0.0.0:9847</code>)</h3>
+<ul>
+<li>Every connection is authenticated via HMAC-SHA256 challenge-response, and the
+  handshake proof is compared in constant time (<code>relay::crypto::ct_eq</code>, #426)</li>
+<li>PSK pairing requires explicit action on both sides</li>
+<li>Auth rate limiting: 5 failed attempts = 60s cooldown per IP</li>
+<li>Max concurrent auth threads capped at 16</li>
+<li>Session state and knowledge go only to paired peers (LAN discovery still
+  broadcasts identity, port and version to the local segment)</li>
+<li>For encryption, tunnel through SSH or WireGuard</li>
+<li>Knowledge never overrides local preferences (deny-first)</li>
+</ul>
+<p>Non-loopback is this listener's intended deployment, which is why it still
+defaults to <code>0.0.0.0</code>.</p>
+<h3 id="coordinator-http-api-http_addrhttp_port-default-loopback">Coordinator HTTP API (<code>http_addr</code>:<code>http_port</code>, default loopback)</h3>
+<p>The bullets above describe the peer transport and do not hold here. This
+listener authenticates with the single <code>--auth-token</code> bearer token, compared in
+constant time as of #426. It has none of the rate limiting or connection caps
+the peer listener has, and the token carries no scope and no revocation short
+of restarting with a different one. A leaked token is full access to the API —
+every session on the cluster, plus the <code>POST /api/heartbeat</code> write — until the
+relay restarts.</p>
+<h3 id="transport">Transport</h3>
+<h1 id="426-settles-q3-in-the-open-cluster-rfc-the">426 settles <a href="../open-cluster/#q3-transport">Q3 in the open-cluster RFC</a>: the</h1>
+<p>HTTP API <strong>binds <code>127.0.0.1</code> by default</strong> and off-machine access is the
+operator's tunnel to arrange — Cloudflare Tunnel, Tailscale Funnel, or
+<code>ssh -R</code>. There is no TLS anywhere in this path. The API speaks plaintext
+HTTP/1.1, so on any hop that is not tunnelled the bearer token and the session
+data both travel in the clear.</p>
+<p><code>rustls</code> was the alternative, and it was rejected on the dependency rule: the
+sync core runs on 7 runtime crates and <code>Cargo.toml</code> carries no TLS crate at
+all. A tunnel covers the same boundary without one. The cost is operator setup,
+and fronting the API does move session data off your network — that is what a
+dashboard on another machine means, tunnel or not.</p>
+<p>Before #426 the HTTP API inherited <code>relay.listen_addr</code>, so
+<code>claudectl relay serve --http-port 9876 --auth-token secret</code> put the plaintext
+API on every interface. It binds loopback now. Pass <code>--http-addr 0.0.0.0</code> (or
+set <code>http_addr</code>) for the old behavior; <code>listen_addr</code> no longer governs the HTTP
+API either way.</p>
+<p>Both HTTP listeners warn at startup when the address they bind is not loopback
+— <code>0.0.0.0</code>, <code>::</code>, or a specific LAN IP. That covers the coordinator API and
+<code>claudectl supervisor metrics</code>, whose <code>/metrics</code> endpoint has no authentication
+at all and defaults to <code>127.0.0.1:9464</code>.</p>
+<h2 id="faq">FAQ</h2>
+<p><strong>Do I need to build with <code>--features relay</code>?</strong>
+No. <code>relay</code> has been in the default feature set for a while — <code>cargo install claudectl</code> and the Homebrew bottle both ship it. The feature still exists for the minimal sync-only build (<code>--no-default-features --features hive</code>), which drops the networking and leaves hive local.</p>
+<p><strong>Does it work across different networks?</strong>
+Yes, if the machines can reach each other over TCP (port 9847). For machines behind NAT, use a VPN like Tailscale or WireGuard, or SSH port forwarding.</p>
+<p><strong>What happens if a peer goes offline?</strong>
+The connection drops, heartbeats detect it within 90 seconds, and the initiating side reconnects with exponential backoff. Knowledge already synced persists locally.</p>
+<p><strong>Can a malicious peer poison my brain?</strong>
+No. Local knowledge always wins. Peer knowledge is labeled with trust tiers and never overrides your own preferences. Low-trust peers' knowledge can be excluded entirely.</p>
+<p><strong>How much data is transferred?</strong>
+Knowledge units are small JSON records (100-300 bytes each). A typical sync between two peers transfers a few KB. Snapshots for new peers are paginated at 500KB.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/mercurialsolo/claudectl" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

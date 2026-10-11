@@ -1,0 +1,2116 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere">
+      
+      
+      
+        <link rel="canonical" href="https://mercurialsolo.github.io/claudectl/access/">
+      
+      
+        <link rel="prev" href="../relay/">
+      
+      
+        <link rel="next" href="../policy-as-code/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Capability Grants - claudectl</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#capability-grants-scoped-expiring-access-for-someone-who-isnt-you" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="claudectl" class="md-header__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            claudectl
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Capability Grants
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="claudectl" class="md-nav__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    claudectl
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent-bus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Bus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive Mind
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Capability Grants
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Capability Grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-grant-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The grant file
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The grant file">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scopes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-signature-covers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the signature covers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What the signature covers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#revocation-is-one-way-and-the-tombstone-is-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revocation is one-way, and the tombstone is why
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-audit-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The audit log
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The secret
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serving-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving queries
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Serving queries">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-a-refusal-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a refusal looks like
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-audit-log-shows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the audit log shows
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#classification-optional-off-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Classification (optional, off by default)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Classification (optional, off by default)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-leaves-your-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What leaves your machine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-classification-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When classification is unavailable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#escalations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Escalations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flagged-grants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flagged grants
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#thresholds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thresholds
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rate-limits-and-budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate limits and budgets
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rate limits and budgets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#which-denials-cost-a-query" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which denials cost a query
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reading-the-log-afterwards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the log afterwards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-these-cannot-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What these cannot do
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy-as-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy as Code
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../team-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Team Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terminal-support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terminal Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design specs
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design specs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../open-cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Open Cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AGENT_BUS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Bus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay-and-hive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay-discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hive-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hive Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-grant-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The grant file
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The grant file">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scopes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-signature-covers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the signature covers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What the signature covers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#revocation-is-one-way-and-the-tombstone-is-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revocation is one-way, and the tombstone is why
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-audit-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The audit log
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The secret
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serving-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving queries
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Serving queries">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-a-refusal-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a refusal looks like
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-audit-log-shows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the audit log shows
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#classification-optional-off-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Classification (optional, off by default)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Classification (optional, off by default)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-leaves-your-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What leaves your machine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-classification-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When classification is unavailable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#escalations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Escalations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flagged-grants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flagged grants
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#thresholds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thresholds
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rate-limits-and-budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate limits and budgets
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rate limits and budgets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#which-denials-cost-a-query" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which denials cost a query
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reading-the-log-afterwards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the log afterwards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-these-cannot-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What these cannot do
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="capability-grants-scoped-expiring-access-for-someone-who-isnt-you">Capability grants — scoped, expiring access for someone who isn't you</h1>
+<p>Everything else in claudectl assumes one trust level: you, on your machines. A
+relay PSK is symmetric — a paired peer reads your sessions, delegates tasks to
+you, and can interrupt your work. The coordinator's HTTP bearer token is one
+shared secret with no identity, no scope, and no revocation short of restarting
+with a different one.</p>
+<p>A <strong>grant</strong> is a named, scoped, expiring, individually revocable capability you
+hand to one external party. Every verb in the scope grammar is read-only, so a
+grant can let someone read and never write. Grants live under
+<code>~/.claudectl/access/</code> and the whole subsystem is behind the <code>relay</code> feature —
+the minimal <code>--no-default-features --features hive</code> build has no <code>access</code>
+command.</p>
+<p><code>claudectl access grant</code> opens no port and starts no listener — it mints a
+credential. The surface that credential is presented <em>to</em> is
+<code>claudectl query serve</code> (#429), a separate process you start deliberately; see
+<a href="#serving-queries">Serving queries</a> below. The per-grant rate limit and daily
+budget are enforced as of #431 — see
+<a href="#rate-limits-and-budgets">Rate limits and budgets</a>. The design behind all of
+this is
+<a href="../open-cluster/">docs/open-cluster.md</a> §3; transport is
+<a href="../relay/#security">docs/relay.md</a>.</p>
+<p><strong><code>--project</code> has to match what the server serves.</strong> A grant's scope qualifier
+is compared for equality against the one project name a <code>query serve</code> process
+answers to, which defaults to its repository directory's basename. Nothing in
+claudectl resolves a project name to a directory, so a mismatch comes back as a
+<code>404</code> rather than a diagnosable error.</p>
+<h2 id="quick-start">Quick start</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>claudectl<span class="w"> </span>access<span class="w"> </span>grant<span class="w"> </span>--project<span class="w"> </span>claudectl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--label<span class="w"> </span><span class="s2">"acme integration review"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--scopes<span class="w"> </span>project.query,project.docs<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--expires<span class="w"> </span>30d
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Grant gr_a38487 issued for "acme integration review"
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>TOKEN: cctl_gr_a38487_e8fc30c0125c4aca239f3c988abaa542
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>This is the only time the token is shown. Store it now.
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>Scopes:
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  project.query:claudectl
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  project.docs:claudectl
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>Expires: in 30d
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>Revoke any time with: claudectl access revoke gr_a38487
+</code></pre></div>
+<p><code>--project</code> and <code>--label</code> are required. <code>--scopes</code> defaults to <code>project.query</code>
+and <code>--expires</code> to <code>30d</code>. The label is for you — it's the only thing in
+<code>access list</code> that says who a grant belongs to.</p>
+<p>The token is printed once and stored nowhere. It is deterministic — anyone with
+the secret and the grant file can recompute it — but no CLI command does, so in
+practice losing the token means issuing a new grant and revoking the old one.</p>
+<h2 id="the-commands">The commands</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>claudectl<span class="w"> </span>access<span class="w"> </span>grant<span class="w"> </span>…<span class="w">              </span><span class="c1"># issue one, print the token once</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>claudectl<span class="w"> </span>access<span class="w"> </span>list<span class="w">                 </span><span class="c1"># every grant, its state, uses, last use</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>claudectl<span class="w"> </span>access<span class="w"> </span>audit<span class="w"> </span>gr_a38487<span class="w">      </span><span class="c1"># what that grant actually asked for</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>claudectl<span class="w"> </span>access<span class="w"> </span>audit<span class="w">                </span><span class="c1"># the whole log, every grant</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>claudectl<span class="w"> </span>access<span class="w"> </span>escalations<span class="w">          </span><span class="c1"># questions classification queued for you</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>claudectl<span class="w"> </span>access<span class="w"> </span>escalations<span class="w"> </span>approve<span class="w"> </span>esc_4f1c8a0b2d3e<span class="w">   </span><span class="c1"># let the caller have an answer</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>claudectl<span class="w"> </span>access<span class="w"> </span>escalations<span class="w"> </span>deny<span class="w"> </span>esc_4f1c8a0b2d3e<span class="w">      </span><span class="c1"># refuse it</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>claudectl<span class="w"> </span>access<span class="w"> </span>revoke<span class="w"> </span>gr_a38487<span class="w">     </span><span class="c1"># immediate, nothing to restart</span>
+</code></pre></div>
+<p>All of them take <code>--json</code>. It's a global flag, so it goes <strong>before</strong> the
+subcommand — <code>claudectl --json access list</code>. <code>claudectl access list --json</code>
+fails with <code>unexpected argument '--json' found</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>$ claudectl access list
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>GRANT       STATE     LABEL                        USES  LAST USED    SCOPES
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>gr_a38487   active    acme integration review         0  never        project.query:claudectl,project.docs:claudectl
+</code></pre></div>
+<p><code>STATE</code> is <code>active</code>, <code>flagged</code>, <code>expired</code>, or <code>revoked</code>, in increasing order of
+precedence from the bottom: a grant that is both expired and revoked reads as
+<code>revoked</code>, since revoking was the explicit action. <code>flagged</code> means
+classification caught an injection attempt from that grant and left it working
+— see <a href="#flagged-grants">Flagged grants</a>. Timestamps
+render relative and coarse, rounded to the nearest unit — <code>3h ago</code>, <code>in 30d</code>,
+<code>never</code>. Coarse on purpose: the useful questions are whether a grant has gone
+stale and when it lapses.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>$ claudectl access revoke gr_a38487
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Revoked gr_a38487 ("acme integration review").
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>Its token stops verifying immediately — nothing to restart.
+</code></pre></div>
+<p>Revoke is idempotent. Revoking a grant id that was never issued is a plain
+error (<code>no such grant: gr_nope</code>) — the opacity described below applies to a
+third party presenting a token, not to you at your own CLI.</p>
+<h2 id="the-grant-file">The grant file</h2>
+<p>One JSON file per grant at <code>~/.claudectl/access/grants/&lt;grant_id&gt;.json</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">"grant_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gr_a38487"</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"acme integration review"</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">"scopes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="s2">"project.query:claudectl"</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="s2">"project.docs:claudectl"</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="nt">"issued_ms"</span><span class="p">:</span><span class="w"> </span><span class="mi">1791245775409</span><span class="p">,</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">"expires_ms"</span><span class="p">:</span><span class="w"> </span><span class="mi">1793837775409</span><span class="p">,</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">"revoked"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="nt">"rate_limit_per_min"</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">  </span><span class="nt">"daily_query_budget"</span><span class="p">:</span><span class="w"> </span><span class="mi">500</span><span class="p">,</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">  </span><span class="nt">"last_used_ms"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span><span class="nt">"use_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="p">}</span>
+</code></pre></div>
+<p>Writes are atomic: temp file in the same directory, <code>sync_data</code>, rename. A
+crash mid-write leaves either the old grant or a dotfile <code>access list</code> skips,
+never a truncated record.</p>
+<p><code>rate_limit_per_min</code> and <code>daily_query_budget</code> are enforced by
+<code>claudectl query serve</code> (#431). Two further counters appear once the grant has
+been used — <code>budget_day</code> (the UTC day the count belongs to) and <code>budget_used</code>.
+Both are omitted while zero, so a freshly minted grant reads exactly as above.
+Like <code>revoked</code>, neither is signed: editing them changes accounting, not
+capability, so it cannot invalidate a token already in someone's hands.</p>
+<p>A <code>0</code> in either field reads as <code>1</code>, not as "unlimited" and not as "deny
+everything". These fields have no CLI flag, so the only way to set them is to
+edit this file — and a hand-written <code>0</code> is far likelier to mean "I didn't think
+about this" than "refuse every query". The two guardrails agree on that
+reading; the file keeps whatever you wrote.</p>
+<h3 id="scopes">Scopes</h3>
+<p>Scopes are <code>&lt;resource&gt;.&lt;verb&gt;:&lt;qualifier&gt;</code>. <code>--scopes project.query</code> takes
+<code>--project</code> as its qualifier. Writing the qualifier out — <code>--scopes
+project.query:claudectl</code> — is accepted only when it agrees with <code>--project</code>;
+disagreeing is an error rather than a silent override, since <code>--project</code> reads
+as the bound on the grant and is the only value validated up front:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>$ claudectl access grant --project internal-api --label x \
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    --scopes project.query:secrets
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>Error: … "scope 'project.query:secrets' is scoped to 'secrets' but --project is
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>'internal-api' — drop the qualifier, or pass the project you mean"
+</code></pre></div>
+<p>Duplicates collapse and whitespace is tolerated.</p>
+<table>
+<thead>
+<tr>
+<th>Scope</th>
+<th>Issuable today</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>project.query:&lt;project&gt;</code></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>project.docs:&lt;project&gt;</code></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>fleet.read:&lt;project&gt;</code></td>
+<td>No — open-cluster Q8: defined, issued to nobody</td>
+</tr>
+<tr>
+<td><code>hive.read:&lt;hive&gt;</code></td>
+<td>No — needs named-hive identity (#424)</td>
+</tr>
+<tr>
+<td><code>hive.join:&lt;hive&gt;</code></td>
+<td>No — needs named-hive identity (#424)</td>
+</tr>
+</tbody>
+</table>
+<p>Asking for one of the last three is an error that says why:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>$ claudectl access grant --project claudectl --label x --scopes fleet.read
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>Error: Custom { kind: Other, error: "cannot issue 'fleet.read:claudectl':
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>fleet.read is defined but issued to nobody by default (open-cluster RFC Q8) —
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>a third party reviewing your project should not see your live session costs" }
+</code></pre></div>
+<p>(One line, wrapped here. The <code>Custom { … }</code> envelope is Rust's default
+<code>io::Error</code> rendering, not part of the message.)</p>
+<p>All five verbs still <em>parse</em>, so a grant file written by a later claudectl
+loads on today's binary. There is no write verb in the grammar at all.</p>
+<p>Qualifiers are ASCII letters, digits, <code>-</code>, <code>_</code> and <code>.</code>, at most 128 characters,
+and may not contain <code>..</code>. The grammar is narrow because scopes are signed into
+the MAC over a <code>\n</code>-joined payload, so a qualifier containing whitespace, a
+newline or <code>:</code> would make that encoding ambiguous and two different scope sets
+could sign identically.</p>
+<h2 id="what-the-signature-covers">What the signature covers</h2>
+<p>The token is <code>cctl_&lt;grant_id&gt;_&lt;mac&gt;</code>, where the MAC is HMAC-SHA256 over a
+canonical payload of <code>grant_id</code>, the sorted scopes, and <code>expires_ms</code>,
+truncated to 128 bits and hex-encoded. Scopes are sorted first, so typing them
+in a different order yields the same token.</p>
+<p>Signed: <code>grant_id</code>, <code>scopes</code>, <code>expires_ms</code>.
+Not signed: <code>revoked</code>, <code>last_used_ms</code>, <code>use_count</code>.</p>
+<p>Operationally that splits grant edits into two kinds:</p>
+<ul>
+<li><strong>Revoking</strong> takes effect on the next verification, with no restart and no
+  re-issue. It is also <strong>one-way</strong>: see below.</li>
+<li><strong>Editing <code>scopes</code> or <code>expires_ms</code></strong> — by hand in the JSON, or by any future
+  tooling — invalidates the token already in the third party's hands. There is
+  no "widen this grant" operation. Issue a new grant and revoke the old one.</li>
+</ul>
+<p>The same property is why a token can't be edited to widen itself: the scopes it
+would have to claim are the ones under the signature.</p>
+<h3 id="revocation-is-one-way-and-the-tombstone-is-why">Revocation is one-way, and the tombstone is why</h3>
+<p><code>claudectl access revoke</code> writes two things: the <code>revoked: true</code> field, and an
+empty marker file at <code>grants/&lt;grant_id&gt;.revoked</code>. <strong>The marker is the
+authority.</strong> Setting the JSON field back to <code>false</code> does not restore the grant;
+removing the marker by hand does, but that is a deliberate act, not an
+accident.</p>
+<p>The reason is concurrency. Three operations rewrite the <em>whole</em> grant record —
+the daily-budget charge, the use-count bump, and revoke itself — and they do not
+all live in one process. <code>access revoke</code> is the CLI; the other two are
+<code>query serve</code>. So this was possible:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>  serve:  load the grant (revoked: false)
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>  you:    claudectl access revoke gr_a38487
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  serve:  bump use_count, write the whole record back  -&gt;  revoked: false
+</code></pre></div>
+<p>A token you believed was dead kept answering. A process-local lock cannot order
+writes across two processes, and revocation is monotonic — there is no
+un-revoke command — so it does not belong in a mutable record at all. A file
+that is only ever <em>created</em> cannot be clobbered by a writer that never writes
+it.</p>
+<p>Two consequences worth knowing:</p>
+<ul>
+<li>The marker outlives a deleted <code>.json</code>. If you delete a grant file by hand and
+  a later <code>access grant</code> happens to draw the same 24-bit id, that new grant is
+  born revoked. Fail-closed, and the fix is to delete the stale <code>.revoked</code> too.</li>
+<li><code>access list</code> and <code>--json</code> both read the marker, so the table and <code>verify</code>
+  can never disagree about whether a grant is live.</li>
+</ul>
+<h2 id="the-audit-log">The audit log</h2>
+<p><code>~/.claudectl/access/audit.jsonl</code> is append-only, one JSON object per line, and
+records allowed and denied attempts alike:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="nt">"ts_ms"</span><span class="p">:</span><span class="mi">1791072975409</span><span class="p">,</span><span class="nt">"grant_id"</span><span class="p">:</span><span class="s2">"gr_cd2630"</span><span class="p">,</span><span class="nt">"event"</span><span class="p">:</span><span class="s2">"allowed"</span><span class="p">,</span><span class="nt">"detail"</span><span class="p">:</span><span class="s2">"how is the brain's decision logging structured?"</span><span class="p">}</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="p">{</span><span class="nt">"ts_ms"</span><span class="p">:</span><span class="mi">1791234975409</span><span class="p">,</span><span class="nt">"grant_id"</span><span class="p">:</span><span class="s2">"gr_cd2630"</span><span class="p">,</span><span class="nt">"event"</span><span class="p">:</span><span class="s2">"denied"</span><span class="p">,</span><span class="nt">"reason"</span><span class="p">:</span><span class="s2">"missing_scope"</span><span class="p">,</span><span class="nt">"detail"</span><span class="p">:</span><span class="s2">"fleet.read:claudectl"</span><span class="p">}</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">{</span><span class="nt">"ts_ms"</span><span class="p">:</span><span class="mi">1791238575409</span><span class="p">,</span><span class="nt">"grant_id"</span><span class="p">:</span><span class="s2">"gr_cd2630"</span><span class="p">,</span><span class="nt">"event"</span><span class="p">:</span><span class="s2">"denied"</span><span class="p">,</span><span class="nt">"reason"</span><span class="p">:</span><span class="s2">"bad_mac"</span><span class="p">}</span>
+</code></pre></div>
+<p><code>reason</code> is absent on an allowed entry. <code>detail</code> is free-form and absent when
+there's nothing to say. <code>claudectl access audit &lt;grant_id&gt;</code> renders the lines
+for one grant, oldest first; <code>claudectl access audit</code> with no id renders the
+whole log. The no-id form is the only way to see denials recorded against a
+token too malformed to name a grant — those are filed under a sentinel id that
+is not a valid grant id, which is precisely the probing the log exists to
+surface:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GRANT        WHEN           EVENT    REASON           DETAIL
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>gr_cd2630    2d ago         allowed  -                how is the brain's decision logging structured?
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>gr_cd2630    3h ago         denied   missing_scope    fleet.read:claudectl
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>gr_cd2630    2h ago         denied   bad_mac
+</code></pre></div>
+<p>The seven deny reasons are <code>malformed_token</code>, <code>unknown_grant</code>,
+<code>unreadable_grant</code>, <code>bad_mac</code>, <code>revoked</code>, <code>expired</code> and <code>missing_scope</code>. A
+malformed token has no recoverable grant id, so its entry is filed under
+<code>&lt;unparseable&gt;</code>.</p>
+<p><strong>The audit log is the only place a denial is explained.</strong> A caller whose token
+fails verification gets one undifferentiated <code>denied</code> with no detail: unknown
+grant, bad MAC, revoked, expired and missing scope are indistinguishable from
+outside. That's the open-cluster RFC's 404-not-403 rule applied one layer
+down — distinguishing "no such grant" from "revoked" would tell a prober which
+grant ids exist. Because denied attempts are audited too, someone hammering an
+invalid token is visible to you even though it's invisible to them.</p>
+<p>Verification is where those entries come from, and <code>claudectl query serve</code> is
+what calls it. <code>audit.jsonl</code> does not exist until the first attempt reaches a
+running surface — <code>access audit</code> on a live
+grant prints <code>No audit entries for gr_a38487 — issued but never used.</code> and
+distinguishes that from <code>No such grant: gr_nope</code>.</p>
+<h2 id="the-secret">The secret</h2>
+<p><code>~/.claudectl/access/secret</code> is the 32-byte HMAC key every grant token derives
+from. It is created on first <code>access grant</code>, written <code>0600</code>, and never leaves
+the machine.</p>
+<p>Two properties of how it is created:</p>
+<ul>
+<li>It comes from a generator that <strong>fails rather than guessing</strong>. The LAN
+  pairing-code path (<code>relay::crypto::generate_psk</code>) falls back to a
+  timestamp/pid/thread-id hash when <code>/dev/urandom</code> cannot be read; the access
+  secret uses <code>try_generate_psk</code>, which errors instead, because a predictable
+  key here would let someone recompute tokens. If the RNG is unavailable,
+  <code>access grant</code> fails.</li>
+<li>The <code>0600</code> mode is part of the <code>open(2)</code> call, so the file never exists at a
+  wider mode and the rename publishes something nobody else could have read.
+  Setting it with a <code>chmod</code> after <code>File::create</code> would not be enough: that
+  leaves a window at <code>0666 &amp; ~umask</code>, and a <code>chmod</code> cannot revoke a descriptor
+  another process already opened during it. (The older
+  <code>relay::save_peer_psk</code> does write first and chmod after.)</li>
+<li><code>grants/*.json</code> and <code>audit.jsonl</code> get the same treatment, and the audit log's
+  mode is re-asserted on every append so a log left wider by an earlier version
+  is repaired rather than staying that way.</li>
+</ul>
+<p><strong>Back the secret up together with <code>grants/</code>.</strong> The two are only meaningful as
+a pair:</p>
+<ul>
+<li><strong>Lose the secret and every issued token dies silently.</strong> On the next
+  <code>access grant</code> a fresh secret is minted, and tokens signed under the old one
+  stop verifying. <code>access list</code> never reads the secret, so those grants still
+  show as <code>active</code> — the list is not evidence the tokens still work. Re-issue
+  and re-distribute.</li>
+<li><strong>Leak the secret and every live token becomes reproducible.</strong> It does not
+  let anyone invent a grant or widen one: <code>verify</code> recomputes the MAC from the
+  stored grant's own <code>scopes</code> and <code>expires_ms</code>, so a forged token for a
+  non-existent grant is <code>unknown_grant</code> and one claiming wider scopes is
+  <code>bad_mac</code>. What a leak gives up is the ability to recompute the legitimate
+  token for any grant whose signed fields you can read — and those fields are
+  in the grant file. Tokens so recomputed are still bounded by <code>revoked</code> and
+  <code>expires_ms</code>. There is nothing to rotate short of deleting the secret and
+  re-issuing every grant.</li>
+</ul>
+<p>File modes: <code>secret</code>, <code>grants/*.json</code>, <code>audit.jsonl</code>, <code>escalations.jsonl</code> and
+<code>jev-spend.json</code> are all <code>0600</code>, each set
+on the temp file or at creation rather than chmodded afterwards. The grant files
+are owner-only because they carry every field the MAC covers — left at a default
+umask, <code>secret</code> would be the only thing between an unprivileged local user and
+every token on the machine. The containing directory is left at the default
+mode, so tighten <code>~/.claudectl/access/</code> itself if other people have shell
+accounts here.</p>
+<p>A secret that exists but is corrupt or the wrong length is an error, not a
+silent re-mint:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>access secret at ~/.claudectl/access/secret is 16 bytes, expected 32 — move it
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>aside to mint a new one (every existing token stops verifying)
+</code></pre></div>
+<p>That error is deliberate. A silent re-mint would invalidate every live grant
+without telling you.</p>
+<h2 id="serving-queries">Serving queries</h2>
+<p>A grant is only useful once something will answer it. That is <code>claudectl query
+serve</code>, which serves <strong>one</strong> project — the repository it is started in:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nb">cd</span><span class="w"> </span>~/code/claudectl
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>claudectl<span class="w"> </span>query<span class="w"> </span>serve<span class="w"> </span>--project<span class="w"> </span>claudectl<span class="w"> </span>--port<span class="w"> </span><span class="m">8787</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>query surface for "claudectl" listening on http://127.0.0.1:8787
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>  index: fnv1a:bfe0770758ce5672
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>  266 tracked files, 0 denied, 0 unreadable
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>  share mode: auto
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>  classification: off (TYPESAFE_API_KEY is not set) — deterministic term matching
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>  POST /api/v1/project/claudectl/query
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>  GET  /api/v1/project/claudectl/topics
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>  POST /api/v1/project/claudectl/doc
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>The index is a startup snapshot; restart to pick up new commits.
+</code></pre></div>
+<p><code>--project</code> names the project this process answers to. It defaults to the
+repository directory's basename, and <code>query serve</code> refuses to start when that
+cannot be a scope qualifier — a worktree called <code>feat+readonly-query-surface</code>
+has a <code>+</code> in it, and sanitizing the name silently would produce a server
+answering to a name no grant was ever minted for.</p>
+<p>The grant holder presents the token as a bearer header:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8787/api/v1/project/claudectl/query<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer cctl_gr_7f2a1b_&lt;mac&gt;"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"question":"how does config layering work?","limit":3}'</span>
+</code></pre></div>
+<p>Answers are verbatim spans with citations — the path, the enclosing heading
+path, and the text exactly as the index holds it. Nothing is generated, so an
+answer cannot contain a claim your documentation does not already make. The
+response also carries <code>matched_terms</code>, so the ranking can be checked rather
+than taken on faith.</p>
+<p>Or they point their Claude at the MCP form, which exposes <code>ask_project</code>,
+<code>list_topics</code> and <code>get_doc</code> as tools over stdio:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>claudectl<span class="w"> </span>query<span class="w"> </span>stdio<span class="w"> </span>--project<span class="w"> </span>claudectl<span class="w"> </span>--token<span class="w"> </span>cctl_gr_7f2a1b_&lt;mac&gt;
+</code></pre></div>
+<p><code>project.query</code> buys <code>ask_project</code> and <code>list_topics</code>. <code>get_doc</code> needs
+<code>project.docs</code>, because that is the verb that returns whole document sections
+verbatim. A path handed to <code>get_doc</code> is matched against paths already in the
+index — never opened from disk — so an unpublished path and a nonexistent one
+are the same <code>404</code>.</p>
+<p>Two things to know before exposing it:</p>
+<ul>
+<li><strong>It binds loopback by default, and it is plaintext HTTP.</strong> A bearer token on
+  an unencrypted connection has no transport confidentiality, and there is no
+  rate limiting until #431. Anything reachable off this machine belongs behind
+  a TLS terminator or a tunnel; <code>query serve</code> warns when the bind address says
+  otherwise.</li>
+<li><strong>The index is a startup snapshot.</strong> Restart to publish new commits.
+  Rebuilding per request would mean running <code>ls-files</code> per query, which is a
+  denial-of-service vector on a third-party-facing endpoint.</li>
+</ul>
+<h3 id="what-a-refusal-looks-like">What a refusal looks like</h3>
+<p>Every refusal is the same opaque <code>404</code> with the same body — wrong project,
+missing scope, revoked grant, expired grant, unknown route and bad MAC are
+indistinguishable from outside. That is deliberate (RFC §3.3): telling them
+apart would let an unauthorized caller enumerate which projects and grants
+exist. The one exception is a missing <code>Authorization</code> header, which is a <code>401</code>,
+decided before anything project-specific and so saying nothing about what
+exists.</p>
+<p>The real reason goes to the audit log and nowhere else.</p>
+<h3 id="what-the-audit-log-shows">What the audit log shows</h3>
+<p>Every answered query appends an <code>allowed</code> line naming the operation; every
+refusal appends a <code>denied</code> line naming the reason the caller never saw:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>claudectl<span class="w"> </span>access<span class="w"> </span>audit<span class="w"> </span>--grant<span class="w"> </span>gr_7f2a1b
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>{"ts_ms":1791258445314,"grant_id":"gr_7f2a1b","event":"allowed","detail":"query.ask"}
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>{"ts_ms":1791258445388,"grant_id":"gr_7f2a1b","event":"allowed","detail":"query.get_doc"}
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>{"ts_ms":1791258517469,"grant_id":"gr_7f2a1b","event":"denied","reason":"bad_mac"}
+</code></pre></div>
+<p><code>claudectl access list</code> shows <code>USES</code> and <code>LAST USED</code> per grant, so a grant being
+hammered is visible without reading the log at all.</p>
+<p>That <code>use_count</code> and that audit line are the only writes the query surface
+performs anywhere. No route touches the project.</p>
+<h2 id="classification-optional-off-by-default">Classification (optional, off by default)</h2>
+<p>By default the query surface matches terms deterministically and answers with
+the best-scoring spans. That is the whole surface, and it works without any
+network access.</p>
+<p>If you set <code>TYPESAFE_API_KEY</code>, every question is also classified by
+<a href="https://typesafe.ai">Jev</a> before anything touches the index, and the surface
+starts denying, declining and escalating instead of answering everything it can
+score:</p>
+<table>
+<thead>
+<tr>
+<th>Jev says</th>
+<th>The caller gets</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>seeks secrets (<code>&gt; 0.15</code>)</td>
+<td>the same opaque <code>404</code> every refusal gets, and the attempt is logged</td>
+</tr>
+<tr>
+<td>instruction-override framing (<code>&gt; 0.15</code>)</td>
+<td>the same <code>404</code>, <strong>and the grant is flagged</strong> for your review</td>
+</tr>
+<tr>
+<td>about another codebase (<code>scope_match &lt; 0.5</code>)</td>
+<td><code>200</code> with <code>status: "declined"</code> and a pointer at what <em>is</em> answerable</td>
+</tr>
+<tr>
+<td>confidently not a project question</td>
+<td>the same decline</td>
+</tr>
+<tr>
+<td>answerable from docs, with a confident intent</td>
+<td>the answer, as before</td>
+</tr>
+<tr>
+<td>anything else</td>
+<td><code>202</code> with <code>status: "pending_review"</code> and an escalation id</td>
+</tr>
+</tbody>
+</table>
+<p><code>query serve</code> says which state it is in, every time:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>  classification: off (TYPESAFE_API_KEY is not set) — deterministic term matching
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>  classification: Jev jev-latest, ceiling $5.00/month
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>    queries are sent to api.typesafe.ai for classification. Tell your grant holders.
+</code></pre></div>
+<h3 id="what-leaves-your-machine">What leaves your machine</h3>
+<p>Only two things: <strong>the question</strong> and <strong>one paragraph of your <code>CLAUDE.md</code></strong> (or
+<code>README.md</code>, if you have no <code>CLAUDE.md</code>), truncated to 512 bytes. Never index
+contents, never retrieved spans, never session data, never anything about your
+other projects. A test captures the outbound request body and asserts exactly
+that, so it is a checked property rather than a promise.</p>
+<p>The API key is read from <code>TYPESAFE_API_KEY</code> only. It is deliberately not a
+config field — a secret in <code>.claudectl.toml</code> is a secret in your repository —
+and it travels to <code>curl</code> on stdin rather than as an argument, because command
+lines are readable by every local user through <code>ps</code>.</p>
+<h3 id="settings">Settings</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="k">[query]</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="n">jev_enabled</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="w">         </span><span class="c1"># hard off switch; the key's presence is the opt-in</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="n">jev_model</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">"jev-latest"</span><span class="w">  </span><span class="c1"># or jev-preview, or a pinned jev-1.x.y</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="n">jev_monthly_usd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">5.00</span><span class="w">         </span><span class="c1"># spend ceiling; on breach, degrade rather than bill on</span>
+</code></pre></div>
+<h3 id="when-classification-is-unavailable">When classification is unavailable</h3>
+<p>Two different situations, treated differently:</p>
+<ul>
+<li><strong>No key, or <code>jev_enabled = false</code>.</strong> No classification happens and the
+  surface behaves exactly as it does without this feature. This is the default
+  and it is not a degraded mode.</li>
+<li><strong>A key is set but the service cannot be used</strong> — unreachable, a bad key, Jev
+  throttling you, an unrecognised response, or your monthly ceiling reached. The
+  surface still answers, but <em>strictly</em>: at most 3 spans, and only spans that
+  matched more than one body term. You turned a gate on; it being down should
+  not make your surface more permissive than you configured.</li>
+</ul>
+<p>The audit log says which, so you can tell "I forgot the key" from "the API is
+down":</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>claudectl access audit
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>GRANT        WHEN           EVENT      REASON            DETAIL             QUESTION
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>gr_07e548    just now       allowed    -                 query.ask          how does config layering work?
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>             jev.spend_ceiling
+</code></pre></div>
+<p>A <code>jev.unmetered</code> marker means the call happened but the spend ledger could not
+record it — so the monthly ceiling has stopped accumulating. It appears on every
+kind of outcome, not just answers, because a holder who trips the deny
+thresholds never produces an answer for a marker to ride on.</p>
+<p>On a successful classification that line carries all five numbers instead:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>             intent=structure/0.91 docs=0.94 sens=0.01 inj=0.01 scope=0.98
+</code></pre></div>
+<h3 id="escalations">Escalations</h3>
+<p>A question Jev is unsure about is queued rather than guessed at:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>claudectl<span class="w"> </span>access<span class="w"> </span>escalations
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>ESCALATION        GRANT        WHEN       STATE          QUESTION
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>esc_4f1c8a0b2d3e  gr_07e548    5m ago     pending_review how does the supervisor decide to retry a verification?
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>                  intent=structure/0.55 docs=0.52 sens=0.10 inj=0.02 scope=0.93
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>1 awaiting you. Decide with: claudectl access escalations approve &lt;id&gt;  (or deny)
+</code></pre></div>
+<p>Decide one either way, with an optional note the caller sees:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>claudectl<span class="w"> </span>access<span class="w"> </span>escalations<span class="w"> </span>approve<span class="w"> </span>esc_4f1c8a0b2d3e<span class="w"> </span>--note<span class="w"> </span><span class="s2">"fair question"</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>claudectl<span class="w"> </span>access<span class="w"> </span>escalations<span class="w"> </span>deny<span class="w"> </span>esc_4f1c8a0b2d3e<span class="w"> </span>--note<span class="w"> </span><span class="s2">"ask me directly"</span>
+</code></pre></div>
+<p>The caller polls the id they were given, with the token they already hold:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">  </span>http://127.0.0.1:8787/api/v1/project/claudectl/escalation/esc_4f1c8a0b2d3e
+</code></pre></div>
+<p>Approved, they get spans; denied, the refusal and your note; neither yet,
+<code>pending_review</code>. <strong>Polling does not spend their daily budget</strong> — it is the tail
+of a question that was already charged — though it is still rate limited, so a
+caller cannot spin on it for free.</p>
+<p>Three things worth knowing:</p>
+<ul>
+<li><strong>Approving retrieves at poll time, not at approval time.</strong> You are saying
+  "this question may be answered", not freezing an answer. The response reports
+  both the fingerprint the question was <em>classified</em> against and the index's
+  fingerprint <em>now</em>, so a caller can see the project moved underneath them.
+  This is also what lets you decide from any directory — <code>approve</code> needs no
+  index, so it never has to work out which project you are in.</li>
+<li><strong>A decision is final.</strong> Deciding twice is refused by the filesystem, not by a
+  check that could race: the verdict is a create-only file, and <code>approve</code> runs
+  in your shell while <code>query serve</code> answers the poll. There is no un-approve;
+  revoke the grant if you change your mind.</li>
+<li><strong>A queue nobody drains expires.</strong> A pending escalation stops being
+  answerable after seven days, which is derived from its timestamp rather than
+  swept by a process. Expired rows still list, so an unanswered question stays
+  visible rather than vanishing.</li>
+</ul>
+<p>To be told rather than having to look, add a hook:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="k">[hooks.on_escalation]</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="n">run</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"osascript -e 'display notification </span><span class="se">\"</span><span class="s2">$CLAUDECTL_ESCALATION_QUESTION</span><span class="se">\"</span><span class="s2">'"</span>
+</code></pre></div>
+<p>It receives <code>CLAUDECTL_ESCALATION_ID</code>, <code>_GRANT</code>, <code>_PROJECT</code> and a truncated
+<code>_QUESTION</code>, and is spawned without being waited on — a slow notifier cannot
+hold the caller's response open.</p>
+<h3 id="flagged-grants">Flagged grants</h3>
+<p>An injection attempt marks the grant and leaves it working:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>claudectl access list
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>GRANT       STATE     LABEL                        USES  LAST USED
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>gr_07e548   flagged   acme security review            12  2m ago       project.query:claudectl
+</code></pre></div>
+<p><code>flagged</code> outranks <code>active</code> in that column precisely because the grant still
+works — if it read <code>active</code> you would never notice. It is not a revocation: the
+injection threshold is deliberately paranoid, and a false positive that killed a
+real reviewer's grant would be worse than one denied question. Revoke it
+yourself if the record warrants it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>claudectl<span class="w"> </span>access<span class="w"> </span>revoke<span class="w"> </span>gr_07e548
+</code></pre></div>
+<p><code>--json</code> carries <code>flagged_ms</code> and <code>flag_reason</code> as their own fields, so a script
+can see both that the grant is live and that it is flagged.</p>
+<h3 id="thresholds">Thresholds</h3>
+<p>The six numbers live in <code>src/query/thresholds.rs</code> with the reasoning for each.
+They are the spec's starting values and have <strong>not</strong> been tuned against real
+traffic — the vendor's own guidance is that thresholds must be validated on your
+own data. The routing table is tested against 24 adversarial fixtures, which
+proves the table is wired correctly; it does not prove <code>0.15</code> is the right place
+to stand. If you run this against real traffic, the audit log's <code>classification</code>
+lines are the data you need to move them.</p>
+<p>No request has been sent to <code>api.typesafe.ai</code> from this codebase, so the live
+path is unverified. If you set a key and the first response does not parse,
+that is schema drift — please file an issue with what came back.</p>
+<h2 id="rate-limits-and-budgets">Rate limits and budgets</h2>
+<p>Two per-grant guardrails, both enforced by <code>claudectl query serve</code> and both
+set on the grant file:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>What it bounds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rate_limit_per_min</code></td>
+<td>20</td>
+<td>A token bucket. Bursts up to the limit, then held to steady refill.</td>
+</tr>
+<tr>
+<td><code>daily_query_budget</code></td>
+<td>500</td>
+<td>Queries per UTC day. Resets on the day boundary with nothing to run.</td>
+</tr>
+</tbody>
+</table>
+<p>Both answer <code>429</code>, with a <code>Retry-After</code> and a body naming which one was hit:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>$ curl -i -X POST http://127.0.0.1:8787/api/v1/project/claudectl/query \
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>    -H "Authorization: Bearer cctl_gr_7f2a1b_&lt;mac&gt;" -d '{"question":"..."}'
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>HTTP/1.1 429 Too Many Requests
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a>Retry-After: 20
+<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a>{"error":"rate limited"}
+</code></pre></div>
+<p>Telling the holder which limit they hit is deliberate, and it is the one
+exception to the opacity everywhere else in this document. The <code>404</code>-not-<code>403</code>
+rule exists so an <em>unauthorized</em> caller cannot enumerate what you have; a
+throttled caller has already proved they hold a valid, in-scope token for this
+project, so naming their own ceiling tells them nothing new — and a working
+grant that goes silently quiet is hostile to them and a support question for
+you.</p>
+<p><strong>Editing a limit takes effect on restart.</strong> A bucket keeps the capacity it was
+created with for the life of the process, so raising <code>rate_limit_per_min</code> in
+the file does not move a ceiling mid-window. The daily budget is read from the
+file on every request, so lowering it applies immediately.</p>
+<h3 id="which-denials-cost-a-query">Which denials cost a query</h3>
+<p>Only one: a <strong>missing scope</strong>. That is the single denial proving the caller
+holds a valid, unexpired, unrevoked token and is probing verbs or projects it
+was not granted — exactly the probing a budget should discourage.</p>
+<p>A bad MAC or an unknown grant costs nothing, and that is not an oversight. A
+grant id is 24 bits. If every denial charged, anyone who guessed an id could
+send garbage until your grant holder's day was spent — a denial-of-service
+against the person the budget protects.</p>
+<h3 id="reading-the-log-afterwards">Reading the log afterwards</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>$ claudectl access audit gr_7f2a1b
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>GRANT        WHEN       EVENT    REASON            DETAIL           QUESTION
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>gr_7f2a1b    3m ago     allowed  -                 query.ask        how does config layering work?
+<a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a>gr_7f2a1b    3m ago     allowed  -                 query.ask        where do terminal backends live?
+<a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a>gr_7f2a1b    3m ago     denied   rate_limited      3/min            how is the brain structured?
+<a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a>gr_7f2a1b    2m ago     denied   budget_exhausted  5/5 used today   what is in the hive?
+</code></pre></div>
+<p>The QUESTION column is the point. Caps stop the abuse you anticipated; the log
+is the only way the abuse nobody anticipated becomes visible, and a log of
+counts alone cannot show what a grant was fishing for. Questions are truncated
+to 512 bytes.</p>
+<p><code>--json</code> adds <code>cited</code> — the distinct paths that answered each query, so you can
+see what actually left the machine without replaying the question against a
+since-changed index:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="p">{</span><span class="nt">"ts_ms"</span><span class="p">:</span><span class="mi">1791263678947</span><span class="p">,</span><span class="nt">"grant_id"</span><span class="p">:</span><span class="s2">"gr_7f2a1b"</span><span class="p">,</span><span class="nt">"event"</span><span class="p">:</span><span class="s2">"allowed"</span><span class="p">,</span>
+<a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="w"> </span><span class="nt">"detail"</span><span class="p">:</span><span class="s2">"query.ask"</span><span class="p">,</span><span class="nt">"question"</span><span class="p">:</span><span class="s2">"how does config layering work?"</span><span class="p">,</span>
+<a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a><span class="w"> </span><span class="nt">"cited"</span><span class="p">:[</span><span class="s2">"CLAUDE.md"</span><span class="p">,</span><span class="s2">"docs/configuration.md"</span><span class="p">]}</span>
+</code></pre></div>
+<h3 id="what-these-cannot-do">What these cannot do</h3>
+<p>Per-grant limits bound an <em>authenticated</em> caller. An unauthenticated flood
+still appends a denial line per attempt, which is a disk-write vector that no
+per-grant cap can address — that is the TLS terminator's or reverse proxy's
+job, and it is the same reason <code>query serve</code> warns when you bind an address
+reachable off the machine.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/mercurialsolo/claudectl" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
