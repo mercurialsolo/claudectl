@@ -1,19 +1,19 @@
 # Cross-Agent Hive — Design Specification
 
-**Status:** Proposed. Nothing in this document is shipped. Written against the code as of `bc61737d` (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
+**Status:** Proposed — epic #521, phases #522–#528. Nothing in this document is shipped. Written against the code as of `bc61737d` (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
 **Scope:** Let coding agents that are not Claude Code — starting with Codex — join a hive as full members: contribute what they learn, receive what others learned, and talk to every other member over one bus. Today the hive's substrate is agent-neutral but its two ends are not: capture happens through a Claude Code hook, and application happens into a Claude Code prompt.
 
 ## Implementation status
 
-| Phase (§8) | Status | Module / artifact |
-| --- | --- | --- |
-| 1. Canonical tool vocabulary | **Not started** | `claudectl-core/src/agent/vocab.rs` (new), seam at `src/brain/preferences.rs:593` |
-| 2. Unit provenance + artifact applicability | **Not started** | `src/hive/mod.rs` (`origin_agent`, `ArtifactRequires::agents`) |
-| 3. Codex discovery + monitor | **Not started** | `claudectl-core/src/agent/codex/` (new), wired through `src/coord/adapter_codex.rs` |
-| 4. Hive read surface for any agent (MCP) | **Not started** | `src/hive/mcp.rs` (new), mirroring `src/query/mcp.rs` |
-| 5. Codex write surface (AGENTS.md, rules) | **Not started** | `src/hive/project/` (new) |
-| 6. Bus: agent + machine dimension | **Not started** | `src/bus/{store,roles,policy}.rs` |
-| 7. Bus: relay bridge (cross-machine) | **Not started** | `src/bus/bridge.rs` (new), `src/relay/mod.rs` message type |
+| Phase (§8) | Issue | Status | Module / artifact |
+| --- | --- | --- | --- |
+| 1. Canonical tool vocabulary | #522 | **Not started** | `claudectl-core/src/agent/vocab.rs` (new), seam at `src/brain/preferences.rs:593` |
+| 2. Unit provenance + artifact applicability | #523 | **Not started** | `src/hive/mod.rs` (`origin_agent`, `ArtifactRequires::agents`) |
+| 3. Codex discovery + monitor | #524 | **Not started** | `claudectl-core/src/agent/codex/` (new), wired through `src/coord/adapter_codex.rs` |
+| 4. Hive read surface for any agent (MCP) | #525 | **Not started** | `src/hive/mcp.rs` (new), mirroring `src/query/mcp.rs` |
+| 5. Codex write surface (AGENTS.md, rules) | #526 | **Not started** | `src/hive/project/` (new) |
+| 6. Bus: agent + machine dimension | #527 | **Not started** | `src/bus/{store,roles,policy}.rs` |
+| 7. Bus: relay bridge (cross-machine) | #528 | **Not started** | `src/bus/bridge.rs` (new), `src/relay/mod.rs` message type |
 
 ---
 
@@ -294,4 +294,6 @@ No header or comment. Machine-written: entries include multi-kilobyte heredoc bo
 
 ## Related
 
-Epic #478 (work across hosts) · epic #424 (open cluster / named hives) · #435 (read-only members, the precedent for refusing a contribution) · #465 (dead-code audit — `coord/adapter.rs` carries `#![allow(dead_code)]` and is the same shape) · `docs/relay-and-hive.md` · `docs/AGENT_BUS.md` · `docs/open-cluster.md`
+Epic #521 is this spec's tracking issue; phases are #522–#528.
+
+Epic #478 (work across hosts — `TaskHandoff` is still the open instance of the no-reply-path trap §7.3 describes) · epic #424 (open cluster / named hives) · #435 (read-only members, the precedent for refusing a contribution rather than dropping it) · #465 (dead-code audit — `coord/adapter.rs` carries `#![allow(dead_code)]` and is the same shape) · #506 (LAN discovery written but never started — the same "exists but not on the path" shape as the adapter trait) · #511 (a one-shot send that is never acknowledged) · `docs/relay-and-hive.md` · `docs/AGENT_BUS.md` · `docs/open-cluster.md`
