@@ -117,6 +117,16 @@ pub struct DecisionRecord {
     pub rule_name: Option<String>,
     /// decision_ids of the past examples retrieved into the prompt (#372).
     pub few_shot_ids: Vec<String>,
+    /// Which coding agent this decision was observed in — `claude-code`,
+    /// `codex`, … (#522). `None` on every record written before the field
+    /// existed, which is what keeps those records' distilled `semantic_key`
+    /// unchanged: an absent family passes the tool name through untouched.
+    ///
+    /// The raw name the agent used is kept here deliberately. Normalizing at
+    /// write time would make the log lie about what the agent actually did,
+    /// and would be unreversible if the vocabulary table turned out wrong;
+    /// normalizing at distill time (`preferences.rs`) is re-runnable.
+    pub agent_family: Option<String>,
 }
 
 impl DecisionRecord {
@@ -488,6 +498,10 @@ pub fn log_decision_full(
         "decision_source": suggestion.cause.source,
         "rule_name": suggestion.cause.rule_name,
         "few_shot_ids": suggestion.cause.few_shot_ids,
+        // Which agent this was observed in (#522). This path is reached from
+        // the Claude Code brain gate, so the family is known here; a Codex
+        // ingest (#524) is what will ever write anything else.
+        "agent_family": claudectl_core::agent::vocab::CLAUDE_CODE,
     });
     if let Some(s) = session {
         record["context"] = snapshot_context(s);
@@ -869,6 +883,13 @@ pub fn read_all_decisions_in(root: &Path) -> Vec<DecisionRecord> {
                             .collect()
                     })
                     .unwrap_or_default(),
+                // Absent on every record written before #522. Left as None
+                // rather than defaulted to `claude-code`, so the two cases
+                // stay distinguishable — the normalizer treats them the same.
+                agent_family: json
+                    .get("agent_family")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
             })
         })
         .collect()
@@ -1057,6 +1078,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 
@@ -1119,6 +1141,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 

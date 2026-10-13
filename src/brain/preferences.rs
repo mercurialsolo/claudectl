@@ -590,7 +590,15 @@ pub fn distill_preferences(decisions: &[DecisionRecord]) -> DistilledPreferences
     let mut pattern_groups: HashMap<(String, Option<String>), Vec<usize>> = HashMap::new();
 
     for (idx, d) in decisions_mut.iter().enumerate() {
-        let tool = d.tool.clone().unwrap_or_else(|| "*".to_string());
+        // Normalize the agent's own tool name into the canonical vocabulary
+        // (#522) so a preference learned in Codex merges with the same
+        // preference learned in Claude Code instead of forming a second,
+        // half-evidenced unit. This is the one seam between a raw decision
+        // record and a distilled pattern, and it is deliberately on the read
+        // side: the log keeps what the agent actually called the tool, so a
+        // wrong table entry is fixed by re-distilling rather than being
+        // baked into the record forever.
+        let tool = canonical_tool_for(d);
         let cmd_key = extract_command_keyword(d.command.as_deref());
 
         // Tool-level stats
@@ -819,6 +827,25 @@ pub fn distill_preferences(decisions: &[DecisionRecord]) -> DistilledPreferences
     }
 }
 
+/// The canonical tool name for a decision record (#522).
+///
+/// Records carry the raw name the agent used, so this is where a foreign
+/// vocabulary becomes the one `hive::semantic_key` is built from. A record
+/// with no `agent_family` — every record written before the field existed —
+/// passes through unchanged, which is what keeps existing hives' keys stable.
+///
+/// `command` doubles as the payload argument: for a Codex `apply_patch` it
+/// holds the patch text, whose envelope marker is what tells `Write` from
+/// `Edit`.
+pub(super) fn canonical_tool_for(d: &DecisionRecord) -> String {
+    claudectl_core::agent::vocab::canonical_tool(
+        d.agent_family.as_deref().unwrap_or_default(),
+        None,
+        d.tool.as_deref().unwrap_or("*"),
+        d.command.as_deref(),
+    )
+}
+
 /// Extract a command keyword for pattern grouping.
 /// e.g., "rm -rf /tmp/foo" → "rm -rf", "cargo test --release" → "cargo test"
 pub(super) fn extract_command_keyword(command: Option<&str>) -> Option<String> {
@@ -954,6 +981,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 
@@ -986,6 +1014,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 
@@ -1053,6 +1082,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 
@@ -1345,6 +1375,7 @@ mod tests {
                 decision_source: None,
                 rule_name: None,
                 few_shot_ids: Vec::new(),
+                agent_family: None,
             },
             DecisionRecord {
                 timestamp: "2".into(),
@@ -1369,6 +1400,7 @@ mod tests {
                 decision_source: None,
                 rule_name: None,
                 few_shot_ids: Vec::new(),
+                agent_family: None,
             },
         ];
 
@@ -1412,6 +1444,7 @@ mod tests {
                 decision_source: None,
                 rule_name: None,
                 few_shot_ids: Vec::new(),
+                agent_family: None,
             });
         }
         // Then user denies
@@ -1438,6 +1471,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         });
         // Repeat the streak pattern to reach threshold of 2
         for _ in 0..4 {
@@ -1464,6 +1498,7 @@ mod tests {
                 decision_source: None,
                 rule_name: None,
                 few_shot_ids: Vec::new(),
+                agent_family: None,
             });
         }
         decisions.push(DecisionRecord {
@@ -1489,6 +1524,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         });
 
         let patterns = detect_temporal_patterns(&decisions);

@@ -751,6 +751,101 @@ mod tests {
         }
     }
 
+    /// The whole point of #522, asserted end to end rather than at the
+    /// vocabulary function: the same preference, expressed in Codex and in
+    /// Claude Code, must distil to **one** semantic key — and therefore one
+    /// merged unit with combined evidence, not two half-evidenced ones.
+    #[test]
+    fn same_preference_in_two_agents_distils_to_one_semantic_key() {
+        let keys_for = |family: Option<&str>, tool: &str| -> Vec<String> {
+            let decisions: Vec<DecisionRecord> = (0..4)
+                .map(|i| {
+                    let mut d = make_decision_with_id(
+                        &format!("dec_{i}"),
+                        tool,
+                        "cargo test --release",
+                        "claudectl",
+                    );
+                    d.agent_family = family.map(|f| f.to_string());
+                    d
+                })
+                .collect();
+            let prefs = crate::brain::preferences::distill_preferences(&decisions);
+            let units = distill_to_knowledge(
+                &prefs,
+                "test-peer",
+                None,
+                &ExportThresholds {
+                    min_pattern_evidence: 1,
+                    min_tool_decisions: 1,
+                    ..ExportThresholds::default()
+                },
+            );
+            let mut keys: Vec<String> = units.iter().map(semantic_key).collect();
+            keys.sort();
+            keys
+        };
+
+        let claude = keys_for(Some("claude-code"), "Bash");
+        let codex = keys_for(Some("codex"), "exec_command");
+
+        assert!(
+            !claude.is_empty(),
+            "the Claude Code side produced no units, so the comparison is vacuous"
+        );
+        assert_eq!(
+            claude, codex,
+            "a Codex `exec_command` preference must land on the same semantic key \
+             as the Claude Code `Bash` preference it is the same as — otherwise the \
+             hive holds two half-evidenced units and 'learns once, remembers \
+             everywhere' is false"
+        );
+
+        // A record from before the field existed is a Claude Code record, and
+        // must keep producing exactly the key it produced before #522.
+        assert_eq!(
+            keys_for(None, "Bash"),
+            claude,
+            "an absent agent_family must not change an existing hive's keys"
+        );
+    }
+
+    /// A Codex `apply_patch` that creates a file belongs with `Write`, not
+    /// `Edit` — the envelope marker carries the distinction and the distiller
+    /// has to preserve it through to the key.
+    #[test]
+    fn codex_apply_patch_splits_write_from_edit_in_the_key() {
+        let key_for = |patch: &str| -> String {
+            let decisions: Vec<DecisionRecord> = (0..3)
+                .map(|i| {
+                    let mut d = make_decision_with_id(
+                        &format!("dec_{i}"),
+                        "apply_patch",
+                        patch,
+                        "claudectl",
+                    );
+                    d.agent_family = Some("codex".to_string());
+                    d
+                })
+                .collect();
+            let prefs = crate::brain::preferences::distill_preferences(&decisions);
+            prefs
+                .patterns
+                .first()
+                .map(|p| p.tool.clone())
+                .unwrap_or_default()
+        };
+
+        assert_eq!(
+            key_for("*** Begin Patch\n*** Add File: new.rs\n+x"),
+            "Write"
+        );
+        assert_eq!(
+            key_for("*** Begin Patch\n*** Update File: old.rs\n@@\n-a\n+b"),
+            "Edit"
+        );
+    }
+
     fn make_decision_with_id(id: &str, tool: &str, command: &str, project: &str) -> DecisionRecord {
         use crate::brain::decisions::DecisionType;
         DecisionRecord {
@@ -776,6 +871,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 

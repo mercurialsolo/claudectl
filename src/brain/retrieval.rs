@@ -186,6 +186,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 
