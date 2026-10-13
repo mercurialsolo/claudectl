@@ -1,6 +1,6 @@
 # Cross-Agent Hive — Design Specification
 
-**Status:** Epic #521, phases #522–#528. Phases 1 (PR #530) and 2 (PR #531) shipped; the rest proposed. Written against the code as of `bc61737d` (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
+**Status:** Epic #521, phases #522–#528. Phases 1 (PR #530), 2 (PR #531) and 3 (PR #532) shipped; the rest proposed. The adapter-registry half of phase 3 was split out as #533. Written against the code as of `bc61737d` (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
 **Scope:** Let coding agents that are not Claude Code — starting with Codex — join a hive as full members: contribute what they learn, receive what others learned, and talk to every other member over one bus. Today the hive's substrate is agent-neutral but its two ends are not: capture happens through a Claude Code hook, and application happens into a Claude Code prompt.
 
 ## Implementation status
@@ -9,7 +9,8 @@
 | --- | --- | --- | --- |
 | 1. Canonical tool vocabulary | #522 | **Shipped** (PR #530) | `claudectl-core/src/agent/vocab.rs`, seam at `brain::preferences::canonical_tool_for` |
 | 2. Unit provenance + artifact applicability | #523 | **Shipped** (PR #531) | `src/hive/mod.rs` (`origin_agents`, `ArtifactRequires::agents`), `hive/distiller.rs` (`OriginIndex`), `claudectl-core/src/agent/mod.rs` (presence detection) |
-| 3. Codex discovery + monitor | #524 | **Not started** | `claudectl-core/src/agent/codex/` (new), wired through `src/coord/adapter_codex.rs` |
+| 3. Codex discovery + monitor | #524 | **Shipped** (PR #532) | `claudectl-core/src/agent/codex.rs`, `session::ClaudeSession::{from_codex_rollout,is_actionable}` |
+| 3b. Route everything through the adapter registry | #533 | **Not started** | `src/coord/adapter*.rs`, or `claudectl-core/src/runtime.rs` |
 | 4. Hive read surface for any agent (MCP) | #525 | **Not started** | `src/hive/mcp.rs` (new), mirroring `src/query/mcp.rs` |
 | 5. Codex write surface (AGENTS.md, rules) | #526 | **Not started** | `src/hive/project/` (new) |
 | 6. Bus: agent + machine dimension | #527 | **Not started** | `src/bus/{store,roles,policy}.rs` |
@@ -62,7 +63,25 @@ Two things that look like cross-agent support but are not:
 
 Codex's equivalent is richer than expected (§9.1): `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`, with `session_meta` carrying `session_id` and `cwd`, `event_msg/token_count` carrying `model_context_window` alongside full token usage, and `task_started` / `task_complete` / `turn_aborted` as status signals.
 
-One real asymmetry: **Codex rollouts carry no USD.** Codex is subscription-billed and records only tokens. Every cost-derived path — `models.rs` pricing, the budget gate, burn rate, cost-spike health checks — must degrade to tokens-only for a Codex session rather than reporting `$0.00`, which would be a lie that propagates into fleet cost totals.
+Phase 3 settled three things this section originally left open, and one of them contradicted the plan.
+
+#### There is no process to discover
+
+This spec and #524 both assumed Codex discovery would find processes and read their state. Measured: the ChatGPT desktop app runs Codex as **one** long-lived `codex … app-server` serving every session, alongside 27 Electron helpers. Nothing distinguishes which session a process owns. A terminal `codex` is its own process, but there is no general mapping.
+
+So a Codex session is discovered from its transcript, `pid` is 0, and the session is **not actionable** — `ClaudeSession::is_actionable()`. This is a safety property, not a missing feature: offering "kill" on a Codex session and reaching the shared `app-server` would end every Codex session the user has open.
+
+#### Liveness is a recency window, because there is no session-end event
+
+`task_complete` ends a *turn*. A session the user closed is byte-identical to one sitting idle. `CODEX_SESSION_TTL_SECS` (30 minutes) is the whole liveness model, chosen from the measured distribution — 0 rollouts touched in the last hour, 1 in four, 25 in a week, 671 all time. It is bimodal, so the exact value barely matters. Its one cost: a session that crashed mid-turn reads as working until the window expires.
+
+#### Cost is absent, not zero
+
+**Codex rollouts carry no USD.** Codex is subscription-billed and records only tokens. `cost_usd` stays 0 with `usage_metrics_available` false and `has_known_cost()` false, so nothing can mistake "unknown" for "free". The existing cost sums are additive, so a 0 contributes nothing and no total is corrupted.
+
+#### The type was not renamed
+
+`ClaudeSession` keeps its name (§10 question 5, now closed). It is public API across all three crates, a Codex session fills the same fields and flows through the same views, and renaming buys nothing an `agent_family` field does not. Three predicates keep the distinctions from drifting: `is_claude_code()` for "where do this session's files live", `is_actionable()` for "may I touch it", `is_remote()` unchanged for "is this from a peer".
 
 ### 3.2 Tool vocabulary — the one that matters
 
@@ -360,8 +379,9 @@ No header or comment. Machine-written: entries include multi-kilobyte heredoc bo
 2. **Forwarding or replication for the bus bridge?** §7.3. Decide before writing code.
 3. **Who owns a cross-machine reserved role?** `supervisor` and `operator` cannot be bound (`bus/policy.rs:41`), so `supervisor@mini` has no resolution story.
 4. **Does `origin_agent` affect confidence, or only display?** A unit confirmed independently in two agents is better evidence than one confirmed twice in the same agent. Saying so in the scoring is defensible; it is also a scoring change, which is a separate kind of risk from a schema change.
-5. **Does `ClaudeSession` get renamed?** It is public API across all three crates. A trait with a Claude implementation may be cheaper than a rename, and the `runtime.rs` DTO boundary (`SessionSnapshot`) may already be the right place to absorb the difference.
-6. **What happens to a Codex session's cost in the fleet snapshot?** Reporting `$0.00` corrupts `claudectl_fleet_cost_usd_total`. Options: omit, or carry a tokens-only variant. Needs deciding before phase 3 publishes a Codex session to `fleet.json`.
+5. ~~**Does `ClaudeSession` get renamed?**~~ **Closed by #524:** no. An `agent_family` field plus three predicates costs less than renaming public API across three crates, and is reversible if a rename later earns itself.
+6. ~~**What happens to a Codex session's cost in the fleet snapshot?**~~ **Closed by #524:** `cost_usd` is 0 with `has_known_cost()` false. The existing sums are additive so nothing is corrupted, and anything that needs to tell "unknown" from "zero" has a predicate to ask.
+7. **Should the adapter registry be `runtime::SessionSource` rather than a second trait?** Raised by #533. `SessionSource` already answers "where do sessions come from", is already core-owned, and is already implemented by the binary — a second registry for the same question would be the duplication #533 exists to remove.
 
 ## Related
 
