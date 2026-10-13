@@ -23,7 +23,7 @@ The project's tagline is "learns from you once and remembers everywhere." *Every
 
 That gap is not academic. On the machine this spec was written against there are 671 Codex rollout transcripts and a Codex approval store with 275 entries. Every approval in that store is a preference the user expressed — the exact raw material `brain/preferences.rs` distills into a `KnowledgeUnit` — and none of it reaches the hive. In the other direction, a preference the hive has learned with high confidence from a hundred Claude sessions has no way to reach a Codex session, which will ask about the same command again.
 
-Worse, the two agents share MCP servers. A preference about `mcp__context7/query_docs` learned in Codex and the same preference learned as `mcp__context7__query_docs` in Claude Code are, to the hive, two unrelated facts about two unrelated tools. They are the same tool on the same server.
+The two agents also share MCP servers, which is where this gets both worse and better than expected. Most of Codex's MCP calls already carry the exact Claude Code tool name (`mcp__chrome-devtools__click`), so those preferences would merge the moment either side contributed one — they simply never do, because Codex never contributes. The rest arrive split across two fields (`namespace: "mcp__cua_repl"`, `name: "js"`) and need one join to become the same key (§3.2). Either way it is the same tool on the same server, and the hive currently treats the two agents' experience of it as unrelated.
 
 This spec covers three questions in order of how expensive they are to get wrong:
 
@@ -73,16 +73,44 @@ One real asymmetry: **Codex rollouts carry no USD.** Codex is subscription-bille
 | `exec_command` | 7046 | `Bash` |
 | `exec` | 3624 | `Bash` |
 | `write_stdin` | 1336 | `Bash` (stdin to a running command) |
-| `apply_patch` | 1270 | `Edit` / `Write` |
+| `apply_patch` | 1270 | `Write` or `Edit` — see below |
 | `shell_command` | 671 | `Bash` |
 | `update_plan` | 60 | `TodoWrite` |
 | `spawn_agent`, `collaboration/*` | ~160 | `Task` |
 | `request_user_input_async` | 31 | `AskUserQuestion` |
 | `web/run` | 27 | `WebSearch` / `WebFetch` |
-| `mcp__context7/query_docs` | 17 | `mcp__context7__query_docs` |
 | `wait`, `clock/sleep` | 251 | *(no equivalent)* |
 
-The MCP row is the most valuable and the most mechanical. Codex keeps `namespace` and `name` as separate fields; Claude Code concatenates them with `__`. Same server, same tool, two spellings — so MCP tool preferences, which should be the most portable knowledge in the system, are currently the least shareable.
+#### MCP tools mostly need no normalization at all
+
+Codex emits MCP calls in **two shapes**, and the dominant one is already the Claude Code spelling byte-for-byte (§9.2):
+
+| Codex `namespace` | Codex `name` | Count | Canonical |
+| --- | --- | --- | --- |
+| *(absent)* | `mcp__chrome-devtools__evaluate_script` | 139 | identical — pass through |
+| `mcp__cua_repl` | `js` | 381 | `mcp__cua_repl__js` |
+
+So the rule is: if `name` already begins with `mcp__`, it *is* the canonical name and must pass through untouched. Otherwise, when `namespace` begins with `mcp__`, join as `{namespace}__{name}` — the namespace already carries the `mcp__` prefix, so this is a join, not a reconstruction.
+
+This matters because the Claude Code form is **not** reversibly splittable: a server segment may itself contain `_` and `-` (`mcp__chrome-devtools__new_page`, `mcp__claude_ai_Claude_Docs__batch`), so there is no way to recover `(server, tool)` from the joined string. Normalization therefore has to run forward from Codex's explicit fields and never attempt the inverse.
+
+The practical consequence is good: most MCP tool preferences already share a key across the two agents and will merge the moment a Codex session contributes one.
+
+#### `apply_patch` splits into `Write` and `Edit`, and the signal is present
+
+Claude Code keeps `Write` (new file) and `Edit` (existing file) as distinct tool names in `DecisionRecord.tool`, so existing hives hold separate `pattern:Write:*` and `pattern:Edit:*` units. Mapping every `apply_patch` to `Edit` would silently merge Codex file-creation approvals into Edit units.
+
+It does not have to be lossy. Codex's patch envelope carries the distinction explicitly, and in the sample (§9.2) it is well populated: `*** Update File` 1934, `*** Add File` 190, `*** Delete File` 10. So:
+
+| Envelope marker | Canonical |
+| --- | --- |
+| `*** Add File` | `Write` |
+| `*** Update File` | `Edit` |
+| `*** Delete File` | `codex:apply_patch_delete` |
+
+Deletion has no Claude Code tool analogue — it happens through `Bash rm`, which is a different operation with different risk — so it keeps a family-prefixed name and merges with nothing. That is correct rather than unfortunate.
+
+A patch touching several files can carry several markers. Where markers disagree, prefer `Write`: a batch that creates a file is the higher-privilege operation, and a preference learned about it should not be filed under the gentler name.
 
 The flow has exactly one seam. `src/brain/preferences.rs:593`:
 
@@ -134,7 +162,7 @@ The reason is the product, not the schema. "`cargo test` is always approved," le
 
 Three consequences:
 
-- **`canonical_tool(family, namespace, name) -> String` is a pure function** living in `claudectl-core`, with the §3.2 table as data. Claude Code's names are the canonical form, because they are already on the wire in every existing hive. This is not a claim that they are better names; it is that they are the incumbent ones and a rename is a migration.
+- **`canonical_tool(family, namespace, name, payload) -> String` is a pure function** living in `claudectl-core`, with the §3.2 tables as data. Claude Code's names are the canonical form, because they are already on the wire in every existing hive. This is not a claim that they are better names; it is that they are the incumbent ones and a rename is a migration. The `payload` argument exists only so `apply_patch` can read its envelope marker (§3.2) — every other mapping is a function of the name and namespace alone.
 - **Provenance is additive, never in the key.** `KnowledgeUnit.origin_agent: Option<String>` with `#[serde(default)]`. Old peers ignore the field; new peers can show "learned in Codex, confirmed in Claude Code," which is *more* trustworthy than either alone and should eventually raise confidence rather than merely annotate it.
 - **Applicability is per-artifact, not per-unit.** `ArtifactRequires.agents: Vec<String>` (`#[serde(default)]`, empty = any) on `Skill` / `Command` / `HookConfig` only. A hook unit declares `agents = ["claude-code"]` and a Codex-only peer skips it on arrival instead of failing to install it.
 
@@ -246,6 +274,20 @@ One JSON object per line, each with `timestamp`, `ordinal`, `type`, `payload`. E
 ### 9.2 Tool-name histogram
 
 120 rollout files sampled across all months, ~15 000 tool calls. Counts in the §3.2 table. Kinds: `function_call` 10 101, `custom_tool_call` 4894, `local_shell_call` 0.
+
+A second pass over 168 files recorded the **raw** `namespace` and `name` fields rather than a joined display string, which is what §3.2's MCP rule is built on:
+
+```
+  381  namespace='mcp__cua_repl'                name='js'
+  139  namespace=None   name='mcp__chrome-devtools__evaluate_script'
+  120  namespace=None   name='mcp__chrome-devtools__take_snapshot'
+   75  namespace=None   name='mcp__chrome-devtools__click'
+   10  namespace=None   name='mcp__codex_apps__github_search'
+```
+
+Two shapes, and the common one is already the Claude Code spelling. An earlier pass of this measurement printed `mcp__context7/query_docs`; the `/` was the measuring script's own join separator and is **not** a Codex delimiter. Recorded here because the mistake is easy to repeat.
+
+The same pass counted `apply_patch` envelope markers: `*** Update File` 1934, `*** Add File` 190, `*** Delete File` 10, `*** Move File` 0.
 
 ### 9.3 Skill format comparison
 
