@@ -1,13 +1,13 @@
 # Cross-Agent Hive — Design Specification
 
-**Status:** Proposed — epic #521, phases #522–#528. Nothing in this document is shipped. Written against the code as of `bc61737d` (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
+**Status:** Epic #521, phases #522–#528. Phase 1 shipped in PR #530; the rest proposed. Written against the code as of `bc61737d` (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
 **Scope:** Let coding agents that are not Claude Code — starting with Codex — join a hive as full members: contribute what they learn, receive what others learned, and talk to every other member over one bus. Today the hive's substrate is agent-neutral but its two ends are not: capture happens through a Claude Code hook, and application happens into a Claude Code prompt.
 
 ## Implementation status
 
 | Phase (§8) | Issue | Status | Module / artifact |
 | --- | --- | --- | --- |
-| 1. Canonical tool vocabulary | #522 | **Not started** | `claudectl-core/src/agent/vocab.rs` (new), seam at `src/brain/preferences.rs:593` |
+| 1. Canonical tool vocabulary | #522 | **Shipped** (PR #530) | `claudectl-core/src/agent/vocab.rs`, seam at `brain::preferences::canonical_tool_for` |
 | 2. Unit provenance + artifact applicability | #523 | **Not started** | `src/hive/mod.rs` (`origin_agent`, `ArtifactRequires::agents`) |
 | 3. Codex discovery + monitor | #524 | **Not started** | `claudectl-core/src/agent/codex/` (new), wired through `src/coord/adapter_codex.rs` |
 | 4. Hive read surface for any agent (MCP) | #525 | **Not started** | `src/hive/mcp.rs` (new), mirroring `src/query/mcp.rs` |
@@ -71,15 +71,34 @@ One real asymmetry: **Codex rollouts carry no USD.** Codex is subscription-bille
 | Codex `name` (and `namespace`) | Observed count | Claude Code equivalent |
 | --- | --- | --- |
 | `exec_command` | 7046 | `Bash` |
-| `exec` | 3624 | `Bash` |
-| `write_stdin` | 1336 | `Bash` (stdin to a running command) |
+| `exec` | 3624 | *none* — a JS sandbox, see below |
+| `write_stdin` | 1336 | *none* — keystrokes, see below |
 | `apply_patch` | 1270 | `Write` or `Edit` — see below |
 | `shell_command` | 671 | `Bash` |
 | `update_plan` | 60 | `TodoWrite` |
-| `spawn_agent`, `collaboration/*` | ~160 | `Task` |
+| `spawn_agent`, `collaboration/{spawn_agent,followup_task}` | ~100 | `Task` |
+| `collaboration/{send_message,wait_agent,list_agents}` | ~140 | *none* — messaging, not delegation |
 | `request_user_input_async` | 31 | `AskUserQuestion` |
-| `web/run` | 27 | `WebSearch` / `WebFetch` |
-| `wait`, `clock/sleep` | 251 | *(no equivalent)* |
+| `web/run` | 27 | `WebSearch` |
+| `wait`, `clock/sleep` | 251 | *none* |
+
+#### The rule: map only a genuinely identical operation
+
+A tool is mapped only when it is the *same operation* **and** its command payload is *comparable*. Everything else keeps a family-prefixed name (`codex:exec`) and merges with nothing.
+
+This is deliberately conservative. A false merge corrupts a unit other machines rely on; a missed merge only leaves knowledge local, and is recoverable later by extending the table. When in doubt, do not map.
+
+Three Codex tools fail that test despite looking mappable, and reading their payloads is what settled it:
+
+| Tool | Payload | Why not mapped |
+| --- | --- | --- |
+| `exec_command` | `{"cmd": "ls"}` | — mapped to `Bash`; a shell command string |
+| `shell_command` | `{"command": "ls", "workdir": …}` | — mapped to `Bash`; same |
+| `exec` | `const r = await tools.exec_command({…})` | A **JavaScript sandbox**, not a shell. Mapping it would file JS snippets under the same key as shell commands. |
+| `write_stdin` | `{"session_id": 76793, "chars": ""}` | Sends keystrokes to an already-running session. Not a command, and `Bash` has no equivalent. |
+| `collaboration/send_message`, `wait_agent` | — | Messaging and waiting, not delegation. Only `spawn_agent` and `followup_task` are what `Task` does. |
+
+`web/run` is the one deliberate imprecision: it is Codex's single web tool where Claude Code splits `WebSearch` from `WebFetch`. Search is the dominant use, and a missed merge on fetch costs less than filing fetches under search would.
 
 #### MCP tools mostly need no normalization at all
 
@@ -112,13 +131,15 @@ Deletion has no Claude Code tool analogue — it happens through `Bash rm`, whic
 
 A patch touching several files can carry several markers. Where markers disagree, prefer `Write`: a batch that creates a file is the higher-privilege operation, and a preference learned about it should not be filed under the gentler name.
 
-The flow has exactly one seam. `src/brain/preferences.rs:593`:
+The flow has exactly one seam, where `DecisionRecord.tool` becomes `PreferencePattern.tool` and then `KnowledgeContent::Pattern.tool`. Before phase 1 it read:
 
 ```rust
 let tool = d.tool.clone().unwrap_or_else(|| "*".to_string());
 ```
 
-`DecisionRecord.tool` → `PreferencePattern.tool` → `KnowledgeContent::Pattern.tool`. Normalize at or before that line and there is one place to get right.
+and it is now `canonical_tool_for(d)`. Normalization runs on the **read** side deliberately: the decision log keeps the name the agent actually used, so the log does not lie about what happened, and a wrong table entry is fixed by re-distilling rather than being baked into every record forever.
+
+Phase 1 also showed the seam covers more than `Pattern` — removing the normalizer splits the `ToolAccuracy` key (`accuracy:{tool}`) the same way.
 
 ### 3.3 Capture
 
