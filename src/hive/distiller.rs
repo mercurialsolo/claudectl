@@ -99,6 +99,11 @@ pub fn distill_to_knowledge(
     // #221 conflict-aware: detect competing approaches and emit clusters.
     units.extend(detect_clusters(prefs, source_peer, &scope, now, thresholds));
 
+    // #523: stamp which agents the evidence came from. One pass over the
+    // finished units rather than a new parameter on each builder, so the
+    // attribution rules live in one readable place.
+    OriginIndex::build(&decisions).attribute(&mut units);
+
     units
 }
 
@@ -164,6 +169,102 @@ fn approach_ref_for(decision: &DecisionRecord) -> Option<String> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "*".to_string());
     Some(format!("pattern:{tool}:{cmd}"))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// #523 provenance: which agents a unit's evidence came from
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Which agent families contributed the decisions behind each approach and
+/// each tool (#523).
+///
+/// Built straight from the decision log, which `distill_to_knowledge`
+/// already reads, so provenance needs no new field threaded through
+/// `PreferencePattern` and `preferences.json`.
+///
+/// The approach key is the content part of a `Pattern`'s semantic key —
+/// canonical tool plus extracted command keyword — which is reliable only
+/// because #522 normalizes the tool name first: `exec_command` and `Bash`
+/// have to land on one key here for the same reason they do in the hive.
+#[derive(Default)]
+pub struct OriginIndex {
+    /// `{canonical_tool}:{command_keyword}` → families, sorted and deduped.
+    by_approach: HashMap<String, Vec<String>>,
+    /// `{canonical_tool}` → families, sorted and deduped. `ToolAccuracy` is
+    /// per-tool, so it cannot use the per-approach key.
+    by_tool: HashMap<String, Vec<String>>,
+}
+
+impl OriginIndex {
+    pub fn build(decisions: &[DecisionRecord]) -> Self {
+        use std::collections::BTreeSet;
+        let mut by_approach: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let mut by_tool: HashMap<String, BTreeSet<String>> = HashMap::new();
+
+        for d in decisions {
+            // A record from before #522 carries no family. Attributing it to
+            // `claude-code` would be a guess presented as provenance, and an
+            // empty list already reads as "not recorded".
+            let Some(family) = d.agent_family.as_deref().filter(|f| !f.is_empty()) else {
+                continue;
+            };
+            let tool = d.canonical_tool();
+            let cmd = crate::brain::preferences::extract_command_keyword(d.command.as_deref());
+            by_approach
+                .entry(approach_attribution_key(&tool, cmd.as_deref()))
+                .or_default()
+                .insert(family.to_string());
+            by_tool.entry(tool).or_default().insert(family.to_string());
+        }
+
+        let flatten = |m: HashMap<String, BTreeSet<String>>| -> HashMap<String, Vec<String>> {
+            m.into_iter()
+                .map(|(k, v)| (k, v.into_iter().collect()))
+                .collect()
+        };
+        OriginIndex {
+            by_approach: flatten(by_approach),
+            by_tool: flatten(by_tool),
+        }
+    }
+
+    /// Stamp `origin_agents` onto every unit this index can attribute.
+    ///
+    /// `Temporal` units are deliberately left empty: a time-of-day habit is
+    /// not a property of any one agent, and there is no tool to join on.
+    pub fn attribute(&self, units: &mut [KnowledgeUnit]) {
+        for unit in units.iter_mut() {
+            let found = match &unit.content {
+                KnowledgeContent::Pattern {
+                    tool,
+                    command_pattern,
+                    ..
+                } => self
+                    .by_approach
+                    .get(&approach_attribution_key(tool, command_pattern.as_deref())),
+                KnowledgeContent::ToolAccuracy { tool, .. } => self.by_tool.get(tool),
+                // `approach_ref` is `pattern:{tool}:{cmd}`; the attribution
+                // key is the part after the prefix.
+                KnowledgeContent::ApproachOutcome { approach_ref, .. } => approach_ref
+                    .strip_prefix("pattern:")
+                    .and_then(|k| self.by_approach.get(k)),
+                // `problem_key` is already `{tool}:{cmd}`.
+                KnowledgeContent::ApproachCluster { problem_key, .. } => {
+                    self.by_approach.get(problem_key)
+                }
+                _ => None,
+            };
+            if let Some(families) = found {
+                unit.origin_agents = families.clone();
+            }
+        }
+    }
+}
+
+/// The attribution key for a (tool, command) pair. Mirrors the content part
+/// of `Pattern`'s semantic key so the two always agree.
+fn approach_attribution_key(tool: &str, command_pattern: Option<&str>) -> String {
+    format!("{tool}:{}", command_pattern.unwrap_or("*"))
 }
 
 #[derive(Default)]
@@ -284,6 +385,7 @@ pub fn distill_outcomes(
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -396,6 +498,7 @@ pub fn detect_clusters(
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -470,6 +573,7 @@ fn pattern_to_unit(
         propagation_count: 0,
         version: 1,
         revalidation_interval_secs: 0,
+        origin_agents: Vec::new(),
         injection_state: crate::hive::InjectionState::Live,
         injection_stats: crate::hive::InjectionStats {
             injected_count: 0,
@@ -514,6 +618,7 @@ fn accuracy_to_unit(
         propagation_count: 0,
         version: 1,
         revalidation_interval_secs: 0,
+        origin_agents: Vec::new(),
         injection_state: crate::hive::InjectionState::Live,
         injection_stats: crate::hive::InjectionStats {
             injected_count: 0,
@@ -581,6 +686,7 @@ fn temporal_to_unit(
         propagation_count: 0,
         version: 1,
         revalidation_interval_secs: 0,
+        origin_agents: Vec::new(),
         injection_state: crate::hive::InjectionState::Live,
         injection_stats: crate::hive::InjectionStats {
             injected_count: 0,
@@ -818,6 +924,118 @@ mod tests {
             claude,
             "an absent agent_family must not change an existing hive's keys"
         );
+    }
+
+    /// Provenance is attributed by joining the decision log back onto the
+    /// finished units (#523). The join key is the canonical tool, so this
+    /// works only because #522 normalized it first.
+    #[test]
+    fn origin_index_attributes_each_agent_to_its_own_approach() {
+        let mut decisions = Vec::new();
+        for i in 0..3 {
+            let mut d = make_decision_with_id(&format!("c{i}"), "Bash", "cargo test", "p");
+            d.agent_family = Some("claude-code".into());
+            decisions.push(d);
+        }
+        for i in 0..3 {
+            // Same approach, learned in Codex under its own tool name.
+            let mut d = make_decision_with_id(&format!("x{i}"), "exec_command", "cargo test", "p");
+            d.agent_family = Some("codex".into());
+            decisions.push(d);
+        }
+        for i in 0..3 {
+            // A different approach, Codex only.
+            let mut d = make_decision_with_id(&format!("f{i}"), "exec_command", "cargo fmt", "p");
+            d.agent_family = Some("codex".into());
+            decisions.push(d);
+        }
+
+        let prefs = crate::brain::preferences::distill_preferences(&decisions);
+        let mut units = Vec::new();
+        for pattern in &prefs.patterns {
+            if let Some(u) = pattern_to_unit(
+                pattern,
+                "peer",
+                &KnowledgeScope::Universal,
+                0,
+                &ExportThresholds {
+                    min_pattern_evidence: 1,
+                    ..Default::default()
+                },
+            ) {
+                units.push(u);
+            }
+        }
+        OriginIndex::build(&decisions).attribute(&mut units);
+
+        let find = |cmd: &str| -> Vec<String> {
+            units
+                .iter()
+                .find(|u| semantic_key(u) == format!("universal/pattern:Bash:{cmd}"))
+                .map(|u| u.origin_agents.clone())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no unit for {cmd}; keys were {:?}",
+                        units.iter().map(semantic_key).collect::<Vec<_>>()
+                    )
+                })
+        };
+
+        assert_eq!(
+            find("cargo test"),
+            vec!["claude-code".to_string(), "codex".to_string()],
+            "an approach seen in both agents must record both, sorted"
+        );
+        assert_eq!(
+            find("cargo fmt"),
+            vec!["codex".to_string()],
+            "provenance is per-approach, not per-tool — a Codex-only approach \
+             must not inherit claude-code just because the tool is shared"
+        );
+    }
+
+    /// A record from before #522 carries no family. Guessing `claude-code`
+    /// would present an assumption as provenance, so it contributes nothing.
+    #[test]
+    fn records_without_a_family_are_not_attributed() {
+        let decisions: Vec<DecisionRecord> = (0..3)
+            .map(|i| make_decision_with_id(&format!("d{i}"), "Bash", "cargo test", "p"))
+            .collect();
+        let index = OriginIndex::build(&decisions);
+        let mut units = vec![sample_unit_for("Bash", Some("cargo test"))];
+        index.attribute(&mut units);
+        assert!(
+            units[0].origin_agents.is_empty(),
+            "an unattributed record must leave the field empty, not guess"
+        );
+    }
+
+    fn sample_unit_for(tool: &str, cmd: Option<&str>) -> KnowledgeUnit {
+        KnowledgeUnit {
+            id: "ku_test".into(),
+            scope: KnowledgeScope::Universal,
+            category: crate::hive::KnowledgeCategory::BestPractice,
+            content: KnowledgeContent::Pattern {
+                tool: tool.into(),
+                command_pattern: cmd.map(|c| c.to_string()),
+                preferred_action: "approve".into(),
+                accept_rate: 1.0,
+                sample_count: 3,
+                conditions: Vec::new(),
+            },
+            evidence_count: 3,
+            confidence: 1.0,
+            source_peer: "peer".into(),
+            originated_at: 0,
+            last_validated_at: 0,
+            propagation_count: 0,
+            version: 1,
+            revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
+            injection_state: crate::hive::InjectionState::Live,
+            injection_stats: crate::hive::InjectionStats::default(),
+            sharing_consent: None,
+        }
     }
 
     /// An outcome has to join back to the approach it describes: an
@@ -1250,6 +1468,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,

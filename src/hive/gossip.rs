@@ -554,6 +554,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,

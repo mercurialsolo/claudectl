@@ -969,10 +969,10 @@ fn cmd_knowledge(
         println!("No knowledge units found.");
     } else {
         println!(
-            "{:<12} {:<15} {:<8} {:<6} {:<8} {:<8} CONTENT",
-            "ID", "SCOPE", "CONF", "EVID", "ROLLOUT", "WIN"
+            "{:<12} {:<15} {:<8} {:<6} {:<8} {:<8} {:<14} CONTENT",
+            "ID", "SCOPE", "CONF", "EVID", "ROLLOUT", "WIN", "AGENTS"
         );
-        println!("{}", "─".repeat(96));
+        println!("{}", "─".repeat(110));
         for unit in &units {
             let id_short = if unit.id.len() > 11 {
                 &unit.id[..11]
@@ -985,13 +985,14 @@ fn cmd_knowledge(
                 "—".to_string()
             };
             println!(
-                "{:<12} {:<15} {:<8.0}% {:<6} {:<8} {:<8} {}",
+                "{:<12} {:<15} {:<8.0}% {:<6} {:<8} {:<8} {:<14} {}",
                 id_short,
                 unit.scope.to_string(),
                 unit.confidence * 100.0,
                 unit.evidence_count,
                 unit.injection_state.label(),
                 win,
+                crate::hive::origin_agents_label(unit),
                 unit.content.summary_line(),
             );
         }

@@ -114,6 +114,23 @@ pub struct KnowledgeUnit {
     /// tier the recipient peer must hold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sharing_consent: Option<SharingConsent>,
+    /// Which agent families this knowledge was observed in — `claude-code`,
+    /// `codex` (#523). Empty on every unit written before the field existed.
+    ///
+    /// Provenance only. It is **not** part of `semantic_key` and must never
+    /// become part of it: the gossip protocol carries no version, so the
+    /// key's derivation cannot change without silently splitting a hive, and
+    /// a unit per agent would mean the same preference held twice with half
+    /// the evidence each. Foreign tool names are normalized *into* one
+    /// vocabulary for exactly that reason (#522); this field records where
+    /// the evidence came from without partitioning it.
+    ///
+    /// A merge unions the two sides' lists, so a unit confirmed independently
+    /// in two agents says so. Whether that should also raise confidence is
+    /// deliberately left open (#521 open question 4) — it is a scoring
+    /// change, which is a different kind of risk from a schema change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub origin_agents: Vec<String>,
 }
 
 fn default_category() -> KnowledgeCategory {
@@ -413,6 +430,22 @@ pub struct ArtifactRequires {
     /// Minimum claudectl version (e.g., "0.42.0"). None = any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_version: Option<String>,
+    /// Agent families this artifact can be installed for — `claude-code`,
+    /// `codex` (#523). Empty = any agent, which is what every unit written
+    /// before this field existed means.
+    ///
+    /// This is what lets a `HookConfig` unit say it is Claude-Code-only.
+    /// Codex has no PreToolUse hook to install into, so such a unit arriving
+    /// at a Codex-only peer has to be *skipped with a reason* rather than
+    /// attempted and failed — which is the difference between a declared
+    /// limitation and what looks like a bug.
+    ///
+    /// Deliberately scoped to artifacts. `Pattern`, `Insight`, `Temporal`,
+    /// `PromotedRule`, `ApproachOutcome` and `ApproachCluster` are
+    /// behavioural knowledge and apply to any agent once the tool vocabulary
+    /// is normalized (#522).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
 }
 
 /// The actual knowledge payload.
@@ -982,6 +1015,14 @@ pub enum CompatIssue {
     },
     /// The local claudectl version is too old.
     VersionTooOld { current: String, required: String },
+    /// The artifact targets agent families none of which are on this machine
+    /// (#523). A Claude-Code-only hook arriving at a Codex-only peer is the
+    /// motivating case: it is a declared limitation, not a failure, and
+    /// saying so is what keeps it from looking like a bug.
+    NoMatchingAgent {
+        present: Vec<String>,
+        required: Vec<String>,
+    },
 }
 
 impl CompatIssue {
@@ -991,12 +1032,19 @@ impl CompatIssue {
             Self::MissingCli(_) => "!cli",
             Self::WrongOs { .. } => "!os",
             Self::VersionTooOld { .. } => "!ver",
+            Self::NoMatchingAgent { .. } => "!agent",
         }
     }
 
     /// Whether this issue should block installation (vs just warn).
+    ///
+    /// A missing agent blocks for the same reason a wrong OS does: there is
+    /// nowhere to install to, so attempting it can only fail.
     pub fn is_blocking(&self) -> bool {
-        matches!(self, Self::WrongOs { .. } | Self::VersionTooOld { .. })
+        matches!(
+            self,
+            Self::WrongOs { .. } | Self::VersionTooOld { .. } | Self::NoMatchingAgent { .. }
+        )
     }
 }
 
@@ -1013,6 +1061,18 @@ impl std::fmt::Display for CompatIssue {
             }
             Self::VersionTooOld { current, required } => {
                 write!(f, "claudectl {current} too old, requires >= {required}")
+            }
+            Self::NoMatchingAgent { present, required } => {
+                let have = if present.is_empty() {
+                    "none detected".to_string()
+                } else {
+                    present.join("/")
+                };
+                write!(
+                    f,
+                    "needs agent {}, this machine has {have}",
+                    required.join("/")
+                )
             }
         }
     }
@@ -1044,6 +1104,23 @@ pub fn check_compatibility(requires: &ArtifactRequires) -> Vec<CompatIssue> {
             issues.push(CompatIssue::VersionTooOld {
                 current: current.to_string(),
                 required: min_ver.clone(),
+            });
+        }
+    }
+
+    // #523: an artifact may name the agent families it can install for.
+    // Empty means any, which is what every unit written before the field
+    // existed means — so this adds no issue to an existing hive's units.
+    if !requires.agents.is_empty() {
+        let present = claudectl_core::agent::present_families();
+        if !requires
+            .agents
+            .iter()
+            .any(|a| present.contains(&a.as_str()))
+        {
+            issues.push(CompatIssue::NoMatchingAgent {
+                present: present.iter().map(|s| s.to_string()).collect(),
+                required: requires.agents.clone(),
             });
         }
     }
@@ -1229,12 +1306,48 @@ pub fn get_requires(content: &KnowledgeContent) -> Option<&ArtifactRequires> {
     }
 }
 
+/// A compact rendering of a unit's agent provenance for a table column
+/// (#523).
+///
+/// `—` means not recorded, which is every unit distilled before the field
+/// existed as well as any unit whose decisions carried no agent family.
+/// A unit confirmed in more than one agent shows them joined, because that
+/// is the interesting case: independent confirmation across agents is
+/// stronger evidence than the same agent agreeing with itself twice.
+pub fn origin_agents_label(unit: &KnowledgeUnit) -> String {
+    if unit.origin_agents.is_empty() {
+        return "—".to_string();
+    }
+    unit.origin_agents
+        .iter()
+        .map(|a| short_agent_label(a))
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// Shorten a family name to fit a column: `claude-code` → `claude`.
+fn short_agent_label(family: &str) -> &str {
+    match family {
+        "claude-code" => "claude",
+        other => other,
+    }
+}
+
 /// Compute a short compatibility label for display.
 /// Returns "ok", "!cli", "!os", "!ver", or "?" (no requirements declared).
 pub fn compat_label(content: &KnowledgeContent) -> &'static str {
     match get_requires(content) {
         None => "—",
-        Some(req) if req.cli.is_empty() && req.os.is_empty() && req.min_version.is_none() => "?",
+        // "?" means the artifact declared no requirements at all, so there is
+        // nothing to check — `agents` counts as a requirement like the rest.
+        Some(req)
+            if req.cli.is_empty()
+                && req.os.is_empty()
+                && req.min_version.is_none()
+                && req.agents.is_empty() =>
+        {
+            "?"
+        }
         Some(req) => {
             let issues = check_compatibility(req);
             if issues.is_empty() {
@@ -1383,6 +1496,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -1437,6 +1551,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -1511,6 +1626,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -1547,6 +1663,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -1583,6 +1700,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -1615,6 +1733,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -1647,6 +1766,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -1873,6 +1993,128 @@ mod tests {
         assert_eq!(result, input);
     }
 
+    // ── #523 provenance and agent applicability ────────────────────────
+
+    /// Both new fields must be absent from the wire when empty, so a unit
+    /// written by this binary deserializes on a peer that predates them —
+    /// and a unit written by that peer deserializes here.
+    #[test]
+    fn new_fields_are_absent_from_the_wire_when_empty() {
+        let unit = sample_pattern_unit("Bash", Some("cargo test"));
+        let json = serde_json::to_string(&unit).unwrap();
+        assert!(
+            !json.contains("origin_agents"),
+            "an empty origin_agents must not be serialized: {json}"
+        );
+        assert!(
+            !json.contains("\"agents\""),
+            "an empty requires.agents must not be serialized: {json}"
+        );
+    }
+
+    /// The forward-compatibility half: a payload written before #523 still
+    /// parses, with both fields defaulting to empty.
+    #[test]
+    fn a_unit_written_before_523_still_parses() {
+        let unit = sample_pattern_unit("Bash", Some("cargo test"));
+        let mut json: serde_json::Value = serde_json::to_value(&unit).unwrap();
+        json.as_object_mut().unwrap().remove("origin_agents");
+        let back: KnowledgeUnit = serde_json::from_value(json).unwrap();
+        assert!(back.origin_agents.is_empty());
+        assert_eq!(semantic_key(&back), semantic_key(&unit));
+    }
+
+    /// Provenance must never reach the merge key. A unit per agent would mean
+    /// the same preference held twice with half the evidence each — the thing
+    /// #522 normalizes tool names to avoid.
+    #[test]
+    fn origin_agents_does_not_affect_semantic_key() {
+        let base = sample_pattern_unit("Bash", Some("cargo test"));
+        let mut codex = base.clone();
+        codex.origin_agents = vec!["codex".into()];
+        let mut both = base.clone();
+        both.origin_agents = vec!["claude-code".into(), "codex".into()];
+
+        assert_eq!(semantic_key(&base), semantic_key(&codex));
+        assert_eq!(semantic_key(&base), semantic_key(&both));
+    }
+
+    /// An artifact that names no agents applies anywhere, which is what every
+    /// unit written before #523 means — so an existing hive gains no issues.
+    #[test]
+    fn empty_agents_requirement_is_satisfied_by_any_machine() {
+        let req = ArtifactRequires::default();
+        assert!(
+            !check_compatibility(&req)
+                .iter()
+                .any(|i| matches!(i, CompatIssue::NoMatchingAgent { .. })),
+            "an artifact with no declared agents must not raise an agent issue"
+        );
+    }
+
+    /// The motivating case: a Claude-Code-only hook arriving where no Claude
+    /// Code install exists is skipped with a reason, and the reason blocks
+    /// rather than warns — there is nowhere to install it.
+    #[test]
+    fn an_artifact_for_an_absent_agent_is_blocked_with_a_reason() {
+        let req = ArtifactRequires {
+            agents: vec!["some-future-agent".into()],
+            ..ArtifactRequires::default()
+        };
+        let issues = check_compatibility(&req);
+        let agent_issue = issues
+            .iter()
+            .find(|i| matches!(i, CompatIssue::NoMatchingAgent { .. }))
+            .expect("an artifact requiring an unknown agent must raise an agent issue");
+
+        assert!(
+            agent_issue.is_blocking(),
+            "there is nowhere to install to, so this must block rather than warn"
+        );
+        assert_eq!(agent_issue.short_label(), "!agent");
+        let rendered = agent_issue.to_string();
+        assert!(
+            rendered.contains("some-future-agent"),
+            "the reason must name the agent it needs: {rendered}"
+        );
+    }
+
+    #[test]
+    fn origin_agents_label_renders_each_case() {
+        let mut unit = sample_pattern_unit("Bash", Some("cargo test"));
+        assert_eq!(origin_agents_label(&unit), "—", "not recorded");
+
+        unit.origin_agents = vec!["claude-code".into()];
+        assert_eq!(origin_agents_label(&unit), "claude");
+
+        unit.origin_agents = vec!["codex".into()];
+        assert_eq!(origin_agents_label(&unit), "codex");
+
+        unit.origin_agents = vec!["claude-code".into(), "codex".into()];
+        assert_eq!(
+            origin_agents_label(&unit),
+            "claude+codex",
+            "independent confirmation across agents is the interesting case"
+        );
+    }
+
+    /// `compat_label` reports "?" only when nothing was declared, so an
+    /// artifact that declares *only* an agent still gets checked.
+    #[test]
+    fn compat_label_treats_agents_as_a_declared_requirement() {
+        let only_agents = KnowledgeContent::Skill {
+            name: "s".into(),
+            description: "d".into(),
+            version: "1".into(),
+            body: "---\nname: s\n---\n".into(),
+            requires: ArtifactRequires {
+                agents: vec!["some-future-agent".into()],
+                ..ArtifactRequires::default()
+            },
+        };
+        assert_eq!(compat_label(&only_agents), "!agent");
+    }
+
     // ── Compatibility tests ────────────────────────────────────────────
 
     #[test]
@@ -1881,12 +2123,14 @@ mod tests {
             cli: vec!["claudectl".into(), "jq".into()],
             os: vec!["macos".into()],
             min_version: Some("0.42.0".into()),
+            agents: vec!["claude-code".into()],
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: ArtifactRequires = serde_json::from_str(&json).unwrap();
         assert_eq!(back.cli, vec!["claudectl", "jq"]);
         assert_eq!(back.os, vec!["macos"]);
         assert_eq!(back.min_version.as_deref(), Some("0.42.0"));
+        assert_eq!(back.agents, vec!["claude-code"]);
     }
 
     #[test]
