@@ -1,0 +1,297 @@
+# Cross-Agent Hive — Design Specification
+
+**Status:** Proposed. Nothing in this document is shipped. Written against the code as of `bc61737d` (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
+**Scope:** Let coding agents that are not Claude Code — starting with Codex — join a hive as full members: contribute what they learn, receive what others learned, and talk to every other member over one bus. Today the hive's substrate is agent-neutral but its two ends are not: capture happens through a Claude Code hook, and application happens into a Claude Code prompt.
+
+## Implementation status
+
+| Phase (§8) | Status | Module / artifact |
+| --- | --- | --- |
+| 1. Canonical tool vocabulary | **Not started** | `claudectl-core/src/agent/vocab.rs` (new), seam at `src/brain/preferences.rs:593` |
+| 2. Unit provenance + artifact applicability | **Not started** | `src/hive/mod.rs` (`origin_agent`, `ArtifactRequires::agents`) |
+| 3. Codex discovery + monitor | **Not started** | `claudectl-core/src/agent/codex/` (new), wired through `src/coord/adapter_codex.rs` |
+| 4. Hive read surface for any agent (MCP) | **Not started** | `src/hive/mcp.rs` (new), mirroring `src/query/mcp.rs` |
+| 5. Codex write surface (AGENTS.md, rules) | **Not started** | `src/hive/project/` (new) |
+| 6. Bus: agent + machine dimension | **Not started** | `src/bus/{store,roles,policy}.rs` |
+| 7. Bus: relay bridge (cross-machine) | **Not started** | `src/bus/bridge.rs` (new), `src/relay/mod.rs` message type |
+
+---
+
+## 1. Motivation
+
+The project's tagline is "learns from you once and remembers everywhere." *Everywhere* currently means every Claude Code session on every machine you have paired. It does not mean every agent you use.
+
+That gap is not academic. On the machine this spec was written against there are 671 Codex rollout transcripts and a Codex approval store with 275 entries. Every approval in that store is a preference the user expressed — the exact raw material `brain/preferences.rs` distills into a `KnowledgeUnit` — and none of it reaches the hive. In the other direction, a preference the hive has learned with high confidence from a hundred Claude sessions has no way to reach a Codex session, which will ask about the same command again.
+
+Worse, the two agents share MCP servers. A preference about `mcp__context7/query_docs` learned in Codex and the same preference learned as `mcp__context7__query_docs` in Claude Code are, to the hive, two unrelated facts about two unrelated tools. They are the same tool on the same server.
+
+This spec covers three questions in order of how expensive they are to get wrong:
+
+1. **How is knowledge represented** so that the same preference learned in two different agents merges into one unit? (§4 — the spine, and the only irreversible decision here.)
+2. **How is knowledge captured** from an agent that has no PreToolUse hook? (§5)
+3. **How is knowledge applied** to an agent that cannot be gated? (§6)
+
+And one more that the user asked for directly, and that turns out to be mostly a plumbing problem rather than a design problem:
+
+4. **How does every agent, on every machine, reach one bus?** (§7)
+
+## 2. What already crosses the boundary
+
+Most of the hive is agent-neutral, and it is worth being precise about that before describing what is not — the work here is smaller than "support another agent" sounds.
+
+| Component | Agent-neutral? | Why |
+| --- | --- | --- |
+| `hive/store.rs`, `gossip.rs`, `merger.rs`, `trust.rs`, `membership.rs` | **Yes** | They move `KnowledgeUnit`s between peers. Nothing in them knows what a session is. |
+| `KnowledgeScope` (`hive/mod.rs:384`) | **Yes** | Universal / Language / Project. No agent dimension is wanted (see §4). |
+| `KnowledgeContent::{Pattern, Insight, Temporal, PromotedRule, ApproachOutcome, ApproachCluster}` | **Yes in shape** | `tool` is a free-form `String`; the rest is prose and statistics. Only the *vocabulary* is Claude-specific. |
+| `KnowledgeContent::Skill` | **Yes, today** | Codex and Claude Code use the same `SKILL.md` contract — `---`-delimited frontmatter with `name` and `description`. Verified in §9.3. |
+| `DecisionRecord` (`brain/decisions.rs:77`) | **Yes in shape** | `tool: Option<String>`, `command: Option<String>`, `project`, `user_action`. Nothing Claude-shaped. |
+| `claudectl --brain-query --tool X --command Y --project Z` | **Yes** | A shell-callable decision endpoint. Any agent that can run a subprocess can already consult the brain. |
+| `claudectl bus stdio` (`bus/mcp.rs`) | **Yes, today** | An MCP stdio server. Codex loads MCP servers from `config.toml`, so a Codex session can already `publish` and `read_inbox`. See §7.1. |
+
+Two things that look like cross-agent support but are not:
+
+- **`src/coord/adapter.rs`** has `AgentAdapter`, `AgentFamily::{ClaudeCode, Codex}`, and a stub `CodexAdapter`. It is the right seam and it is nearly dead: the only callers are `src/coord/cli.rs:1061` and `:1079`, both inside a `coord adapters` listing command. Nothing in discovery, monitor, brain, or hive routes through it.
+- **`src/brain/agents.rs`** (`AgentConfig`, `[agents.codex]` in config, `run_agent`) is *delegate-to* Codex: shell out with a prompt, capture stdout. That is the opposite direction from observing a Codex session you did not start, and it is a different feature. Conflating the two is the most likely way to misread this spec.
+
+## 3. The five couplings
+
+### 3.1 Discovery
+
+`claudectl-core/src/discovery.rs:6` hardcodes `~/.claude/sessions/*.json` (PID-named) and resolves transcripts under `~/.claude/projects/<slug>/<uuid>.jsonl`. `scan_subagents` hardcodes `/tmp/claude-{uid}`. The `ClaudeSession` type name is load-bearing across both other crates.
+
+Codex's equivalent is richer than expected (§9.1): `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`, with `session_meta` carrying `session_id` and `cwd`, `event_msg/token_count` carrying `model_context_window` alongside full token usage, and `task_started` / `task_complete` / `turn_aborted` as status signals.
+
+One real asymmetry: **Codex rollouts carry no USD.** Codex is subscription-billed and records only tokens. Every cost-derived path — `models.rs` pricing, the budget gate, burn rate, cost-spike health checks — must degrade to tokens-only for a Codex session rather than reporting `$0.00`, which would be a lie that propagates into fleet cost totals.
+
+### 3.2 Tool vocabulary — the one that matters
+
+`semantic_key` for a `Pattern` is `pattern:{tool}:{cmd}` (`hive/mod.rs:549-556`), and `tool` is literally `"Bash"`, `"Write"`, `"Edit"`. Codex names the same operations differently. The measured table (§9.2, from 15 000 tool calls across 120 rollouts):
+
+| Codex `name` (and `namespace`) | Observed count | Claude Code equivalent |
+| --- | --- | --- |
+| `exec_command` | 7046 | `Bash` |
+| `exec` | 3624 | `Bash` |
+| `write_stdin` | 1336 | `Bash` (stdin to a running command) |
+| `apply_patch` | 1270 | `Edit` / `Write` |
+| `shell_command` | 671 | `Bash` |
+| `update_plan` | 60 | `TodoWrite` |
+| `spawn_agent`, `collaboration/*` | ~160 | `Task` |
+| `request_user_input_async` | 31 | `AskUserQuestion` |
+| `web/run` | 27 | `WebSearch` / `WebFetch` |
+| `mcp__context7/query_docs` | 17 | `mcp__context7__query_docs` |
+| `wait`, `clock/sleep` | 251 | *(no equivalent)* |
+
+The MCP row is the most valuable and the most mechanical. Codex keeps `namespace` and `name` as separate fields; Claude Code concatenates them with `__`. Same server, same tool, two spellings — so MCP tool preferences, which should be the most portable knowledge in the system, are currently the least shareable.
+
+The flow has exactly one seam. `src/brain/preferences.rs:593`:
+
+```rust
+let tool = d.tool.clone().unwrap_or_else(|| "*".to_string());
+```
+
+`DecisionRecord.tool` → `PreferencePattern.tool` → `KnowledgeContent::Pattern.tool`. Normalize at or before that line and there is one place to get right.
+
+### 3.3 Capture
+
+Decisions are produced by `claude-plugin/hooks/scripts/brain-gate.sh`, a Claude Code **PreToolUse** hook. Codex has no pre-tool gate. Its only event hook is `notify`, which fires after the fact — on this machine, `notify = [<client>, "turn-ended"]`.
+
+So **the hive cannot gate Codex the way it gates Claude Code.** That is a property of Codex, not a gap in claudectl, and the design has to accept it rather than work around it.
+
+What Codex does have is its own approval memory: `~/.codex/rules/default.rules`, 275 entries, every one of the form
+
+```
+prefix_rule(pattern=["uv", "run", "pytest", "tests/test_prompt_schema.py"], decision="allow")
+```
+
+This is machine-written, not hand-authored — entries include full heredoc bodies and absolute-path `mkdir`s nobody types into a config file (§9.4). It is a distilled approval corpus in a format claudectl can both read and write, which makes it both a capture source and an application target.
+
+**Caveat, flagged because phase 5 depends on it:** the file's last write on this machine was 2 Sep, and `state_5.sqlite` contains no approvals table. Current Codex may have moved approval memory somewhere else, or may simply not have had a new approval to record. Verify before building on it; phases 1–4 do not depend on it.
+
+### 3.4 Application
+
+`src/brain/engine.rs:388` calls `hive::injection::build_hive_context_for_session` and puts the result in `brain_ctx.hive_context` — the **brain's own LLM prompt**, not the agent's context. The agent only ever sees the brain's verdict, delivered through the hook.
+
+For an agent with no hook, the hive has to reach it another way. Three targets, in increasing order of privilege:
+
+1. **An MCP server** (`claudectl hive stdio`). Pull-style: the agent asks. Needs no hook, no file mutation, and works with stock Codex because Codex loads MCP servers natively. This is the right first move.
+2. **A managed block in `AGENTS.md`.** Prose knowledge, pushed. There is already precedent for marker-delimited managed blocks in that file on this machine — `<!-- paper-lantern:start -->` — so the pattern is established and the convention is `<!-- claudectl-hive:start -->` … `<!-- claudectl-hive:end -->`.
+3. **Emitting `prefix_rule` lines into `~/.codex/rules/`.** Native enforcement without a hook: a high-confidence "always approve `cargo test`" unit becomes a Codex rule and Codex stops asking. This is real privilege — claudectl would be writing another agent's approval store — and must be explicit opt-in, never a default, never silent.
+
+### 3.5 Artifact applicability
+
+`KnowledgeContent::HookConfig` is Claude-Code-only by nature: there is no Codex PreToolUse to install into. `ArtifactRequires` (`hive/mod.rs:406`) carries `cli`, `os`, and `min_version` but no agent field, so a hook unit gossiped to a Codex-only peer has no way to declare itself inapplicable. It will arrive, fail to install, and look like a bug.
+
+## 4. The spine: one vocabulary, no agent in the key
+
+There is **no version on the gossip wire.** `hive/gossip.rs:555` writes `version: 1` on the *unit*, not on the protocol. And `semantic_key` is the cross-peer merge key — `store.rs:84`, `distiller.rs:120`, `archive.rs:147` and the merger all key on it. Changing how it is derived splits a hive between old and new binaries, silently, with both halves believing they are in sync.
+
+That single fact determines the design:
+
+> **Do not add an agent dimension to `semantic_key`.** Normalize foreign tool names *into* the existing vocabulary at capture time.
+
+The reason is the product, not the schema. "`cargo test` is always approved," learned in Codex, has to land in the *same unit* as the one learned in Claude Code. If the key carried the agent, the hive would hold two units, each with half the evidence, each decaying on its own clock, and "learns once, remembers everywhere" would be false in exactly the case the feature exists for.
+
+Three consequences:
+
+- **`canonical_tool(family, namespace, name) -> String` is a pure function** living in `claudectl-core`, with the §3.2 table as data. Claude Code's names are the canonical form, because they are already on the wire in every existing hive. This is not a claim that they are better names; it is that they are the incumbent ones and a rename is a migration.
+- **Provenance is additive, never in the key.** `KnowledgeUnit.origin_agent: Option<String>` with `#[serde(default)]`. Old peers ignore the field; new peers can show "learned in Codex, confirmed in Claude Code," which is *more* trustworthy than either alone and should eventually raise confidence rather than merely annotate it.
+- **Applicability is per-artifact, not per-unit.** `ArtifactRequires.agents: Vec<String>` (`#[serde(default)]`, empty = any) on `Skill` / `Command` / `HookConfig` only. A hook unit declares `agents = ["claude-code"]` and a Codex-only peer skips it on arrival instead of failing to install it.
+
+An unnormalizable tool — Codex's `wait`, or any future agent's unique primitive — keeps its raw name prefixed with its family (`codex:wait`). It will not merge with anything, which is correct: it has no counterpart.
+
+## 5. Observe: adapters that produce neutral records
+
+`src/coord/adapter.rs` already declares the trait. Two things have to change for it to carry real weight.
+
+**It has to move, or grow a core half.** `ClaudeCodeAdapter` wraps `claudectl-core`'s `discovery::scan_sessions`. A Codex adapter needs the same: rollout parsing belongs in `claudectl-core/src/agent/codex/`, not inside `src/coord/adapter_codex.rs`, because core cannot depend on the binary and the TUI needs to render Codex sessions too. The adapter in `src/coord/` stays a thin binding.
+
+**It has to be on the path, not beside it.** Today nothing but a listing command calls it. Discovery, monitor, the brain's observe loop, and the TUI session table all need to go through `all_adapters()` for the trait to mean anything. That is the largest mechanical change in this spec and the one most likely to want its own epic.
+
+The capability matrix already models partial support honestly (`AdapterCapabilities::minimal()`), which is what Codex needs: `discover_sessions` and `monitor_state` yes, `send_input` and `deliver_interrupt` no, until there is a mechanism for them.
+
+## 6. Apply: project a unit into each agent's native surface
+
+Symmetry is the wrong goal here. Each agent has a different enforcement surface, and the hive should use the best one each offers rather than the lowest common denominator.
+
+| | Claude Code | Codex |
+| --- | --- | --- |
+| Gate a tool call before it runs | PreToolUse hook → `--brain-query` | **not possible** |
+| Pull knowledge on demand | — | `claudectl hive stdio` (MCP) |
+| Standing prose instruction | `CLAUDE.md` | `AGENTS.md` managed block |
+| Standing approval | brain gate + `session-policy` | `rules/default.rules` (opt-in) |
+| Install a skill | `~/.claude/skills/` | `~/.codex/skills/` |
+
+The skills row works today except for one hardwired path: `hive/cli/share.rs:487-490` (`default_install_dir()` → `~/.claude`) and the scan roots at `claudectl-core/src/skills.rs:79-86`. Widening both to a per-family set of roots makes skill sharing cross-agent with no change to the wire format, which makes it the cheapest visible win in this spec.
+
+## 7. One bus everyone can use
+
+The bus today is single-machine and Claude-shaped in exactly one place. Both are smaller problems than they look.
+
+### 7.1 Any agent, same machine — mostly works already
+
+`claudectl bus stdio` is an MCP server. Codex loads MCP servers from `config.toml`. A Codex session can therefore already call `whoami`, `list_agents`, `publish` and `read_inbox` with **no code change** — this needs documenting more than building.
+
+One thing does break. `bus/roles.rs:116`:
+
+```rust
+pub fn find_claude_ancestor_pid() -> Option<u32> {
+    ancestor_pids().into_iter()
+        .find(|pid| process_command_for(*pid).is_some_and(|c| c.to_lowercase().contains("claude")))
+}
+```
+
+`bus role bind --self` walks the ancestor chain for a process whose command line contains `claude`. From a Codex session there isn't one, so the bind fails. The fix is to match a set of known agent families and return which one matched — the family is worth recording on the role anyway (§7.2).
+
+### 7.2 Roles need an agent and a machine dimension
+
+The `roles` table (`bus/store.rs:69-77`) is keyed on `role` alone, with `cwd_selector` and a nullable `pid` for resolution. Both are machine-local concepts, so `supervisor` on a laptop and `supervisor` on a Mac mini are the same row, and a role bound on one machine resolves to nothing on the other.
+
+Three additive columns — `agent_family`, `origin_peer`, and a `peer_id`-qualified address form — let a message be addressed to `reviewer@mini` or `reviewer:codex` while leaving bare `reviewer` meaning what it means today. The migration pattern already exists in the file (`add_column_if_missing`, used for the `pid` column), and the coord schema's `PRAGMA user_version` gate is the precedent for refusing to run against a newer schema.
+
+### 7.3 The relay bridge
+
+There is **no bridging between the bus and the relay.** Verified: zero `relay::` references in `src/bus/`, zero `bus::` references in `src/relay/`, and `relay::MessageType` has no bus variant. The bus is SQLite over a local file; the relay is authenticated TCP between machines. They have never met.
+
+A bridge is a new `MessageType::BusMessage` plus a forwarder, and two existing pieces do most of the hard part:
+
+- **Loop prevention is already built.** `bus/policy.rs:31` defines `DEFAULT_MAX_HOPS = 8` and `validate_hop_count`, and the `messages` table already carries `hop_count`. A forwarded message increments it; the cap that exists for agent-to-agent chains works unchanged for machine-to-machine ones.
+- **Trust is already built.** The relay's HMAC challenge-response and the hive's membership tiers decide who may forward. A bus bridge should refuse to forward from a `hive.read` member for the same reason `KnowledgeRejected` exists (#435): a reader contributing silently is worse than a reader being told no.
+
+What needs deciding, and should be decided before it is built: whether the bridge is **replicating** (every peer's SQLite converges, which means conflict resolution and a durable ordering) or **forwarding** (a message addressed to a remote role is relayed on demand, and the local database stays local). Forwarding is far simpler, matches how `send_to` already works, and is almost certainly right for the first version — but the reserved-role guard (`bus/policy.rs:41`, `supervisor` and `operator` cannot be bound) means a cross-machine `supervisor` address has no owner, so that interaction needs an answer either way.
+
+**Known trap:** one-shot relay dials have no reply path — `send_to` fails by design and `TransientReplies` is the mechanism. A bus bridge that forwards a `publish` and expects an ack will hit exactly this, and it is the same shape as the still-open `TaskHandoff` instance in epic #478.
+
+## 8. Phasing
+
+Ordered by irreversibility, not by size.
+
+1. **Canonical tool vocabulary** (§4). Pure function, table-driven, no wire change, no new dependency. Testable against real rollout fixtures. Ships alone and unblocks everything else. **Do this first** — it is the only decision here that is expensive to reverse.
+2. **Provenance and applicability** (`origin_agent`, `ArtifactRequires.agents`). Both `#[serde(default)]`, so old peers ignore them. Small, and wanted before any foreign unit exists.
+3. **Codex discovery and monitor** in `claudectl-core`, wired through the adapter trait. The largest piece; may want its own epic. Cost fields degrade to tokens-only (§3.1).
+4. **`claudectl hive stdio`** — the read surface, mirroring `src/query/mcp.rs`. Lowest-risk application path, works with stock Codex.
+5. **Codex write surfaces** — `AGENTS.md` managed block, then `rules/default.rules` emission behind explicit opt-in. Depends on verifying §3.3's caveat.
+6. **Bus agent/machine dimension** (§7.2). Additive columns plus a resolver change. Independent of 1–5; could go first if the bus matters more than the knowledge sharing.
+7. **Bus relay bridge** (§7.3). Decide forwarding vs replication before writing code.
+
+Skill-root widening (§6) is a one-file change and does not need a phase; it can ride with whatever lands first.
+
+**Feature gates.** Adapters sit behind `coord`; the hive sits behind `relay`; the bus sits behind `bus`. Cross-agent hive lives in the intersection of all three, which no current CI job exercises together. That needs a build job before phase 3, or the gates will rot the way the ones in the #465 audit did.
+
+## 9. Evidence
+
+Everything below was measured on one machine (macOS, Codex CLI 0.162.1) on 2026-10-13. It is recorded here because the next person to touch this will otherwise re-measure it.
+
+### 9.1 Codex session layout
+
+```
+~/.codex/sessions/YYYY/MM/DD/rollout-<ISO-ts>-<uuid>.jsonl     671 files
+```
+
+One JSON object per line, each with `timestamp`, `ordinal`, `type`, `payload`. Event types observed:
+
+| `type` / `payload.type` | Carries |
+| --- | --- |
+| `session_meta` | `session_id`, `id`, `cwd`, `runtime_workspace_roots`, `parent_thread_id` |
+| `event_msg` / `token_count` | `total_token_usage{input,cached_input,cache_write_input,output,reasoning_output,total}`, `last_token_usage`, `model_context_window` |
+| `event_msg` / `task_started`, `task_complete`, `turn_aborted` | status transitions |
+| `response_item` / `function_call` | `name`, `namespace`, `arguments`, `call_id` |
+| `response_item` / `custom_tool_call` | `name`, `input`, `status`, `call_id` |
+| `response_item` / `message`, `reasoning` | conversation content |
+| `token_usage_record` | per-turn usage |
+| `turn_context`, `world_state` | turn configuration |
+
+`model_context_window` being present means context-pressure health checks work for Codex with no new signal. No field carries cost in USD.
+
+### 9.2 Tool-name histogram
+
+120 rollout files sampled across all months, ~15 000 tool calls. Counts in the §3.2 table. Kinds: `function_call` 10 101, `custom_tool_call` 4894, `local_shell_call` 0.
+
+### 9.3 Skill format comparison
+
+```
+~/.codex/skills/docker-container-ops/SKILL.md
+  ---
+  name: docker-container-ops
+  description: Launch, manage, exec into, and listen to Docker containers. …
+  ---
+
+~/.claude/skills/braintrust/SKILL.md
+  ---
+  name: braintrust
+  version: 1.0.0
+  description: Use the Braintrust `bt` CLI for projects, traces, prompts, …
+  ---
+```
+
+Same contract. Claude Code's optional `version` is absent in Codex skills and ignored by them, so a shared skill round-trips.
+
+### 9.4 Codex approval store
+
+```
+~/.codex/rules/default.rules      275 lines, 46 KB, mtime 2 Sep
+  275 x prefix_rule(...)
+  275 x decision="allow"       (no deny entries)
+```
+
+No header or comment. Machine-written: entries include multi-kilobyte heredoc bodies and `mkdir -p /Users/<user>/.codex/skills/...` with absolute paths. `state_5.sqlite` tables are `threads`, `thread_sections`, `thread_attachments`, `thread_dynamic_tools`, `thread_spawn_edges`, `projects`, `project_roots`, `project_idempotency_keys`, `external_agent_config_imports`, `remote_control_enrollments`, `backfill_state`, `rollout_migration_*`, `_sqlx_migrations` — no approvals table, so the rules file remains the only approval store found.
+
+### 9.5 Other Codex integration points
+
+- `~/.codex/AGENTS.md` — standing instructions. Already contains marker-delimited managed blocks (`<!-- paper-lantern:start -->`), so the convention is established.
+- `~/.codex/config.toml` — `mcp_servers.*` (many configured), `notify = [<client>, "turn-ended"]`, `approvals_reviewer = "auto_review"`.
+- `~/.codex/session_index.jsonl` — `{id, thread_name, updated_at}` per thread. A cheap index for listing without parsing rollouts.
+- `~/.codex/plugins/`, `~/.codex/memories/` — not examined; possible later surfaces.
+
+## 10. Open questions
+
+1. **Does current Codex still write `rules/default.rules`?** §3.3's caveat. Blocks phase 5 only.
+2. **Forwarding or replication for the bus bridge?** §7.3. Decide before writing code.
+3. **Who owns a cross-machine reserved role?** `supervisor` and `operator` cannot be bound (`bus/policy.rs:41`), so `supervisor@mini` has no resolution story.
+4. **Does `origin_agent` affect confidence, or only display?** A unit confirmed independently in two agents is better evidence than one confirmed twice in the same agent. Saying so in the scoring is defensible; it is also a scoring change, which is a separate kind of risk from a schema change.
+5. **Does `ClaudeSession` get renamed?** It is public API across all three crates. A trait with a Claude implementation may be cheaper than a rename, and the `runtime.rs` DTO boundary (`SessionSnapshot`) may already be the right place to absorb the difference.
+6. **What happens to a Codex session's cost in the fleet snapshot?** Reporting `$0.00` corrupts `claudectl_fleet_cost_usd_total`. Options: omit, or carry a tokens-only variant. Needs deciding before phase 3 publishes a Codex session to `fleet.json`.
+
+## Related
+
+Epic #478 (work across hosts) · epic #424 (open cluster / named hives) · #435 (read-only members, the precedent for refusing a contribution) · #465 (dead-code audit — `coord/adapter.rs` carries `#![allow(dead_code)]` and is the same shape) · `docs/relay-and-hive.md` · `docs/AGENT_BUS.md` · `docs/open-cluster.md`

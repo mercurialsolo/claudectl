@@ -54,6 +54,7 @@ nav:
   - Contributing: contributing.md
   - Design specs:
       - Open Cluster: open-cluster.md
+      - Cross-Agent Hive: cross-agent-hive.md
       - Agent Bus: AGENT_BUS.md
       - Relay & Hive: relay-and-hive.md
       - Relay Discovery: relay-discovery.md
