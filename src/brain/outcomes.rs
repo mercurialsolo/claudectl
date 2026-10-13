@@ -338,8 +338,12 @@ fn fanout_test_failures(
                 if !d.project.eq_ignore_ascii_case(&p.project) {
                     return false;
                 }
-                let tool = d.tool.as_deref().unwrap_or("");
-                if !EDIT_LIKE_TOOLS.contains(&tool) {
+                // Matched on the canonical name, not the raw one (#522):
+                // `EDIT_LIKE_TOOLS` is spelled in Claude Code's vocabulary, so
+                // a Codex `apply_patch` record would never match its raw name
+                // and its edit outcomes would silently never attribute.
+                let tool = d.canonical_tool();
+                if !EDIT_LIKE_TOOLS.contains(&tool.as_str()) {
                     return false;
                 }
                 if !d.is_positive() {

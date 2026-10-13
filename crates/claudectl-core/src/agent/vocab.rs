@@ -157,9 +157,12 @@ fn canonical_codex(namespace: Option<&str>, name: &str, payload: Option<&str>) -
 }
 
 /// `Write` for a patch that adds a file, `Edit` for one that modifies, and a
-/// family-prefixed name for a deletion — Claude Code deletes through
-/// `Bash rm`, a different operation with different risk, so a deletion
-/// preference must not merge into either.
+/// family-prefixed name for a deletion, which merges with nothing: there is
+/// no Claude Code tool for deleting a file, so there is no name to merge
+/// *into*. Note this also means it will not merge with a Codex
+/// `exec_command rm`, which is arguably the same operation — accepted under
+/// the conservative rule above, since the alternative is filing deletions
+/// under `Bash` alongside every other shell command.
 ///
 /// Falls back to `Edit` when the payload is absent or carries no marker:
 /// modification is overwhelmingly the common case (1934 of 2134 observed

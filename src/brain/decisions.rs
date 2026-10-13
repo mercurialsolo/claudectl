@@ -130,6 +130,36 @@ pub struct DecisionRecord {
 }
 
 impl DecisionRecord {
+    /// This decision's tool name in the canonical cross-agent vocabulary
+    /// (#522).
+    ///
+    /// Records store the raw name the agent used, so this is the single place
+    /// a foreign vocabulary becomes the one `hive::semantic_key` is built
+    /// from. **Every key derived from a decision must go through here**, not
+    /// through `self.tool` — the `Pattern`, `ToolAccuracy` and
+    /// `ApproachOutcome` keys all have to agree, and `ApproachOutcome` exists
+    /// precisely to join back to the `Pattern` by matching key shape.
+    ///
+    /// A record with no `agent_family` — every record written before the
+    /// field existed — passes through unchanged, which is what keeps existing
+    /// hives' keys stable.
+    ///
+    /// `command` doubles as the payload argument: for a Codex `apply_patch`
+    /// it holds the patch text, whose envelope marker tells `Write` from
+    /// `Edit`.
+    ///
+    /// Local views — metrics, risk tiering, the review UI — deliberately keep
+    /// reading `self.tool` raw, because they describe what the agent actually
+    /// did rather than what the hive should key on.
+    pub fn canonical_tool(&self) -> String {
+        claudectl_core::agent::vocab::canonical_tool(
+            self.agent_family.as_deref().unwrap_or_default(),
+            None,
+            self.tool.as_deref().unwrap_or("*"),
+            self.command.as_deref(),
+        )
+    }
+
     /// A one-line, human-readable explanation of *why* the brain reached this
     /// decision (#372): the source, confidence, any rule that fired, and how
     /// many past examples informed it. Used by the review UI, `--brain-query`,

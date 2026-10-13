@@ -145,8 +145,18 @@ pub fn distill_to_knowledge_stable(
 
 /// Build the canonical approach reference for a decision. Mirrors the shape
 /// used by `Pattern`'s semantic_key so cluster/outcome views can join on it.
+///
+/// The tool name goes through the same normalizer as the `Pattern` it has to
+/// join against (#522). Reading the raw `decision.tool` here would leave a
+/// Codex record's outcome at `outcome:pattern:exec_command:cargo test` while
+/// its pattern sat at `pattern:Bash:cargo test` — the join this function
+/// exists to preserve, silently broken for every foreign record.
 fn approach_ref_for(decision: &DecisionRecord) -> Option<String> {
-    let tool = decision.tool.as_deref()?;
+    // A decision with no tool has no approach to reference. Bail before
+    // normalizing, because `canonical_tool` would turn it into "*" and
+    // bucket every toolless decision together.
+    decision.tool.as_ref()?;
+    let tool = decision.canonical_tool();
     let cmd = decision
         .command
         .as_deref()
@@ -807,6 +817,72 @@ mod tests {
             keys_for(None, "Bash"),
             claude,
             "an absent agent_family must not change an existing hive's keys"
+        );
+    }
+
+    /// An outcome has to join back to the approach it describes: an
+    /// `ApproachOutcome`'s key is `outcome:{approach_ref}` and `approach_ref`
+    /// mirrors a `Pattern`'s key on purpose (`mod.rs` §ApproachOutcome).
+    ///
+    /// Normalizing only the Pattern side would leave a Codex record's outcome
+    /// at `outcome:pattern:exec_command:cargo test` while its pattern sat at
+    /// `pattern:Bash:cargo test` — the join silently broken for every foreign
+    /// record, and invisible to the other #522 test because the default
+    /// `min_outcome_samples` of 5 emits no outcome units at all.
+    #[test]
+    fn codex_outcome_joins_the_pattern_it_describes() {
+        let refs_for = |family: &str, tool: &str| -> Vec<String> {
+            let decisions: Vec<DecisionRecord> = (0..3)
+                .map(|i| {
+                    let mut d = make_decision_with_id(
+                        &format!("d{i}"),
+                        tool,
+                        "cargo test --release",
+                        "claudectl",
+                    );
+                    d.agent_family = Some(family.to_string());
+                    d
+                })
+                .collect();
+            let resolved: HashMap<String, ResolvedOutcome> = (0..3)
+                .map(|i| {
+                    let id = format!("d{i}");
+                    (
+                        id.clone(),
+                        make_resolved(&id, tool, "claudectl", Some(0), Some(100)),
+                    )
+                })
+                .collect();
+
+            let units = distill_outcomes(
+                &decisions,
+                &resolved,
+                "peer",
+                &KnowledgeScope::Universal,
+                None,
+                0,
+                &ExportThresholds {
+                    min_outcome_samples: 1,
+                    ..Default::default()
+                },
+            );
+            let mut keys: Vec<String> = units.iter().map(semantic_key).collect();
+            keys.sort();
+            keys
+        };
+
+        let claude = refs_for("claude-code", "Bash");
+        assert_eq!(
+            claude,
+            vec!["universal/outcome:pattern:Bash:cargo test --release".to_string()],
+            "the Claude Code side must key on the Pattern shape it joins to"
+        );
+        assert_eq!(
+            refs_for("codex", "exec_command"),
+            claude,
+            "a Codex outcome must join the same approach_ref as the Claude Code \
+             pattern it describes, or outcome attribution breaks for every \
+             foreign record"
         );
     }
 

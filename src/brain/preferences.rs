@@ -598,7 +598,7 @@ pub fn distill_preferences(decisions: &[DecisionRecord]) -> DistilledPreferences
         // side: the log keeps what the agent actually called the tool, so a
         // wrong table entry is fixed by re-distilling rather than being
         // baked into the record forever.
-        let tool = canonical_tool_for(d);
+        let tool = d.canonical_tool();
         let cmd_key = extract_command_keyword(d.command.as_deref());
 
         // Tool-level stats
@@ -825,25 +825,6 @@ pub fn distill_preferences(decisions: &[DecisionRecord]) -> DistilledPreferences
         overall_accuracy,
         temporal,
     }
-}
-
-/// The canonical tool name for a decision record (#522).
-///
-/// Records carry the raw name the agent used, so this is where a foreign
-/// vocabulary becomes the one `hive::semantic_key` is built from. A record
-/// with no `agent_family` — every record written before the field existed —
-/// passes through unchanged, which is what keeps existing hives' keys stable.
-///
-/// `command` doubles as the payload argument: for a Codex `apply_patch` it
-/// holds the patch text, whose envelope marker is what tells `Write` from
-/// `Edit`.
-pub(super) fn canonical_tool_for(d: &DecisionRecord) -> String {
-    claudectl_core::agent::vocab::canonical_tool(
-        d.agent_family.as_deref().unwrap_or_default(),
-        None,
-        d.tool.as_deref().unwrap_or("*"),
-        d.command.as_deref(),
-    )
 }
 
 /// Extract a command keyword for pattern grouping.
