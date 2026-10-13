@@ -696,8 +696,8 @@ impl App {
         let Some(session) = self.selected_session() else {
             return;
         };
-        if session.is_remote() {
-            self.status_msg = "Remote session \u{2014} action not available".into();
+        if let Some(reason) = session.unactionable_reason() {
+            self.status_msg = reason.into();
             return;
         }
         let pid = session.pid;
@@ -727,8 +727,8 @@ impl App {
         let Some(session) = self.selected_session() else {
             return;
         };
-        if session.is_remote() {
-            self.status_msg = "Remote session \u{2014} action not available".into();
+        if let Some(reason) = session.unactionable_reason() {
+            self.status_msg = reason.into();
             return;
         }
         let pid = session.pid;

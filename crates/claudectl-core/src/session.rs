@@ -193,6 +193,14 @@ pub struct ClaudeSession {
     /// If set, this session is from a remote worker (not local).
     /// Terminal actions (approve, kill, etc.) are disabled for remote sessions.
     pub worker_origin: Option<String>,
+    /// Which coding agent this session belongs to — `claude-code`, `codex`
+    /// (#524). Defaults to `claude-code` in every existing constructor, so
+    /// nothing that predates the field changes behaviour.
+    ///
+    /// The type keeps its name. A Codex session fills the same fields and
+    /// flows through the same views, and renaming a struct that is public API
+    /// across three crates buys nothing a field does not.
+    pub agent_family: String,
 }
 
 /// A captured tool error with context.
@@ -393,6 +401,9 @@ impl ClaudeSession {
             total_error_count: 0,
             decay_score: 0,
             worker_origin: None,
+            // Every existing caller of `from_raw` is a Claude Code session;
+            // `from_codex_rollout` overrides this.
+            agent_family: crate::agent::vocab::CLAUDE_CODE.to_string(),
         }
     }
 
@@ -486,6 +497,130 @@ impl ClaudeSession {
     /// Whether this session is from a remote worker (not local).
     pub fn is_remote(&self) -> bool {
         self.worker_origin.is_some()
+    }
+
+    /// Whether this is a Claude Code session (#524).
+    ///
+    /// The question to ask when the answer is about Claude Code's *file
+    /// layout* — `~/.claude/projects` transcripts, `/tmp/claude-<uid>`
+    /// subagent tasks — rather than about permission to act. A remote Claude
+    /// session is still a Claude Code session; `is_actionable` is what says
+    /// you cannot touch it.
+    pub fn is_claude_code(&self) -> bool {
+        self.agent_family == crate::agent::vocab::CLAUDE_CODE
+    }
+
+    /// Whether claudectl can *act* on this session — send input, interrupt,
+    /// approve, kill (#524).
+    ///
+    /// False for two different reasons, which is why this is one predicate
+    /// rather than scattered checks:
+    ///
+    /// * A **remote** session's process is on another machine.
+    /// * A **non-Claude-Code** session has no process claudectl can address.
+    ///   For Codex specifically this is not "not implemented yet": the
+    ///   ChatGPT app runs one `codex … app-server` for every session at once,
+    ///   so there is no pid that means *this* session, and the pid we do hold
+    ///   is 0. Signalling it would reach the caller's own process group.
+    ///
+    /// Read it as the question "may I touch this?", not "is this local?" —
+    /// `is_remote` answers the latter and is still the right check for
+    /// display and fleet labelling.
+    pub fn is_actionable(&self) -> bool {
+        self.unactionable_reason().is_none()
+    }
+
+    /// Why this session cannot be acted on, as a line fit for a status bar —
+    /// or `None` when it can.
+    ///
+    /// The two reasons are genuinely different and a caller that collapses
+    /// them tells the user something false, so the reason travels with the
+    /// verdict rather than being re-derived at each of the gate sites.
+    pub fn unactionable_reason(&self) -> Option<&'static str> {
+        if self.is_remote() {
+            return Some("Remote session — action not available");
+        }
+        if !self.is_claude_code() {
+            // Deliberately not "not supported yet". With the ChatGPT app one
+            // `codex … app-server` serves every session, so there is no pid
+            // that means this one; see `agent::codex`.
+            return Some("Codex session — claudectl has no process to act on");
+        }
+        None
+    }
+
+    /// Whether this session's `cost_usd` means anything (#524).
+    ///
+    /// Codex is subscription-billed and its transcripts record tokens only,
+    /// so a Codex session's cost is *absent*, not zero. Anything summing or
+    /// rendering cost should ask this rather than trusting a 0.0 that cannot
+    /// be told apart from a session that genuinely cost nothing.
+    pub fn has_known_cost(&self) -> bool {
+        self.agent_family != crate::agent::vocab::CODEX
+    }
+
+    /// Build a session from a parsed Codex rollout transcript (#524).
+    ///
+    /// `pid` is 0 and `is_actionable()` is false — see that method for why
+    /// there is no process to hold. `cost_usd` stays 0 with
+    /// `usage_metrics_available` false, so it reads as absent rather than
+    /// free.
+    pub fn from_codex_rollout(summary: &crate::agent::codex::RolloutSummary) -> Self {
+        use crate::agent::codex::Lifecycle;
+
+        let mut session = Self::from_raw(RawSession {
+            pid: 0,
+            session_id: summary.session_id.clone(),
+            cwd: summary.cwd.clone(),
+            started_at: summary.started_at_secs.saturating_mul(1000),
+        });
+
+        session.agent_family = crate::agent::vocab::CODEX.to_string();
+        session.status = match summary.lifecycle {
+            Lifecycle::Working => SessionStatus::Processing,
+            // `task_complete` ends a turn, not a session: the agent is done
+            // responding and waiting for the next prompt.
+            Lifecycle::Idle => SessionStatus::WaitingInput,
+            Lifecycle::Unknown => SessionStatus::Unknown,
+        };
+
+        session.own_input_tokens = summary.input_tokens;
+        session.own_output_tokens = summary.output_tokens;
+        session.own_cache_read_tokens = summary.cached_input_tokens;
+        session.total_input_tokens = summary.input_tokens;
+        session.total_output_tokens = summary.output_tokens;
+        session.cache_read_tokens = summary.cached_input_tokens;
+        // Codex measures its context window against `total_tokens`.
+        session.context_tokens = summary.total_tokens;
+        session.context_max = summary.context_window.unwrap_or(0);
+
+        if let Some(model) = &summary.model {
+            session.model = model.clone();
+        }
+        session.pending_tool_name = summary.last_tool.clone();
+        session.tool_usage = summary
+            .last_tool
+            .as_ref()
+            .map(|t| {
+                let mut m = HashMap::new();
+                m.insert(
+                    t.clone(),
+                    ToolStats {
+                        calls: summary.tool_calls,
+                    },
+                );
+                m
+            })
+            .unwrap_or_default();
+
+        // Absent, not free. See `has_known_cost`.
+        session.cost_usd = 0.0;
+        session.usage_metrics_available = false;
+        session.cost_estimate_unverified = true;
+        session.model_profile_source = "codex (tokens only, no cost)".to_string();
+        session.jsonl_path = Some(summary.path.clone());
+
+        session
     }
 
     /// Build a ClaudeSession from remote JSON (as received via heartbeat/HTTP).
@@ -923,6 +1058,136 @@ mod tests {
             cwd: "/tmp/project".into(),
             started_at: 0,
         })
+    }
+
+    // ── #524 agent family and the action gate ──────────────────────────
+
+    fn codex_summary() -> crate::agent::codex::RolloutSummary {
+        crate::agent::codex::RolloutSummary {
+            session_id: "01a12c5d".into(),
+            cwd: "/Users/dev/project".into(),
+            started_at_secs: 1_700_000_000,
+            last_event_secs: 1_700_000_100,
+            input_tokens: 33_434,
+            cached_input_tokens: 22_912,
+            output_tokens: 215,
+            total_tokens: 33_649,
+            context_window: Some(272_000),
+            model: Some("gpt-6-astra".into()),
+            lifecycle: crate::agent::codex::Lifecycle::Idle,
+            tool_calls: 3,
+            last_tool: Some("Bash".into()),
+            path: std::path::PathBuf::from("/Users/dev/.codex/sessions/2026/10/11/r.jsonl"),
+        }
+    }
+
+    #[test]
+    fn a_local_claude_session_is_actionable() {
+        let s = make_session();
+        assert!(s.is_claude_code());
+        assert!(s.is_actionable());
+        assert_eq!(s.unactionable_reason(), None);
+        assert!(s.has_known_cost());
+    }
+
+    /// The safety property this whole phase turns on: nothing may offer to
+    /// send input to, interrupt, or kill a Codex session. There is no pid
+    /// that means *this* session — with the ChatGPT app one `app-server`
+    /// process serves them all — and the pid we hold is 0, which
+    /// `kill(0, sig)` aims at the caller's own process group.
+    #[test]
+    fn a_codex_session_is_never_actionable() {
+        let s = ClaudeSession::from_codex_rollout(&codex_summary());
+        assert!(!s.is_claude_code());
+        assert!(
+            !s.is_actionable(),
+            "a Codex session must never be actionable — see from_codex_rollout"
+        );
+        assert_eq!(s.pid, 0, "there is no process to hold");
+        let reason = s.unactionable_reason().expect("must carry a reason");
+        assert!(
+            reason.to_lowercase().contains("codex"),
+            "the reason must name Codex rather than claiming the session is remote: {reason}"
+        );
+    }
+
+    /// A remote session and a Codex session are unactionable for different
+    /// reasons, and a caller that collapses them tells the user something
+    /// false.
+    #[test]
+    fn remote_and_codex_give_different_reasons() {
+        let mut remote = make_session();
+        remote.worker_origin = Some("mini".into());
+        let codex = ClaudeSession::from_codex_rollout(&codex_summary());
+
+        assert_ne!(remote.unactionable_reason(), codex.unactionable_reason());
+        assert!(
+            remote.unactionable_reason().unwrap().contains("Remote"),
+            "the remote wording must not regress"
+        );
+        // A remote session is still a Claude Code session.
+        assert!(remote.is_claude_code());
+    }
+
+    #[test]
+    fn a_codex_session_carries_tokens_and_context_but_no_cost() {
+        let s = ClaudeSession::from_codex_rollout(&codex_summary());
+        assert_eq!(s.own_input_tokens, 33_434);
+        assert_eq!(s.own_output_tokens, 215);
+        assert_eq!(s.own_cache_read_tokens, 22_912);
+        assert_eq!(
+            s.context_tokens, 33_649,
+            "Codex measures its window against total_tokens"
+        );
+        assert_eq!(s.context_max, 272_000);
+
+        assert_eq!(s.cost_usd, 0.0);
+        assert!(
+            !s.has_known_cost(),
+            "Codex is subscription-billed; its cost is absent, not zero — a \
+             0.0 that reads as known would understate nothing but would let a \
+             fleet total claim completeness it does not have"
+        );
+        assert!(!s.usage_metrics_available);
+    }
+
+    #[test]
+    fn a_codex_session_maps_lifecycle_to_status() {
+        use crate::agent::codex::Lifecycle;
+        let mut summary = codex_summary();
+
+        summary.lifecycle = Lifecycle::Working;
+        assert_eq!(
+            ClaudeSession::from_codex_rollout(&summary).status,
+            SessionStatus::Processing
+        );
+
+        // `task_complete` ends a turn, not a session.
+        summary.lifecycle = Lifecycle::Idle;
+        assert_eq!(
+            ClaudeSession::from_codex_rollout(&summary).status,
+            SessionStatus::WaitingInput
+        );
+
+        summary.lifecycle = Lifecycle::Unknown;
+        assert_eq!(
+            ClaudeSession::from_codex_rollout(&summary).status,
+            SessionStatus::Unknown
+        );
+    }
+
+    /// The rollout is the transcript. `resolve_jsonl_paths` must not later
+    /// point this at a `~/.claude/projects` file.
+    #[test]
+    fn a_codex_session_keeps_its_rollout_as_its_transcript() {
+        let s = ClaudeSession::from_codex_rollout(&codex_summary());
+        assert_eq!(
+            s.jsonl_path.as_deref(),
+            Some(codex_summary().path.as_path())
+        );
+        assert_eq!(s.project_name, "project");
+        assert_eq!(s.model, "gpt-6-astra");
+        assert_eq!(s.pending_tool_name.as_deref(), Some("Bash"));
     }
 
     #[test]

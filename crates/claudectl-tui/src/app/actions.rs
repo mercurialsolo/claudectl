@@ -6,8 +6,8 @@ use super::*;
 impl App {
     pub(super) fn handle_approve(&mut self) {
         if let Some(session) = self.selected_session() {
-            if session.is_remote() {
-                self.status_msg = "Remote session \u{2014} action not available".into();
+            if let Some(reason) = session.unactionable_reason() {
+                self.status_msg = reason.into();
                 return;
             }
             if session.status == SessionStatus::NeedsInput {
@@ -35,8 +35,8 @@ impl App {
         let Some(session) = self.selected_session().cloned() else {
             return;
         };
-        if session.is_remote() {
-            self.status_msg = "Remote session \u{2014} action not available".into();
+        if let Some(reason) = session.unactionable_reason() {
+            self.status_msg = reason.into();
             return;
         }
         let pid = session.pid;
@@ -84,8 +84,8 @@ impl App {
         let Some(session) = self.selected_session().cloned() else {
             return;
         };
-        if session.is_remote() {
-            self.status_msg = "Remote session \u{2014} action not available".into();
+        if let Some(reason) = session.unactionable_reason() {
+            self.status_msg = reason.into();
             return;
         }
         let pid = session.pid;
@@ -172,8 +172,8 @@ impl App {
 
     pub(super) fn handle_compact(&mut self) {
         if let Some(session) = self.selected_session() {
-            if session.is_remote() {
-                self.status_msg = "Remote session \u{2014} action not available".into();
+            if let Some(reason) = session.unactionable_reason() {
+                self.status_msg = reason.into();
                 return;
             }
             match session.status {
@@ -211,8 +211,8 @@ impl App {
 
     pub(super) fn handle_switch_terminal(&mut self) {
         if let Some(session) = self.selected_session() {
-            if session.is_remote() {
-                self.status_msg = "Remote session \u{2014} action not available".into();
+            if let Some(reason) = session.unactionable_reason() {
+                self.status_msg = reason.into();
                 return;
             }
             match terminals::switch_to_terminal(session) {

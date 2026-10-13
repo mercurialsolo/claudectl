@@ -10,6 +10,7 @@
 //! See `docs/cross-agent-hive.md` (epic #521) for the design, and §9 of that
 //! document for the measurements the tables here are built from.
 
+pub mod codex;
 pub mod vocab;
 
 use std::path::PathBuf;

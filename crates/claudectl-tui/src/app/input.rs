@@ -659,8 +659,8 @@ impl App {
 
     pub(super) fn enter_input_mode(&mut self) {
         if let Some(session) = self.selected_session() {
-            if session.is_remote() {
-                self.status_msg = "Remote session \u{2014} action not available".into();
+            if let Some(reason) = session.unactionable_reason() {
+                self.status_msg = reason.into();
                 return;
             }
         }
@@ -685,6 +685,11 @@ impl App {
         };
         if session.is_remote() {
             self.status_msg = "Remote session \u{2014} bind locally instead".into();
+            return;
+        }
+        // A bus role binds to a pid (#307). A Codex session has none (#524).
+        if !session.is_claude_code() {
+            self.status_msg = "Codex session \u{2014} no pid to bind a role to".into();
             return;
         }
         let pid = session.pid;
@@ -763,6 +768,14 @@ impl App {
         };
         if session.is_remote() {
             self.status_msg = "Already on another machine — send from there".into();
+            return;
+        }
+        // Transfer lands a transcript where `claude --resume` looks for it
+        // (#478 item 3). A Codex rollout has no equivalent resume path, so
+        // sending one would move bytes that nothing on the far side reads.
+        if !session.is_claude_code() {
+            self.status_msg =
+                "Codex session — transfer only supports Claude Code transcripts".into();
             return;
         }
         let Some(transcript) = session.jsonl_path.clone() else {
