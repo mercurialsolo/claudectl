@@ -1,6 +1,6 @@
 # Cross-Agent Hive — Design Specification
 
-**Status:** Epic #521, phases #522–#528. Phase 1 shipped in PR #530; the rest proposed. Written against the code as of `bc61737d` (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
+**Status:** Epic #521, phases #522–#528. Phases 1 (PR #530) and 2 (PR #531) shipped; the rest proposed. Written against the code as of `bc61737d` (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
 **Scope:** Let coding agents that are not Claude Code — starting with Codex — join a hive as full members: contribute what they learn, receive what others learned, and talk to every other member over one bus. Today the hive's substrate is agent-neutral but its two ends are not: capture happens through a Claude Code hook, and application happens into a Claude Code prompt.
 
 ## Implementation status
@@ -8,7 +8,7 @@
 | Phase (§8) | Issue | Status | Module / artifact |
 | --- | --- | --- | --- |
 | 1. Canonical tool vocabulary | #522 | **Shipped** (PR #530) | `claudectl-core/src/agent/vocab.rs`, seam at `brain::preferences::canonical_tool_for` |
-| 2. Unit provenance + artifact applicability | #523 | **Not started** | `src/hive/mod.rs` (`origin_agent`, `ArtifactRequires::agents`) |
+| 2. Unit provenance + artifact applicability | #523 | **Shipped** (PR #531) | `src/hive/mod.rs` (`origin_agents`, `ArtifactRequires::agents`), `hive/distiller.rs` (`OriginIndex`), `claudectl-core/src/agent/mod.rs` (presence detection) |
 | 3. Codex discovery + monitor | #524 | **Not started** | `claudectl-core/src/agent/codex/` (new), wired through `src/coord/adapter_codex.rs` |
 | 4. Hive read surface for any agent (MCP) | #525 | **Not started** | `src/hive/mcp.rs` (new), mirroring `src/query/mcp.rs` |
 | 5. Codex write surface (AGENTS.md, rules) | #526 | **Not started** | `src/hive/project/` (new) |
@@ -186,6 +186,14 @@ Three consequences:
 - **`canonical_tool(family, namespace, name, payload) -> String` is a pure function** living in `claudectl-core`, with the §3.2 tables as data. Claude Code's names are the canonical form, because they are already on the wire in every existing hive. This is not a claim that they are better names; it is that they are the incumbent ones and a rename is a migration. The `payload` argument exists only so `apply_patch` can read its envelope marker (§3.2) — every other mapping is a function of the name and namespace alone.
 - **Provenance is additive, never in the key.** `KnowledgeUnit.origin_agent: Option<String>` with `#[serde(default)]`. Old peers ignore the field; new peers can show "learned in Codex, confirmed in Claude Code," which is *more* trustworthy than either alone and should eventually raise confidence rather than merely annotate it.
 - **Applicability is per-artifact, not per-unit.** `ArtifactRequires.agents: Vec<String>` (`#[serde(default)]`, empty = any) on `Skill` / `Command` / `HookConfig` only. A hook unit declares `agents = ["claude-code"]` and a Codex-only peer skips it on arrival instead of failing to install it.
+
+Two details phase 2 settled that the first draft left implicit:
+
+**Attribution is per-approach, not per-tool.** `origin_agents` is joined onto finished units from the decision log, keyed on canonical tool *plus* command keyword — the content part of a `Pattern`'s key. Keying on the tool alone would make a Codex-only `cargo fmt` approach inherit `claude-code` simply because `Bash` is a shared tool.
+
+**Provenance is cumulative across a merge, but only where evidence is.** A replacing merge unions both units' agent lists, since "confirmed independently in two agents" is the case the field exists to record. A *rejected* unit's origins are not folded in: its evidence did not transfer, so claiming its agent would overstate where the stored knowledge came from.
+
+**Agent presence is detected by state directory, not by PATH.** `~/.claude` and `~/.codex` existing is the better signal for what the answer is used for — a skill installs into that directory and is read from it on the agent's next run, so an agent whose binary lives somewhere unusual (a version manager, a wrapper, a GUI bundle) should still receive artifacts.
 
 An unnormalizable tool — Codex's `wait`, or any future agent's unique primitive — keeps its raw name prefixed with its family (`codex:wait`). It will not merge with anything, which is correct: it has no counterpart.
 
