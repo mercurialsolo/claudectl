@@ -1,5 +1,5 @@
 pkgbase = claudectl-bin
-	pkgdesc = Mission control TUI for Claude Code sessions
+	pkgdesc = Hive mind for Claude Code that learns from you once and remembers everywhere
 	pkgver = 0.16.0
 	pkgrel = 1
 	url = https://github.com/mercurialsolo/claudectl
