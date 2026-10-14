@@ -13,7 +13,7 @@ BASE_URL="https://github.com/mercurialsolo/claudectl/releases/download/${TAG}"
 
 cat <<EOF
 class Claudectl < Formula
-  desc "Hive mind for Claude Code - learns from you once and remembers everywhere"
+  desc "Hive mind for Claude Code that learns from you once and remembers everywhere"
   homepage "https://github.com/mercurialsolo/claudectl"
   version "${VERSION}"
   license "MIT"
