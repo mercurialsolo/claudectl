@@ -96,6 +96,11 @@ impl AgentConfig {
 }
 
 /// `~/Library/LaunchAgents/io.claudectl.relay.plist`.
+///
+/// macOS only: `service_path` routes to the systemd unit elsewhere (#546), and
+/// the tests all take an explicit home through [`plist_path_in`], so this has
+/// no caller on any other platform — in a test build either.
+#[cfg(target_os = "macos")]
 pub fn plist_path() -> PathBuf {
     plist_path_in(&claudectl_core::helpers::dirs_home())
 }
@@ -105,6 +110,7 @@ pub fn plist_path() -> PathBuf {
 /// Split out so the tests never read the ambient `HOME`. Another test in this
 /// crate mutates `HOME` process-wide (`brain::decisions`), and cargo runs tests
 /// on parallel threads, so anything reading the env here is a race.
+#[cfg(any(target_os = "macos", test))]
 pub fn plist_path_in(home: &Path) -> PathBuf {
     home.join("Library")
         .join("LaunchAgents")
@@ -234,25 +240,34 @@ pub fn is_loaded() -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn is_loaded() -> bool {
-    false
-}
-
 /// What `relay agent-status` reports.
+///
+/// Named for the service rather than the plist since #546: the same struct now
+/// describes a launchd agent on macOS and a systemd `--user` unit on Linux.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentStatus {
-    pub plist_exists: bool,
+    pub service_exists: bool,
     pub loaded: bool,
-    pub plist: PathBuf,
+    pub service: PathBuf,
+}
+
+/// The service definition this platform's manager reads.
+#[cfg(target_os = "macos")]
+pub fn service_path() -> PathBuf {
+    plist_path()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn service_path() -> PathBuf {
+    unit_path()
 }
 
 pub fn status() -> AgentStatus {
-    let plist = plist_path();
+    let service = service_path();
     AgentStatus {
-        plist_exists: plist.exists(),
+        service_exists: service.exists(),
         loaded: is_loaded(),
-        plist,
+        service,
     }
 }
 
@@ -355,35 +370,171 @@ pub fn uninstall() -> Result<(bool, Option<String>), String> {
     Ok((existed || loaded, note))
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Linux: systemd --user
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Mirrors the launchd side deliberately: a pure renderer with tests, then the
+// IO on top. #546 — this used to print a recipe and install nothing, which is
+// documentation rather than a daemon, on exactly the machine most likely to be
+// left running.
+
+/// The unit's file name, and the name `systemctl --user` addresses it by.
 #[cfg(not(target_os = "macos"))]
-pub fn install(_cfg: &AgentConfig) -> Result<PathBuf, String> {
-    Err(unsupported())
+pub const UNIT_NAME: &str = "claudectl-relay.service";
+
+/// Where the unit file lives.
+#[cfg(not(target_os = "macos"))]
+pub fn unit_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    unit_path_in(Path::new(&home))
+}
+
+/// Explicit home, so tests never read the ambient one.
+#[cfg(not(target_os = "macos"))]
+pub fn unit_path_in(home: &Path) -> PathBuf {
+    home.join(".config")
+        .join("systemd")
+        .join("user")
+        .join(UNIT_NAME)
+}
+
+/// Render the unit.
+///
+/// `Restart=always` with a delay is the `KeepAlive` equivalent. `RestartSec`
+/// matters more than it looks: a relay that cannot bind its port would
+/// otherwise respawn in a tight loop and systemd would give up and mark the
+/// unit failed, which reads as "the agent is broken" rather than "the port is
+/// taken".
+///
+/// Logs go to the journal rather than to files. The launchd side writes files
+/// because launchd has no journal; duplicating that here would mean two places
+/// to look on one platform.
+#[cfg(not(target_os = "macos"))]
+pub fn render_unit(binary: &Path, cfg: &AgentConfig) -> String {
+    let argv = cfg.argv(binary);
+    // `argv` is already shell-free — systemd splits ExecStart on whitespace, so
+    // a path containing a space has to be quoted here even though the plist
+    // needed no such thing.
+    let exec: Vec<String> = argv
+        .iter()
+        .map(|a| {
+            if a.contains(char::is_whitespace) {
+                format!("\"{a}\"")
+            } else {
+                a.clone()
+            }
+        })
+        .collect();
+    format!(
+        "[Unit]\n\
+         Description=claudectl relay\n\
+         Documentation=https://github.com/mercurialsolo/claudectl\n\
+         After=network-online.target\n\
+         Wants=network-online.target\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart={}\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        exec.join(" ")
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn systemctl(args: &[&str]) -> Result<std::process::Output, String> {
+    std::process::Command::new("systemctl")
+        .arg("--user")
+        .args(args)
+        .output()
+        .map_err(|e| format!("systemctl --user {}: {e}", args.join(" ")))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_loaded() -> bool {
+    systemctl(&["is-enabled", UNIT_NAME])
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn install(cfg: &AgentConfig) -> Result<PathBuf, String> {
+    let binary = resolve_binary()?;
+    let path = unit_path();
+    let dir = path
+        .parent()
+        .ok_or_else(|| "unit path has no parent".to_string())?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    std::fs::write(&path, render_unit(&binary, cfg))
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
+
+    // A unit rewritten under a running service keeps the old ExecStart until
+    // something reloads it — the same failure the launchd side unloads to avoid.
+    let reload = systemctl(&["daemon-reload"])?;
+    if !reload.status.success() {
+        return Err(format!(
+            "systemctl --user daemon-reload failed: {}",
+            String::from_utf8_lossy(&reload.stderr).trim()
+        ));
+    }
+    let enable = systemctl(&["enable", "--now", UNIT_NAME])?;
+    if !enable.status.success() {
+        return Err(format!(
+            "systemctl --user enable --now {UNIT_NAME} failed: {}",
+            String::from_utf8_lossy(&enable.stderr).trim()
+        ));
+    }
+
+    // Without lingering, the user manager stops at logout and takes the relay
+    // with it — which is the whole point of installing a service. It needs
+    // policy permission, so a refusal is reported rather than failing an
+    // install that otherwise worked.
+    if let Err(hint) = enable_linger() {
+        eprintln!("warning: {hint}");
+    }
+    Ok(path)
+}
+
+/// `loginctl enable-linger`, the systemd equivalent of a launchd agent
+/// outliving the login session.
+#[cfg(not(target_os = "macos"))]
+fn enable_linger() -> Result<(), String> {
+    let user = std::env::var("USER").unwrap_or_default();
+    let out = std::process::Command::new("loginctl")
+        .args(["enable-linger", &user])
+        .output()
+        .map_err(|e| format!("loginctl enable-linger: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "could not enable lingering, so the relay will stop at logout. \
+         Run: loginctl enable-linger {user}   ({})",
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn uninstall() -> Result<(bool, Option<String>), String> {
-    Err(unsupported())
-}
-
-/// What to say on a platform without `launchd`.
-///
-/// A recipe rather than a refusal: the equivalent is short, and a user on Linux
-/// asking for a durable relay deserves the answer rather than a closed door.
-#[cfg(not(target_os = "macos"))]
-pub fn unsupported() -> String {
-    "`relay install-agent` manages a macOS launchd agent, and this is not macOS.\n\n\
-     On Linux, systemd --user does the same job. Write\n\
-     ~/.config/systemd/user/claudectl-relay.service:\n\n\
-     \x20 [Unit]\n\
-     \x20 Description=claudectl relay\n\n\
-     \x20 [Service]\n\
-     \x20 ExecStart=%h/.cargo/bin/claudectl relay serve --port 9847\n\
-     \x20 Restart=always\n\n\
-     \x20 [Install]\n\
-     \x20 WantedBy=default.target\n\n\
-     then: systemctl --user enable --now claudectl-relay\n\
-     and:  loginctl enable-linger $USER   (so it survives logout)"
-        .to_string()
+    let path = unit_path();
+    let existed = path.exists();
+    let mut note = None;
+    if existed {
+        let disable = systemctl(&["disable", "--now", UNIT_NAME])?;
+        if !disable.status.success() {
+            note = Some(format!(
+                "systemctl --user disable failed: {}",
+                String::from_utf8_lossy(&disable.stderr).trim()
+            ));
+        }
+        std::fs::remove_file(&path).map_err(|e| format!("remove {}: {e}", path.display()))?;
+        let _ = systemctl(&["daemon-reload"]);
+    }
+    Ok((existed, note))
 }
 
 #[cfg(test)]
@@ -545,12 +696,77 @@ mod tests {
         );
     }
 
+    // The systemd half, rendered and checked without installing anything —
+    // neither CI nor a container can meaningfully run `systemd --user`, so the
+    // unit text is what gets asserted (#546). Same approach as the plist above.
     #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn a_non_macos_platform_gets_a_recipe_not_a_refusal() {
-        let msg = unsupported();
-        assert!(msg.contains("systemd --user"), "{msg}");
-        assert!(msg.contains("enable-linger"), "{msg}");
-        assert!(install(&AgentConfig::default()).is_err());
+    mod systemd {
+        use super::*;
+
+        fn linux_home() -> PathBuf {
+            PathBuf::from("/home/testuser")
+        }
+
+        #[test]
+        fn the_unit_lives_where_systemd_user_looks_for_it() {
+            let path = unit_path_in(&linux_home());
+            assert_eq!(
+                path,
+                PathBuf::from("/home/testuser/.config/systemd/user/claudectl-relay.service")
+            );
+        }
+
+        #[test]
+        fn the_unit_restarts_and_installs_into_the_default_target() {
+            let unit = render_unit(
+                Path::new("/usr/local/bin/claudectl"),
+                &AgentConfig::default(),
+            );
+            assert!(unit.contains("Restart=always"), "{unit}");
+            // Without a delay a relay that cannot bind its port respawns in a
+            // tight loop until systemd gives up and marks the unit failed,
+            // which reads as a broken agent rather than a taken port.
+            assert!(unit.contains("RestartSec="), "{unit}");
+            assert!(unit.contains("WantedBy=default.target"), "{unit}");
+            assert!(
+                unit.contains("ExecStart=/usr/local/bin/claudectl relay serve --port 9847"),
+                "{unit}"
+            );
+        }
+
+        /// systemd splits `ExecStart` on whitespace, where a launchd plist takes
+        /// an argv array and needs no quoting at all. A path with a space is
+        /// the case that difference breaks.
+        #[test]
+        fn a_binary_path_with_a_space_is_quoted() {
+            let unit = render_unit(
+                Path::new("/home/testuser/My Tools/claudectl"),
+                &AgentConfig::default(),
+            );
+            assert!(
+                unit.contains("ExecStart=\"/home/testuser/My Tools/claudectl\" relay serve"),
+                "{unit}"
+            );
+        }
+
+        #[test]
+        fn optional_config_reaches_the_unit() {
+            let cfg = AgentConfig {
+                port: 9900,
+                http_port: Some(9876),
+                ..AgentConfig::default()
+            };
+            let unit = render_unit(Path::new("/usr/bin/claudectl"), &cfg);
+            assert!(unit.contains("--port 9900"), "{unit}");
+            assert!(unit.contains("--http-port 9876"), "{unit}");
+        }
+
+        #[test]
+        fn the_unit_waits_for_the_network() {
+            // A relay started before the network is up dials every peer once,
+            // fails, and — before #543 — forgot them all.
+            let unit = render_unit(Path::new("/usr/bin/claudectl"), &AgentConfig::default());
+            assert!(unit.contains("After=network-online.target"), "{unit}");
+        }
     }
 }
