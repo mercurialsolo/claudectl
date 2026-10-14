@@ -529,6 +529,20 @@ fn cmd_serve(
         None
     };
 
+    // #506: listen as well as announce. `start_announcer` tells the LAN where
+    // we are; without a listener this machine never hears anyone else move, so
+    // a paired peer that changed network stayed unreachable until a human ran
+    // `relay discover` at the right moment. Started whenever announcing is on,
+    // since a machine unwilling to say where it is has no claim on others.
+    let lan_seen = if relay_cfg.lan_announce {
+        Some(super::lan::start_listener(
+            identity.0.clone(),
+            Arc::clone(&lan_shutdown),
+        ))
+    } else {
+        None
+    };
+
     // This machine's sessions, advertised to peers on every heartbeat.
     let mut local_feed = super::advertise::LocalSessionFeed::new();
 
@@ -902,6 +916,20 @@ fn cmd_serve(
                 hive.sync_if_due(std::time::Instant::now(), reg.connected_peers())
             {
                 let _ = reg.send_to(target.as_str(), &sync_msg);
+            }
+
+            // #506: a paired peer that moved announces itself from its new
+            // address; record it so `reconnect_peer`'s existing fallback (#484)
+            // has somewhere to go. Cheap per tick — the map is small, and only
+            // a genuinely new address writes anything.
+            if let Some(seen) = lan_seen.as_ref() {
+                relearn_moved_peers(seen);
+                // Publish what we have heard: a second process cannot bind the
+                // discovery port and expect a copy of each datagram, so
+                // `relay discover` reads this instead. See the note in lan.rs.
+                if let Ok(map) = seen.lock() {
+                    super::lan::publish_seen(&map);
+                }
             }
 
             let events = reg.tick(identity.as_str(), Some(local_feed.sessions()));
@@ -1352,6 +1380,42 @@ Nothing was sent. `claudectl relay peers` shows what each peer advertises."
         "{peer_id} does not meet: {}",
         unmet.join("; ")
     )))
+}
+
+/// Record a new address for any *already paired* peer heard on the LAN (#506).
+///
+/// Pairing is the filter: an announcement is unauthenticated, so anyone on the
+/// network can claim any identity. Writing an address for a peer we hold no PSK
+/// for would let a stranger seed candidates we later dial. For a paired peer the
+/// cost of a wrong address is a failed dial and the next candidate, because the
+/// PSK still has to check out — so this widens where we look, never who we will
+/// talk to.
+///
+/// Only genuinely new addresses are written; `save_peer_meta` merges and keeps
+/// the most recent at the front (#484).
+fn relearn_moved_peers(
+    seen: &Arc<Mutex<std::collections::HashMap<String, super::lan::DiscoveredPeer>>>,
+) {
+    let Ok(map) = seen.lock() else {
+        return;
+    };
+    for (peer_id, found) in map.iter() {
+        if found.is_stale() {
+            continue;
+        }
+        if load_peer_psk(peer_id).is_none() {
+            continue; // not paired — see above
+        }
+        let addr = found.relay_addr().to_string();
+        let known = super::peer_addrs(load_peer_meta(peer_id).as_ref());
+        if known.iter().any(|a| a.addr == addr) {
+            continue;
+        }
+        match super::save_peer_meta(peer_id, &addr) {
+            Ok(()) => println!("Learned new address for {peer_id}: {addr}"),
+            Err(e) => eprintln!("warning: could not record {addr} for {peer_id}: {e}"),
+        }
+    }
 }
 
 /// Write a peer's advertised manifest to disk so the standalone CLI commands
@@ -2824,13 +2888,32 @@ fn cmd_join(input: &[String]) -> io::Result<()> {
 fn cmd_discover(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
 
-    println!(
-        "Scanning LAN for claudectl instances ({} seconds)...",
-        super::lan::SCAN_DURATION.as_secs()
-    );
-    println!();
-
-    let peers = super::lan::scan_lan(super::lan::SCAN_DURATION, identity.as_str());
+    // A relay running on this machine already holds the discovery port and has
+    // been listening continuously, so ask it rather than binding alongside it:
+    // `SO_REUSEPORT` splits datagrams between sockets instead of copying them,
+    // and a six-second window next to a long-lived listener can see nothing at
+    // all. Reading its published view is also immediate and covers longer than
+    // one window. Falls back to scanning when no relay is running.
+    let peers = match super::lan::read_seen() {
+        Some(snapshot) => {
+            println!("Peers seen by the relay running on this machine:");
+            println!();
+            snapshot
+                .peers
+                .into_iter()
+                .filter(|p| p.identity != identity.0)
+                .map(|p| super::lan::DiscoveredPeer::from_seen(&p))
+                .collect()
+        }
+        None => {
+            println!(
+                "Scanning LAN for claudectl instances ({} seconds)...",
+                super::lan::SCAN_DURATION.as_secs()
+            );
+            println!();
+            super::lan::scan_lan(super::lan::SCAN_DURATION, identity.as_str())
+        }
+    };
 
     if json_mode {
         let json_peers: Vec<serde_json::Value> = peers
