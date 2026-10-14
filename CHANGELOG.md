@@ -4,6 +4,30 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Four version numbers that had stopped tracking the crate.** The release
+  bump moved the three `Cargo.toml` files and nothing else, so everything
+  version-stamped outside them quietly rotted:
+
+  - `claude-plugin/.claude-plugin/plugin.json` sat at **0.53.0** for 27
+    releases. It is `include_str!`d into the binary, so this is the version a
+    user sees after `claudectl init` or `brew upgrade` — not a repo-only
+    detail. Its `description` was also still the pre-hive one.
+  - `claude-plugin/skills/session-monitoring/SKILL.md` sat at **0.48.0**.
+  - `packaging/aur/claudectl-bin/{PKGBUILD,.SRCINFO}` sat at **0.16.0**, 64
+    releases back, with checksums for a tarball nobody installs. Re-rendered at
+    0.80.0 through the documented script, and the source checksum verified by
+    downloading the release tarball rather than copied from the asset listing.
+  - `packaging/homebrew-core/claudectl.rb` pointed at the **v0.49.3** source
+    archive.
+
+  Both plugin versions are now asserted against `CARGO_PKG_VERSION` by tests,
+  which is the part that keeps this fixed: the two packaging templates can only
+  be updated after a tag exists, but the plugin ships *with* the binary and has
+  no such excuse. The guards were checked by reverting each version and
+  confirming the failure, not just by watching them pass.
+
 ## [0.80.0] - 2026-10-14
 
 ### Added
