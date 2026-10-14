@@ -1096,9 +1096,9 @@ fn cmd_agent_status(json_mode: bool) -> io::Result<()> {
 
     if json_mode {
         let json = serde_json::json!({
-            "plist_exists": st.plist_exists,
+            "service_exists": st.service_exists,
             "loaded": st.loaded,
-            "plist": st.plist.display().to_string(),
+            "plist": st.service.display().to_string(),
             "label": super::agent::AGENT_LABEL,
             "stdout_log": out_log.display().to_string(),
             "stderr_log": err_log.display().to_string(),
@@ -1110,15 +1110,15 @@ fn cmd_agent_status(json_mode: bool) -> io::Result<()> {
         return Ok(());
     }
 
-    match (st.plist_exists, st.loaded) {
+    match (st.service_exists, st.loaded) {
         (true, true) => {
             println!("Relay agent: running.");
-            println!("  plist: {}", st.plist.display());
+            println!("  plist: {}", st.service.display());
             println!("  logs:  {}", out_log.display());
         }
         (true, false) => {
             println!("Relay agent: installed but NOT running.");
-            println!("  plist: {}", st.plist.display());
+            println!("  plist: {}", st.service.display());
             println!("  error log: {}", err_log.display());
             println!();
             println!("Re-run `claudectl relay install-agent` to reload it.");

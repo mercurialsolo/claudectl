@@ -670,30 +670,49 @@ fn check_supervisor_drain_state() -> Check {
 /// A fourth state, loaded with no plist, is reported too: it is how a relay
 /// keeps resurrecting after someone deletes the file by hand.
 fn check_relay_agent() -> Check {
-    #[cfg(not(all(feature = "relay", target_os = "macos")))]
+    #[cfg(not(feature = "relay"))]
     {
         Check {
             name: "relay agent".into(),
             status: CheckStatus::Skipped,
-            message: "launchd agent is macOS-only".into(),
+            message: "built without the relay feature".into(),
             fix_hint: None,
         }
     }
-    #[cfg(all(feature = "relay", target_os = "macos"))]
+    // #546: Linux installs a real systemd --user unit now, so this is no
+    // longer a macOS-only question.
+    #[cfg(feature = "relay")]
     {
         let st = crate::relay::agent::status();
         let (_, err_log) = crate::relay::agent::log_paths();
-        match (st.plist_exists, st.loaded) {
+        match (st.service_exists, st.loaded) {
+            // Loaded is not the same as working. A service manager restarts a
+            // process that *exited*; neither launchd nor systemd notices one
+            // that is alive and doing nothing. The fleet snapshot is the
+            // liveness signal already available: `relay serve` rewrites it
+            // every tick, and `read_snapshot` returns `None` once it is older
+            // than `SNAPSHOT_STALE_SECS`.
+            (true, true) if claudectl_core::fleet::read_snapshot().is_none() => Check {
+                name: "relay agent".into(),
+                status: CheckStatus::Fail,
+                message: "loaded, but it has stopped publishing — wedged, not running".into(),
+                fix_hint: Some(format!(
+                    "Nothing has updated the fleet snapshot for over {}s. \
+                     Check {} and restart with `claudectl relay install-agent`.",
+                    claudectl_core::fleet::SNAPSHOT_STALE_SECS,
+                    err_log.display()
+                )),
+            },
             (true, true) => Check {
                 name: "relay agent".into(),
                 status: CheckStatus::Pass,
-                message: "installed and running — survives logout".into(),
+                message: "installed, running and publishing — survives logout".into(),
                 fix_hint: None,
             },
             (true, false) => Check {
                 name: "relay agent".into(),
                 status: CheckStatus::Fail,
-                message: "installed but launchd is not running it".into(),
+                message: "installed but the service manager is not running it".into(),
                 fix_hint: Some(format!(
                     "Check {} for why it failed to start, then re-run `claudectl relay install-agent`.",
                     err_log.display()
@@ -702,7 +721,7 @@ fn check_relay_agent() -> Check {
             (false, true) => Check {
                 name: "relay agent".into(),
                 status: CheckStatus::Fail,
-                message: "loaded in launchd but its plist is missing".into(),
+                message: "loaded but its service definition is missing".into(),
                 fix_hint: Some(
                     "Run `claudectl relay uninstall-agent` to clear the orphaned service.".into(),
                 ),
