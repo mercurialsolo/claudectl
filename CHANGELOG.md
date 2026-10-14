@@ -4,6 +4,105 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.80.0] - 2026-10-14
+
+### Added
+
+- **Peers advertise what they can run, and a delegation is refused before it
+  spends (#536).** `relay serve` probes this machine once and puts the result
+  on every heartbeat; `relay delegate --requires "cargo>=1.88,claude:auth"`
+  checks the target's manifest and refuses *locally*, with the specific
+  missing capability, before any message goes on the wire.
+
+  Until now work was placed on faith. The worker spawns `claude`, so a missing
+  binary and a missing working directory surfaced as the same `ENOENT` — and a
+  logged-out `claude` was worse: it ran, returned "Not logged in" as the task
+  result, and the caller was billed for the round trip.
+
+  Probed, not declared, because a manifest a peer asserts without running
+  anything is the same mistake as #433/#434/#455 in a new place. Unknown is
+  never treated as missing: a peer that has not advertised, and a tool it never
+  probed, both pass, so an older peer stays usable and the failure mode is
+  one-directional — this can let through work that then fails the old way, and
+  can never block work that would have succeeded.
+
+  Credential detection is three-valued and platform-aware. On macOS the
+  Keychain is authoritative, so "nowhere to be found" is a real "logged out".
+  On Linux an absent credentials file reads as *unknown*, because the storage
+  location has not been verified there and a wrong "logged out" would refuse
+  work on every Linux worker.
+
+- **Peers advertise where they can be reached (#541).** An address used to be
+  learned only from a path already in use — we dial the one address we know,
+  and the acceptor records the source address of whoever dialled in. So a peer
+  could not discover a second route to a peer it could no longer reach, which
+  is exactly when it needs one.
+
+  Each peer now puts its own reachable addresses on the heartbeat
+  (`getifaddrs`, filtered to routable unicast; loopback, link-local and
+  unspecified dropped, private ranges and `100.64/10` kept, since an overlay is
+  where the surviving route usually lives). Advertised addresses never displace
+  one that has actually worked.
+
+- **A real service on Linux, not a printed recipe (#546, partial).**
+  `relay install-agent` wrote a launchd plist on macOS and, everywhere else,
+  printed a systemd recipe for the operator to type in. It now writes
+  `~/.config/systemd/user/claudectl-relay.service`, enables it, and runs
+  `loginctl enable-linger` so it survives logout the way a launchd agent does.
+
+- **`doctor` tells a wedged daemon from a running one (#546, partial).** A
+  service manager restarts a process that *exited*; neither launchd nor systemd
+  notices one that is alive and doing nothing, and `doctor` only asked whether
+  the service was loaded. A loaded service whose fleet snapshot has gone stale
+  is now a Fail naming the log and the fix.
+
+### Fixed
+
+- **`hive join` works when a relay pairing already exists (#518).** Two
+  machines paired with `relay pair` / `relay accept` could not then join a hive
+  by invite: the host authenticates against the key stored for the peer id and
+  never falls through to the invite's pending key, so the join was refused with
+  `handshake denied` and a "no matching PSK" line in a log that is off by
+  default. The joiner now tries the pairing it already holds before the
+  invite's key, and persists whichever actually authenticated — the previous
+  code saved the invite's key regardless, which would overwrite a working
+  pairing with one the host rejects.
+
+- **A peer that changes network is found again (#506).** `lan::start_listener`
+  was complete and had no callers, so a moved peer stayed unreachable until a
+  human happened to run `relay discover`. `relay serve` now listens as well as
+  announces and records new addresses for already-paired peers — pairing being
+  the filter, since announcements are unauthenticated.
+
+  Holding the discovery port continuously stops a second process getting its
+  own copy of each announcement (`SO_REUSEPORT` load-balances datagrams rather
+  than duplicating them), so the serving process publishes what it hears and
+  `relay discover` reads that when a relay is running. That also makes
+  `discover` immediate instead of a six-second scan.
+
+- **A peer unreachable at startup is retried (#543).** A failed startup dial
+  dropped the peer entirely, and the reconnect loop only acts on peers already
+  in the registry — so nothing retried it until the process restarted, and the
+  addresses learned by #506 and #541 had nothing to act on. A failed dial now
+  leaves a placeholder that the existing backoff drives, and a real connection
+  always displaces it.
+
+### Changed
+
+- **The project leads with the hive.** New positioning across every public
+  surface (#513–#515), and the README hero is now a real two-machine capture:
+  one GIF of two Macs forming a hive, one of a migration spread across them
+  (#517, #520).
+
+- Docs corrected where they had drifted (#513): a caveat that outlived its fix
+  by eleven releases, feature-gate wording that survived the defaults change,
+  and blanket "no network" claims that are false once relay, hive or the
+  optional classifier is on.
+
+- `.gitignore` no longer swallows committed assets (#535). `*.gif` and `*.cast`
+  were blanket rules, so `git add -A` skipped every asset in silence — which is
+  how #515 shipped a README pointing at a GIF that was never committed.
+
 ## [0.79.0] - 2026-10-10
 
 ### Added
