@@ -12,11 +12,8 @@ const ANNOUNCE_MAGIC: &[u8; 4] = b"CCTL";
 ///
 /// Only `start_listener` accumulates peers over time — `scan_lan`, which
 /// `relay discover` uses, returns what it heard in one window and keeps
-/// nothing. Since `start_listener` has no caller, neither does this.
-#[allow(
-    dead_code,
-    reason = "only start_listener expires peers; see the audit note on it"
-)]
+/// nothing. `start_listener` keeps a map instead, and expires from it with
+/// this (#506).
 const STALE_AFTER: Duration = Duration::from_secs(30);
 
 /// How often `relay serve` broadcasts its presence.
@@ -44,12 +41,8 @@ pub struct DiscoveredPeer {
     pub addr: SocketAddr,
     pub relay_port: u16,
     pub version: String,
-    /// When this peer was last heard from. Read only by `is_stale`, so it
-    /// shares that method's fate until continuous discovery is wired.
-    #[allow(
-        dead_code,
-        reason = "read only by is_stale; see the audit note on start_listener"
-    )]
+    /// When this peer was last heard from. Read by `is_stale` to expire
+    /// entries from the long-lived map `start_listener` keeps (#506).
     pub last_seen: Instant,
     /// The hive this machine advertises, if it named one.
     pub hive: Option<HiveAd>,
@@ -57,10 +50,6 @@ pub struct DiscoveredPeer {
 
 impl DiscoveredPeer {
     /// Whether this entry is old enough to drop from a long-lived map.
-    #[allow(
-        dead_code,
-        reason = "only start_listener expires peers; see the audit note on it"
-    )]
     pub fn is_stale(&self) -> bool {
         self.last_seen.elapsed() > STALE_AFTER
     }
@@ -269,8 +258,64 @@ pub fn start_announcer(
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Scan the LAN for claudectl instances. Listens for `duration` seconds.
+/// Bind the discovery port so several readers on one machine can share it.
+///
+/// Needed by #506. `relay serve` holds this socket for its whole life, and
+/// `relay discover` binds the same port from a separate process. `UdpSocket::bind`
+/// gives neither `SO_REUSEADDR` nor `SO_REUSEPORT`, so the second bind fails —
+/// which would make `discover` on any machine running a relay report
+/// "No instances found". That is the #433 symptom, reintroduced by fixing #506.
+///
+/// Both options are set, not just `SO_REUSEPORT`: on Linux `SO_REUSEPORT`
+/// alone is enough for multiple binds, on macOS/BSD the pair is the portable
+/// incantation. `libc` is already a dependency and already used this way
+/// (`bus/roles.rs`, `relay/agent.rs`, `core/process.rs`), so this adds no crate.
+fn bind_shared(port: u16) -> std::io::Result<UdpSocket> {
+    use std::os::fd::FromRawFd;
+
+    // SAFETY: the fd is wrapped in a `UdpSocket` immediately after creation, so
+    // every later error path closes it by drop rather than leaking. The
+    // `sockaddr_in` is zeroed first, which sets `sin_len` correctly on the BSD
+    // layouts that have the field and is ignored on the ones that do not.
+    unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let socket = UdpSocket::from_raw_fd(fd);
+
+        let on: libc::c_int = 1;
+        for opt in [libc::SO_REUSEADDR, libc::SO_REUSEPORT] {
+            let rc = libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                opt,
+                std::ptr::addr_of!(on).cast(),
+                std::mem::size_of_val(&on) as libc::socklen_t,
+            );
+            if rc != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+
+        let mut addr: libc::sockaddr_in = std::mem::zeroed();
+        addr.sin_family = libc::AF_INET as libc::sa_family_t;
+        addr.sin_port = port.to_be();
+        addr.sin_addr.s_addr = libc::INADDR_ANY.to_be();
+        let rc = libc::bind(
+            fd,
+            std::ptr::addr_of!(addr).cast(),
+            std::mem::size_of_val(&addr) as libc::socklen_t,
+        );
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(socket)
+    }
+}
+
 pub fn scan_lan(duration: Duration, own_identity: &str) -> Vec<DiscoveredPeer> {
-    let socket = match UdpSocket::bind(format!("0.0.0.0:{LAN_PORT}")) {
+    let socket = match bind_shared(LAN_PORT) {
         Ok(s) => s,
         Err(e) => {
             crate::logger::log("LAN", &format!("bind failed on port {LAN_PORT}: {e}"));
@@ -325,10 +370,6 @@ pub fn scan_lan(duration: Duration, own_identity: &str) -> Vec<DiscoveredPeer> {
 /// Kept rather than deleted because it is most of the answer to that, and
 /// flagged here rather than left under a module-wide allow, which is how the
 /// same shape of bug reached users three times (#433, #434, #455).
-#[allow(
-    dead_code,
-    reason = "continuous LAN discovery is written but not yet wired; see #478 item 1"
-)]
 pub fn start_listener(
     own_identity: String,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -337,7 +378,7 @@ pub fn start_listener(
     let peers_clone = std::sync::Arc::clone(&peers);
 
     std::thread::spawn(move || {
-        let socket = match UdpSocket::bind(format!("0.0.0.0:{LAN_PORT}")) {
+        let socket = match bind_shared(LAN_PORT) {
             Ok(s) => s,
             Err(_) => return,
         };
@@ -385,12 +426,158 @@ pub fn start_listener(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Publishing what a running relay has heard
+// ────────────────────────────────────────────────────────────────────────────
+
+// Why this exists, since it looks like duplication of `scan_lan`:
+//
+// Once `relay serve` holds the discovery port continuously (#506), a second
+// process binding the same port does *not* get a copy of each announcement.
+// `SO_REUSEPORT` load-balances datagrams across the sockets bound to a port
+// rather than duplicating them, so the long-lived listener wins most of them
+// and `relay discover` — a six-second window — can easily see none at all.
+// Measured, not assumed: with a relay serving, `discover` reported "No
+// claudectl instances found" while the serving process was logging the very
+// announcements it needed; stopping the relay made `discover` work instantly.
+//
+// So the serving process publishes what it hears, and `discover` reads that
+// when a relay is running. This mirrors `fleet.json` (`core/fleet.rs`): one
+// writer, atomic rename, a staleness gate on the reader. It is also strictly
+// better than the old behaviour — the answer is continuous rather than
+// whatever happened to arrive inside one window, and it returns immediately.
+
+/// How long a published file is trusted before the reader falls back to its own
+/// scan. Three announce intervals: long enough to survive a missed broadcast,
+/// short enough that a stopped relay is noticed quickly.
+pub const SEEN_FRESH_SECS: u64 = ANNOUNCE_INTERVAL_SECS * 3;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SeenPeer {
+    pub identity: String,
+    pub addr: String,
+    pub relay_port: u16,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hive: Option<HiveAd>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SeenSnapshot {
+    pub written_ms: u64,
+    pub peers: Vec<SeenPeer>,
+}
+
+fn seen_path() -> std::path::PathBuf {
+    super::relay_dir().join("discovered.json")
+}
+
+impl DiscoveredPeer {
+    /// Rebuild from a published entry (#506), so `relay discover` can render
+    /// the running relay's view through exactly the same path as a live scan.
+    ///
+    /// `last_seen` becomes "now": the publisher already dropped stale entries,
+    /// and the reader's staleness gate is the file's own age.
+    pub fn from_seen(seen: &SeenPeer) -> Self {
+        let addr = seen
+            .addr
+            .parse::<SocketAddr>()
+            .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], seen.relay_port)));
+        DiscoveredPeer {
+            identity: seen.identity.clone(),
+            addr,
+            relay_port: seen.relay_port,
+            version: seen.version.clone(),
+            last_seen: Instant::now(),
+            hive: seen.hive.clone(),
+        }
+    }
+}
+
+/// Publish what this relay has heard. Best-effort: discovery is a convenience,
+/// and a failed write must never disturb the serve loop.
+pub fn publish_seen(map: &HashMap<String, DiscoveredPeer>) {
+    let peers: Vec<SeenPeer> = map
+        .values()
+        .filter(|p| !p.is_stale())
+        .map(|p| SeenPeer {
+            identity: p.identity.clone(),
+            addr: p.relay_addr().to_string(),
+            relay_port: p.relay_port,
+            version: p.version.clone(),
+            hive: p.hive.clone(),
+        })
+        .collect();
+    let snapshot = SeenSnapshot {
+        written_ms: super::epoch_ms(),
+        peers,
+    };
+    let dir = super::relay_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let Ok(body) = serde_json::to_string(&snapshot) else {
+        return;
+    };
+    let tmp = dir.join(".discovered.json.tmp");
+    if std::fs::write(&tmp, body).is_ok() {
+        let _ = std::fs::rename(&tmp, seen_path());
+    }
+}
+
+/// What a running relay has heard, or `None` when there is no relay, the file
+/// is unreadable, or it is old enough that whoever wrote it has clearly stopped.
+pub fn read_seen() -> Option<SeenSnapshot> {
+    let body = std::fs::read_to_string(seen_path()).ok()?;
+    let snap: SeenSnapshot = serde_json::from_str(&body).ok()?;
+    let age_ms = super::epoch_ms().saturating_sub(snap.written_ms);
+    if age_ms > SEEN_FRESH_SECS * 1000 {
+        return None;
+    }
+    Some(snap)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole reason `bind_shared` exists: `relay serve` holds the discovery
+    /// port for its lifetime once #506 wires the listener, and `relay discover`
+    /// binds the same port from another process. A plain `UdpSocket::bind`
+    /// fails the second time, which is how `discover` would start reporting
+    /// "No instances found" on any machine running a relay.
+    #[test]
+    fn two_readers_can_hold_the_discovery_port_at_once() {
+        // A high port, so a developer machine already running a relay on the
+        // real LAN_PORT does not make this pass or fail for the wrong reason.
+        let port = 47_653;
+        let first = match bind_shared(port) {
+            Ok(s) => s,
+            // A sandbox with no AF_INET at all; nothing to assert.
+            Err(_) => return,
+        };
+        let second = bind_shared(port).expect("a second reader must be able to bind");
+        assert_eq!(first.local_addr().unwrap().port(), port);
+        assert_eq!(second.local_addr().unwrap().port(), port);
+    }
+
+    #[test]
+    fn a_plain_bind_on_the_same_port_is_what_fails() {
+        let port = 47_654;
+        let Ok(_shared) = bind_shared(port) else {
+            return;
+        };
+        // Documents the behaviour being worked around: without the options,
+        // the second bind is refused. If a future std gains reuse by default
+        // this assertion flips and `bind_shared` can go.
+        assert!(
+            UdpSocket::bind(format!("0.0.0.0:{port}")).is_err(),
+            "plain bind unexpectedly succeeded; bind_shared may be unnecessary now"
+        );
+    }
 
     #[test]
     fn announcement_roundtrip() {
