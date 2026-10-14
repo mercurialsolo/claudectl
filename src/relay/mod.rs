@@ -1,5 +1,6 @@
 pub mod advertise;
 pub mod agent;
+pub mod capabilities;
 pub mod cli;
 pub mod crypto;
 pub mod delegation;

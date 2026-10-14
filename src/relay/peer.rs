@@ -222,12 +222,14 @@ impl PeerConnection {
     }
 
     /// Send a heartbeat carrying session state.
-    pub fn send_heartbeat_with_sessions(
+    /// Heartbeat carrying sessions and this machine's capability manifest.
+    pub fn send_heartbeat_with(
         &mut self,
         identity: &str,
         sessions: &[serde_json::Value],
+        capabilities: Option<&serde_json::Value>,
     ) -> io::Result<()> {
-        let msg = protocol::heartbeat_with_sessions(identity, sessions);
+        let msg = protocol::heartbeat_full(identity, sessions, capabilities);
         self.send(&msg)?;
         self.last_heartbeat_sent = Instant::now();
         Ok(())
