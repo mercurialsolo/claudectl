@@ -91,7 +91,10 @@ impl PeerRegistry {
     pub fn add_peer(&mut self, conn: PeerConnection) -> bool {
         let id = conn.peer_id.0.clone();
         if let Some(old) = self.peers.remove(&id) {
-            if old.reader_alive() && !self.replaces(&old, &conn) {
+            // A placeholder (#543) holds no socket, so a real connection always
+            // wins — otherwise the collision rule could keep an entry that
+            // cannot carry a single message and close the one that can.
+            if !old.is_placeholder() && old.reader_alive() && !self.replaces(&old, &conn) {
                 // Keep what we have. The peer applies the same rule to the
                 // same two ids and keeps the other end of this same socket.
                 conn.shutdown();
@@ -499,6 +502,96 @@ mod tests {
     /// Both ends dial at once, so each holds an inbound and an outbound socket
     /// for the one peer. Whichever order the two arrive in, and whichever way
     /// the ids compare, the two ends must keep opposite ends of the SAME
+    /// #543: a peer that could not be reached at startup must still be
+    /// retried, and must never beat a real connection.
+    mod unreachable_at_startup {
+        use super::super::*;
+        use std::net::{SocketAddr, TcpListener, TcpStream};
+
+        fn addr() -> SocketAddr {
+            "127.0.0.1:9999".parse().unwrap()
+        }
+
+        #[test]
+        fn a_placeholder_is_offered_for_reconnect() {
+            let mut reg = PeerRegistry::new(30, "local-test");
+            // Not scheduled, so it is due immediately — the production path
+            // schedules once to back off, which is asserted separately.
+            reg.add_peer(PeerConnection::pending(PeerId("gone".into()), Some(addr())));
+
+            let events = reg.tick("local-test", None);
+            assert!(
+                events.iter().any(|e| matches!(
+                    e,
+                    MeshEvent::ReconnectNeeded(id, Some(a)) if id.0 == "gone" && *a == addr()
+                )),
+                "an unreachable peer must be offered for reconnect, got {events:?}"
+            );
+        }
+
+        #[test]
+        fn scheduling_backs_off_instead_of_retrying_every_tick() {
+            let mut pending = PeerConnection::pending(PeerId("gone".into()), Some(addr()));
+            assert!(
+                pending.should_reconnect(),
+                "an unscheduled placeholder is due at once"
+            );
+            pending.schedule_reconnect();
+            assert!(
+                !pending.should_reconnect(),
+                "after scheduling it must wait, not redial on the next tick"
+            );
+        }
+
+        /// The hazard the placeholder introduces: it holds no socket, so if it
+        /// won a collision the registry would keep an entry that cannot carry a
+        /// message and close the one that can.
+        #[test]
+        fn a_real_connection_always_displaces_a_placeholder() {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let remote = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (accepted, _) = listener.accept().unwrap();
+
+            let mut reg = PeerRegistry::new(30, "aaa-local");
+            // "zzz-peer" sorts above ours, so the collision rule would keep the
+            // existing entry if it were ever consulted here.
+            reg.add_peer(PeerConnection::pending(
+                PeerId("zzz-peer".into()),
+                Some(addr()),
+            ));
+
+            let tx = reg.message_tx();
+            let real = PeerConnection::from_authenticated(PeerId("zzz-peer".into()), accepted, tx);
+            assert!(
+                reg.add_peer(real),
+                "the real connection must be the one kept"
+            );
+            assert_eq!(reg.connected_peers().len(), 1);
+            drop(remote);
+        }
+
+        #[test]
+        fn a_placeholder_is_not_a_connected_peer() {
+            let mut reg = PeerRegistry::new(30, "local-test");
+            reg.add_peer(PeerConnection::pending(PeerId("gone".into()), Some(addr())));
+            assert!(
+                reg.connected_peers().is_empty(),
+                "a placeholder must not look connected"
+            );
+            let msg = RelayMessage {
+                id: "m1".into(),
+                msg_type: super::super::super::MessageType::Heartbeat,
+                from_peer: "local-test".into(),
+                timestamp: 0,
+                payload: serde_json::json!({}),
+            };
+            assert!(
+                reg.send_to("gone", &msg).is_err(),
+                "nothing can be sent to a placeholder"
+            );
+        }
+    }
+
     /// socket — otherwise both survivors are half-dead and the pair never
     /// recovers. That is what #464's startup dial made reachable.
     mod simultaneous_dial {
