@@ -240,8 +240,9 @@ Connect machines, delegate tasks. See the [full relay guide](relay.md).
 | `relay peers` | List known and connected peers |
 | `relay delegate <peer> <prompt>` | Delegate a task to a remote peer |
 | `relay identity` | Show this instance's relay identity |
-| `relay install-agent` | Install a `launchd` agent so the relay survives logout |
-| `relay uninstall-agent` | Remove the `launchd` agent |
+| `relay install-agent` | Install a service so the relay survives logout (launchd on macOS, `systemd --user` on Linux) |
+| `relay install-agent --headless` | Also install the headless service: the supervisor reconciler, and the brain with `--brain` |
+| `relay uninstall-agent` | Remove both services |
 | `relay agent-status` | Whether the agent is installed, loaded, and running |
 
 Both ends of a connection gossip: the dialler and the listener each offer the

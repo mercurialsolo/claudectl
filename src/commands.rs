@@ -1116,6 +1116,17 @@ pub(crate) fn run_headless(
             tick_count += 1;
         }
 
+        // Liveness for whatever supervises this process (#546). A service
+        // manager restarts a process that exited; neither launchd nor systemd
+        // notices one that is alive and doing nothing, which is the state that
+        // went unreported for days. `relay serve` answers this by rewriting
+        // fleet.json; this is the headless equivalent.
+        //
+        // Best-effort on purpose: a full disk should not take down the loop
+        // that is still doing useful work. A heartbeat that stops being written
+        // reads as wedged, which is the honest answer in that case anyway.
+        let _ = claudectl_core::heartbeat::write();
+
         // Emit status change events
         for s in &app.sessions {
             let prev = prev_statuses.get(&s.pid).copied();
