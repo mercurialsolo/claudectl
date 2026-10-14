@@ -96,6 +96,11 @@ impl AgentConfig {
 }
 
 /// `~/Library/LaunchAgents/io.claudectl.relay.plist`.
+///
+/// macOS only: `service_path` routes to the systemd unit elsewhere (#546), and
+/// the tests all take an explicit home through [`plist_path_in`], so this has
+/// no caller on any other platform — in a test build either.
+#[cfg(target_os = "macos")]
 pub fn plist_path() -> PathBuf {
     plist_path_in(&claudectl_core::helpers::dirs_home())
 }
@@ -105,6 +110,7 @@ pub fn plist_path() -> PathBuf {
 /// Split out so the tests never read the ambient `HOME`. Another test in this
 /// crate mutates `HOME` process-wide (`brain::decisions`), and cargo runs tests
 /// on parallel threads, so anything reading the env here is a race.
+#[cfg(any(target_os = "macos", test))]
 pub fn plist_path_in(home: &Path) -> PathBuf {
     home.join("Library")
         .join("LaunchAgents")
