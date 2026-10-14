@@ -1985,6 +1985,20 @@ fn spawn_startup_dials(
                 break;
             }
             let (Some(conn), Some(addr)) = (connected, addr_used) else {
+                // #543: every address failed. Leave a placeholder so the
+                // reconnect loop keeps trying — including any address learned
+                // after startup (#506, #541) — instead of forgetting this peer
+                // until the process restarts. A relay is usually a launchd
+                // agent running for weeks, so "restart it" is not a fix.
+                if let (Ok(mut reg), Some(first)) = (registry.lock(), addrs.first()) {
+                    let mut pending = PeerConnection::pending(peer_id.clone(), Some(*first));
+                    // Back off from the start rather than redialling on the
+                    // very next tick, which for an unreachable host is a dial
+                    // storm against a 10s connect timeout.
+                    pending.schedule_reconnect();
+                    reg.add_peer(pending);
+                    println!("Peer {id} unreachable for now; will keep retrying");
+                }
                 continue;
             };
 

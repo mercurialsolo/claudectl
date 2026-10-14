@@ -71,6 +71,45 @@ impl PeerConnection {
         conn
     }
 
+    /// A peer we know about and have not reached (#543).
+    ///
+    /// `spawn_startup_dials` used to drop a peer whose every address failed,
+    /// and `tick`'s reconnect arm only acts on peers that are *in* the registry
+    /// and disconnected — so nothing retried it, and an address learned later
+    /// (#506, #541) had nothing to act on it. A placeholder gives the existing
+    /// backoff something to drive.
+    ///
+    /// It holds no socket, so it can only ever be a reconnect target: `tick`
+    /// heartbeats `Connected` peers, `send_to` refuses anything else, and
+    /// `add_peer` always lets a real connection displace it.
+    pub fn pending(peer_id: PeerId, addr: Option<SocketAddr>) -> Self {
+        let now = Instant::now();
+        PeerConnection {
+            peer_id,
+            state: PeerState::Disconnected,
+            addr,
+            stream: None,
+            reader_handle: None,
+            last_heartbeat_sent: now,
+            last_heartbeat_recv: now,
+            missed_heartbeats: 0,
+            // The whole point: `should_reconnect` gates on this.
+            is_initiator: true,
+            reconnect_attempts: 0,
+            next_reconnect_at: None,
+        }
+    }
+
+    /// Whether this entry is a placeholder rather than a live connection.
+    ///
+    /// A placeholder must never win `add_peer`'s collision rule: it has no
+    /// socket, so keeping it over a real inbound connection would discard the
+    /// only working link. `reader_alive` cannot answer this — it reports `true`
+    /// when there is no reader at all, which is exactly a placeholder.
+    pub fn is_placeholder(&self) -> bool {
+        self.stream.is_none() && self.reader_handle.is_none()
+    }
+
     /// Connect to a remote peer (client-side).
     /// Dial a peer. `intent` tells the acceptor what kind of connection this
     /// is — a lasting link or a one-shot delivery — and what address it could
