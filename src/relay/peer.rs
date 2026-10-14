@@ -228,8 +228,9 @@ impl PeerConnection {
         identity: &str,
         sessions: &[serde_json::Value],
         capabilities: Option<&serde_json::Value>,
+        listen_addrs: &[String],
     ) -> io::Result<()> {
-        let msg = protocol::heartbeat_full(identity, sessions, capabilities);
+        let msg = protocol::heartbeat_full(identity, sessions, capabilities, listen_addrs);
         self.send(&msg)?;
         self.last_heartbeat_sent = Instant::now();
         Ok(())
