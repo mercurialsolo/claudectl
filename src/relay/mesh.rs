@@ -26,6 +26,10 @@ pub struct PeerRegistry {
     seen_ids: VecDeque<String>,
     heartbeat_interval: Duration,
     last_heartbeat_tick: Instant,
+    /// This machine's probed capability manifest, sent on each heartbeat
+    /// (#536). `None` until something probes, so a registry that never sets it
+    /// sends exactly what it sent before.
+    local_capabilities: Option<serde_json::Value>,
     /// Session state received from each connected peer's heartbeat.
     worker_states: HashMap<String, WorkerState>,
     /// Our own peer id, for resolving simultaneous-dial collisions.
@@ -42,6 +46,7 @@ impl PeerRegistry {
             seen_ids: VecDeque::with_capacity(DEDUP_CAPACITY + 1),
             heartbeat_interval: Duration::from_secs(heartbeat_interval_secs),
             last_heartbeat_tick: Instant::now(),
+            local_capabilities: None,
             worker_states: HashMap::new(),
             identity: identity.to_string(),
         }
@@ -208,6 +213,7 @@ impl PeerRegistry {
             self.last_heartbeat_tick = now;
         }
 
+        let caps = self.local_capabilities.clone();
         let peer_ids: Vec<String> = self.peers.keys().cloned().collect();
         for id in peer_ids {
             let peer = match self.peers.get_mut(&id) {
@@ -221,7 +227,13 @@ impl PeerRegistry {
                     if should_heartbeat {
                         let send_ok = match local_sessions {
                             Some(sessions) => peer
-                                .send_heartbeat_with_sessions(identity, sessions)
+                                .send_heartbeat_with(identity, sessions, caps.as_ref())
+                                .is_ok(),
+                            // No sessions but a manifest to advertise is still
+                            // worth a payload, so capability-only peers are
+                            // visible to a delegator.
+                            None if caps.is_some() => peer
+                                .send_heartbeat_with(identity, &[], caps.as_ref())
                                 .is_ok(),
                             None => peer.send_heartbeat(identity).is_ok(),
                         };
@@ -262,6 +274,11 @@ impl PeerRegistry {
 
     /// Process an incoming heartbeat for a peer.
     /// If the payload contains session data, store the worker state.
+    /// Set the manifest advertised on subsequent heartbeats (#536).
+    pub fn set_local_capabilities(&mut self, caps: serde_json::Value) {
+        self.local_capabilities = Some(caps);
+    }
+
     pub fn handle_heartbeat(&mut self, peer_id: &PeerId, payload: &serde_json::Value) {
         if let Some(peer) = self.peers.get_mut(&peer_id.0) {
             peer.record_heartbeat();

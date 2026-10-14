@@ -112,6 +112,10 @@ pub enum RelayCommand {
         /// Git ref for the task context
         #[arg(long)]
         git_ref: Option<String>,
+        /// Refuse before sending if the peer does not advertise these, e.g.
+        /// `cargo>=1.88,claude:auth` (#536).
+        #[arg(long)]
+        requires: Option<String>,
     },
 
     /// Move a conversation to a paired peer, so it can be resumed there
@@ -220,7 +224,15 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
             prompt,
             cwd,
             git_ref,
-        } => cmd_delegate(peer, prompt, cwd.as_deref(), git_ref.clone(), json_mode),
+            requires,
+        } => cmd_delegate(
+            peer,
+            prompt,
+            cwd.as_deref(),
+            git_ref.clone(),
+            requires.as_deref(),
+            json_mode,
+        ),
         RelayCommand::SendSession {
             peer,
             session,
@@ -293,6 +305,15 @@ fn cmd_serve(
         relay_cfg.heartbeat_interval_secs,
         identity.as_str(),
     )));
+    // #536: probe this machine once and advertise it on every heartbeat, so a
+    // delegator can refuse work this host cannot run before spending anything.
+    if let Ok(mut reg) = registry.lock() {
+        let caps = super::capabilities::local();
+        println!("Capabilities: {}", caps.summary());
+        if let Ok(value) = serde_json::to_value(&caps) {
+            reg.set_local_capabilities(value);
+        }
+    }
     // Write handles for in-flight one-shot deliveries (#511). Beside the
     // registry, never in it.
     let replies = super::transient::TransientReplies::new();
@@ -540,6 +561,7 @@ fn cmd_serve(
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(&from_peer, &msg.payload);
+                        persist_peer_capabilities(from_peer.as_str(), &msg.payload);
                     }
                     super::MessageType::DelegateTask => {
                         match super::delegation::parse_delegate_message(&msg) {
@@ -1177,6 +1199,7 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(peer_id, &msg.payload);
+                        persist_peer_capabilities(peer_id.as_str(), &msg.payload);
                     }
                     // #434: the owner of a `join_policy: ask` hive usually
                     // approves long after `hive join` exited, so this is where
@@ -1271,6 +1294,79 @@ fn try_connect_with(
         reg.add_peer(conn);
     }
     Ok((remote_id, registry))
+}
+
+/// Refuse a delegation the target cannot run, before anything goes on the wire
+/// (#536).
+///
+/// Checked here rather than on the worker because the whole point is to spend
+/// nothing: no message, no authenticated connection, no `claude` session whose
+/// only output is "Not logged in".
+///
+/// Two cases deliberately pass: no `--requires` at all, and a peer that has
+/// never advertised a manifest. The second is what keeps an older peer usable —
+/// unknown is not the same as missing, and a refusal here would break setups
+/// that work today. The failure mode is therefore one-directional: this can let
+/// through work that then fails the old way, never block work that would have
+/// succeeded.
+fn check_requirements(peer_id: &str, requires: Option<&str>, json_mode: bool) -> io::Result<()> {
+    let Some(spec) = requires else {
+        return Ok(());
+    };
+    let reqs = super::capabilities::Requirement::parse_list(spec)
+        .map_err(|e| io::Error::other(format!("invalid --requires: {e}")))?;
+    if reqs.is_empty() {
+        return Ok(());
+    }
+    let Some(caps) = super::capabilities::load_peer_capabilities(peer_id) else {
+        if !json_mode {
+            eprintln!("note: {peer_id} has not advertised its capabilities yet.");
+            eprintln!("      Delegating without checking --requires.");
+        }
+        return Ok(());
+    };
+    let unmet = caps.unmet(&reqs);
+    if unmet.is_empty() {
+        return Ok(());
+    }
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::json!({
+                "error": "requirements not met",
+                "peer": peer_id,
+                "unmet": unmet,
+            })
+        );
+    } else {
+        eprintln!("{peer_id} cannot run this task:");
+        for miss in &unmet {
+            eprintln!("  - {miss}");
+        }
+        eprintln!(
+            "
+Nothing was sent. `claudectl relay peers` shows what each peer advertises."
+        );
+    }
+    Err(io::Error::other(format!(
+        "{peer_id} does not meet: {}",
+        unmet.join("; ")
+    )))
+}
+
+/// Write a peer's advertised manifest to disk so the standalone CLI commands
+/// can see it (#536).
+///
+/// Best-effort by construction: a heartbeat that cannot be recorded must never
+/// take down the loop that received it, and the only cost of a failed write is
+/// a `delegate` that does not pre-check.
+fn persist_peer_capabilities(peer_id: &str, payload: &serde_json::Value) {
+    let Some(caps) = payload.get("capabilities") else {
+        return;
+    };
+    if let Ok(parsed) = serde_json::from_value::<super::capabilities::Capabilities>(caps.clone()) {
+        let _ = super::capabilities::save_peer_capabilities(peer_id, &parsed);
+    }
 }
 
 /// What a successful invite dial yields: the resolved peer id, the registry
@@ -1952,6 +2048,12 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
                     "no"
                 };
                 println!("{:<20} {:<24} {}", id, addr, has_psk);
+                // #536: what that peer says it can run. Indented under the row
+                // rather than given a column, because the manifest is long and
+                // the table is already at the width of a terminal.
+                if let Some(caps) = super::capabilities::load_peer_capabilities(id) {
+                    println!("  └ {} ({}/{})", caps.summary(), caps.os, caps.arch);
+                }
             }
         }
     }
@@ -2113,9 +2215,11 @@ fn cmd_delegate(
     prompt: &str,
     cwd: Option<&str>,
     git_ref: Option<String>,
+    requires: Option<&str>,
     json_mode: bool,
 ) -> io::Result<()> {
     let identity = load_or_create_identity();
+    check_requirements(peer_id, requires, json_mode)?;
     let task_id = gen_msg_id().replace("msg_", "task_");
 
     let context = DelegationContext {
