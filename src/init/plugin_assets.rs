@@ -156,6 +156,50 @@ pub fn remove_assets(dest: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    /// The embedded copy of one asset, by the path it installs to.
+    fn asset(rel_path: &str) -> &'static str {
+        ASSETS
+            .iter()
+            .find(|a| a.rel_path == rel_path)
+            .unwrap_or_else(|| panic!("{rel_path} is not an embedded asset"))
+            .contents
+    }
+
+    /// The manifest is baked into the binary, so its version is what a user
+    /// sees after `claudectl init` or `brew upgrade` — not what the repo said
+    /// when the plugin was last touched. It sat at 0.53.0 for 27 releases
+    /// because the release bump only moved the three `Cargo.toml` files and
+    /// nothing read this one. Lockstep with the crate is the rule; this test
+    /// is what makes forgetting it fail.
+    #[test]
+    fn plugin_manifest_version_tracks_the_crate() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(asset(".claude-plugin/plugin.json")).unwrap();
+        assert_eq!(
+            parsed["version"].as_str().unwrap(),
+            env!("CARGO_PKG_VERSION"),
+            "claude-plugin/.claude-plugin/plugin.json is out of step with \
+             Cargo.toml — bump it in the release commit"
+        );
+    }
+
+    /// Same reasoning for the skill, which drifted further still (0.48.0).
+    #[test]
+    fn skill_version_tracks_the_crate() {
+        let frontmatter_version = asset("skills/session-monitoring/SKILL.md")
+            .lines()
+            .take_while(|l| !l.starts_with("# "))
+            .find_map(|l| l.strip_prefix("version:"))
+            .expect("SKILL.md frontmatter should carry a version")
+            .trim();
+        assert_eq!(
+            frontmatter_version,
+            env!("CARGO_PKG_VERSION"),
+            "claude-plugin/skills/session-monitoring/SKILL.md is out of step \
+             with Cargo.toml — bump it in the release commit"
+        );
+    }
+
     #[test]
     fn write_assets_creates_every_file_with_expected_contents() {
         let tmp = tempfile::tempdir().unwrap();

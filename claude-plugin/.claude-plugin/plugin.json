@@ -1,7 +1,7 @@
 {
   "name": "claudectl",
-  "version": "0.53.0",
-  "description": "Mission control for Claude Code — local LLM brain, session monitoring, spend control, and hive mind skill sharing",
+  "version": "0.80.0",
+  "description": "Hive mind for Claude Code that learns from you once and remembers everywhere — local LLM brain, session monitoring, spend control",
   "author": {
     "name": "mercurialsolo",
     "url": "https://github.com/mercurialsolo"

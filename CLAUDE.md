@@ -208,3 +208,7 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 - Brain prompt templates can be overridden by placing files in `~/.claudectl/brain/prompts/` — run `--brain-prompts` to list sources.
 - Plugin hook scripts must check for `claudectl` availability and exit 0 on failure — never block Claude Code.
 - Plugin commands call `claudectl` CLI modes and format output — they don't implement logic directly.
+- Plugin manifest and skill versions track the crate version. Bump
+  `claude-plugin/.claude-plugin/plugin.json` and
+  `claude-plugin/skills/session-monitoring/SKILL.md` in the release commit —
+  two tests in `src/init/plugin_assets.rs` fail if you don't.
