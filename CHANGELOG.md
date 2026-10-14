@@ -92,7 +92,10 @@ All notable changes to claudectl are documented here.
 - **The project leads with the hive.** New positioning across every public
   surface (#513–#515), and the README hero is now a real two-machine capture:
   one GIF of two Macs forming a hive, one of a migration spread across them
-  (#517, #520).
+  (#517, #520). The Homebrew formula was the last surface still describing a
+  swarm with a local-LLM brain; it is rendered from this repo, so it moves with
+  this release — trimmed to the tagline's second half, since `desc` is audited
+  at 80 characters and the full line is 125.
 
 - Docs corrected where they had drifted (#513): a caveat that outlived its fix
   by eleven releases, feature-gate wording that survived the defaults change,
