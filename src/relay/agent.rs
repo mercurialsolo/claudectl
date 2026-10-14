@@ -95,14 +95,147 @@ impl AgentConfig {
     }
 }
 
-/// `~/Library/LaunchAgents/io.claudectl.relay.plist`.
+/// `io.claudectl.headless`, the brain and supervisor service.
+pub const HEADLESS_LABEL: &str = "io.claudectl.headless";
+
+/// Which background service (#546, gap 2).
+///
+/// `relay serve` was the only thing with an installer, so the orchestrating
+/// half of "always running and coordinating in the background" was started by
+/// hand and stopped with the terminal.
+///
+/// #546 describes that half as "the brain and supervisor — `--headless --brain
+/// --auto-run`, `supervisor run`". There is no `supervisor run` daemon: that
+/// subcommand submits a `tasks.toml` and exits. The reconciler and the actuator
+/// tick inside `commands::run_headless` next to the brain, so the two are
+/// **one** service, not two — which is why this enum has two variants, not three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Service {
+    /// `relay serve` — transport, heartbeats, and the fleet snapshot.
+    Relay,
+    /// `--headless` — the brain and the supervisor reconciler, one process.
+    Headless,
+}
+
+impl Service {
+    /// Every service, for the commands that act on the whole background set.
+    pub const ALL: [Service; 2] = [Service::Relay, Service::Headless];
+
+    /// Reverse-DNS label: the plist basename and the `launchctl` service name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Service::Relay => AGENT_LABEL,
+            Service::Headless => HEADLESS_LABEL,
+        }
+    }
+
+    /// The unit file name `systemctl --user` addresses it by.
+    ///
+    /// Only the systemd path uses this for real work, but it is compiled on
+    /// both platforms because the collision test asserts unit names everywhere
+    /// — a name clash would mean installing one service overwrote the other,
+    /// and that is worth catching on whichever machine runs the tests.
+    #[cfg_attr(
+        target_os = "macos",
+        allow(dead_code, reason = "used by tests and by the systemd install path")
+    )]
+    pub fn unit_name(self) -> &'static str {
+        match self {
+            Service::Relay => "claudectl-relay.service",
+            Service::Headless => "claudectl-headless.service",
+        }
+    }
+
+    /// Its directory under `~/.claudectl/`. One service, one place to look —
+    /// the relay's logs already sit beside `fleet.json` for that reason, and
+    /// the headless heartbeat sits beside its own logs for the same one.
+    pub fn dir_name(self) -> &'static str {
+        match self {
+            Service::Relay => "relay",
+            Service::Headless => "headless",
+        }
+    }
+
+    /// `Description=` in the systemd unit, and what the CLI calls it.
+    pub fn description(self) -> &'static str {
+        match self {
+            Service::Relay => "claudectl relay",
+            Service::Headless => "claudectl headless (brain + supervisor)",
+        }
+    }
+}
+
+/// Arguments the headless service will run `claudectl` with.
+///
+/// `--brain` and `--auto-run` are both off by default, and that is a decision
+/// rather than an oversight: a service installed once at login that executes
+/// brain decisions without being asked is not something to default on.
+/// `--headless` alone still runs the supervisor reconciler and the coordination
+/// loop, which is the half with no other way to stay up.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeadlessConfig {
+    /// Enable the local-LLM brain. With no reachable endpoint the process warns
+    /// and runs on without it (`commands::run_headless`), so this is safe to set
+    /// on a machine whose endpoint comes and goes — it will not crashloop.
+    pub brain: bool,
+    /// Execute brain suggestions without confirmation. Implies `brain`.
+    pub auto_run: bool,
+}
+
+impl HeadlessConfig {
+    /// The argv, binary first — same contract as [`AgentConfig::argv`].
+    pub fn argv(&self, binary: &Path) -> Vec<String> {
+        let mut args = vec![binary.display().to_string(), "--headless".to_string()];
+        // `--auto-run` without `--brain` is accepted by clap but does nothing,
+        // since the brain is what produces the suggestions to run. Treat the
+        // narrower flag as implying the wider one rather than installing a
+        // service that silently ignores what it was asked for.
+        if self.brain || self.auto_run {
+            args.push("--brain".to_string());
+        }
+        if self.auto_run {
+            args.push("--auto-run".to_string());
+        }
+        args
+    }
+}
+
+/// What to install, for one of the two services.
+///
+/// The variants carry different settings — ports and a token for the relay,
+/// brain flags for the headless process — so this is an enum rather than one
+/// struct with half its fields ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceConfig {
+    Relay(AgentConfig),
+    Headless(HeadlessConfig),
+}
+
+impl ServiceConfig {
+    pub fn service(&self) -> Service {
+        match self {
+            ServiceConfig::Relay(_) => Service::Relay,
+            ServiceConfig::Headless(_) => Service::Headless,
+        }
+    }
+
+    /// The argv for whichever service this is.
+    pub fn argv(&self, binary: &Path) -> Vec<String> {
+        match self {
+            ServiceConfig::Relay(c) => c.argv(binary),
+            ServiceConfig::Headless(c) => c.argv(binary),
+        }
+    }
+}
+
+/// `~/Library/LaunchAgents/<label>.plist`.
 ///
 /// macOS only: `service_path` routes to the systemd unit elsewhere (#546), and
 /// the tests all take an explicit home through [`plist_path_in`], so this has
 /// no caller on any other platform — in a test build either.
 #[cfg(target_os = "macos")]
-pub fn plist_path() -> PathBuf {
-    plist_path_in(&claudectl_core::helpers::dirs_home())
+pub fn plist_path(service: Service) -> PathBuf {
+    plist_path_in(&claudectl_core::helpers::dirs_home(), service)
 }
 
 /// [`plist_path`] under an explicit home.
@@ -111,23 +244,23 @@ pub fn plist_path() -> PathBuf {
 /// crate mutates `HOME` process-wide (`brain::decisions`), and cargo runs tests
 /// on parallel threads, so anything reading the env here is a race.
 #[cfg(any(target_os = "macos", test))]
-pub fn plist_path_in(home: &Path) -> PathBuf {
+pub fn plist_path_in(home: &Path, service: Service) -> PathBuf {
     home.join("Library")
         .join("LaunchAgents")
-        .join(format!("{AGENT_LABEL}.plist"))
+        .join(format!("{}.plist", service.label()))
 }
 
 /// Where the agent's stdout and stderr go.
 ///
 /// Under `~/.claudectl/relay/` beside `fleet.json`, not `~/Library/Logs`, so
 /// everything about one relay is in one place.
-pub fn log_paths() -> (PathBuf, PathBuf) {
-    log_paths_in(&claudectl_core::helpers::dirs_home())
+pub fn log_paths(service: Service) -> (PathBuf, PathBuf) {
+    log_paths_in(&claudectl_core::helpers::dirs_home(), service)
 }
 
 /// [`log_paths`] under an explicit home. See [`plist_path_in`] for why.
-pub fn log_paths_in(home: &Path) -> (PathBuf, PathBuf) {
-    let dir = home.join(".claudectl").join("relay");
+pub fn log_paths_in(home: &Path, service: Service) -> (PathBuf, PathBuf) {
+    let dir = home.join(".claudectl").join(service.dir_name());
     (dir.join("agent.out.log"), dir.join("agent.err.log"))
 }
 
@@ -156,7 +289,7 @@ fn xml_escape(s: &str) -> String {
     not(target_os = "macos"),
     allow(dead_code, reason = "only the launchd agent path renders a plist")
 )]
-pub fn render_plist(binary: &Path, cfg: &AgentConfig) -> String {
+pub fn render_plist(binary: &Path, cfg: &ServiceConfig) -> String {
     render_plist_in(binary, cfg, &claudectl_core::helpers::dirs_home())
 }
 
@@ -165,8 +298,8 @@ pub fn render_plist(binary: &Path, cfg: &AgentConfig) -> String {
     not(target_os = "macos"),
     allow(dead_code, reason = "only the launchd agent path renders a plist")
 )]
-pub fn render_plist_in(binary: &Path, cfg: &AgentConfig, home: &Path) -> String {
-    let (out_log, err_log) = log_paths_in(home);
+pub fn render_plist_in(binary: &Path, cfg: &ServiceConfig, home: &Path) -> String {
+    let (out_log, err_log) = log_paths_in(home, cfg.service());
     let args: String = cfg
         .argv(binary)
         .iter()
@@ -198,7 +331,7 @@ pub fn render_plist_in(binary: &Path, cfg: &AgentConfig, home: &Path) -> String 
 </dict>
 </plist>
 "#,
-        label = AGENT_LABEL,
+        label = cfg.service().label(),
         args = args,
         out = xml_escape(&out_log.display().to_string()),
         err = xml_escape(&err_log.display().to_string()),
@@ -230,9 +363,9 @@ fn gui_domain() -> String {
 
 /// Whether `launchd` currently has the agent loaded.
 #[cfg(target_os = "macos")]
-pub fn is_loaded() -> bool {
+pub fn is_loaded(service: Service) -> bool {
     std::process::Command::new("launchctl")
-        .args(["print", &format!("{}/{AGENT_LABEL}", gui_domain())])
+        .args(["print", &format!("{}/{}", gui_domain(), service.label())])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -253,21 +386,21 @@ pub struct AgentStatus {
 
 /// The service definition this platform's manager reads.
 #[cfg(target_os = "macos")]
-pub fn service_path() -> PathBuf {
-    plist_path()
+pub fn service_path(service: Service) -> PathBuf {
+    plist_path(service)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn service_path() -> PathBuf {
-    unit_path()
+pub fn service_path(service: Service) -> PathBuf {
+    unit_path(service)
 }
 
-pub fn status() -> AgentStatus {
-    let service = service_path();
+pub fn status(service: Service) -> AgentStatus {
+    let path = service_path(service);
     AgentStatus {
-        service_exists: service.exists(),
-        loaded: is_loaded(),
-        service,
+        service_exists: path.exists(),
+        loaded: is_loaded(service),
+        service: path,
     }
 }
 
@@ -277,9 +410,10 @@ pub fn status() -> AgentStatus {
 /// re-running after a `brew upgrade` or a port change is the supported way to
 /// update it.
 #[cfg(target_os = "macos")]
-pub fn install(cfg: &AgentConfig) -> Result<PathBuf, String> {
+pub fn install(cfg: &ServiceConfig) -> Result<PathBuf, String> {
     let binary = resolve_binary()?;
-    let path = plist_path();
+    let service = cfg.service();
+    let path = plist_path(service);
     let dir = path
         .parent()
         .ok_or_else(|| "LaunchAgents path has no parent".to_string())?;
@@ -287,21 +421,32 @@ pub fn install(cfg: &AgentConfig) -> Result<PathBuf, String> {
 
     // The log directory has to exist before launchd opens the paths, or the
     // agent fails to spawn with a bare errno and no obvious cause.
-    let (out_log, _) = log_paths();
+    let (out_log, _) = log_paths(service);
     if let Some(log_dir) = out_log.parent() {
         std::fs::create_dir_all(log_dir)
             .map_err(|e| format!("create {}: {e}", log_dir.display()))?;
     }
 
+    let rendered = render_plist(&binary, cfg);
+
+    // Nothing to do if this exact service is already installed and running.
+    // Without this, adding the headless service with `--headless` would also
+    // tear down and restart a relay that nothing had changed about — a side
+    // effect the caller never asked for, on the one process that is supposed
+    // to stay up.
+    if is_loaded(service) && std::fs::read_to_string(&path).is_ok_and(|on_disk| on_disk == rendered)
+    {
+        return Ok(path);
+    }
+
     // Unload an existing instance first. A plist rewritten underneath a loaded
     // service leaves launchd running the old argv until something reloads it,
     // which looks exactly like the install not having worked.
-    if is_loaded() {
-        let _ = bootout();
+    if is_loaded(service) {
+        let _ = bootout(service);
     }
 
-    std::fs::write(&path, render_plist(&binary, cfg))
-        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    std::fs::write(&path, rendered).map_err(|e| format!("write {}: {e}", path.display()))?;
 
     bootstrap(&path)?;
     Ok(path)
@@ -335,9 +480,9 @@ fn bootstrap(plist: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn bootout() -> Result<(), String> {
+fn bootout(service: Service) -> Result<(), String> {
     let out = std::process::Command::new("launchctl")
-        .args(["bootout", &format!("{}/{AGENT_LABEL}", gui_domain())])
+        .args(["bootout", &format!("{}/{}", gui_domain(), service.label())])
         .output()
         .map_err(|e| format!("run launchctl bootout: {e}"))?;
     if out.status.success() {
@@ -357,12 +502,12 @@ fn bootout() -> Result<(), String> {
 /// Returns whether anything was actually there, so an uninstall with nothing
 /// installed can say so instead of claiming success.
 #[cfg(target_os = "macos")]
-pub fn uninstall() -> Result<(bool, Option<String>), String> {
-    let path = plist_path();
+pub fn uninstall(service: Service) -> Result<(bool, Option<String>), String> {
+    let path = plist_path(service);
     let existed = path.exists();
-    let loaded = is_loaded();
+    let loaded = is_loaded(service);
 
-    let note = if loaded { bootout().err() } else { None };
+    let note = if loaded { bootout(service).err() } else { None };
 
     if existed {
         std::fs::remove_file(&path).map_err(|e| format!("remove {}: {e}", path.display()))?;
@@ -379,24 +524,20 @@ pub fn uninstall() -> Result<(bool, Option<String>), String> {
 // documentation rather than a daemon, on exactly the machine most likely to be
 // left running.
 
-/// The unit's file name, and the name `systemctl --user` addresses it by.
-#[cfg(not(target_os = "macos"))]
-pub const UNIT_NAME: &str = "claudectl-relay.service";
-
 /// Where the unit file lives.
 #[cfg(not(target_os = "macos"))]
-pub fn unit_path() -> PathBuf {
+pub fn unit_path(service: Service) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    unit_path_in(Path::new(&home))
+    unit_path_in(Path::new(&home), service)
 }
 
 /// Explicit home, so tests never read the ambient one.
 #[cfg(not(target_os = "macos"))]
-pub fn unit_path_in(home: &Path) -> PathBuf {
+pub fn unit_path_in(home: &Path, service: Service) -> PathBuf {
     home.join(".config")
         .join("systemd")
         .join("user")
-        .join(UNIT_NAME)
+        .join(service.unit_name())
 }
 
 /// Render the unit.
@@ -411,7 +552,7 @@ pub fn unit_path_in(home: &Path) -> PathBuf {
 /// because launchd has no journal; duplicating that here would mean two places
 /// to look on one platform.
 #[cfg(not(target_os = "macos"))]
-pub fn render_unit(binary: &Path, cfg: &AgentConfig) -> String {
+pub fn render_unit(binary: &Path, cfg: &ServiceConfig) -> String {
     let argv = cfg.argv(binary);
     // `argv` is already shell-free — systemd splits ExecStart on whitespace, so
     // a path containing a space has to be quoted here even though the plist
@@ -428,7 +569,7 @@ pub fn render_unit(binary: &Path, cfg: &AgentConfig) -> String {
         .collect();
     format!(
         "[Unit]\n\
-         Description=claudectl relay\n\
+         Description={}\n\
          Documentation=https://github.com/mercurialsolo/claudectl\n\
          After=network-online.target\n\
          Wants=network-online.target\n\
@@ -441,6 +582,7 @@ pub fn render_unit(binary: &Path, cfg: &AgentConfig) -> String {
          \n\
          [Install]\n\
          WantedBy=default.target\n",
+        cfg.service().description(),
         exec.join(" ")
     )
 }
@@ -455,22 +597,31 @@ fn systemctl(args: &[&str]) -> Result<std::process::Output, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn is_loaded() -> bool {
-    systemctl(&["is-enabled", UNIT_NAME])
+pub fn is_loaded(service: Service) -> bool {
+    systemctl(&["is-enabled", service.unit_name()])
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn install(cfg: &AgentConfig) -> Result<PathBuf, String> {
+pub fn install(cfg: &ServiceConfig) -> Result<PathBuf, String> {
     let binary = resolve_binary()?;
-    let path = unit_path();
+    let service = cfg.service();
+    let path = unit_path(service);
     let dir = path
         .parent()
         .ok_or_else(|| "unit path has no parent".to_string())?;
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    std::fs::write(&path, render_unit(&binary, cfg))
-        .map_err(|e| format!("write {}: {e}", path.display()))?;
+
+    let rendered = render_unit(&binary, cfg);
+    // See the launchd side: an unchanged unit that is already enabled is left
+    // strictly alone, so installing one service never restarts the other.
+    if is_loaded(service) && std::fs::read_to_string(&path).is_ok_and(|on_disk| on_disk == rendered)
+    {
+        return Ok(path);
+    }
+
+    std::fs::write(&path, rendered).map_err(|e| format!("write {}: {e}", path.display()))?;
 
     // A unit rewritten under a running service keeps the old ExecStart until
     // something reloads it — the same failure the launchd side unloads to avoid.
@@ -481,16 +632,17 @@ pub fn install(cfg: &AgentConfig) -> Result<PathBuf, String> {
             String::from_utf8_lossy(&reload.stderr).trim()
         ));
     }
-    let enable = systemctl(&["enable", "--now", UNIT_NAME])?;
+    let enable = systemctl(&["enable", "--now", service.unit_name()])?;
     if !enable.status.success() {
         return Err(format!(
-            "systemctl --user enable --now {UNIT_NAME} failed: {}",
+            "systemctl --user enable --now {} failed: {}",
+            service.unit_name(),
             String::from_utf8_lossy(&enable.stderr).trim()
         ));
     }
 
-    // Without lingering, the user manager stops at logout and takes the relay
-    // with it — which is the whole point of installing a service. It needs
+    // Without lingering, the user manager stops at logout and takes the
+    // service with it — which is the whole point of installing one. It needs
     // policy permission, so a refusal is reported rather than failing an
     // install that otherwise worked.
     if let Err(hint) = enable_linger() {
@@ -512,19 +664,19 @@ fn enable_linger() -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "could not enable lingering, so the relay will stop at logout. \
+        "could not enable lingering, so the service will stop at logout. \
          Run: loginctl enable-linger {user}   ({})",
         String::from_utf8_lossy(&out.stderr).trim()
     ))
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn uninstall() -> Result<(bool, Option<String>), String> {
-    let path = unit_path();
+pub fn uninstall(service: Service) -> Result<(bool, Option<String>), String> {
+    let path = unit_path(service);
     let existed = path.exists();
     let mut note = None;
     if existed {
-        let disable = systemctl(&["disable", "--now", UNIT_NAME])?;
+        let disable = systemctl(&["disable", "--now", service.unit_name()])?;
         if !disable.status.success() {
             note = Some(format!(
                 "systemctl --user disable failed: {}",
@@ -598,7 +750,7 @@ mod tests {
     fn the_plist_carries_the_label_argv_and_keepalive() {
         let xml = render_plist_in(
             Path::new("/opt/homebrew/bin/claudectl"),
-            &AgentConfig::default(),
+            &ServiceConfig::Relay(AgentConfig::default()),
             &home(),
         );
         assert!(xml.contains("<string>io.claudectl.relay</string>"), "{xml}");
@@ -626,7 +778,7 @@ mod tests {
         assert_eq!(argv[0], "/Users/a b/bin/claudectl");
         let xml = render_plist_in(
             Path::new("/Users/a b/bin/claudectl"),
-            &AgentConfig::default(),
+            &ServiceConfig::Relay(AgentConfig::default()),
             &home(),
         );
         assert!(
@@ -641,7 +793,7 @@ mod tests {
         // refuses — an agent that is "installed" and never runs.
         let xml = render_plist_in(
             Path::new("/Users/a&b/bin/claudectl"),
-            &AgentConfig::default(),
+            &ServiceConfig::Relay(AgentConfig::default()),
             &home(),
         );
         assert!(xml.contains("/Users/a&amp;b/bin/claudectl"), "{xml}");
@@ -664,7 +816,11 @@ mod tests {
             auth_token: Some("sekrit".into()),
             ..Default::default()
         };
-        let xml = render_plist_in(Path::new("/x/claudectl"), &cfg, &home());
+        let xml = render_plist_in(
+            Path::new("/x/claudectl"),
+            &ServiceConfig::Relay(cfg),
+            &home(),
+        );
         assert!(
             xml.contains("<string>sekrit</string>"),
             "the token has to be in the plist for the agent to use it"
@@ -674,7 +830,7 @@ mod tests {
     #[test]
     fn the_label_is_used_for_both_the_plist_name_and_the_service() {
         assert!(
-            plist_path_in(&home())
+            plist_path_in(&home(), Service::Relay)
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
@@ -686,13 +842,108 @@ mod tests {
 
     #[test]
     fn logs_land_beside_the_fleet_snapshot() {
-        let (out, err) = log_paths_in(&home());
+        let (out, err) = log_paths_in(&home(), Service::Relay);
         assert!(out.ends_with("agent.out.log"), "{out:?}");
         assert!(err.ends_with("agent.err.log"), "{err:?}");
         assert_eq!(out.parent(), err.parent());
         assert!(
             out.parent().unwrap().ends_with(".claudectl/relay"),
             "{out:?}"
+        );
+    }
+
+    /// #546 gap 2: the headless process carries the brain *and* the supervisor
+    /// reconciler, so this argv is the whole orchestrating half of the stack.
+    #[test]
+    fn the_headless_argv_runs_the_brain_and_supervisor_process() {
+        let argv = HeadlessConfig::default().argv(Path::new("/opt/homebrew/bin/claudectl"));
+        assert_eq!(argv, vec!["/opt/homebrew/bin/claudectl", "--headless"]);
+    }
+
+    /// Neither flag is on by default: a login-installed service that executes
+    /// brain decisions unasked is opt-in.
+    #[test]
+    fn brain_and_auto_run_are_opt_in() {
+        let bare = HeadlessConfig::default().argv(Path::new("/x/claudectl"));
+        assert!(!bare.iter().any(|a| a == "--brain"), "{bare:?}");
+        assert!(!bare.iter().any(|a| a == "--auto-run"), "{bare:?}");
+
+        let brain = HeadlessConfig {
+            brain: true,
+            auto_run: false,
+        }
+        .argv(Path::new("/x/claudectl"));
+        assert_eq!(brain, vec!["/x/claudectl", "--headless", "--brain"]);
+    }
+
+    /// `--auto-run` alone is accepted by clap but does nothing without the
+    /// brain that produces the suggestions, so it implies `--brain` rather than
+    /// installing a service that ignores what it was asked for.
+    #[test]
+    fn auto_run_implies_brain() {
+        let argv = HeadlessConfig {
+            brain: false,
+            auto_run: true,
+        }
+        .argv(Path::new("/x/claudectl"));
+        assert_eq!(
+            argv,
+            vec!["/x/claudectl", "--headless", "--brain", "--auto-run"]
+        );
+    }
+
+    #[test]
+    fn the_headless_plist_carries_its_own_label_and_argv() {
+        let xml = render_plist_in(
+            Path::new("/opt/homebrew/bin/claudectl"),
+            &ServiceConfig::Headless(HeadlessConfig::default()),
+            &home(),
+        );
+        assert!(
+            xml.contains("<string>io.claudectl.headless</string>"),
+            "{xml}"
+        );
+        assert!(xml.contains("<string>--headless</string>"), "{xml}");
+        // And none of the relay's argv leaked into it.
+        assert!(!xml.contains("<string>serve</string>"), "{xml}");
+    }
+
+    /// The two services must never share a plist, a unit name, a label or a
+    /// log directory. Any collision means installing one silently uninstalls
+    /// or overwrites the other.
+    #[test]
+    fn the_two_services_share_no_paths() {
+        let mut labels = vec![];
+        let mut dirs = vec![];
+        let mut units = vec![];
+        for svc in Service::ALL {
+            labels.push(svc.label());
+            units.push(svc.unit_name());
+            let (out, err) = log_paths_in(&home(), svc);
+            assert_eq!(out.parent(), err.parent());
+            dirs.push(out.parent().unwrap().to_path_buf());
+        }
+        labels.sort_unstable();
+        labels.dedup();
+        units.sort_unstable();
+        units.dedup();
+        dirs.sort();
+        dirs.dedup();
+        assert_eq!(labels.len(), Service::ALL.len(), "labels collide");
+        assert_eq!(units.len(), Service::ALL.len(), "unit names collide");
+        assert_eq!(dirs.len(), Service::ALL.len(), "log directories collide");
+    }
+
+    /// The headless heartbeat has to land in the same directory as that
+    /// service's logs — one service, one place to look.
+    #[test]
+    fn the_heartbeat_sits_with_the_headless_logs() {
+        let (out, _) = log_paths_in(&home(), Service::Headless);
+        let beat = claudectl_core::heartbeat::path_in(&home());
+        assert_eq!(
+            beat.parent(),
+            out.parent(),
+            "heartbeat {beat:?} should sit beside {out:?}"
         );
     }
 
@@ -709,10 +960,15 @@ mod tests {
 
         #[test]
         fn the_unit_lives_where_systemd_user_looks_for_it() {
-            let path = unit_path_in(&linux_home());
+            let path = unit_path_in(&linux_home(), Service::Relay);
             assert_eq!(
                 path,
                 PathBuf::from("/home/testuser/.config/systemd/user/claudectl-relay.service")
+            );
+            let headless = unit_path_in(&linux_home(), Service::Headless);
+            assert_eq!(
+                headless,
+                PathBuf::from("/home/testuser/.config/systemd/user/claudectl-headless.service")
             );
         }
 
@@ -720,7 +976,7 @@ mod tests {
         fn the_unit_restarts_and_installs_into_the_default_target() {
             let unit = render_unit(
                 Path::new("/usr/local/bin/claudectl"),
-                &AgentConfig::default(),
+                &ServiceConfig::Relay(AgentConfig::default()),
             );
             assert!(unit.contains("Restart=always"), "{unit}");
             // Without a delay a relay that cannot bind its port respawns in a
@@ -741,7 +997,7 @@ mod tests {
         fn a_binary_path_with_a_space_is_quoted() {
             let unit = render_unit(
                 Path::new("/home/testuser/My Tools/claudectl"),
-                &AgentConfig::default(),
+                &ServiceConfig::Relay(AgentConfig::default()),
             );
             assert!(
                 unit.contains("ExecStart=\"/home/testuser/My Tools/claudectl\" relay serve"),
@@ -756,7 +1012,7 @@ mod tests {
                 http_port: Some(9876),
                 ..AgentConfig::default()
             };
-            let unit = render_unit(Path::new("/usr/bin/claudectl"), &cfg);
+            let unit = render_unit(Path::new("/usr/bin/claudectl"), &ServiceConfig::Relay(cfg));
             assert!(unit.contains("--port 9900"), "{unit}");
             assert!(unit.contains("--http-port 9876"), "{unit}");
         }
@@ -765,8 +1021,35 @@ mod tests {
         fn the_unit_waits_for_the_network() {
             // A relay started before the network is up dials every peer once,
             // fails, and — before #543 — forgot them all.
-            let unit = render_unit(Path::new("/usr/bin/claudectl"), &AgentConfig::default());
+            let unit = render_unit(
+                Path::new("/usr/bin/claudectl"),
+                &ServiceConfig::Relay(AgentConfig::default()),
+            );
             assert!(unit.contains("After=network-online.target"), "{unit}");
+        }
+
+        /// The headless unit is a separate unit with its own Description and
+        /// ExecStart — not the relay's with a different name.
+        #[test]
+        fn the_headless_unit_runs_the_headless_process() {
+            let unit = render_unit(
+                Path::new("/usr/bin/claudectl"),
+                &ServiceConfig::Headless(HeadlessConfig {
+                    brain: true,
+                    auto_run: false,
+                }),
+            );
+            assert!(
+                unit.contains("ExecStart=/usr/bin/claudectl --headless --brain"),
+                "{unit}"
+            );
+            assert!(
+                unit.contains("Description=claudectl headless (brain + supervisor)"),
+                "{unit}"
+            );
+            assert!(!unit.contains("relay serve"), "{unit}");
+            assert!(unit.contains("Restart=always"), "{unit}");
+            assert!(unit.contains("WantedBy=default.target"), "{unit}");
         }
     }
 }

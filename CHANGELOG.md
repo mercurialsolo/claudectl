@@ -4,6 +4,51 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **The orchestrating half of the stack can stay up (#546, closes it).**
+  `relay install-agent` installed a service for `relay serve` and nothing else,
+  so the brain and the supervisor — the part that actually coordinates — were
+  started by hand and stopped with the terminal.
+
+  `relay install-agent --headless` now installs a second service for them, a
+  launchd agent on macOS and a `systemd --user` unit on Linux. `--brain` and
+  `--auto-run` are off by default: `--headless` alone still runs the supervisor
+  reconciler and the coordination loop, and a service installed once at login
+  that executes brain decisions unasked is something you should have to ask for
+  by name. `--auto-run` implies `--brain`, because clap accepts it alone and it
+  does nothing without the brain that produces the suggestions.
+
+  **It is one service, not two.** #546 describes this half as "`--headless
+  --brain --auto-run`, `supervisor run`", but there is no `supervisor run`
+  daemon — that subcommand submits a `tasks.toml` and exits. The reconciler and
+  the actuator tick inside `run_headless` next to the brain.
+
+- **`doctor` can tell a wedged headless service from a running one.** The
+  relay's liveness check (0.80.0) read `fleet.json`, which the headless process
+  does not write — so reusing it would have reported every headless service as
+  wedged. It now writes `~/.claudectl/headless/heartbeat.json` every tick, with
+  the same atomic temp + rename and the same staleness constant as the fleet
+  snapshot, and `doctor` fails when a loaded service has stopped writing it.
+
+  One file on both platforms rather than log mtime on macOS and `journalctl` on
+  Linux, because a check that works differently per platform is one nobody
+  trusts. Not-installed stays an advisory on both services: a checklist that
+  nags about an opt-in feature is one people stop reading.
+
+### Fixed
+
+- **Re-running `install-agent` no longer restarts a service nothing changed
+  about.** It used to unload and reload unconditionally, which was harmless when
+  the relay was the only service and is not once `--headless` exists: adding the
+  second service would tear down a working relay as a side effect. An already
+  running service whose definition is byte-identical is now left strictly alone.
+
+- **`docs/relay.md` still told Linux users to hand-write a unit file**, under a
+  heading saying there was no installer on their platform — 0.80.0 shipped one
+  and the page was not updated. Same shape as the doc rot #513 cleared out: a
+  caveat that outlived its fix.
+
 ### Fixed
 
 - **Four version numbers that had stopped tracking the crate.** The release

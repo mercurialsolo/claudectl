@@ -57,12 +57,25 @@ pub enum RelayCommand {
         /// under ~/Library/LaunchAgents, which is readable by your user.
         #[arg(long)]
         auth_token: Option<String>,
+        /// Also install the headless service: the supervisor reconciler and
+        /// (with --brain) the brain, which otherwise only run while a terminal
+        /// is open (#546).
+        #[arg(long)]
+        headless: bool,
+        /// Enable the local-LLM brain in the headless service. Off by default;
+        /// with no reachable endpoint the service warns and runs on without it.
+        #[arg(long, requires = "headless")]
+        brain: bool,
+        /// Let the headless brain execute its suggestions without asking.
+        /// Implies --brain.
+        #[arg(long, requires = "headless")]
+        auto_run: bool,
     },
 
-    /// Remove the launchd agent (#438, macOS)
+    /// Remove the background services — relay and headless (#438, #546)
     UninstallAgent,
 
-    /// Whether the launchd agent is installed and running (#438, macOS)
+    /// Whether the background services are installed and running (#438, #546)
     AgentStatus,
 
     /// Generate a raw PSK pairing code
@@ -201,6 +214,9 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
             http_port,
             http_addr,
             auth_token,
+            headless,
+            brain,
+            auto_run,
         } => cmd_install_agent(
             super::agent::AgentConfig {
                 port: *port,
@@ -208,6 +224,10 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
                 http_addr: http_addr.clone(),
                 auth_token: auth_token.clone(),
             },
+            headless.then(|| super::agent::HeadlessConfig {
+                brain: *brain,
+                auto_run: *auto_run,
+            }),
             json_mode,
         ),
         RelayCommand::UninstallAgent => cmd_uninstall_agent(json_mode),
@@ -1010,14 +1030,38 @@ fn cmd_serve(
 
 /// `claudectl relay pair`
 /// Generate a new PSK and display it.
-/// `relay install-agent` (#438).
-fn cmd_install_agent(cfg: super::agent::AgentConfig, json_mode: bool) -> io::Result<()> {
-    let path = super::agent::install(&cfg).map_err(io::Error::other)?;
-    let (out_log, err_log) = super::agent::log_paths();
-    let loaded = super::agent::is_loaded();
+/// `relay install-agent` (#438, and the headless service in #546).
+///
+/// The relay is always installed; `headless` adds the second service. Both are
+/// idempotent — re-running after an upgrade or a port change is the supported
+/// way to update them.
+fn cmd_install_agent(
+    cfg: super::agent::AgentConfig,
+    headless: Option<super::agent::HeadlessConfig>,
+    json_mode: bool,
+) -> io::Result<()> {
+    use super::agent::{Service, ServiceConfig};
+
+    let relay = ServiceConfig::Relay(cfg.clone());
+    let path = super::agent::install(&relay).map_err(io::Error::other)?;
+    let (out_log, err_log) = super::agent::log_paths(Service::Relay);
+    let loaded = super::agent::is_loaded(Service::Relay);
+
+    // The headless install is reported but not fatal: a relay that installed
+    // cleanly should not be rolled back because the second service failed.
+    let headless_result = headless.as_ref().map(|h| {
+        let cfg = ServiceConfig::Headless(h.clone());
+        super::agent::install(&cfg).map(|p| {
+            (
+                p,
+                super::agent::is_loaded(Service::Headless),
+                super::agent::log_paths(Service::Headless),
+            )
+        })
+    });
 
     if json_mode {
-        let json = serde_json::json!({
+        let mut json = serde_json::json!({
             "installed": true,
             "loaded": loaded,
             "plist": path.display().to_string(),
@@ -1026,6 +1070,22 @@ fn cmd_install_agent(cfg: super::agent::AgentConfig, json_mode: bool) -> io::Res
             "stdout_log": out_log.display().to_string(),
             "stderr_log": err_log.display().to_string(),
         });
+        if let Some(result) = &headless_result {
+            json["headless"] = match result {
+                Ok((p, loaded, (out, err))) => serde_json::json!({
+                    "installed": true,
+                    "loaded": loaded,
+                    "service": p.display().to_string(),
+                    "label": super::agent::HEADLESS_LABEL,
+                    "brain": headless.as_ref().map(|h| h.brain || h.auto_run),
+                    "auto_run": headless.as_ref().map(|h| h.auto_run),
+                    "stdout_log": out.display().to_string(),
+                    "stderr_log": err.display().to_string(),
+                    "heartbeat": claudectl_core::heartbeat::path().display().to_string(),
+                }),
+                Err(e) => serde_json::json!({"installed": false, "error": e}),
+            };
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&json).unwrap_or_default()
@@ -1053,19 +1113,83 @@ fn cmd_install_agent(cfg: super::agent::AgentConfig, json_mode: bool) -> io::Res
         println!();
         println!("Note: --auth-token is stored in the plist, which is readable by your user.");
     }
+
+    match (&headless_result, headless.as_ref()) {
+        (Some(Ok((p, hl_loaded, (hl_out, hl_err)))), Some(h)) => {
+            println!();
+            println!(
+                "Installed the headless service (supervisor reconciler{}).",
+                if h.brain || h.auto_run {
+                    " + brain"
+                } else {
+                    ""
+                }
+            );
+            println!();
+            println!("  service:   {}", p.display());
+            println!("  label:     {}", super::agent::HEADLESS_LABEL);
+            println!("  logs:      {}", hl_out.display());
+            println!("             {}", hl_err.display());
+            println!(
+                "  heartbeat: {}",
+                claudectl_core::heartbeat::path().display()
+            );
+            println!();
+            if *hl_loaded {
+                println!("It is running now and ticks the supervisor even with no terminal open.");
+            } else {
+                println!("The service is written but is not reported as loaded.");
+                println!("Check the error log above, then: claudectl relay agent-status");
+            }
+            if h.auto_run {
+                println!();
+                println!("Note: --auto-run lets the brain act without asking you first.");
+            }
+        }
+        (Some(Err(e)), _) => {
+            println!();
+            println!("The relay agent installed, but the headless service did not: {e}");
+            println!("Re-run with --headless once that is fixed; the relay is unaffected.");
+        }
+        _ => {}
+    }
+
     println!();
-    println!("Remove it with: claudectl relay uninstall-agent");
+    println!("Remove them with: claudectl relay uninstall-agent");
     Ok(())
 }
 
-/// `relay uninstall-agent` (#438).
+/// `relay uninstall-agent` (#438, both services since #546).
+///
+/// Removes every service rather than taking a name: the command's job is "stop
+/// claudectl from coming back at login", and leaving the second service
+/// installed would not do that.
 fn cmd_uninstall_agent(json_mode: bool) -> io::Result<()> {
-    let (was_present, note) = super::agent::uninstall().map_err(io::Error::other)?;
+    use super::agent::Service;
+
+    let mut removed: Vec<(Service, bool, Option<String>)> = Vec::new();
+    for service in Service::ALL {
+        let (was_present, note) = super::agent::uninstall(service).map_err(io::Error::other)?;
+        removed.push((service, was_present, note));
+    }
+    let any = removed.iter().any(|(_, present, _)| *present);
 
     if json_mode {
+        // `removed` and `note` keep their old shape and meaning for the relay,
+        // so anything scripted against #438 still reads the same answer.
+        let relay = removed
+            .iter()
+            .find(|(s, _, _)| *s == Service::Relay)
+            .expect("relay is in Service::ALL");
+        let headless = removed
+            .iter()
+            .find(|(s, _, _)| *s == Service::Headless)
+            .expect("headless is in Service::ALL");
         let json = serde_json::json!({
-            "removed": was_present,
-            "note": note,
+            "removed": relay.1,
+            "note": relay.2,
+            "headless": {"removed": headless.1, "note": headless.2},
+            "any_removed": any,
         });
         println!(
             "{}",
@@ -1074,25 +1198,39 @@ fn cmd_uninstall_agent(json_mode: bool) -> io::Result<()> {
         return Ok(());
     }
 
-    if was_present {
-        println!("Removed the relay agent. It will not come back at login.");
-    } else {
-        println!("No relay agent was installed — nothing to remove.");
+    if !any {
+        println!("No background services were installed — nothing to remove.");
+        return Ok(());
     }
-    if let Some(n) = note {
-        // The plist is gone either way; this only explains why unloading was
-        // noisy, usually "it was not running".
-        println!();
-        println!("(launchctl said: {n})");
-        println!("The plist was removed regardless, so nothing will restart it.");
+
+    for (service, was_present, note) in &removed {
+        if *was_present {
+            println!(
+                "Removed {}. It will not come back at login.",
+                service.description()
+            );
+        }
+        if let Some(n) = note {
+            // The service file is gone either way; this only explains why
+            // unloading was noisy, usually "it was not running".
+            println!("  (service manager said: {n})");
+            println!("  It was removed regardless, so nothing will restart it.");
+        }
     }
     Ok(())
 }
 
-/// `relay agent-status` (#438).
+/// `relay agent-status` (#438, both services since #546).
 fn cmd_agent_status(json_mode: bool) -> io::Result<()> {
-    let st = super::agent::status();
-    let (out_log, err_log) = super::agent::log_paths();
+    use super::agent::Service;
+
+    let st = super::agent::status(Service::Relay);
+    let (out_log, err_log) = super::agent::log_paths(Service::Relay);
+    let hl = super::agent::status(Service::Headless);
+    let (hl_out, hl_err) = super::agent::log_paths(Service::Headless);
+    // Loaded answers "is it installed"; the heartbeat answers "is it working".
+    // #546 was filed because only the first question was being asked.
+    let hl_beat = claudectl_core::heartbeat::read();
 
     if json_mode {
         let json = serde_json::json!({
@@ -1102,6 +1240,17 @@ fn cmd_agent_status(json_mode: bool) -> io::Result<()> {
             "label": super::agent::AGENT_LABEL,
             "stdout_log": out_log.display().to_string(),
             "stderr_log": err_log.display().to_string(),
+            "headless": {
+                "service_exists": hl.service_exists,
+                "loaded": hl.loaded,
+                "service": hl.service.display().to_string(),
+                "label": super::agent::HEADLESS_LABEL,
+                "stdout_log": hl_out.display().to_string(),
+                "stderr_log": hl_err.display().to_string(),
+                "heartbeat": claudectl_core::heartbeat::path().display().to_string(),
+                "publishing": hl_beat.is_some(),
+                "pid": hl_beat.as_ref().map(|b| b.pid),
+            },
         });
         println!(
             "{}",
@@ -1134,6 +1283,45 @@ fn cmd_agent_status(json_mode: bool) -> io::Result<()> {
             println!();
             println!("Nothing keeps `relay serve` alive across logout. Install it with:");
             println!("  claudectl relay install-agent");
+        }
+    }
+
+    println!();
+    match (hl.service_exists, hl.loaded) {
+        (true, true) if hl_beat.is_some() => {
+            println!("Headless service: running.");
+            println!("  service: {}", hl.service.display());
+            if let Some(b) = &hl_beat {
+                println!("  pid:     {}", b.pid);
+            }
+            println!("  logs:    {}", hl_out.display());
+        }
+        (true, true) => {
+            // Loaded but not publishing — alive and doing nothing, which is
+            // the case a service manager cannot see.
+            println!("Headless service: loaded, but it has stopped publishing.");
+            println!(
+                "  heartbeat: {}",
+                claudectl_core::heartbeat::path().display()
+            );
+            println!("  error log: {}", hl_err.display());
+            println!();
+            println!("That is wedged, not running. Check the log, then re-install it.");
+        }
+        (true, false) => {
+            println!("Headless service: installed but NOT running.");
+            println!("  service:   {}", hl.service.display());
+            println!("  error log: {}", hl_err.display());
+        }
+        (false, true) => {
+            println!("Headless service: loaded, but its service file is gone.");
+            println!("Clean it up with: claudectl relay uninstall-agent");
+        }
+        (false, false) => {
+            println!("Headless service: not installed.");
+            println!();
+            println!("The supervisor and brain only run while a terminal is open. To keep");
+            println!("them up: claudectl relay install-agent --headless");
         }
     }
     Ok(())
