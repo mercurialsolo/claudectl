@@ -15,6 +15,7 @@ pub mod invite;
 pub mod lan;
 pub mod listener;
 pub mod mesh;
+pub mod netif;
 pub mod outcome;
 pub mod peer;
 pub mod protocol;
@@ -290,6 +291,78 @@ pub fn save_peer_meta(peer_id: &str, addr: &str) -> Result<(), String> {
         serde_json::to_string_pretty(&meta).unwrap_or_default(),
     )
     .map_err(|e| format!("write meta: {e}"))
+}
+
+/// Add addresses a peer advertised, without disturbing which one is primary
+/// (#541).
+///
+/// `save_peer_meta` promotes the address it is given to `addr`, which is right
+/// when we have just *used* that address and wrong here: an advertised address
+/// is a claim, not a demonstration. Promoting one would make the next dial
+/// start with an address nothing has ever connected over, ahead of the one that
+/// last worked.
+///
+/// So the primary is left alone and new addresses are appended, keeping the
+/// existing order. `last_seen` is 0 for an advertised address — it has not been
+/// seen, only offered — which also keeps it behind anything real if these are
+/// ever sorted by recency.
+///
+/// Returns how many were genuinely new, so a caller can stay quiet when nothing
+/// changed.
+pub fn merge_advertised_addrs(peer_id: &str, advertised: &[String]) -> Result<usize, String> {
+    if advertised.is_empty() {
+        return Ok(0);
+    }
+    let path = peer_meta_path(peer_id).ok_or_else(|| format!("invalid peer id: {peer_id}"))?;
+    let existing = load_peer_meta(peer_id);
+    let known = peer_addrs(existing.as_ref());
+
+    let mut addrs: Vec<serde_json::Value> = known
+        .iter()
+        .map(|a| serde_json::json!({ "addr": a.addr, "last_seen": a.last_seen }))
+        .collect();
+
+    let mut added = 0;
+    for candidate in advertised {
+        if known.iter().any(|a| &a.addr == candidate) {
+            continue;
+        }
+        if addrs
+            .iter()
+            .any(|a| a.get("addr").and_then(|v| v.as_str()) == Some(candidate))
+        {
+            continue; // duplicate within one advertisement
+        }
+        addrs.push(serde_json::json!({ "addr": candidate, "last_seen": 0 }));
+        added += 1;
+    }
+    if added == 0 {
+        return Ok(0);
+    }
+    addrs.truncate(MAX_PEER_ADDRS);
+
+    let prev = existing.unwrap_or(serde_json::json!({}));
+    let primary = prev
+        .get("addr")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        // Nothing has ever connected: the first advertised address is at least
+        // a starting point, and `reconnect_peer` will work down the rest.
+        .unwrap_or_else(|| advertised[0].clone());
+    let last_seen = prev.get("last_seen").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    let meta = serde_json::json!({
+        "addr": primary,
+        "last_seen": last_seen,
+        "addrs": addrs,
+    });
+    fs::create_dir_all(peers_dir()).map_err(|e| format!("create peers dir: {e}"))?;
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&meta).unwrap_or_default(),
+    )
+    .map_err(|e| format!("write meta: {e}"))?;
+    Ok(added)
 }
 
 /// One address we have seen a peer at.

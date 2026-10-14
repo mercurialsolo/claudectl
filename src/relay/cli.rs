@@ -313,6 +313,13 @@ fn cmd_serve(
         if let Ok(value) = serde_json::to_value(&caps) {
             reg.set_local_capabilities(value);
         }
+        // #541: where we can be reached, so a peer that loses the path it has
+        // can try another instead of retrying a dead address forever.
+        let addrs = super::netif::advertised_addrs(port);
+        if !addrs.is_empty() {
+            println!("Reachable at: {}", addrs.join(", "));
+        }
+        reg.set_local_addrs(addrs);
     }
     // Write handles for in-flight one-shot deliveries (#511). Beside the
     // registry, never in it.
@@ -576,6 +583,7 @@ fn cmd_serve(
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(&from_peer, &msg.payload);
                         persist_peer_capabilities(from_peer.as_str(), &msg.payload);
+                        record_advertised_addrs(from_peer.as_str(), &msg.payload);
                     }
                     super::MessageType::DelegateTask => {
                         match super::delegation::parse_delegate_message(&msg) {
@@ -1228,6 +1236,7 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(peer_id, &msg.payload);
                         persist_peer_capabilities(peer_id.as_str(), &msg.payload);
+                        record_advertised_addrs(peer_id.as_str(), &msg.payload);
                     }
                     // #434: the owner of a `join_policy: ask` hive usually
                     // approves long after `hive join` exited, so this is where
@@ -1415,6 +1424,31 @@ fn relearn_moved_peers(
             Ok(()) => println!("Learned new address for {peer_id}: {addr}"),
             Err(e) => eprintln!("warning: could not record {addr} for {peer_id}: {e}"),
         }
+    }
+}
+
+/// Record the addresses a peer says it can be reached at (#541).
+///
+/// Only addresses that parse as a literal `address:port` are kept: there is no
+/// resolver on the dial path, so a hostname is not something we could use, and
+/// an unparseable entry from a peer should never reach the record.
+///
+/// Best-effort, like the manifest beside it: a heartbeat that cannot be
+/// recorded must not disturb the loop that received it.
+fn record_advertised_addrs(peer_id: &str, payload: &serde_json::Value) {
+    let Some(list) = payload.get("listen_addrs").and_then(|v| v.as_array()) else {
+        return;
+    };
+    let addrs: Vec<String> = list
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|s| s.parse::<SocketAddr>().is_ok())
+        .map(str::to_string)
+        .collect();
+    match super::merge_advertised_addrs(peer_id, &addrs) {
+        Ok(0) => {}
+        Ok(n) => println!("Learned {n} more address(es) for {peer_id}"),
+        Err(e) => eprintln!("warning: could not record addresses for {peer_id}: {e}"),
     }
 }
 

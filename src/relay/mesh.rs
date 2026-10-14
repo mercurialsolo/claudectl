@@ -30,6 +30,10 @@ pub struct PeerRegistry {
     /// (#536). `None` until something probes, so a registry that never sets it
     /// sends exactly what it sent before.
     local_capabilities: Option<serde_json::Value>,
+    /// Where this machine can be reached, advertised on every heartbeat (#541).
+    /// Empty until something probes, so a registry that never sets it sends
+    /// exactly what it sent before.
+    local_addrs: Vec<String>,
     /// Session state received from each connected peer's heartbeat.
     worker_states: HashMap<String, WorkerState>,
     /// Our own peer id, for resolving simultaneous-dial collisions.
@@ -47,6 +51,7 @@ impl PeerRegistry {
             heartbeat_interval: Duration::from_secs(heartbeat_interval_secs),
             last_heartbeat_tick: Instant::now(),
             local_capabilities: None,
+            local_addrs: Vec::new(),
             worker_states: HashMap::new(),
             identity: identity.to_string(),
         }
@@ -214,6 +219,7 @@ impl PeerRegistry {
         }
 
         let caps = self.local_capabilities.clone();
+        let addrs = self.local_addrs.clone();
         let peer_ids: Vec<String> = self.peers.keys().cloned().collect();
         for id in peer_ids {
             let peer = match self.peers.get_mut(&id) {
@@ -227,13 +233,13 @@ impl PeerRegistry {
                     if should_heartbeat {
                         let send_ok = match local_sessions {
                             Some(sessions) => peer
-                                .send_heartbeat_with(identity, sessions, caps.as_ref())
+                                .send_heartbeat_with(identity, sessions, caps.as_ref(), &addrs)
                                 .is_ok(),
                             // No sessions but a manifest to advertise is still
                             // worth a payload, so capability-only peers are
                             // visible to a delegator.
-                            None if caps.is_some() => peer
-                                .send_heartbeat_with(identity, &[], caps.as_ref())
+                            None if caps.is_some() || !addrs.is_empty() => peer
+                                .send_heartbeat_with(identity, &[], caps.as_ref(), &addrs)
                                 .is_ok(),
                             None => peer.send_heartbeat(identity).is_ok(),
                         };
@@ -277,6 +283,11 @@ impl PeerRegistry {
     /// Set the manifest advertised on subsequent heartbeats (#536).
     pub fn set_local_capabilities(&mut self, caps: serde_json::Value) {
         self.local_capabilities = Some(caps);
+    }
+
+    /// Set the addresses advertised on subsequent heartbeats (#541).
+    pub fn set_local_addrs(&mut self, addrs: Vec<String>) {
+        self.local_addrs = addrs;
     }
 
     pub fn handle_heartbeat(&mut self, peer_id: &PeerId, payload: &serde_json::Value) {
