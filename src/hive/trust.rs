@@ -274,6 +274,10 @@ impl TrustStore {
 
     /// Save to disk.
     pub fn save(&self) -> Result<(), String> {
+        // See `hive::skip_ambient_write`.
+        if super::skip_ambient_write() {
+            return Ok(());
+        }
         let path = trust_path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
@@ -456,6 +460,9 @@ fn collisions_path() -> PathBuf {
 }
 
 fn log_collision(c: &Collision) {
+    if super::skip_ambient_write() {
+        return;
+    }
     let path = collisions_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -469,17 +476,18 @@ fn log_collision(c: &Collision) {
         "existing_peer": c.existing_peer,
         "confidence_delta": c.confidence_delta,
     });
+    let Ok(mut line) = serde_json::to_string(&record) else {
+        return;
+    };
+    line.push('\n');
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
     {
         use std::io::Write;
-        let _ = writeln!(
-            file,
-            "{}",
-            serde_json::to_string(&record).unwrap_or_default()
-        );
+        // One write, for the reason given in `store::log_conflict_in` (#552).
+        let _ = file.write_all(line.as_bytes());
     }
 }
 
