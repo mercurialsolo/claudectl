@@ -77,13 +77,15 @@ fn note_unknown(line: &[u8], from_peer: &str) {
         .lock()
         .map(|mut seen| seen.insert(key.clone()))
         .unwrap_or(false);
+    // stderr, like the relay's other operational warnings: `logger::log` is
+    // silent unless a log file is configured, and this is the one sign that a
+    // peer is sending something this build drops.
     if first {
-        crate::logger::log(
-            "RELAY",
-            &format!(
-                "skipping unknown message type '{}' from {} — the peer is newer than this build",
-                key.1, key.0
-            ),
+        eprintln!(
+            "[{}] skipping unknown message type '{}' from {}: the peer is newer than this build",
+            crate::logger::timestamp_now(),
+            key.1,
+            key.0
         );
     }
 }

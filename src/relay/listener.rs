@@ -324,28 +324,18 @@ fn handle_incoming(
             return false;
         }
     };
-    let version = handshake_msg
+    // Logged, never compared: compatibility is the feature set, not this.
+    // The peer chooses the string, so keep it short and printable.
+    let version: String = handshake_msg
         .payload
         .get("version")
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    let agreed = if features.is_empty() {
-        "none — the peer predates protocol negotiation, or shares nothing with this build"
-            .to_string()
-    } else {
-        features.names().join(", ")
-    };
-    crate::logger::log(
-        "RELAY",
-        &format!(
-            "{remote_peer_id} at {peer_addr}: claudectl {}, features: {agreed}",
-            version
-                .chars()
-                .filter(|c| c.is_ascii_graphic())
-                .take(32)
-                .collect::<String>(),
-        ),
-    );
+        .unwrap_or("unknown")
+        .chars()
+        .filter(|c| c.is_ascii_graphic())
+        .take(32)
+        .collect();
+    let agreed = features.describe();
 
     // Step 5: Reconstruct the underlying TcpStream from the reader
     let stream = reader.into_inner();
@@ -404,6 +394,9 @@ fn handle_incoming(
         crate::logger::log(
             "RELAY",
             &format!("peer {} connected from {}", peer_id, peer_addr),
+        );
+        println!(
+            "Peer {peer_id} connected from {peer_addr} (claudectl {version}; features: {agreed})"
         );
     }
 

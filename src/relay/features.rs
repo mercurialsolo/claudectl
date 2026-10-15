@@ -57,6 +57,15 @@ impl Features {
         self.0.iter().cloned().collect()
     }
 
+    /// One line for the relay's output when a link comes up.
+    pub fn describe(&self) -> String {
+        if self.is_empty() {
+            "none (the peer predates protocol negotiation)".to_string()
+        } else {
+            self.names().join(", ")
+        }
+    }
+
     /// The features both sides have.
     pub fn agree(&self, other: &Features) -> Features {
         Features(self.0.intersection(&other.0).cloned().collect())
