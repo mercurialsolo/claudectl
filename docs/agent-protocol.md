@@ -1,6 +1,6 @@
 # claudectl Agent Protocol — Design Specification
 
-**Status:** Proposed, epic #558. Nothing here is built. Written against the code as of `edaed703`.
+**Status:** Proposed, epic #558. Phase 1 (#559) shipped in PR #566; the rest is not built. Written against the code as of `f722aaf2`.
 **Scope:** Let any coding agent (Claude Code, Codex CLI, Gemini CLI, OpenCode, Factory Droid, an agent hosted in Zed, and agents nobody has named yet) be observed by claudectl, reach the bus and the hive, and take delegated work. Define the relay wire protocol formally, version it, and make it faster to exchange.
 
 **Relationship to the cross-agent hive (#521, `docs/cross-agent-hive.md`).** That spec makes Codex a full member: canonical tool vocabulary (#522, shipped), provenance (#523), Codex discovery (#524), the adapter registry (#533), the hive MCP surface (#525), Codex write surfaces (#526), and the bus's agent and machine dimensions (#527) and relay bridge (#528). This spec builds on it and doesn't repeat it. It covers agents beyond Codex, delivering into them, running work on them, and the relay wire protocol all of it rides on.
@@ -9,13 +9,13 @@
 
 | Phase (§11) | Issue | Status | Module / artifact |
 | --- | --- | --- | --- |
-| 1. Wire protocol v1: handshake negotiation, unknown-type tolerance | #559 | In review | `src/relay/{features,protocol,peer,listener}.rs`, `docs/relay-protocol.md` |
+| 1. Wire protocol v1: handshake negotiation, unknown-type tolerance | #559 | **Shipped** (PR #566) | `src/relay/{features,protocol,peer,listener}.rs`, `docs/relay-protocol.md` |
 | 2. Agent manifests (other agents appear in the TUI and fleet) | #563 | Not started, after #533 | `crates/claudectl-core/src/agent/`, `process.rs` |
 | 3. Per-agent delivery into a running agent | #560 | Not started | `src/bus/`, hook installers per agent |
 | 4. ACP runner for delegated work | #561 | Not started | `src/relay/worker.rs`, new `src/acp/` |
 | 5. Binary frames + LZ4 | #562 (answers #503) | Not started | `src/relay/protocol.rs`, `transfer.rs` |
 | 6. Delta heartbeats | #564 | Not started | `src/relay/{advertise,protocol}.rs` |
-| — Bus across machines | #528 (cross-agent hive) | Not started, needs #559 | see §8 |
+| — Bus across machines | #528 (cross-agent hive) | Not started, unblocked by #559 | see §8 |
 
 ---
 
