@@ -48,12 +48,27 @@ pub struct PeerConnection {
 }
 
 impl PeerConnection {
-    /// Create a new PeerConnection from an already-authenticated stream.
-    /// Used by the listener after successful auth.
+    /// Create a new PeerConnection from an already-authenticated stream, with
+    /// no negotiated features: NDJSON, as every peer from before #559 speaks.
+    /// Tests only; production goes through `from_authenticated_with`.
+    #[cfg(test)]
     pub fn from_authenticated(
         peer_id: PeerId,
         stream: TcpStream,
         tx: Sender<(PeerId, RelayMessage)>,
+    ) -> Self {
+        Self::from_authenticated_with(peer_id, stream, tx, Features::default())
+    }
+
+    /// Create a PeerConnection with what its handshake agreed. The listener's
+    /// path. The features go in before the reader thread starts, because they
+    /// decide the framing it reads with (#562): a reader started on NDJSON for
+    /// a link that agreed binary frames would misread every byte.
+    pub fn from_authenticated_with(
+        peer_id: PeerId,
+        stream: TcpStream,
+        tx: Sender<(PeerId, RelayMessage)>,
+        features: Features,
     ) -> Self {
         let now = Instant::now();
         let stream_arc = Arc::new(Mutex::new(stream));
@@ -70,18 +85,16 @@ impl PeerConnection {
             is_initiator: false,
             reconnect_attempts: 0,
             next_reconnect_at: None,
-            features: Features::default(),
+            features,
         };
 
         conn.spawn_reader(stream_arc, tx);
         conn
     }
 
-    /// Record what the handshake agreed (#559). The listener negotiates
-    /// before it builds the connection, so it sets this afterwards.
-    pub fn with_features(mut self, features: Features) -> Self {
-        self.features = features;
-        self
+    /// How this link frames its bytes, from what its handshake agreed.
+    pub fn framing(&self) -> protocol::Framing {
+        protocol::Framing::for_link(&self.features)
     }
 
     /// A peer we know about and have not reached (#543).
@@ -144,7 +157,12 @@ impl PeerConnection {
             .set_write_timeout(Some(Duration::from_secs(10)))
             .map_err(|e| format!("set write timeout: {e}"))?;
 
-        let mut reader = BufReader::new(
+        // Capacity 1: a buffered reader would read past the ack, and this one
+        // is dropped when the handshake ends. Bytes the acceptor sends right
+        // after its ack would vanish with it, and under `frame-bin` a lost
+        // partial frame desyncs every frame after it (#562).
+        let mut reader = BufReader::with_capacity(
+            1,
             stream
                 .try_clone()
                 .map_err(|e| format!("clone stream: {e}"))?,
@@ -261,10 +279,11 @@ impl PeerConnection {
             .stream
             .as_ref()
             .ok_or_else(|| io::Error::other("not connected"))?;
+        let framing = self.framing();
         let mut guard = stream
             .lock()
             .map_err(|_| io::Error::other("stream lock poisoned"))?;
-        protocol::write_message(&mut guard, msg)
+        protocol::write_frame(&mut *guard, msg, framing)
     }
 
     /// Send a heartbeat (liveness only).
@@ -355,6 +374,9 @@ impl PeerConnection {
     /// Spawn a reader thread that reads messages and sends them to the channel.
     fn spawn_reader(&mut self, stream: Arc<Mutex<TcpStream>>, tx: Sender<(PeerId, RelayMessage)>) {
         let peer_id = self.peer_id.clone();
+        // Fixed for the life of the connection: a link's features don't
+        // change after its handshake.
+        let framing = self.framing();
 
         let handle = std::thread::spawn(move || {
             // Clone the TcpStream for the reader
@@ -371,7 +393,7 @@ impl PeerConnection {
 
             let mut reader = BufReader::new(raw_stream);
             loop {
-                match protocol::read_message(&mut reader) {
+                match protocol::read_frame(&mut reader, framing) {
                     Ok(Some(msg)) => {
                         if tx.send((peer_id.clone(), msg)).is_err() {
                             break; // Receiver dropped
@@ -489,5 +511,217 @@ mod tests {
         conn.schedule_reconnect();
         assert_eq!(conn.state, PeerState::Disconnected);
         assert!(conn.next_reconnect_at.is_some());
+    }
+
+    // ── End to end over loopback (#562) ─────────────────────────────────
+    //
+    // The dialler is the real `PeerConnection::connect`. The acceptor runs
+    // the listener's own steps with the same protocol functions, so no test
+    // needs a HOME to look a PSK up in.
+
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::sync::mpsc::{Receiver, channel};
+
+    const WAIT: Duration = Duration::from_secs(5);
+
+    fn heartbeat(from: &str, payload: serde_json::Value) -> RelayMessage {
+        RelayMessage {
+            id: super::super::gen_msg_id(),
+            msg_type: super::super::MessageType::Heartbeat,
+            from_peer: from.into(),
+            timestamp: 0,
+            payload,
+        }
+    }
+
+    fn big() -> serde_json::Value {
+        serde_json::json!({"sessions": "project staffai status Idle cost 1.23 ".repeat(300)})
+    }
+
+    /// Accept one connection the way `listener::handle_incoming` does. If
+    /// `then_send` is given, it's written the instant the ack is out, before
+    /// the connection object even exists.
+    fn accept_like_the_listener(
+        listener: &TcpListener,
+        psk: [u8; 32],
+        then_send: Option<RelayMessage>,
+    ) -> (PeerConnection, Receiver<(PeerId, RelayMessage)>) {
+        let (stream, _) = listener.accept().unwrap();
+        let mut write = stream.try_clone().unwrap();
+        let mut reader = BufReader::with_capacity(1, stream);
+        let nonce = protocol::send_challenge(&mut write).unwrap();
+        let hs = protocol::read_message(&mut reader).unwrap().unwrap();
+        let peer = protocol::verify_handshake(&hs, &nonce, &psk).unwrap();
+        // The ack and any first frame go out in a single write, so they
+        // reach the dialler in one segment, which is the case a buffered
+        // handshake reader gets wrong.
+        let mut out = Vec::new();
+        let features = protocol::send_handshake_ack_negotiated(&mut out, "acceptor", &hs).unwrap();
+        if let Some(msg) = then_send {
+            protocol::write_frame(&mut out, &msg, protocol::Framing::for_link(&features)).unwrap();
+        }
+        write.write_all(&out).unwrap();
+        let (tx, rx) = channel();
+        let conn = PeerConnection::from_authenticated_with(
+            PeerId(peer),
+            reader.into_inner(),
+            tx,
+            features,
+        );
+        (conn, rx)
+    }
+
+    fn dial(
+        addr: SocketAddr,
+        psk: &[u8; 32],
+    ) -> (PeerConnection, Receiver<(PeerId, RelayMessage)>) {
+        let (tx, rx) = channel();
+        let conn = PeerConnection::connect(
+            addr,
+            psk,
+            &PeerId("dialler".into()),
+            tx,
+            &protocol::DialIntent::peer_link(None),
+        )
+        .unwrap();
+        (conn, rx)
+    }
+
+    #[test]
+    fn two_new_peers_agree_binary_and_exchange_compressed_frames_both_ways() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let psk = super::super::crypto::generate_psk();
+        let acceptor = std::thread::spawn(move || accept_like_the_listener(&listener, psk, None));
+        let (client, client_rx) = dial(addr, &psk);
+        let (server, server_rx) = acceptor.join().unwrap();
+
+        assert_eq!(client.framing(), protocol::Framing::Binary);
+        assert_eq!(server.framing(), protocol::Framing::Binary);
+
+        // Dialler → acceptor, large then small, order kept.
+        client.send(&heartbeat("dialler", big())).unwrap();
+        client
+            .send(&heartbeat("dialler", serde_json::json!({"n": 2})))
+            .unwrap();
+        let (_, a) = server_rx.recv_timeout(WAIT).unwrap();
+        let (_, b) = server_rx.recv_timeout(WAIT).unwrap();
+        assert_eq!(a.payload, big());
+        assert_eq!(b.payload, serde_json::json!({"n": 2}));
+
+        // Acceptor → dialler.
+        server.send(&heartbeat("acceptor", big())).unwrap();
+        let (_, c) = client_rx.recv_timeout(WAIT).unwrap();
+        assert_eq!(c.payload, big());
+
+        // Many frames back to back, mixed sizes.
+        for i in 0..200 {
+            let p = if i % 3 == 0 {
+                big()
+            } else {
+                serde_json::json!({"i": i})
+            };
+            client.send(&heartbeat("dialler", p)).unwrap();
+        }
+        for i in 0..200 {
+            let (_, m) = server_rx.recv_timeout(WAIT).unwrap();
+            let want = if i % 3 == 0 {
+                big()
+            } else {
+                serde_json::json!({"i": i})
+            };
+            assert_eq!(m.payload, want, "frame {i}");
+        }
+        client.shutdown();
+        server.shutdown();
+    }
+
+    /// The acceptor's first frame can arrive in the same TCP segment as its
+    /// ack. A buffered handshake reader would swallow it and the link would
+    /// start mid-frame.
+    #[test]
+    fn a_frame_sent_right_after_the_ack_is_not_lost() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let psk = super::super::crypto::generate_psk();
+        let first = heartbeat("acceptor", big());
+        let want = first.payload.clone();
+        let acceptor =
+            std::thread::spawn(move || accept_like_the_listener(&listener, psk, Some(first)));
+        let (client, client_rx) = dial(addr, &psk);
+        let (server, _) = acceptor.join().unwrap();
+        let (_, got) = client_rx.recv_timeout(WAIT).unwrap();
+        assert_eq!(got.payload, want);
+        client.shutdown();
+        server.shutdown();
+    }
+
+    /// A 0.80 dialler: NDJSON handshake with no `proto`, NDJSON frames after.
+    #[test]
+    fn an_old_dialler_stays_on_ndjson_with_a_new_acceptor() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let psk = super::super::crypto::generate_psk();
+        let acceptor = std::thread::spawn(move || accept_like_the_listener(&listener, psk, None));
+
+        let old = TcpStream::connect(addr).unwrap();
+        let mut old_w = old.try_clone().unwrap();
+        let mut old_r = BufReader::new(old);
+        let challenge = protocol::read_message(&mut old_r).unwrap().unwrap();
+        let nonce = challenge.payload["nonce"].as_str().unwrap().to_string();
+        let hs = RelayMessage {
+            payload: serde_json::json!({
+                "proof": protocol::compute_proof(&nonce, &psk),
+                "version": "0.80.0",
+            }),
+            msg_type: super::super::MessageType::Handshake,
+            ..heartbeat("old-peer", serde_json::json!({}))
+        };
+        protocol::write_message(&mut old_w, &hs).unwrap();
+        let ack = protocol::read_message(&mut old_r).unwrap().unwrap();
+        assert_eq!(ack.payload, serde_json::json!({"status": "ok"}));
+
+        let (server, server_rx) = acceptor.join().unwrap();
+        assert_eq!(server.framing(), protocol::Framing::Lines);
+
+        protocol::write_message(&mut old_w, &heartbeat("old-peer", big())).unwrap();
+        let (_, got) = server_rx.recv_timeout(WAIT).unwrap();
+        assert_eq!(got.payload, big());
+
+        server.send(&heartbeat("acceptor", big())).unwrap();
+        let back = protocol::read_message(&mut old_r).unwrap().unwrap();
+        assert_eq!(back.payload, big());
+        server.shutdown();
+    }
+
+    /// A 0.80 acceptor answers with the old ack; the new dialler must stay on
+    /// NDJSON, or it would send it binary frames it can't read.
+    #[test]
+    fn a_new_dialler_stays_on_ndjson_with_an_old_acceptor() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let psk = super::super::crypto::generate_psk();
+        let old_acceptor = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut w = stream.try_clone().unwrap();
+            let mut r = BufReader::new(stream);
+            let nonce = protocol::send_challenge(&mut w).unwrap();
+            let hs = protocol::read_message(&mut r).unwrap().unwrap();
+            protocol::verify_handshake(&hs, &nonce, &psk).unwrap();
+            protocol::send_handshake_ack(&mut w, "old-acceptor", "ok").unwrap();
+            // What the old relay reads next must be a line.
+            let got = protocol::read_message(&mut r).unwrap().unwrap();
+            protocol::write_message(&mut w, &heartbeat("old-acceptor", big())).unwrap();
+            got
+        });
+        let (client, client_rx) = dial(addr, &psk);
+        assert_eq!(client.framing(), protocol::Framing::Lines);
+        client.send(&heartbeat("dialler", big())).unwrap();
+        let got = old_acceptor.join().unwrap();
+        assert_eq!(got.payload, big());
+        let (_, back) = client_rx.recv_timeout(WAIT).unwrap();
+        assert_eq!(back.payload, big());
+        client.shutdown();
     }
 }

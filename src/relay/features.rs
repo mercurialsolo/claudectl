@@ -21,8 +21,14 @@ pub const PROTO_VERSION: u64 = 1;
 /// closing the link. A sender may rely on it to probe; nothing else does yet.
 pub const UNKNOWN_OK: &str = "unknown-ok";
 
+/// After the handshake, the link uses length-prefixed binary frames, and a
+/// frame whose JSON is at least `protocol::COMPRESS_THRESHOLD` bytes may be
+/// LZ4-compressed (#562). The threshold and `protocol::MAX_RAW_LEN` are part
+/// of what this name means: changing either needs a new feature string.
+pub const FRAME_BIN: &str = "frame-bin";
+
 /// Every feature this build supports.
-const LOCAL: &[&str] = &[UNKNOWN_OK];
+const LOCAL: &[&str] = &[UNKNOWN_OK, FRAME_BIN];
 
 /// A peer controls this list, so it's bounded and filtered before it's kept.
 const MAX_FEATURES: usize = 64;
@@ -40,10 +46,6 @@ impl Features {
 
     /// Whether this link agreed to `feature`. Gate every new message type
     /// and every new payload key on this.
-    #[allow(
-        dead_code,
-        reason = "the gate for #560-#564; `unknown-ok` itself needs no check on send"
-    )]
     pub fn has(&self, feature: &str) -> bool {
         self.0.contains(feature)
     }
@@ -138,7 +140,8 @@ mod tests {
     #[test]
     fn both_sides_get_only_what_both_have() {
         let (proto, agreed) =
-            negotiate(&json!({"proto": 1, "features": ["unknown-ok", "frame-bin"]})).unwrap();
+            negotiate(&json!({"proto": 1, "features": ["unknown-ok", "not-in-this-build"]}))
+                .unwrap();
         assert_eq!(proto, 1);
         assert_eq!(agreed.names(), vec!["unknown-ok".to_string()]);
     }
