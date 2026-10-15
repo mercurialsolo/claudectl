@@ -72,10 +72,29 @@ fn note_unknown(line: &[u8], from_peer: &str) {
             .collect()
     };
     let key = (clip(from_peer), clip(&name));
+    // Bounded by count as well as length: a peer that invents a new type name
+    // per frame would otherwise grow this for the life of the process.
+    const MAX_SEEN: usize = 256;
     let first = SEEN
         .get_or_init(|| Mutex::new(HashSet::new()))
         .lock()
-        .map(|mut seen| seen.insert(key.clone()))
+        .map(|mut seen| {
+            if seen.contains(&key) {
+                false
+            } else if seen.len() < MAX_SEEN {
+                seen.insert(key.clone())
+            } else {
+                if seen.len() == MAX_SEEN {
+                    // One sentinel entry, so this line prints once.
+                    seen.insert((String::new(), String::new()));
+                    eprintln!(
+                        "[{}] further unknown message types are skipped without logging",
+                        crate::logger::timestamp_now()
+                    );
+                }
+                false
+            }
+        })
         .unwrap_or(false);
     // stderr, like the relay's other operational warnings: `logger::log` is
     // silent unless a log file is configured, and this is the one sign that a
