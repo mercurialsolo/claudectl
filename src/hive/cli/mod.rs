@@ -820,7 +820,7 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
     }
 
     // Count conflicts
-    let conflict_count = conflict_line_count();
+    let conflict_count = crate::hive::store::conflict_count();
 
     // Load gossip sync state (only when relay is available)
     #[cfg(feature = "relay")]
@@ -928,17 +928,6 @@ fn cmd_status(json_mode: bool) -> io::Result<()> {
 }
 
 /// Count lines in the conflicts log.
-fn conflict_line_count() -> usize {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let path = std::path::PathBuf::from(home)
-        .join(".claudectl")
-        .join("hive")
-        .join("conflicts.jsonl");
-    std::fs::read_to_string(&path)
-        .map(|c| c.lines().filter(|l| !l.is_empty()).count())
-        .unwrap_or(0)
-}
-
 /// `claudectl hive knowledge [--scope X] [--from peer]`
 fn cmd_knowledge(
     from_filter: Option<&str>,

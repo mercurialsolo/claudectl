@@ -19,6 +19,7 @@ pub mod discovery;
 pub mod fleet;
 pub mod forecast;
 pub mod health;
+pub mod heartbeat;
 pub mod helpers;
 pub mod history;
 pub mod hooks;

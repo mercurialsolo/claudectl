@@ -247,6 +247,11 @@ impl HiveStore {
 
     /// Save the entire store to disk (atomic rewrite via temp file + rename).
     pub fn save(&self) -> std::io::Result<()> {
+        // See `hive::skip_ambient_write`: this would overwrite the developer's
+        // real knowledge store with whatever a test's store holds.
+        if super::skip_ambient_write() {
+            return Ok(());
+        }
         let dir = hive_dir();
         fs::create_dir_all(&dir)?;
         let path = knowledge_path();
@@ -307,10 +312,37 @@ impl HiveStore {
 }
 
 /// Log a merge conflict for diagnostics.
+///
+/// Skipped in unit tests: `merge_unit` calls this transitively, `hive_dir`
+/// resolves `HOME` at call time, and the merger's tests do not override it — so
+/// before #552 running them appended fixture records to the developer's own
+/// `~/.claudectl/hive/conflicts.jsonl`. The file on this machine had 1,771 of
+/// them and not one real conflict. The writer itself is covered by testing
+/// [`log_conflict_in`] directly, which is where the interesting behaviour is.
 pub fn log_conflict(local: &KnowledgeUnit, incoming: &KnowledgeUnit) {
-    let dir = hive_dir();
-    let _ = fs::create_dir_all(&dir);
-    let path = conflicts_path();
+    if super::skip_ambient_write() {
+        return;
+    }
+    log_conflict_in(&hive_dir(), local, incoming);
+}
+
+/// [`log_conflict`] into an explicit directory.
+///
+/// # Why one `write_all` and not `writeln!`
+///
+/// `File` is unbuffered, so `writeln!` reaches `write_fmt` and emits the JSON
+/// and the newline as **two** writes. `O_APPEND` makes each individual write
+/// atomic, not the pair — so a concurrent logger lands its record in between
+/// and two records end up sharing a line. Gossip merges batches from several
+/// peers, which is exactly where that happens: 131 of 1,618 lines on this
+/// machine held more than one record (#552).
+///
+/// Building the line and its terminator into one buffer makes a record either
+/// wholly present or wholly absent, which is what a diagnostic log has to be
+/// before anything can read it.
+pub fn log_conflict_in(dir: &std::path::Path, local: &KnowledgeUnit, incoming: &KnowledgeUnit) {
+    let _ = fs::create_dir_all(dir);
+    let path = dir.join("conflicts.jsonl");
 
     let record = serde_json::json!({
         "ts": super::epoch_secs(),
@@ -323,13 +355,36 @@ pub fn log_conflict(local: &KnowledgeUnit, incoming: &KnowledgeUnit) {
         "semantic_key": semantic_key(local),
     });
 
+    let Ok(mut line) = serde_json::to_string(&record) else {
+        return;
+    };
+    line.push('\n');
+
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(
-            file,
-            "{}",
-            serde_json::to_string(&record).unwrap_or_default()
-        );
+        let _ = file.write_all(line.as_bytes());
     }
+}
+
+/// How many conflict records the log holds.
+///
+/// Counts **records**, not lines. A log written before #552 can hold several
+/// concatenated records on one line, and `serde_json`'s streaming reader takes
+/// those in its stride — so an existing file reports honestly without needing a
+/// migration, and `hive status` stops undercounting itself (1,617 shown against
+/// 1,771 actual, on this machine).
+pub fn conflict_count_in(dir: &std::path::Path) -> usize {
+    let Ok(body) = fs::read_to_string(dir.join("conflicts.jsonl")) else {
+        return 0;
+    };
+    serde_json::Deserializer::from_str(&body)
+        .into_iter::<serde_json::Value>()
+        .take_while(|r| r.is_ok())
+        .count()
+}
+
+/// [`conflict_count_in`] for the real hive directory.
+pub fn conflict_count() -> usize {
+    conflict_count_in(&hive_dir())
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -340,6 +395,142 @@ pub fn log_conflict(local: &KnowledgeUnit, incoming: &KnowledgeUnit) {
 mod tests {
     use super::*;
     use crate::hive::{KnowledgeContent, KnowledgeScope};
+
+    /// Every record must be on its own line and parse on its own. This is the
+    /// #552 regression: `writeln!` on an unbuffered `File` wrote the JSON and
+    /// the newline separately, so a concurrent logger split a record in two.
+    #[test]
+    fn concurrent_conflict_logging_never_splits_a_record() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+
+        const THREADS: usize = 8;
+        const EACH: usize = 60;
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for i in 0..EACH {
+                        let local = make_unit(&format!("l{t}_{i}"), "Bash", "local");
+                        let incoming = make_unit(&format!("r{t}_{i}"), "Bash", "peer-a");
+                        log_conflict_in(&dir, &local, &incoming);
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let body = fs::read_to_string(dir.join("conflicts.jsonl")).unwrap();
+        let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(
+            lines.len(),
+            THREADS * EACH,
+            "expected one line per record, got {} lines for {} records",
+            lines.len(),
+            THREADS * EACH
+        );
+        for line in &lines {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|e| panic!("line is not one whole record ({e}): {line}"));
+        }
+        assert_eq!(conflict_count_in(&dir), THREADS * EACH);
+    }
+
+    /// A log written before the fix has concatenated records on one line. The
+    /// count has to be right on those too, or the number only becomes honest
+    /// after someone deletes their file.
+    #[test]
+    fn the_count_reads_a_legacy_run_together_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
+        // Three records, no separators — exactly the shape found on disk.
+        let one = r#"{"ts":1,"local_id":"ku_local","semantic_key":"k"}"#;
+        fs::write(
+            tmp.path().join("conflicts.jsonl"),
+            format!("{one}{one}{one}\n"),
+        )
+        .unwrap();
+
+        // What the old line counter would have said.
+        let body = fs::read_to_string(tmp.path().join("conflicts.jsonl")).unwrap();
+        assert_eq!(body.lines().filter(|l| !l.is_empty()).count(), 1);
+        // What it actually holds.
+        assert_eq!(conflict_count_in(tmp.path()), 3);
+    }
+
+    #[test]
+    fn the_count_is_zero_with_no_log_at_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(conflict_count_in(tmp.path()), 0);
+    }
+
+    /// Truncated trailing bytes must not panic or inflate the count — the log
+    /// is appended to by a process that can be killed mid-write.
+    #[test]
+    fn a_truncated_tail_counts_the_whole_records_before_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let one = r#"{"ts":1,"local_id":"ku_local","semantic_key":"k"}"#;
+        fs::write(
+            tmp.path().join("conflicts.jsonl"),
+            format!("{one}\n{one}\n{{\"ts\":3,\"local_i"),
+        )
+        .unwrap();
+        assert_eq!(conflict_count_in(tmp.path()), 2);
+    }
+
+    /// Every byte under the real `~/.claudectl/hive` must survive a test run
+    /// (#552). Before the fix, `cargo test` replaced the developer's
+    /// `knowledge.jsonl` with fixture units — `save` persists whatever the
+    /// store holds — and appended to three logs besides.
+    ///
+    /// Exercises the ambient entry points, the ones that resolve `$HOME`
+    /// themselves, and asserts the directory is unchanged afterwards.
+    #[test]
+    fn the_real_hive_directory_survives_a_test_run() {
+        fn snapshot() -> Vec<(PathBuf, usize)> {
+            let Ok(entries) = fs::read_dir(hive_dir()) else {
+                return Vec::new();
+            };
+            let mut out: Vec<(PathBuf, usize)> = entries
+                .flatten()
+                .filter(|e| e.path().is_file())
+                .filter_map(|e| fs::read(e.path()).ok().map(|b| (e.path(), b.len())))
+                .collect();
+            out.sort();
+            out
+        }
+
+        let before = snapshot();
+
+        let mut store = HiveStore {
+            units: HashMap::new(),
+            semantic_index: HashMap::new(),
+        };
+        store.insert(make_unit("ku_local", "Bash", "local"));
+
+        // knowledge.jsonl — the data-loss one.
+        store.save().unwrap();
+        // conflicts.jsonl, and resolutions.jsonl through the merger.
+        let incoming = make_unit("ku_remote", "Bash", "peer-a");
+        crate::hive::merger::merge_unit(&mut store, &incoming, "local");
+        log_conflict(&make_unit("a", "Bash", "local"), &incoming);
+
+        assert_eq!(
+            before,
+            snapshot(),
+            "a test run changed {} — see hive::skip_ambient_write",
+            hive_dir().display()
+        );
+    }
+
+    /// The choke point the test above depends on.
+    #[test]
+    fn ambient_writes_are_suppressed_in_a_test_build() {
+        assert!(crate::hive::skip_ambient_write());
+    }
 
     fn make_unit(id: &str, tool: &str, peer: &str) -> KnowledgeUnit {
         KnowledgeUnit {

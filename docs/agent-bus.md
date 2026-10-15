@@ -98,7 +98,7 @@ From inside a Claude session, just use natural language with the recipient role 
 
 The recipient picks up mail in two ways:
 
-**Automatic (recommended).** The Stop hook installed by `claudectl init` drains the mailbox at the end of every Claude turn. When mail is present, the hook returns `decision: "block"` with the rendered messages as `additionalContext` so the agent picks the work up in the same turn — no user interaction, no polling. This is **Trigger A** in the [design spec](AGENT_BUS.md#trigger-a-claude-code-stop-hook-claudectl-mcp-tool-primary).
+**Automatic (recommended).** The Stop hook installed by `claudectl init` drains the mailbox at the end of every Claude turn. When mail is present, the hook returns `decision: "block"` with the rendered messages as `additionalContext` so the agent picks the work up in the same turn — no user interaction, no polling. This is **Trigger A** in the [design spec](AGENT_BUS.md#trigger-a--claude-code-stop-hook--claudectl-mcp-tool-primary).
 
 **Manual.** Use the `/inbox` slash command (provided by the bundled plugin — pairs with `/role`) any time, or:
 
