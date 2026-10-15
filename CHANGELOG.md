@@ -4,6 +4,50 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`cargo test` was rewriting the developer's own hive state (#552).** Every
+  path in `src/hive/` resolves `$HOME` at call time and the unit tests do not
+  override it — mutating `HOME` process-wide would race, since cargo runs tests
+  on parallel threads. So a test run reached straight into `~/.claudectl/hive`:
+
+  - `knowledge.jsonl` was **replaced**, not appended to. `HiveStore::save`
+    persists whatever the in-memory store holds, and `GossipEngine::handle_sync`
+    and `handle_snapshot` call it — so two gossip tests overwrote real distilled
+    knowledge with fixture units. That is data loss, not noise.
+  - `trust.json`, `collisions.jsonl` and `resolutions.jsonl` likewise.
+
+  The ambient entry points now return early in a test build, through one
+  documented choke point (`hive::skip_ambient_write`). Tests that assert on
+  persistence use the explicit-path variants — `save_to`, `load_from`,
+  `log_conflict_in` — which is where that belongs. A test walks the real
+  directory and fails if a test run changes a byte of it; it was confirmed to
+  fail with the guard disabled.
+
+  Three files outside this module are still written by the suite —
+  `access/audit.jsonl`, `coord/coord.db` and `relay/fleet.json` — tracked in
+  #553.
+
+- **The hive's three append-only logs were not append-atomic (#552).**
+  `conflicts.jsonl`, `resolutions.jsonl` and `collisions.jsonl` were each
+  written with `writeln!` on an unbuffered `File`, which emits the JSON and the
+  newline as two separate writes. `O_APPEND` makes each write atomic, not the
+  pair, so a concurrent logger landed its record in between and two records
+  shared a line — in a file named `.jsonl`, which anything line-based then
+  mis-parses.
+
+  Measured on this machine before the fix: 1,771 records across 1,618 lines,
+  131 of them doubled up. A test that appends from eight threads reproduces it
+  at 303 lines for 480 records and passes once each record is written as a
+  single buffer.
+
+- **`hive status` undercounted its own conflict log.** It counted lines, so it
+  reported 1,618 against 1,771 actual records. It now counts records with
+  `serde_json`'s streaming reader, which reads concatenated objects correctly —
+  so a file written before the fix reports honestly instead of needing a
+  migration, and a truncated tail counts the whole records before it rather
+  than panicking.
+
 ### Added
 
 - **The orchestrating half of the stack can stay up (#546, closes it).**
