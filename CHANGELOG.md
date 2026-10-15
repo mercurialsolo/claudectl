@@ -4,7 +4,46 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The hive is where the README leads, not section eleven.** `Hive Mind &
+  Relay` and `Open Cluster` now follow `Local LLM Brain` directly, so "a brain
+  that learns from you" is immediately followed by "and carries it to every
+  machine". Everything that moved down is machinery — plugin, headless, coord,
+  bus, supervisor.
+
+  The "Why claudectl" hive bullet described the pipeline ("knowledge
+  distillation, archiving, and curriculum generation") rather than what you get.
+  It now says a hive is something you name, that advertises, invites and queues
+  join requests, and it leads the list.
+
+- **The website grid was missing two shipped epics.** `Supervisor` — the durable
+  ledger, three verifier kinds, resume-after-death — and `Open Cluster` both had
+  README sections, doc pages in the nav, and no card. Added, and the hive card
+  moved from tenth to second with the named-hive copy.
+
+- **The quickstart had no hive step**, for the one feature that needs a second
+  machine. Added after the supervisor step, with the real `hive discover` output
+  shape; every command in it was checked against `--help` on 0.80.0, and the
+  read-only ones were run.
+
+### Added
+
+- **CI checks documentation links (`Doc links`).** The docs workflow only runs
+  `mkdocs gh-deploy`, after merge, so nothing caught a broken relative link
+  before a reader did. `scripts/check-doc-links.py` resolves every relative link
+  and anchor across all 23 Markdown files, following GitHub's slug rule —
+  whitespace runs are not collapsed, and an explicit `<a id>` counts.
+
 ### Fixed
+
+- **Three documentation links that pointed at nothing.** `CLAUDE.md` and
+  `docs/AGENT_BUS.md` both referenced an `AGENT_BUS.md` supervisor section that
+  has never existed (§10 is Guardrails); they now point at §13, the long-horizon
+  persistence section. `docs/agent-bus.md` linked to a `Trigger A` anchor
+  missing the doubled hyphens GitHub produces where an em-dash and an arrow were.
+  All three were found by the new check, on its first run.
+
 
 - **`cargo test` was rewriting the developer's own hive state (#552).** Every
   path in `src/hive/` resolves `$HOME` at call time and the unit tests do not

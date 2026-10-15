@@ -125,7 +125,7 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 - `mcp.rs` — rmcp stdio server exposing `whoami`, `list_agents`, `publish` (with `parent_hop`), `read_inbox` (with `peek`), plus supervisor tools `submit_task` / `list_tasks` / `task_status`
 - `cli.rs` — `claudectl bus` subcommand (stdio, role bind/list, send, inbox + `--peek`, whoami, stop-hook driver, prune)
 
-**Supervisor** (`src/coord/{supervisor,actuator,verify,resume,tasks,session_policy,hook_events,events,exporter,supervisor_cli}.rs`, `src/ingest.rs`): Durable, verified task lifecycles on top of the bus (see `docs/AGENT_BUS.md#10-supervisor` and README §Supervisor).
+**Supervisor** (`src/coord/{supervisor,actuator,verify,resume,tasks,session_policy,hook_events,events,exporter,supervisor_cli}.rs`, `src/ingest.rs`): Durable, verified task lifecycles on top of the bus (see `docs/AGENT_BUS.md#13-longevity-persistence-across-team-teardown-the-differentiated-layer` and README §Supervisor).
 - `tasks.rs` — `tasks` / `task_attempts` / `task_verifications` / `task_transitions` CRUD + state machine. Every transition writes state + log in one transaction so the ledger invariant "every state has a cause" holds.
 - `supervisor.rs` — **pure** reconciler. Reads desired state from coord, observed state from `Sensors`, returns `Vec<Action>`. No I/O. Health-check → `HealthAction` mapping table. `Unknown` observed status is the no-actuation backstop (RFC §6).
 - `actuator.rs` — Carries out `Action`s. Three-step: insert attempt → perform side effect → log transition. Side-effect failure stops *before* the transition is recorded, so the next tick re-emits.
