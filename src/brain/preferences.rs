@@ -590,7 +590,15 @@ pub fn distill_preferences(decisions: &[DecisionRecord]) -> DistilledPreferences
     let mut pattern_groups: HashMap<(String, Option<String>), Vec<usize>> = HashMap::new();
 
     for (idx, d) in decisions_mut.iter().enumerate() {
-        let tool = d.tool.clone().unwrap_or_else(|| "*".to_string());
+        // Normalize the agent's own tool name into the canonical vocabulary
+        // (#522) so a preference learned in Codex merges with the same
+        // preference learned in Claude Code instead of forming a second,
+        // half-evidenced unit. This is the one seam between a raw decision
+        // record and a distilled pattern, and it is deliberately on the read
+        // side: the log keeps what the agent actually called the tool, so a
+        // wrong table entry is fixed by re-distilling rather than being
+        // baked into the record forever.
+        let tool = d.canonical_tool();
         let cmd_key = extract_command_keyword(d.command.as_deref());
 
         // Tool-level stats
@@ -954,6 +962,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 
@@ -986,6 +995,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 
@@ -1053,6 +1063,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         }
     }
 
@@ -1345,6 +1356,7 @@ mod tests {
                 decision_source: None,
                 rule_name: None,
                 few_shot_ids: Vec::new(),
+                agent_family: None,
             },
             DecisionRecord {
                 timestamp: "2".into(),
@@ -1369,6 +1381,7 @@ mod tests {
                 decision_source: None,
                 rule_name: None,
                 few_shot_ids: Vec::new(),
+                agent_family: None,
             },
         ];
 
@@ -1412,6 +1425,7 @@ mod tests {
                 decision_source: None,
                 rule_name: None,
                 few_shot_ids: Vec::new(),
+                agent_family: None,
             });
         }
         // Then user denies
@@ -1438,6 +1452,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         });
         // Repeat the streak pattern to reach threshold of 2
         for _ in 0..4 {
@@ -1464,6 +1479,7 @@ mod tests {
                 decision_source: None,
                 rule_name: None,
                 few_shot_ids: Vec::new(),
+                agent_family: None,
             });
         }
         decisions.push(DecisionRecord {
@@ -1489,6 +1505,7 @@ mod tests {
             decision_source: None,
             rule_name: None,
             few_shot_ids: Vec::new(),
+            agent_family: None,
         });
 
         let patterns = detect_temporal_patterns(&decisions);

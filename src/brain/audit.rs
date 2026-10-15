@@ -131,6 +131,7 @@ mod tests {
             decision_source: Some("llm".into()),
             rule_name: None,
             few_shot_ids: vec!["dec_0".into()],
+            agent_family: None,
         }
     }
 
