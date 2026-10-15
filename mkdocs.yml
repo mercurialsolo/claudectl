@@ -57,6 +57,7 @@ nav:
       - Cross-Agent Hive: cross-agent-hive.md
       - Agent Bus: AGENT_BUS.md
       - Relay & Hive: relay-and-hive.md
+      - Relay Wire Protocol: relay-protocol.md
       - Relay Discovery: relay-discovery.md
       - Hive Storage: hive-storage.md
       - Agent Protocol: agent-protocol.md

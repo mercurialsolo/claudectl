@@ -2190,10 +2190,11 @@ fn spawn_startup_dials(
                 continue;
             };
 
+            let agreed = conn.features.describe();
             match registry.lock() {
                 Ok(mut reg) => {
                     if reg.add_peer(conn) {
-                        println!("Connected to {id} ({addr})");
+                        println!("Connected to {id} ({addr}; features: {agreed})");
                     } else {
                         // We and the peer dialled each other at the same
                         // moment and the rule kept theirs. Still connected,
