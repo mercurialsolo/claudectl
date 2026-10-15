@@ -4,6 +4,7 @@ pub mod capabilities;
 pub mod cli;
 pub mod crypto;
 pub mod delegation;
+pub mod features;
 /// The hive join handshake — needs the hive module, which `relay` does not imply.
 #[cfg(feature = "hive")]
 pub mod hivejoin;
@@ -98,6 +99,13 @@ pub enum MessageType {
     /// command to resume it. Sent because placement is load-bearing and only
     /// the receiver knows the path it chose.
     SessionReceived,
+
+    /// A `msg_type` this build doesn't know (#559). Never sent: it exists so a
+    /// newer peer's frame parses instead of failing serde, which used to end
+    /// the reader loop and drop the link. `protocol::read_message` logs and
+    /// skips these, so nothing past the reader ever sees one.
+    #[serde(other)]
+    Unknown,
 }
 
 static MSG_COUNTER: AtomicU64 = AtomicU64::new(0);

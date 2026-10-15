@@ -4,6 +4,7 @@ use std::io::{self, BufReader, Write};
 use std::net::TcpStream;
 
 use super::crypto;
+use super::features::{self, Features};
 use super::{MessageType, RelayMessage, epoch_ms, gen_msg_id};
 
 /// Maximum line size: 1 MB.
@@ -23,8 +24,74 @@ pub fn write_message(stream: &mut TcpStream, msg: &RelayMessage) -> io::Result<(
 }
 
 /// Read one RelayMessage from a buffered reader. Returns None on EOF.
-/// Reads byte-by-byte up to MAX_LINE_SIZE to prevent OOM from malicious peers.
-pub fn read_message(reader: &mut BufReader<TcpStream>) -> io::Result<Option<RelayMessage>> {
+///
+/// A frame whose `msg_type` this build doesn't know is logged and skipped,
+/// and the next frame is read (#559). Before, it failed to parse and every
+/// caller treated that as a dead connection, so a newer peer adding any
+/// message type disconnected every older one.
+pub fn read_message<R: io::Read>(reader: &mut BufReader<R>) -> io::Result<Option<RelayMessage>> {
+    loop {
+        let Some(line) = read_line(reader)? else {
+            return Ok(None);
+        };
+        let msg = parse_message(&line)?;
+        if msg.msg_type != MessageType::Unknown {
+            return Ok(Some(msg));
+        }
+        note_unknown(&line, &msg.from_peer);
+    }
+}
+
+/// Parse one frame. Split out so the unknown-type path is testable without a
+/// socket.
+fn parse_message(line: &[u8]) -> io::Result<RelayMessage> {
+    let text = std::str::from_utf8(line).map_err(|e| io::Error::other(format!("utf8: {e}")))?;
+    serde_json::from_str(text.trim()).map_err(|e| io::Error::other(format!("parse: {e}")))
+}
+
+/// Log a skipped frame once per `(peer, msg_type)` for the life of the
+/// process, so a newer peer sending one every heartbeat doesn't flood the log.
+fn note_unknown(line: &[u8], from_peer: &str) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
+
+    let name = serde_json::from_slice::<serde_json::Value>(line)
+        .ok()
+        .and_then(|v| {
+            v.get("msg_type")
+                .and_then(|t| t.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    // A peer chooses both strings; keep what's logged short and printable.
+    let clip = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_graphic())
+            .take(64)
+            .collect()
+    };
+    let key = (clip(from_peer), clip(&name));
+    let first = SEEN
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .map(|mut seen| seen.insert(key.clone()))
+        .unwrap_or(false);
+    if first {
+        crate::logger::log(
+            "RELAY",
+            &format!(
+                "skipping unknown message type '{}' from {} — the peer is newer than this build",
+                key.1, key.0
+            ),
+        );
+    }
+}
+
+/// Read one `\n`-terminated line, byte by byte up to `MAX_LINE_SIZE` so a
+/// peer can't make this side buffer without bound. `None` on EOF before any
+/// byte.
+fn read_line<R: io::Read>(reader: &mut BufReader<R>) -> io::Result<Option<Vec<u8>>> {
     let mut line = Vec::with_capacity(4096);
     let mut byte = [0u8; 1];
 
@@ -50,14 +117,11 @@ pub fn read_message(reader: &mut BufReader<TcpStream>) -> io::Result<Option<Rela
         }
     }
 
+    // A blank line has always read as EOF; keep that.
     if line.is_empty() {
         return Ok(None);
     }
-
-    let text = String::from_utf8(line).map_err(|e| io::Error::other(format!("utf8: {e}")))?;
-    let msg: RelayMessage =
-        serde_json::from_str(text.trim()).map_err(|e| io::Error::other(format!("parse: {e}")))?;
-    Ok(Some(msg))
+    Ok(Some(line))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -107,14 +171,39 @@ pub fn verify_handshake(msg: &RelayMessage, nonce: &str, psk: &[u8; 32]) -> Resu
 
 /// Server: send a handshake acknowledgement.
 pub fn send_handshake_ack(stream: &mut TcpStream, identity: &str, status: &str) -> io::Result<()> {
-    let msg = RelayMessage {
+    write_message(stream, &handshake_ack(identity, status, None))
+}
+
+/// Server: accept a handshake, answering with the protocol and features both
+/// sides have (#559). Returns what was agreed, to store on the connection. A
+/// dialler from before #559 gets the same ack it always did, and no features.
+pub fn send_handshake_ack_negotiated(
+    stream: &mut TcpStream,
+    identity: &str,
+    handshake: &RelayMessage,
+) -> io::Result<Features> {
+    let negotiated = features::negotiate(&handshake.payload);
+    write_message(stream, &handshake_ack(identity, "ok", negotiated.as_ref()))?;
+    Ok(negotiated.map(|(_, f)| f).unwrap_or_default())
+}
+
+fn handshake_ack(
+    identity: &str,
+    status: &str,
+    negotiated: Option<&(u64, Features)>,
+) -> RelayMessage {
+    let mut payload = serde_json::json!({ "status": status });
+    if let Some((proto, agreed)) = negotiated {
+        payload["proto"] = serde_json::json!(proto);
+        payload["features"] = serde_json::json!(agreed.names());
+    }
+    RelayMessage {
         id: gen_msg_id(),
         msg_type: MessageType::HandshakeAck,
         from_peer: identity.to_string(),
         timestamp: epoch_ms(),
-        payload: serde_json::json!({ "status": status }),
-    };
-    write_message(stream, &msg)
+        payload,
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -183,6 +272,8 @@ pub fn send_handshake(
     let mut payload = serde_json::json!({
         "proof": proof,
         "version": env!("CARGO_PKG_VERSION"),
+        "proto": features::PROTO_VERSION,
+        "features": Features::local().names(),
     });
     if let Some(port) = intent.listen_port {
         payload["listen_port"] = serde_json::json!(port);
@@ -222,8 +313,12 @@ pub fn handshake_listen_port(msg: &RelayMessage) -> Option<u16> {
     Some(port as u16)
 }
 
-/// Client: wait for and parse the handshake ack. Returns Ok(()) on success.
-pub fn await_handshake_ack(reader: &mut BufReader<TcpStream>) -> Result<String, String> {
+/// Client: wait for and parse the handshake ack. Returns the acceptor's peer
+/// id and the features agreed for this link (#559); an acceptor from before
+/// #559 means none.
+pub fn await_handshake_ack(
+    reader: &mut BufReader<TcpStream>,
+) -> Result<(String, Features), String> {
     let msg = read_message(reader)
         .map_err(|e| format!("read ack: {e}"))?
         .ok_or("connection closed before ack")?;
@@ -239,7 +334,7 @@ pub fn await_handshake_ack(reader: &mut BufReader<TcpStream>) -> Result<String, 
         .unwrap_or("unknown");
 
     if status == "ok" {
-        Ok(msg.from_peer)
+        Ok((msg.from_peer, features::from_ack(&msg.payload)))
     } else {
         Err(format!("handshake denied: {status}"))
     }
@@ -307,6 +402,182 @@ pub fn heartbeat_full(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn frames(lines: &[&str]) -> BufReader<std::io::Cursor<Vec<u8>>> {
+        let mut bytes = Vec::new();
+        for line in lines {
+            bytes.extend_from_slice(line.as_bytes());
+            bytes.push(b'\n');
+        }
+        BufReader::new(std::io::Cursor::new(bytes))
+    }
+
+    const FUTURE_FRAME: &str = r#"{"id":"1","msg_type":"bus_forward","from_peer":"newer","timestamp":0,"payload":{"to":"x"}}"#;
+    const HEARTBEAT_FRAME: &str =
+        r#"{"id":"2","msg_type":"heartbeat","from_peer":"newer","timestamp":0,"payload":{}}"#;
+
+    /// The #559 regression: a frame from a newer peer used to fail to parse,
+    /// and every caller read that as a dead link.
+    #[test]
+    fn an_unknown_message_type_is_skipped_not_fatal() {
+        let mut reader = frames(&[FUTURE_FRAME, HEARTBEAT_FRAME]);
+        let msg = read_message(&mut reader).unwrap().unwrap();
+        assert_eq!(msg.msg_type, MessageType::Heartbeat);
+        assert_eq!(msg.id, "2");
+    }
+
+    #[test]
+    fn only_unknown_frames_then_eof_reads_as_eof() {
+        let mut reader = frames(&[FUTURE_FRAME, FUTURE_FRAME]);
+        assert!(read_message(&mut reader).unwrap().is_none());
+    }
+
+    #[test]
+    fn malformed_json_is_still_an_error() {
+        let mut reader = frames(&["{not json"]);
+        assert!(read_message(&mut reader).is_err());
+    }
+
+    #[test]
+    fn a_blank_line_still_reads_as_eof() {
+        let mut reader = frames(&[""]);
+        assert!(read_message(&mut reader).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_oversized_line_is_refused() {
+        let big = "x".repeat(MAX_LINE_SIZE + 1);
+        let mut reader = frames(&[&big]);
+        assert!(read_message(&mut reader).is_err());
+    }
+
+    /// Every type this build sends must parse back as itself. A variant that
+    /// serialised to a name the reader mapped to `Unknown` would be silently
+    /// dropped by every peer, including one on this same build.
+    #[test]
+    fn every_message_type_round_trips() {
+        use MessageType::*;
+        // Matching exhaustively means a new variant fails to compile here
+        // until it's added to the list below.
+        let all = [
+            Challenge,
+            Handshake,
+            HandshakeAck,
+            Heartbeat,
+            Ack,
+            DelegateTask,
+            TaskStatus,
+            TaskHandoff,
+            TaskInterrupt,
+            KnowledgeSync,
+            KnowledgeRequest,
+            KnowledgeSnapshot,
+            HiveJoinRequest,
+            HiveJoinResult,
+            KnowledgeRejected,
+            SessionTransfer,
+            SessionReceived,
+        ];
+        for t in all {
+            match t {
+                Challenge | Handshake | HandshakeAck | Heartbeat | Ack | DelegateTask
+                | TaskStatus | TaskHandoff | TaskInterrupt | KnowledgeSync | KnowledgeRequest
+                | KnowledgeSnapshot | HiveJoinRequest | HiveJoinResult | KnowledgeRejected
+                | SessionTransfer | SessionReceived => {}
+                Unknown => unreachable!("never sent"),
+            }
+            let msg = RelayMessage {
+                id: "x".into(),
+                msg_type: t,
+                from_peer: "p".into(),
+                timestamp: 0,
+                payload: serde_json::json!({}),
+            };
+            let line = serde_json::to_string(&msg).unwrap();
+            let mut reader = frames(&[&line]);
+            let back = read_message(&mut reader).unwrap().unwrap();
+            assert_eq!(back.msg_type, t, "{t:?} did not survive the wire");
+        }
+    }
+
+    #[test]
+    fn a_handshake_advertises_protocol_and_features() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let psk = crypto::generate_psk();
+        send_handshake(
+            &mut client,
+            "me",
+            "nonce",
+            &psk,
+            &DialIntent::peer_link(None),
+        )
+        .unwrap();
+        let msg = read_message(&mut BufReader::new(server)).unwrap().unwrap();
+        assert_eq!(
+            msg.payload["proto"],
+            serde_json::json!(features::PROTO_VERSION)
+        );
+        assert!(
+            msg.payload["features"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(features::UNKNOWN_OK))
+        );
+        // The proof still verifies with the new keys present.
+        assert_eq!(verify_handshake(&msg, "nonce", &psk).unwrap(), "me");
+    }
+
+    #[test]
+    fn negotiation_over_a_socket_agrees_on_both_ends() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let psk = crypto::generate_psk();
+
+        send_handshake(
+            &mut client,
+            "dialler",
+            "n",
+            &psk,
+            &DialIntent::peer_link(None),
+        )
+        .unwrap();
+        let mut server_reader = BufReader::new(server.try_clone().unwrap());
+        let handshake = read_message(&mut server_reader).unwrap().unwrap();
+        let server_side =
+            send_handshake_ack_negotiated(&mut server, "acceptor", &handshake).unwrap();
+
+        let (peer, client_side) = await_handshake_ack(&mut BufReader::new(client)).unwrap();
+        assert_eq!(peer, "acceptor");
+        assert_eq!(server_side, client_side);
+        assert!(client_side.has(features::UNKNOWN_OK));
+    }
+
+    /// A 0.80 dialler sends no `proto`. Its ack must look exactly as it did,
+    /// and the link gets no features.
+    #[test]
+    fn a_pre_negotiation_dialler_gets_the_old_ack() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let old_handshake = RelayMessage {
+            id: "h".into(),
+            msg_type: MessageType::Handshake,
+            from_peer: "old".into(),
+            timestamp: 0,
+            payload: serde_json::json!({"proof": "p", "version": "0.80.0"}),
+        };
+        let agreed =
+            send_handshake_ack_negotiated(&mut server, "acceptor", &old_handshake).unwrap();
+        assert!(agreed.is_empty());
+        let ack = read_message(&mut BufReader::new(client)).unwrap().unwrap();
+        assert_eq!(ack.payload, serde_json::json!({"status": "ok"}));
+    }
 
     #[test]
     fn challenge_response_flow() {
