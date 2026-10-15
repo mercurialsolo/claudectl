@@ -172,6 +172,7 @@ claudectl relay send-session mac-mini <session-id>
 claudectl relay sessions              # what went where, and how to resume it
 
 # Remote sessions also appear in the TUI as [worker-id] project-name.
+# Tab on one sshes in and attaches to its tmux pane on that machine.
 # The coordinator's HTTP API serves the same unified view to a dashboard:
 claudectl relay serve --http-port 9876 --auth-token secret
 # GET /api/sessions across all workers. Binds 127.0.0.1 — it is plaintext with

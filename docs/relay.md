@@ -99,8 +99,15 @@ Remote sessions also appear in the dashboard (`claudectl`) and the plain list
 5101    [mac-mini-9f2a1b] claudec… Processing   -        $4.2
 ```
 
-They're read-only from here — the keys that send input or terminate a session
-act on local sessions only. To put work on another machine, delegate it:
+Press `Tab` on one to attach to it: claudectl sshes to that machine and attaches
+to the session's tmux pane — in a new tmux window if the dashboard runs inside
+tmux, otherwise in this terminal until you detach (`Ctrl-b d`). That needs the
+session to run under tmux there, ssh access to the machine as the user running
+it, and claudectl on both sides new enough to report panes and addresses.
+Without them, `Tab` says which one is missing.
+
+The other keys — approve, send input, terminate — act on local sessions only.
+To put work on another machine, delegate it:
 
 ```bash
 claudectl relay delegate mac-mini-9f2a1b "run the full test suite" --cwd ~/code/claudectl
