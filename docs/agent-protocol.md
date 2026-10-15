@@ -1,18 +1,21 @@
 # claudectl Agent Protocol — Design Specification
 
-**Status:** Proposed. Nothing here is built. Written against the code as of `cec14e59`.
+**Status:** Proposed, epic #558. Nothing here is built. Written against the code as of `edaed703`.
 **Scope:** Let any coding agent (Claude Code, Codex CLI, Gemini CLI, OpenCode, Factory Droid, an agent hosted in Zed, and agents nobody has named yet) be observed by claudectl, reach the bus and the hive, and take delegated work. Define the relay wire protocol formally, version it, and make it faster to exchange.
+
+**Relationship to the cross-agent hive (#521, `docs/cross-agent-hive.md`).** That spec makes Codex a full member: canonical tool vocabulary (#522, shipped), provenance (#523), Codex discovery (#524), the adapter registry (#533), the hive MCP surface (#525), Codex write surfaces (#526), and the bus's agent and machine dimensions (#527) and relay bridge (#528). This spec builds on it and doesn't repeat it. It covers agents beyond Codex, delivering into them, running work on them, and the relay wire protocol all of it rides on.
 
 ## Implementation status
 
-| Phase (§11) | Status | Module / artifact |
-| --- | --- | --- |
-| 1. Wire protocol v1: handshake negotiation, unknown-type tolerance | Not started | `src/relay/{protocol,peer,mod}.rs` |
-| 2. Agent manifests + `SessionProvider` (other agents appear in the TUI and fleet) | Not started | `crates/claudectl-core/src/agents/`, `discovery.rs`, `process.rs` |
-| 3. Per-agent delivery into a running agent | Not started | `src/bus/deliver.rs`, plugin/hook installers per agent |
-| 4. ACP runner for delegated work | Not started | `src/relay/worker.rs`, new `src/acp/` |
-| 5. Binary frames, LZ4, delta heartbeats | Not started | `src/relay/{protocol,advertise}.rs` |
-| 6. Bus across machines (`BusForward`) | Not started | `src/relay/`, `src/bus/store.rs` |
+| Phase (§11) | Issue | Status | Module / artifact |
+| --- | --- | --- | --- |
+| 1. Wire protocol v1: handshake negotiation, unknown-type tolerance | #559 | Not started | `src/relay/{protocol,peer,mod}.rs` |
+| 2. Agent manifests (other agents appear in the TUI and fleet) | #563 | Not started, after #533 | `crates/claudectl-core/src/agent/`, `process.rs` |
+| 3. Per-agent delivery into a running agent | #560 | Not started | `src/bus/`, hook installers per agent |
+| 4. ACP runner for delegated work | #561 | Not started | `src/relay/worker.rs`, new `src/acp/` |
+| 5. Binary frames + LZ4 | #562 (answers #503) | Not started | `src/relay/protocol.rs`, `transfer.rs` |
+| 6. Delta heartbeats | #564 | Not started | `src/relay/{advertise,protocol}.rs` |
+| — Bus across machines | #528 (cross-agent hive) | Not started, needs #559 | see §8 |
 
 ---
 
@@ -48,8 +51,9 @@ So the compatibility promise for phase 1 is **any agent on a claudectl node**. A
 
 ### What exists today
 
-- `trait AgentAdapter` with `AgentFamily {ClaudeCode, Codex}` (`src/coord/adapter.rs:93,119`). Only `claudectl coord adapters` calls it (`src/coord/cli.rs:1061`). The Codex adapter discovers nothing (`src/coord/adapter_codex.rs:9`).
-- Everything else is hard-coded to Claude:
+- `trait AgentAdapter` with `AgentFamily {ClaudeCode, Codex}` (`src/coord/adapter.rs:93,119`). Only `claudectl coord adapters` calls it (`src/coord/cli.rs:1061`); #533 routes the rest through it.
+- Codex discovery and monitoring is #524 (PR #532), as a second hand-written family in `claudectl-core/src/agent/codex.rs`. The tool vocabulary that maps each family's tool names is #522, shipped in `agent/vocab.rs`.
+- Before #532, everything else is hard-coded to Claude:
   - discovery reads `~/.claude/sessions/*.json` and `~/.claude/projects/<slug>/*.jsonl` (`crates/claudectl-core/src/discovery.rs:7,17`)
   - the pid filter drops any process whose command line lacks `claude` (`process.rs:97`)
   - the transcript parser expects Anthropic's message schema (`transcript.rs:75-142`)
@@ -57,7 +61,7 @@ So the compatibility promise for phase 1 is **any agent on a claudectl node**. A
 
 ### Proposal: agents are data, not an enum
 
-"Or whatever else" rules out an enum that needs a release per agent. Each agent is described by a manifest. claudectl ships built-ins and reads overrides and additions from `~/.claudectl/agents/<name>.toml`.
+"Or whatever else" rules out an enum that needs a release per agent. Claude and Codex keep their hand-written families. Every agent after them is described by a manifest, and a manifest can also override a built-in. claudectl ships built-ins and reads overrides and additions from `~/.claudectl/agents/<name>.toml`.
 
 ```toml
 # ~/.claudectl/agents/opencode.toml
@@ -91,7 +95,7 @@ Rules:
 
 ### Core seam
 
-`SessionProvider` moves into `claudectl-core` next to `SessionSource` (dependency direction: core can't reach up into `src/coord`). One provider per manifest. `discovery::scan_sessions` becomes the `anthropic` provider, and `LiveSessions` aggregates across providers. `ClaudeSession` gains an `agent: String` field (the manifest `name`). A rename to `AgentSession` is cosmetic and can wait.
+#533 decides where the adapter registry lives. If it lands in `claudectl-core` next to `SessionSource` (core can't reach up into `src/coord`), a manifest is one more registry entry built from data. `ClaudeSession` already gains `agent_family: String` in #532; for a manifest agent it holds the manifest `name`.
 
 `bus`'s `list_agents` (`src/bus/mcp.rs:307`) and the `--self` ancestor walk (`src/bus/roles.rs:116`) read the manifest set instead of matching `"claude"`.
 
@@ -100,7 +104,7 @@ Rules:
 | Agent | Binary | Observe | MCP config | ACP | Delivery hook |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | `claude` | sessions JSON + JSONL (today) | plugin `.mcp.json` | via adapter | `Stop` hook (today) |
-| Codex CLI | `codex` | JSONL format TBD | `~/.codex/config.toml` | via adapter | TBD |
+| Codex CLI | `codex` | rollout JSONL (#524) | `~/.codex/config.toml` | via adapter | TBD |
 | Gemini CLI | `gemini` | TBD | `~/.gemini/settings.json` | native | TBD |
 | OpenCode | `opencode` | TBD | `opencode.json` | native | plugin `event` hook |
 | Factory Droid | `droid` | TBD | `~/.factory/mcp.json` | registry | hooks (experimental since 1.10) |
@@ -234,6 +238,8 @@ Same three payloads. Pure-Rust crates where possible; size is the stripped relea
 
 ## 8. Bus across machines (feature `bus-forward`)
 
+This is #528's to design (`docs/cross-agent-hive.md` §7.3), and the addressing is #527's. What this spec adds is the wire constraint: the bridge's message type goes only to peers that agreed `bus-forward` (§6.2), so it can't disconnect an older peer. The sketch below is one forwarding design #528 can take or replace.
+
 The bus is a SQLite file per machine (`~/.claudectl/bus/bus.db`). A role on the mini can't be addressed from here. Rather than a second transport, a new relay type carries bus messages:
 
 ```json
@@ -249,17 +255,14 @@ The bus is a SQLite file per machine (`~/.claudectl/bus/bus.db`). A role on the 
 
 ## 9. Hive content
 
-Gossip, merge and trust are already agent-neutral (`src/hive/mod.rs:73,384`). The content isn't:
+The cross-agent hive covers the content model:
+- #522 (shipped) normalises tool names to one canonical vocabulary.
+- #523 records each unit's origin agents and adds `ArtifactRequires::agents`.
 
-- `Pattern` and `ToolAccuracy` use Claude tool names (`Bash`, `Edit`, `Write`) (`hive/mod.rs:423-437`).
-- `HookConfig` stores Claude hook event names (`hive/mod.rs:472-482`).
-- Skills and commands install into `~/.claude` (`hive/share.rs:490`).
+Manifests extend both:
 
-Proposal:
-
-- A canonical tool vocabulary (`shell`, `edit`, `write`, `read`, `search`, `fetch`) with a per-manifest mapping. Units are stored canonical, displayed native.
-- `ArtifactRequires` gains `targets: [agent names]`. A unit without `targets` is treated as Claude-only. It isn't guessed to be portable.
-- Install paths come from the manifest's `install.skills_dir`. An empty value means "don't install", not "install to `~/.claude`".
+- **Each manifest gets its own tool-name mapping.** A manifest agent has no hand-written mapping in `agent/vocab.rs`. Its manifest names which canonical tool each native tool is, under the same rule `docs/cross-agent-hive.md` §3.2 sets: map only a genuinely identical operation. A native tool with no listed mapping passes through unnormalised.
+- **Install paths come from `install.skills_dir`.** An empty value means "don't install", not "install to `~/.claude`" (`hive/share.rs:490` today).
 
 ## 10. Security
 
@@ -273,16 +276,18 @@ Proposal:
 
 Each phase is independently shippable and has to be run on two machines before it's called done.
 
-1. **Wire protocol v1.** `proto` + `features` in the handshake, `Unknown` tolerated, the catalogue in §6.5 with fixture tests. Tested by running a new peer against a 0.80 peer and confirming the old one stays connected.
-2. **Agent manifests + `SessionProvider`.** Other agents appear in the TUI, `relay fleet` and `list_agents`, at observe-only depth. Proven on one non-Claude agent first (open question 3).
-3. **Delivery modes.** `plugin-event` for the first non-Claude agent, `terminal` as opt-in fallback.
-4. **ACP runner.** `agent` on `DelegateTask`, `session/new` with the bus attached, `session/cancel` for interrupts.
-5. **Speed.** `frame-bin`, LZ4 with the 1 KiB threshold and 4 MiB bound, `hb-delta`, binary transfer chunks.
-6. **`bus-forward`.** `role@peer` addressing, remote roles in `list_agents`, dedupe by `msg_id`.
+1. **Wire protocol v1 (#559).** `proto` + `features` in the handshake, `Unknown` tolerated, the catalogue in §6.5 with fixture tests. Tested by running a new peer against a 0.80 peer and confirming the old one stays connected.
+2. **Agent manifests (#563, after #533).** Other agents appear in the TUI, `relay fleet` and `list_agents`, at observe-only depth. Proven on one agent beyond Codex first (open question 3).
+3. **Delivery modes (#560).** `plugin-event` for that agent, `terminal` as opt-in fallback.
+4. **ACP runner (#561).** `agent` on `DelegateTask`, `session/new` with the bus attached, `session/cancel` for interrupts.
+5. **Binary frames + LZ4 (#562).** `frame-bin`, the 1 KiB threshold and 4 MiB bound, binary transfer chunks.
+6. **Delta heartbeats (#564).**
+
+#528 (`bus-forward`) can start any time after #559.
 
 ## 12. Open questions
 
 1. **Non-claudectl relay implementations: yes or no?** §6 makes one possible. Supporting one means freezing the catalogue and treating changes as public API. Recommendation: publish the spec, keep the non-goal for now, and revisit when someone asks to implement it.
-2. **One dependency (`lz4_flex`), or keep hand-rolling?** The crypto and base64 are hand-rolled to keep the dependency count down. A hand-rolled LZ4 decoder is small, but it parses bytes from the network. The crate is the safer choice; this is the maintainer's call (#503 left it open).
-3. **Which agent proves the manifest first?** OpenCode (native ACP, documented plugin events) or Codex (already has a stub adapter and a config entry in `src/config.rs`).
+2. **One dependency (`lz4_flex`), or keep hand-rolling?** The crypto and base64 are hand-rolled to keep the dependency count down. A hand-rolled LZ4 decoder is small, but it parses bytes from the network. The crate is the safer choice; this is the maintainer's call (#503, #562).
+3. **Which agent proves the manifest first?** Codex is covered by #524 with hand-written code. The first manifest-only agent should be one with native ACP and documented hooks; OpenCode fits both.
 4. **Does `claudectl` keep the name?** Not for this spec to decide, but phase 2 is when the name stops describing the product.
