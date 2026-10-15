@@ -82,8 +82,8 @@ The `init` wizard walks five phases — weekly budget, local-LLM brain detection
 
 ## Why claudectl
 
-- **Local LLM auto-pilot** — a brain that learns your preferences and auto-approves/denies tool calls. No cloud API.
-- **Hive mind** — knowledge distillation, archiving, and curriculum generation. Connect instances to share learnings across machines.
+- **Hive mind** — name a hive and it becomes joinable: it advertises on the LAN, hands out invites, and queues join requests for you to approve. Members exchange what their brains learned, so a second machine starts with what the first one worked out. A read-only member receives and can never contribute. Nothing is advertised or shared until you name one.
+- **Local LLM auto-pilot** — a brain that learns your preferences and auto-approves/denies tool calls. No cloud API, and every decision stays on your machine.
 - **Self-improving** — detects friction patterns, suggests rules, and gets smarter with every correction.
 - **Multi-session orchestration** — run parallel tasks with dependency ordering and cross-session context routing.
 - **Health monitoring** — catches cognitive decay, cost spikes, error loops, and context saturation before they waste money.
@@ -144,6 +144,105 @@ claudectl --brain --insights        # View current insights
 ```
 
 Detects: friction patterns, error loops, context blowouts, missing rules, accuracy gaps, cost trends. Only new insights are surfaced — the system tracks what you've already seen. Use `/auto-insights` in the Claude Code plugin.
+
+## Hive Mind & Relay
+
+The brain distills your decisions into shareable knowledge. Connect instances across machines to build a convergent hive mind — then move work, or a whole conversation, to whichever machine is free.
+
+```bash
+# Hive knowledge is built-in — view what the brain has learned
+claudectl hive status
+claudectl hive knowledge
+claudectl hive distill                # Condense archive into curriculum
+
+# Relay for cross-machine networking is enabled by default
+claudectl relay invite                # Generate an invite code
+claudectl relay join YCU-AIG-EAH-CC7-GUK-RYW-ZB4  # Join from another machine
+claudectl relay discover              # Scan LAN for nearby instances
+claudectl relay install-agent         # Keep the relay running across logout
+
+# Run a relay on each machine, then see every session on either one
+claudectl relay serve                 # leave running on both machines
+claudectl relay fleet                 # every session across the cluster
+claudectl relay delegate mac-mini "run the full test suite" --cwd ~/code/app
+
+# Move a conversation to another machine and carry on there — or press `S`
+# on the session in the TUI and pick the machine from the list
+claudectl relay send-session mac-mini <session-id>
+claudectl relay sessions              # what went where, and how to resume it
+
+# Remote sessions also appear in the TUI as [worker-id] project-name.
+# The coordinator's HTTP API serves the same unified view to a dashboard:
+claudectl relay serve --http-port 9876 --auth-token secret
+# GET /api/sessions across all workers. Binds 127.0.0.1 — it is plaintext with
+# a bearer token, so forward the port for an off-machine dashboard.
+```
+
+### Name a hive, and it becomes joinable
+
+By default a hive has no name — it is whatever your relay peers happen to be. Naming one makes it something you can advertise, find and join *as such*, and lets you decide who gets in:
+
+```bash
+claudectl hive identity set --name barrys-hive --join-policy ask
+claudectl hive discover               # named hives on the LAN, with peer/unit counts
+claudectl hive invite                 # a link, a code, or a word phrase (--qr, --words)
+claudectl hive join cctl://hive/hv_3a9f21?a=...   # from another machine
+claudectl hive requests               # who is waiting; approve <peer> / deny <peer>
+```
+
+**The host decides, not the link.** With `--join-policy ask`, holding an invite gets you queued for approval rather than admitted. `invite` admits a paired peer that asks; `open` warns you about what it exposes and records your confirmation before it will advertise as open.
+
+**Read-only membership.** A `hive.read` capability grant admits someone who receives your hive's knowledge and can never contribute any — useful for a contractor or a colleague you want to teach without being taught by:
+
+```bash
+claudectl access grant --scopes hive.read --project barrys-hive --label "alice, read-only"
+# alice, with both the invite and the grant:
+claudectl hive join <invite> --grant cctl_gr_cf827c_...
+```
+
+A hive with no name advertises nothing and gates nothing, so none of this changes anything until you opt in.
+
+Knowledge categories (best practices, techniques, workflow patterns) propagate between hive members. Personal patterns (time-of-day habits, cost tolerance) stay local. You control what's shared:
+
+```toml
+[hive]
+share_categories = ["best_practice", "technique"]
+exclude_tools = ["Write"]
+max_units = 500
+max_prompt_units = 20
+```
+
+> **How propagation works.** Both ends of a relay connection offer each other whatever the other has not been sent yet, every 12 seconds, incrementally. One timer covers connect, reconnect, a peer approved after it asked to join, and a unit distilled while the link was down — a machine that joins late catches up on the next tick. Accepted units are re-offered onward up to a hop cap, so knowledge crosses a mesh it was not directly connected to. What it needs is a live relay connection: one machine running `relay serve`, the other dialling it.
+
+See the [full Relay & Hive Mind guide](docs/relay.md).
+
+## Open Cluster — let someone ask about your project
+
+A relay peer is symmetric: it reads your sessions, delegates to you, interrupts you. A **capability grant** is the opposite — scoped, expiring, revocable, read-only. Someone outside your trust boundary (or their Claude) can ask *"how is auth structured?"* and get cited answers, with no way to write, execute, delegate or interrupt.
+
+```bash
+# Mint a token for a third party — prints once, store it then
+claudectl access grant --project claudectl \
+  --label "acme integration review" \
+  --scopes project.query \
+  --expires 30d
+
+claudectl access list                 # every grant, its state, uses, last use
+claudectl access audit gr_a38487      # what that grant actually asked for
+claudectl access revoke gr_a38487     # immediate, nothing to restart
+
+# Serve the repo you're in — one process, one project
+claudectl query serve                 # 127.0.0.1:8787 by default
+claudectl query stdio                 # same surface over MCP
+```
+
+Answers are **verbatim doc spans with citations**, never generated prose. They come only from a pre-built index of what git tracks, minus a deny-list covering `.env*`, ssh keys, transcripts, `.claudectl/`, databases and more. Source bodies are never indexed — only `//!` headers, `///` docs and public signatures. There is no code path from a query to an unindexed file, and no write verb anywhere in the surface.
+
+A token for one project returns an opaque `404` for every other. Each grant carries its own rate limit and daily budget, so one noisy caller can't spend another's.
+
+Classification is optional and off unless you set `TYPESAFE_API_KEY`. When on, it routes questions — deny, decline, answer, or escalate to you — but it is never the boundary: it runs *after* scopes and budgets, and answers still come only from the index. Remove it and the surface is blunter, not less safe. It is the one thing in claudectl that sends anything off-machine: the question and one paragraph of `CLAUDE.md`, never index contents or session data.
+
+See [Capability Grants](docs/access.md) and the [Open Cluster spec](docs/open-cluster.md).
 
 ## Claude Code Plugin
 
@@ -313,105 +412,6 @@ Three load-bearing properties from the design spec:
 Metrics (team observability): `claudectl supervisor metrics` serves a Prometheus `/metrics` endpoint on `127.0.0.1:9464` (`claudectl_tasks_by_state`, `claudectl_fleet_cost_usd_total`, `claudectl_retries_total`, `claudectl_verifier_pass_rate`) that Grafana or Datadog scrape with no claudectl-specific glue. Each scrape reads the coord DB fresh (WAL), so it runs safely alongside the reconciler. A ready dashboard and the full recipe live in [docs/team-observability.md](docs/team-observability.md).
 
 Policy as code (team guardrails): commit a `.claudectl/policy.toml` to the repo and its `[deny]` commands/tools are enforced by the brain gate at the highest precedence — a developer can't soften them by editing local config. Scaffold with `claudectl --policy init`, inspect with `claudectl --policy`. See [docs/policy-as-code.md](docs/policy-as-code.md).
-
-## Hive Mind & Relay
-
-The brain distills your decisions into shareable knowledge. Connect instances across machines to build a convergent hive mind — then move work, or a whole conversation, to whichever machine is free.
-
-```bash
-# Hive knowledge is built-in — view what the brain has learned
-claudectl hive status
-claudectl hive knowledge
-claudectl hive distill                # Condense archive into curriculum
-
-# Relay for cross-machine networking is enabled by default
-claudectl relay invite                # Generate an invite code
-claudectl relay join YCU-AIG-EAH-CC7-GUK-RYW-ZB4  # Join from another machine
-claudectl relay discover              # Scan LAN for nearby instances
-claudectl relay install-agent         # Keep the relay running across logout
-
-# Run a relay on each machine, then see every session on either one
-claudectl relay serve                 # leave running on both machines
-claudectl relay fleet                 # every session across the cluster
-claudectl relay delegate mac-mini "run the full test suite" --cwd ~/code/app
-
-# Move a conversation to another machine and carry on there — or press `S`
-# on the session in the TUI and pick the machine from the list
-claudectl relay send-session mac-mini <session-id>
-claudectl relay sessions              # what went where, and how to resume it
-
-# Remote sessions also appear in the TUI as [worker-id] project-name.
-# The coordinator's HTTP API serves the same unified view to a dashboard:
-claudectl relay serve --http-port 9876 --auth-token secret
-# GET /api/sessions across all workers. Binds 127.0.0.1 — it is plaintext with
-# a bearer token, so forward the port for an off-machine dashboard.
-```
-
-### Name a hive, and it becomes joinable
-
-By default a hive has no name — it is whatever your relay peers happen to be. Naming one makes it something you can advertise, find and join *as such*, and lets you decide who gets in:
-
-```bash
-claudectl hive identity set --name barrys-hive --join-policy ask
-claudectl hive discover               # named hives on the LAN, with peer/unit counts
-claudectl hive invite                 # a link, a code, or a word phrase (--qr, --words)
-claudectl hive join cctl://hive/hv_3a9f21?a=...   # from another machine
-claudectl hive requests               # who is waiting; approve <peer> / deny <peer>
-```
-
-**The host decides, not the link.** With `--join-policy ask`, holding an invite gets you queued for approval rather than admitted. `invite` admits a paired peer that asks; `open` warns you about what it exposes and records your confirmation before it will advertise as open.
-
-**Read-only membership.** A `hive.read` capability grant admits someone who receives your hive's knowledge and can never contribute any — useful for a contractor or a colleague you want to teach without being taught by:
-
-```bash
-claudectl access grant --scopes hive.read --project barrys-hive --label "alice, read-only"
-# alice, with both the invite and the grant:
-claudectl hive join <invite> --grant cctl_gr_cf827c_...
-```
-
-A hive with no name advertises nothing and gates nothing, so none of this changes anything until you opt in.
-
-Knowledge categories (best practices, techniques, workflow patterns) propagate between hive members. Personal patterns (time-of-day habits, cost tolerance) stay local. You control what's shared:
-
-```toml
-[hive]
-share_categories = ["best_practice", "technique"]
-exclude_tools = ["Write"]
-max_units = 500
-max_prompt_units = 20
-```
-
-> **How propagation works.** Both ends of a relay connection offer each other whatever the other has not been sent yet, every 12 seconds, incrementally. One timer covers connect, reconnect, a peer approved after it asked to join, and a unit distilled while the link was down — a machine that joins late catches up on the next tick. Accepted units are re-offered onward up to a hop cap, so knowledge crosses a mesh it was not directly connected to. What it needs is a live relay connection: one machine running `relay serve`, the other dialling it.
-
-See the [full Relay & Hive Mind guide](docs/relay.md).
-
-## Open Cluster — let someone ask about your project
-
-A relay peer is symmetric: it reads your sessions, delegates to you, interrupts you. A **capability grant** is the opposite — scoped, expiring, revocable, read-only. Someone outside your trust boundary (or their Claude) can ask *"how is auth structured?"* and get cited answers, with no way to write, execute, delegate or interrupt.
-
-```bash
-# Mint a token for a third party — prints once, store it then
-claudectl access grant --project claudectl \
-  --label "acme integration review" \
-  --scopes project.query \
-  --expires 30d
-
-claudectl access list                 # every grant, its state, uses, last use
-claudectl access audit gr_a38487      # what that grant actually asked for
-claudectl access revoke gr_a38487     # immediate, nothing to restart
-
-# Serve the repo you're in — one process, one project
-claudectl query serve                 # 127.0.0.1:8787 by default
-claudectl query stdio                 # same surface over MCP
-```
-
-Answers are **verbatim doc spans with citations**, never generated prose. They come only from a pre-built index of what git tracks, minus a deny-list covering `.env*`, ssh keys, transcripts, `.claudectl/`, databases and more. Source bodies are never indexed — only `//!` headers, `///` docs and public signatures. There is no code path from a query to an unindexed file, and no write verb anywhere in the surface.
-
-A token for one project returns an opaque `404` for every other. Each grant carries its own rate limit and daily budget, so one noisy caller can't spend another's.
-
-Classification is optional and off unless you set `TYPESAFE_API_KEY`. When on, it routes questions — deny, decline, answer, or escalate to you — but it is never the boundary: it runs *after* scopes and budgets, and answers still come only from the index. Remove it and the surface is blunter, not less safe. It is the one thing in claudectl that sends anything off-machine: the question and one paragraph of `CLAUDE.md`, never index contents or session data.
-
-See [Capability Grants](docs/access.md) and the [Open Cluster spec](docs/open-cluster.md).
 
 ## Orchestrate Sessions
 

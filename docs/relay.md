@@ -161,7 +161,7 @@ Consequences worth knowing:
 
 - **A relay must be running on each machine.** `relay fleet` with no snapshot
   falls back to local sessions and tells you so. On macOS,
-  [`relay install-agent`](#keeping-the-relay-alive) keeps one running across
+  [`relay install-agent`](#keeping-the-background-stack-alive) keeps one running across
   logout and reboot; otherwise `relay serve` is a foreground process that stops
   when its terminal does.
 - **A peer that stops reporting disappears** after 90s rather than lingering as
