@@ -210,12 +210,16 @@ impl App {
     }
 
     pub(super) fn handle_switch_terminal(&mut self) {
-        if let Some(session) = self.selected_session() {
+        if let Some(session) = self.selected_session().cloned() {
+            if session.is_remote() {
+                self.status_msg = self.attach_remote(&session);
+                return;
+            }
             if let Some(reason) = session.unactionable_reason() {
                 self.status_msg = reason.into();
                 return;
             }
-            match terminals::switch_to_terminal(session) {
+            match terminals::switch_to_terminal(&session) {
                 Ok(()) => {
                     self.status_msg = format!("Switched to {}", session.display_name());
                 }
@@ -226,6 +230,26 @@ impl App {
         } else {
             self.status_msg = "No session selected".into();
         }
+    }
+
+    /// Attach to a remote session's tmux pane over ssh. Inside tmux it opens a
+    /// new local window, leaving the dashboard where it was; anywhere else it
+    /// queues the command for the render loop, which hands it this terminal
+    /// until the user detaches.
+    fn attach_remote(&mut self, session: &ClaudeSession) -> String {
+        let argv = match terminals::remote_attach_argv(session) {
+            Ok(argv) => argv,
+            Err(e) => return e,
+        };
+        let name = session.display_name().to_string();
+        if std::env::var_os("TMUX").is_some() {
+            return match terminals::open_in_tmux_window(&name, &argv) {
+                Ok(()) => format!("Attached to {name} in a new tmux window"),
+                Err(e) => format!("Error: {e}"),
+            };
+        }
+        self.pending_foreground = Some(argv);
+        format!("Attaching to {name} — detach with Ctrl-b d to return")
     }
 
     pub(super) fn submit_launch_form(&mut self) {

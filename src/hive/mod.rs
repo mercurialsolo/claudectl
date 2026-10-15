@@ -725,6 +725,25 @@ pub fn gen_ku_id() -> String {
     format!("ku_{epoch}_{seq}")
 }
 
+/// Whether to skip a write that would land in the real `~/.claudectl/hive`.
+///
+/// Every path in this module is derived from `$HOME` at call time, and the unit
+/// tests do not override it — mutating `HOME` process-wide would race, since
+/// cargo runs tests on parallel threads. So before #552 a `cargo test` run
+/// rewrote the developer's own hive state: `knowledge.jsonl` replaced with
+/// fixture units (`HiveStore::save` persists whatever the test store holds, so
+/// this was real data loss, not noise), plus `trust.json`, `collisions.jsonl`,
+/// `resolutions.jsonl` and `conflicts.jsonl`.
+///
+/// The ambient entry points return early in a test build. Tests that need to
+/// assert on persistence use the explicit-path variants — `save_to`,
+/// `load_from`, `log_conflict_in` — which is where that behaviour belongs
+/// anyway.
+#[inline]
+pub(crate) fn skip_ambient_write() -> bool {
+    cfg!(test)
+}
+
 pub fn epoch_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

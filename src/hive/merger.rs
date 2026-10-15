@@ -326,6 +326,9 @@ fn resolutions_path() -> PathBuf {
 /// Append a merge resolution to the audit log. Best-effort — failures are
 /// swallowed so a logging hiccup never blocks gossip.
 pub fn log_resolution(resolution: MergeResolution) {
+    if super::skip_ambient_write() {
+        return;
+    }
     let path = resolutions_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -342,12 +345,15 @@ pub fn log_resolution(resolution: MergeResolution) {
         "loser_score": resolution.loser_score,
         "rationale": resolution.rationale,
     });
+    // One `write_all`, not `writeln!` — see `store::log_conflict_in` for why:
+    // an unbuffered `File` emits the value and the newline as two writes, and a
+    // concurrent appender lands between them (#552).
+    let Ok(mut line) = serde_json::to_string(&record) else {
+        return;
+    };
+    line.push('\n');
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(
-            file,
-            "{}",
-            serde_json::to_string(&record).unwrap_or_default()
-        );
+        let _ = file.write_all(line.as_bytes());
     }
 }
 

@@ -512,6 +512,16 @@ impl QueryCore {
             }
             Operation::GetDoc => Scope::ProjectDocs(self.project.clone()),
         };
+        // This surface answers questions and returns verbatim spans; it must
+        // never be satisfiable by a scope that can *act*. The derivation above
+        // already makes that true — it only ever builds a project scope from
+        // the served project — but #537 added the grammar's first non-read-only
+        // verb (`credential.use`), so the property is asserted here rather than
+        // left as a consequence of how `want` happens to be written today.
+        debug_assert!(
+            want.is_read_only(),
+            "the query surface required a non-read-only scope: {want}"
+        );
 
         let grant = match self
             .store

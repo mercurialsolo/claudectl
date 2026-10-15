@@ -4,6 +4,289 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **The scope grammar gains `credential.use`, and the read-only claim becomes
+  checkable (#537, step 1).** The access model's point is that a grant lets
+  someone look and never touch, and `src/access/scope.rs` asserted that as a
+  blanket comment: "every verb is read-only".
+
+  #537 needs one verb that is not — a delegated task has to reach a credential
+  the owner holds, by asking the owner's machine to perform the authenticated
+  step, so the secret never moves. The issue asks for the grammar to be
+  "extended, not loosened", so rather than letting that comment quietly become
+  false: `Scope::is_read_only` states the property per scope, and the read-only
+  surfaces assert it. `query::core` derives the scope it requires from the
+  project it serves, so a `credential.use` grant could never have satisfied it —
+  the assertion makes that a property of the code rather than a consequence of
+  how the derivation happens to be written today.
+
+  The scope parses but is **not mintable yet**, on the `fleet.read` precedent: a
+  capability nothing honours must not be issuable, or an owner could hand out a
+  grant that authorises nothing. The delivery mechanism is decided — the grant
+  rides `DelegateTask` and the persisted copy keeps only its id — and the
+  surface follows.
+
+### Fixed
+
+- **`docs/access.md` still listed `hive.read` as unissuable.** #435 made it
+  mintable once #432 gave hives a name to qualify on. The scope table now also
+  says which verbs are read-only, since that stopped being all of them.
+
+### Changed
+
+- **The hive is where the README leads, not section eleven.** `Hive Mind &
+  Relay` and `Open Cluster` now follow `Local LLM Brain` directly, so "a brain
+  that learns from you" is immediately followed by "and carries it to every
+  machine". Everything that moved down is machinery — plugin, headless, coord,
+  bus, supervisor.
+
+  The "Why claudectl" hive bullet described the pipeline ("knowledge
+  distillation, archiving, and curriculum generation") rather than what you get.
+  It now says a hive is something you name, that advertises, invites and queues
+  join requests, and it leads the list.
+
+- **The website grid was missing two shipped epics.** `Supervisor` — the durable
+  ledger, three verifier kinds, resume-after-death — and `Open Cluster` both had
+  README sections, doc pages in the nav, and no card. Added, and the hive card
+  moved from tenth to second with the named-hive copy.
+
+- **The quickstart had no hive step**, for the one feature that needs a second
+  machine. Added after the supervisor step, with the real `hive discover` output
+  shape; every command in it was checked against `--help` on 0.80.0, and the
+  read-only ones were run.
+
+### Added
+
+- **CI checks documentation links (`Doc links`).** The docs workflow only runs
+  `mkdocs gh-deploy`, after merge, so nothing caught a broken relative link
+  before a reader did. `scripts/check-doc-links.py` resolves every relative link
+  and anchor across all 23 Markdown files, following GitHub's slug rule —
+  whitespace runs are not collapsed, and an explicit `<a id>` counts.
+
+### Fixed
+
+- **Three documentation links that pointed at nothing.** `CLAUDE.md` and
+  `docs/AGENT_BUS.md` both referenced an `AGENT_BUS.md` supervisor section that
+  has never existed (§10 is Guardrails); they now point at §13, the long-horizon
+  persistence section. `docs/agent-bus.md` linked to a `Trigger A` anchor
+  missing the doubled hyphens GitHub produces where an em-dash and an arrow were.
+  All three were found by the new check, on its first run.
+
+
+- **`cargo test` was rewriting the developer's own hive state (#552).** Every
+  path in `src/hive/` resolves `$HOME` at call time and the unit tests do not
+  override it — mutating `HOME` process-wide would race, since cargo runs tests
+  on parallel threads. So a test run reached straight into `~/.claudectl/hive`:
+
+  - `knowledge.jsonl` was **replaced**, not appended to. `HiveStore::save`
+    persists whatever the in-memory store holds, and `GossipEngine::handle_sync`
+    and `handle_snapshot` call it — so two gossip tests overwrote real distilled
+    knowledge with fixture units. That is data loss, not noise.
+  - `trust.json`, `collisions.jsonl` and `resolutions.jsonl` likewise.
+
+  The ambient entry points now return early in a test build, through one
+  documented choke point (`hive::skip_ambient_write`). Tests that assert on
+  persistence use the explicit-path variants — `save_to`, `load_from`,
+  `log_conflict_in` — which is where that belongs. A test walks the real
+  directory and fails if a test run changes a byte of it; it was confirmed to
+  fail with the guard disabled.
+
+  Three files outside this module are still written by the suite —
+  `access/audit.jsonl`, `coord/coord.db` and `relay/fleet.json` — tracked in
+  #553.
+
+- **The hive's three append-only logs were not append-atomic (#552).**
+  `conflicts.jsonl`, `resolutions.jsonl` and `collisions.jsonl` were each
+  written with `writeln!` on an unbuffered `File`, which emits the JSON and the
+  newline as two separate writes. `O_APPEND` makes each write atomic, not the
+  pair, so a concurrent logger landed its record in between and two records
+  shared a line — in a file named `.jsonl`, which anything line-based then
+  mis-parses.
+
+  Measured on this machine before the fix: 1,771 records across 1,618 lines,
+  131 of them doubled up. A test that appends from eight threads reproduces it
+  at 303 lines for 480 records and passes once each record is written as a
+  single buffer.
+
+- **`hive status` undercounted its own conflict log.** It counted lines, so it
+  reported 1,618 against 1,771 actual records. It now counts records with
+  `serde_json`'s streaming reader, which reads concatenated objects correctly —
+  so a file written before the fix reports honestly instead of needing a
+  migration, and a truncated tail counts the whole records before it rather
+  than panicking.
+
+### Added
+
+- **The orchestrating half of the stack can stay up (#546, closes it).**
+  `relay install-agent` installed a service for `relay serve` and nothing else,
+  so the brain and the supervisor — the part that actually coordinates — were
+  started by hand and stopped with the terminal.
+
+  `relay install-agent --headless` now installs a second service for them, a
+  launchd agent on macOS and a `systemd --user` unit on Linux. `--brain` and
+  `--auto-run` are off by default: `--headless` alone still runs the supervisor
+  reconciler and the coordination loop, and a service installed once at login
+  that executes brain decisions unasked is something you should have to ask for
+  by name. `--auto-run` implies `--brain`, because clap accepts it alone and it
+  does nothing without the brain that produces the suggestions.
+
+  **It is one service, not two.** #546 describes this half as "`--headless
+  --brain --auto-run`, `supervisor run`", but there is no `supervisor run`
+  daemon — that subcommand submits a `tasks.toml` and exits. The reconciler and
+  the actuator tick inside `run_headless` next to the brain.
+
+- **`doctor` can tell a wedged headless service from a running one.** The
+  relay's liveness check (0.80.0) read `fleet.json`, which the headless process
+  does not write — so reusing it would have reported every headless service as
+  wedged. It now writes `~/.claudectl/headless/heartbeat.json` every tick, with
+  the same atomic temp + rename and the same staleness constant as the fleet
+  snapshot, and `doctor` fails when a loaded service has stopped writing it.
+
+  One file on both platforms rather than log mtime on macOS and `journalctl` on
+  Linux, because a check that works differently per platform is one nobody
+  trusts. Not-installed stays an advisory on both services: a checklist that
+  nags about an opt-in feature is one people stop reading.
+
+### Fixed
+
+- **Re-running `install-agent` no longer restarts a service nothing changed
+  about.** It used to unload and reload unconditionally, which was harmless when
+  the relay was the only service and is not once `--headless` exists: adding the
+  second service would tear down a working relay as a side effect. An already
+  running service whose definition is byte-identical is now left strictly alone.
+
+- **`docs/relay.md` still told Linux users to hand-write a unit file**, under a
+  heading saying there was no installer on their platform — 0.80.0 shipped one
+  and the page was not updated. Same shape as the doc rot #513 cleared out: a
+  caveat that outlived its fix.
+
+### Fixed
+
+- **Four version numbers that had stopped tracking the crate.** The release
+  bump moved the three `Cargo.toml` files and nothing else, so everything
+  version-stamped outside them quietly rotted:
+
+  - `claude-plugin/.claude-plugin/plugin.json` sat at **0.53.0** for 27
+    releases. It is `include_str!`d into the binary, so this is the version a
+    user sees after `claudectl init` or `brew upgrade` — not a repo-only
+    detail. Its `description` was also still the pre-hive one.
+  - `claude-plugin/skills/session-monitoring/SKILL.md` sat at **0.48.0**.
+  - `packaging/aur/claudectl-bin/{PKGBUILD,.SRCINFO}` sat at **0.16.0**, 64
+    releases back, with checksums for a tarball nobody installs. Re-rendered at
+    0.80.0 through the documented script, and the source checksum verified by
+    downloading the release tarball rather than copied from the asset listing.
+  - `packaging/homebrew-core/claudectl.rb` pointed at the **v0.49.3** source
+    archive.
+
+  Both plugin versions are now asserted against `CARGO_PKG_VERSION` by tests,
+  which is the part that keeps this fixed: the two packaging templates can only
+  be updated after a tag exists, but the plugin ships *with* the binary and has
+  no such excuse. The guards were checked by reverting each version and
+  confirming the failure, not just by watching them pass.
+
+## [0.80.0] - 2026-10-14
+
+### Added
+
+- **Peers advertise what they can run, and a delegation is refused before it
+  spends (#536).** `relay serve` probes this machine once and puts the result
+  on every heartbeat; `relay delegate --requires "cargo>=1.88,claude:auth"`
+  checks the target's manifest and refuses *locally*, with the specific
+  missing capability, before any message goes on the wire.
+
+  Until now work was placed on faith. The worker spawns `claude`, so a missing
+  binary and a missing working directory surfaced as the same `ENOENT` — and a
+  logged-out `claude` was worse: it ran, returned "Not logged in" as the task
+  result, and the caller was billed for the round trip.
+
+  Probed, not declared, because a manifest a peer asserts without running
+  anything is the same mistake as #433/#434/#455 in a new place. Unknown is
+  never treated as missing: a peer that has not advertised, and a tool it never
+  probed, both pass, so an older peer stays usable and the failure mode is
+  one-directional — this can let through work that then fails the old way, and
+  can never block work that would have succeeded.
+
+  Credential detection is three-valued and platform-aware. On macOS the
+  Keychain is authoritative, so "nowhere to be found" is a real "logged out".
+  On Linux an absent credentials file reads as *unknown*, because the storage
+  location has not been verified there and a wrong "logged out" would refuse
+  work on every Linux worker.
+
+- **Peers advertise where they can be reached (#541).** An address used to be
+  learned only from a path already in use — we dial the one address we know,
+  and the acceptor records the source address of whoever dialled in. So a peer
+  could not discover a second route to a peer it could no longer reach, which
+  is exactly when it needs one.
+
+  Each peer now puts its own reachable addresses on the heartbeat
+  (`getifaddrs`, filtered to routable unicast; loopback, link-local and
+  unspecified dropped, private ranges and `100.64/10` kept, since an overlay is
+  where the surviving route usually lives). Advertised addresses never displace
+  one that has actually worked.
+
+- **A real service on Linux, not a printed recipe (#546, partial).**
+  `relay install-agent` wrote a launchd plist on macOS and, everywhere else,
+  printed a systemd recipe for the operator to type in. It now writes
+  `~/.config/systemd/user/claudectl-relay.service`, enables it, and runs
+  `loginctl enable-linger` so it survives logout the way a launchd agent does.
+
+- **`doctor` tells a wedged daemon from a running one (#546, partial).** A
+  service manager restarts a process that *exited*; neither launchd nor systemd
+  notices one that is alive and doing nothing, and `doctor` only asked whether
+  the service was loaded. A loaded service whose fleet snapshot has gone stale
+  is now a Fail naming the log and the fix.
+
+### Fixed
+
+- **`hive join` works when a relay pairing already exists (#518).** Two
+  machines paired with `relay pair` / `relay accept` could not then join a hive
+  by invite: the host authenticates against the key stored for the peer id and
+  never falls through to the invite's pending key, so the join was refused with
+  `handshake denied` and a "no matching PSK" line in a log that is off by
+  default. The joiner now tries the pairing it already holds before the
+  invite's key, and persists whichever actually authenticated — the previous
+  code saved the invite's key regardless, which would overwrite a working
+  pairing with one the host rejects.
+
+- **A peer that changes network is found again (#506).** `lan::start_listener`
+  was complete and had no callers, so a moved peer stayed unreachable until a
+  human happened to run `relay discover`. `relay serve` now listens as well as
+  announces and records new addresses for already-paired peers — pairing being
+  the filter, since announcements are unauthenticated.
+
+  Holding the discovery port continuously stops a second process getting its
+  own copy of each announcement (`SO_REUSEPORT` load-balances datagrams rather
+  than duplicating them), so the serving process publishes what it hears and
+  `relay discover` reads that when a relay is running. That also makes
+  `discover` immediate instead of a six-second scan.
+
+- **A peer unreachable at startup is retried (#543).** A failed startup dial
+  dropped the peer entirely, and the reconnect loop only acts on peers already
+  in the registry — so nothing retried it until the process restarted, and the
+  addresses learned by #506 and #541 had nothing to act on. A failed dial now
+  leaves a placeholder that the existing backoff drives, and a real connection
+  always displaces it.
+
+### Changed
+
+- **The project leads with the hive.** New positioning across every public
+  surface (#513–#515), and the README hero is now a real two-machine capture:
+  one GIF of two Macs forming a hive, one of a migration spread across them
+  (#517, #520). The Homebrew formula was the last surface still describing a
+  swarm with a local-LLM brain; it is rendered from this repo, so it moves with
+  this release — trimmed to the tagline's second half, since `desc` is audited
+  at 80 characters and the full line is 125.
+
+- Docs corrected where they had drifted (#513): a caveat that outlived its fix
+  by eleven releases, feature-gate wording that survived the defaults change,
+  and blanket "no network" claims that are false once relay, hive or the
+  optional classifier is on.
+
+- `.gitignore` no longer swallows committed assets (#535). `*.gif` and `*.cast`
+  were blanket rules, so `git add -A` skipped every asset in silence — which is
+  how #515 shipped a README pointing at a GIF that was never committed.
+
 ## [0.79.0] - 2026-10-10
 
 ### Added

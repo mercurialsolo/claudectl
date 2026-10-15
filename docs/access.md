@@ -159,15 +159,22 @@ Error: … "scope 'project.query:secrets' is scoped to 'secrets' but --project i
 
 Duplicates collapse and whitespace is tolerated.
 
-| Scope | Issuable today |
-| --- | --- |
-| `project.query:<project>` | Yes |
-| `project.docs:<project>` | Yes |
-| `fleet.read:<project>` | No — open-cluster Q8: defined, issued to nobody |
-| `hive.read:<hive>` | No — needs named-hive identity (#424) |
-| `hive.join:<hive>` | No — needs named-hive identity (#424) |
+| Scope | Read-only | Issuable today |
+| --- | --- | --- |
+| `project.query:<project>` | Yes | Yes |
+| `project.docs:<project>` | Yes | Yes |
+| `hive.read:<hive>` | Yes | Yes — since #435, now that #432 gave hives a name to qualify on |
+| `fleet.read:<project>` | Yes | No — open-cluster Q8: defined, issued to nobody |
+| `hive.join:<hive>` | Yes | No — a hive is joined with an invite, and `hive.read` grants membership without contribution |
+| `credential.use:<name>` | **No** | No — the callback surface that honours it is not shipped (#537) |
 
-Asking for one of the last three is an error that says why:
+`credential.use` is the one verb in the grammar that *acts*: it asks the
+owner's machine to perform a configured credentialed step for a delegated
+task, so the secret never leaves the owner. Everything else can only observe.
+The read-only surfaces assert the distinction rather than assume it — see
+`Scope::is_read_only`.
+
+Asking for an unissuable scope is an error that says why:
 
 ```
 $ claudectl access grant --project claudectl --label x --scopes fleet.read
