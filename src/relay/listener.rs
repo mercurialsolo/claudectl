@@ -312,11 +312,30 @@ fn handle_incoming(
         }
     }
 
-    // Step 4: Send ack
-    if let Err(e) = protocol::send_handshake_ack(&mut write_stream, identity.as_str(), "ok") {
-        crate::logger::log("RELAY", &format!("ack send failed to {peer_addr}: {e}"));
-        return false;
-    }
+    // Step 4: Send ack, with the protocol and features both sides have (#559)
+    let features = match protocol::send_handshake_ack_negotiated(
+        &mut write_stream,
+        identity.as_str(),
+        &handshake_msg,
+    ) {
+        Ok(f) => f,
+        Err(e) => {
+            crate::logger::log("RELAY", &format!("ack send failed to {peer_addr}: {e}"));
+            return false;
+        }
+    };
+    // Logged, never compared: compatibility is the feature set, not this.
+    // The peer chooses the string, so keep it short and printable.
+    let version: String = handshake_msg
+        .payload
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .chars()
+        .filter(|c| c.is_ascii_graphic())
+        .take(32)
+        .collect();
+    let agreed = features.describe();
 
     // Step 5: Reconstruct the underlying TcpStream from the reader
     let stream = reader.into_inner();
@@ -360,7 +379,8 @@ fn handle_incoming(
         }
     }
 
-    let conn = PeerConnection::from_authenticated(peer_id.clone(), stream, tx);
+    let conn =
+        PeerConnection::from_authenticated(peer_id.clone(), stream, tx).with_features(features);
     if transient {
         crate::logger::log(
             "RELAY",
@@ -374,6 +394,9 @@ fn handle_incoming(
         crate::logger::log(
             "RELAY",
             &format!("peer {} connected from {}", peer_id, peer_addr),
+        );
+        println!(
+            "Peer {peer_id} connected from {peer_addr} (claudectl {version}; features: {agreed})"
         );
     }
 
