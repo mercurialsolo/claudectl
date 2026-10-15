@@ -145,3 +145,18 @@ jobs:
             exit 1
           fi
           echo "claudectl-core has no upward dependencies on the binary crate."
+
+  # Relative links and anchors across every Markdown file. The docs workflow
+  # only runs `mkdocs gh-deploy`, and only after merge, so until this job a
+  # broken link shipped and was found by a reader. Three were already broken,
+  # one of them from CLAUDE.md to a section that had never existed.
+  doc-links:
+    name: Doc links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Every relative link and anchor resolves
+        run: python3 scripts/check-doc-links.py

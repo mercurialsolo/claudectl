@@ -3,8 +3,23 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
+# Stray recordings: `claudectl --record demo.gif` and `asciinema rec` both write
+# their output to whatever directory you ran them from. Ignore those by default…
 *.cast
 *.gif
+# …but never the committed assets. Without these negations `git add -A` skips a
+# new asset without a word: #515 shipped a README pointing at a GIF that was
+# never committed, and main served a broken hero image until #516 fixed it.
+# Everything tracked today had to be `git add -f`'d past the two lines above.
+!assets/**/*.gif
+!assets/**/*.cast
+!docs/assets/**/*.gif
+!docs/assets/**/*.cast
+# Demo media committed at the repo root, from before assets/ existed.
+!/claude-demo.gif
+!/claudectl.gif
+!/demo.cast
+!/demo.gif
 GROWTH.md
 .claudectl-runs/
 social/

@@ -99,8 +99,15 @@ Remote sessions also appear in the dashboard (`claudectl`) and the plain list
 5101    [mac-mini-9f2a1b] claudec… Processing   -        $4.2
 ```
 
-They're read-only from here — the keys that send input or terminate a session
-act on local sessions only. To put work on another machine, delegate it:
+Press `Tab` on one to attach to it: claudectl sshes to that machine and attaches
+to the session's tmux pane — in a new tmux window if the dashboard runs inside
+tmux, otherwise in this terminal until you detach (`Ctrl-b d`). That needs the
+session to run under tmux there, ssh access to the machine as the user running
+it, and claudectl on both sides new enough to report panes and addresses.
+Without them, `Tab` says which one is missing.
+
+The other keys — approve, send input, terminate — act on local sessions only.
+To put work on another machine, delegate it:
 
 ```bash
 claudectl relay delegate mac-mini-9f2a1b "run the full test suite" --cwd ~/code/claudectl
@@ -161,7 +168,7 @@ Consequences worth knowing:
 
 - **A relay must be running on each machine.** `relay fleet` with no snapshot
   falls back to local sessions and tells you so. On macOS,
-  [`relay install-agent`](#keeping-the-relay-alive) keeps one running across
+  [`relay install-agent`](#keeping-the-background-stack-alive) keeps one running across
   logout and reboot; otherwise `relay serve` is a foreground process that stops
   when its terminal does.
 - **A peer that stops reporting disappears** after 90s rather than lingering as
@@ -194,15 +201,19 @@ bind the API to every interface with `--http-addr 0.0.0.0`; it works, it prints
 a warning at startup, and [Security](#security) says why you probably want the
 tunnel.
 
-## Keeping the relay alive
+## Keeping the background stack alive
 
-`relay serve` is a foreground process. Close the terminal and the relay stops, which means the cluster view on every peer goes stale — `relay fleet` falls back to local sessions and says so. On macOS, install a launchd agent instead:
+`relay serve` is a foreground process. Close the terminal and the relay stops, which means the cluster view on every peer goes stale — `relay fleet` falls back to local sessions and says so. The same is true of the half that does the orchestrating: the supervisor reconciler and the brain tick inside `claudectl --headless`, which is also a foreground process.
+
+Install them as services instead. A launchd agent on macOS, a `systemd --user` unit on Linux — same commands on both:
 
 ```bash
-claudectl relay install-agent                    # port 9847
+claudectl relay install-agent                    # the relay, port 9847
 claudectl relay install-agent --port 9850 --http-port 9876 --auth-token secret
+claudectl relay install-agent --headless         # the relay and the headless service
+claudectl relay install-agent --headless --brain # ...with the local-LLM brain enabled
 claudectl relay agent-status
-claudectl relay uninstall-agent
+claudectl relay uninstall-agent                  # removes both
 ```
 
 ```
@@ -219,32 +230,60 @@ It is running now, starts at login, and restarts if it dies.
 
 The agent starts at login (`RunAtLoad`) and is restarted if it exits (`KeepAlive`), so a crash or a kill brings it straight back. `claudectl doctor` reports whether it is running.
 
+### The headless service
+
+`--headless` installs a second service for the orchestrating half of the stack. It is one service, not two: the supervisor reconciler and the actuator tick in the same process as the brain, so `claudectl --headless` covers both. (`supervisor run` is not a daemon — it submits a `tasks.toml` and exits.)
+
+Two things are deliberately off by default:
+
+- **`--brain`** enables the local-LLM brain. Without it the service still runs the supervisor reconciler and the coordination loop, which is the half with no other way to stay up. With it, an unreachable endpoint is not fatal: the process warns and runs on without the brain, so it will not crashloop on a machine whose endpoint comes and goes.
+- **`--auto-run`** lets the brain act on its own suggestions, and implies `--brain`. A service installed once at login that executes decisions without being asked is opt-in, so you have to ask for it by name.
+
+### Loaded is not working
+
+A service manager restarts a process that *exited*. Neither launchd nor systemd notices one that is alive and doing nothing — which is what actually went wrong: a relay agent ran happily for days while its only link flapped.
+
+So both services publish a liveness signal, and `doctor` reads it rather than just asking whether the service is loaded:
+
+| Service | Signal |
+|---|---|
+| relay | `~/.claudectl/relay/fleet.json`, rewritten every tick |
+| headless | `~/.claudectl/headless/heartbeat.json`, rewritten every tick |
+
+Either going stale for more than 120s is a `doctor` failure that names the log and the fix:
+
+```
+✗ headless service      loaded, but it has stopped ticking — wedged, not running
+    → Nothing has written the heartbeat for over 120s. Check
+      ~/.claudectl/headless/agent.err.log and restart with
+      `claudectl relay install-agent --headless`.
+```
+
+Neither check nags a machine that deliberately installed no service: not-installed is an advisory, not a failure.
+
 Details worth knowing:
 
-- **Re-run `install-agent` to change anything.** It replaces the plist and reloads the service, so changing a port or picking up a `brew upgrade` is one command. Running it twice is harmless.
+- **Re-run `install-agent` to change anything.** It rewrites the service definition and reloads it, so changing a port or picking up a `brew upgrade` is one command.
+- **Re-running changes nothing when nothing changed.** An already-running service whose definition is byte-identical is left strictly alone, so adding `--headless` does not restart a relay you did not ask it to touch.
 - **Uninstall never leaves an orphan.** The plist is removed even if unloading complains — an orphaned plist that keeps resurrecting a service you thought you removed is the usual way this feature goes wrong. `agent-status` also detects the reverse case (loaded, plist missing) and tells you to run `uninstall-agent`.
 - **`--auth-token` lands in the plist**, under `~/Library/LaunchAgents`, readable by your user. The install output says so when you pass one.
 - **The relay is killed abruptly on unload**, not asked to shut down. That is safe: `fleet.json` and the knowledge store are both written atomically, so the worst case is losing the current one-second tick rather than a torn file.
 
 ### Linux
 
-There is no launchd, and `install-agent` says so rather than failing silently. The `systemd --user` equivalent — write `~/.config/systemd/user/claudectl-relay.service`:
+The same commands. `install-agent` writes a real `systemd --user` unit — `~/.config/systemd/user/claudectl-relay.service`, and `claudectl-headless.service` with `--headless` — runs `daemon-reload` and `enable --now`, then calls `loginctl enable-linger` so the unit survives logout the way a launchd agent does.
 
-```ini
-[Unit]
-Description=claudectl relay
-
-[Service]
-ExecStart=%h/.cargo/bin/claudectl relay serve --port 9847
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
+Lingering needs policy permission. If it is refused, the install still succeeds and prints the command to run by hand:
 
 ```bash
-systemctl --user enable --now claudectl-relay
-loginctl enable-linger $USER     # so it survives logout
+loginctl enable-linger $USER
+```
+
+Logs go to the journal rather than to files, since systemd has one and launchd does not:
+
+```bash
+journalctl --user -u claudectl-relay -f
+journalctl --user -u claudectl-headless -f
 ```
 
 ## Three Ways to Share a Code

@@ -120,6 +120,46 @@ Batch from a `tasks.toml` file (RFC §4 shape) with `claudectl supervisor run ta
 
 `claudectl supervisor drain` halts new assignments without killing running tasks; the `supervisor drain` row in `claudectl doctor` surfaces the state.
 
+## Optional: name a hive and let another machine join
+
+A hive with no name advertises nothing. Naming one is what makes it findable,
+and lets you decide who gets in.
+
+```bash
+# On the first machine
+claudectl hive identity set --name my-hive --join-policy ask
+claudectl relay install-agent            # keep the relay up across logout
+claudectl hive invite --words            # a phrase you can read down a phone
+
+# On the second machine
+claudectl hive discover                  # named hives on this LAN
+claudectl hive join <phrase-or-link>
+
+# Back on the first
+claudectl hive requests                  # then: requests approve <peer>
+claudectl hive status                    # units received and contributed
+```
+
+`discover` takes six seconds and reports what each hive will tell you before
+you ask to join it:
+
+```
+Found 1 hive(s):
+
+  HIVE                 POLICY     PEERS   UNITS   MACHINES
+  ──────────────────────────────────────────────────────────────────
+  my-hive              ask        1       212     2
+                       hv_5229f5
+```
+
+With `--join-policy ask`, holding an invite only gets the peer queued — you
+approve it. The other policies admit on request. Both ends then sync on a
+gossip tick, so a machine that joins later catches up on its own rather than
+needing the first one to re-send anything.
+
+`hive requests` also lists who is already a member and how they got in, which
+is the quickest way to answer "who can see what my brain learned".
+
 ## Optional: project-scoped hooks
 
 If you only want claudectl hooks in specific projects (not globally), the `--init` legacy flag still works for hook-only installs:

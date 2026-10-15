@@ -15,7 +15,7 @@ cat >"${OUT_DIR}/PKGBUILD" <<EOF
 pkgname=claudectl-bin
 pkgver=${VERSION}
 pkgrel=1
-pkgdesc='Orchestrate a swarm of Claude Code agents with a learning local-LLM brain'
+pkgdesc='Hive mind for Claude Code that learns from you once and remembers everywhere'
 arch=('x86_64')
 url='https://github.com/mercurialsolo/claudectl'
 license=('MIT')
@@ -38,7 +38,7 @@ EOF
 
 cat >"${OUT_DIR}/.SRCINFO" <<EOF
 pkgbase = claudectl-bin
-	pkgdesc = Orchestrate a swarm of Claude Code agents with a learning local-LLM brain
+	pkgdesc = Hive mind for Claude Code that learns from you once and remembers everywhere
 	pkgver = ${VERSION}
 	pkgrel = 1
 	url = https://github.com/mercurialsolo/claudectl
