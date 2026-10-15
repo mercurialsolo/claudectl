@@ -142,9 +142,11 @@ pub fn remote_attach_argv(destination: &str, target: &str) -> Vec<String> {
     let tmux = format!(
         "tmux select-window -t {quoted} \\; select-pane -t {quoted} \\; attach-session -t {quoted}"
     );
+    // `--` so a destination built from peer-supplied text can't be an option.
     vec![
         "ssh".to_string(),
         "-t".to_string(),
+        "--".to_string(),
         destination.to_string(),
         format!("exec \"$SHELL\" -lc {}", super::shell_escape(&tmux)),
     ]
@@ -197,8 +199,8 @@ mod tests {
     #[test]
     fn remote_attach_selects_the_pane_without_detaching_others() {
         let argv = remote_attach_argv("baradas@100.109.212.89", "claude-staffai:0.0");
-        assert_eq!(&argv[..3], ["ssh", "-t", "baradas@100.109.212.89"]);
-        let remote = &argv[3];
+        assert_eq!(&argv[..4], ["ssh", "-t", "--", "baradas@100.109.212.89"]);
+        let remote = &argv[4];
         assert!(remote.starts_with("exec \"$SHELL\" -lc "));
         assert!(remote.contains("select-window -t "));
         assert!(remote.contains("attach-session -t "));

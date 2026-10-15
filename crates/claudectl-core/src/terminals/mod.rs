@@ -1152,7 +1152,7 @@ mod tests {
             Some("100.109.212.89"),
         ))
         .unwrap();
-        assert_eq!(argv[2], "baradas@100.109.212.89");
+        assert_eq!(argv[3], "baradas@100.109.212.89");
     }
 
     #[test]

@@ -537,14 +537,22 @@ impl ClaudeSession {
         session.status = status;
         session.worker_origin = Some(worker_id.to_string());
         session.project_name = format!("[{worker_id}] {project}");
-        let text = |key: &str| {
+        // Both end up in an ssh command line, and a peer chooses them. Anything
+        // that could read as an option or carry shell syntax is dropped, which
+        // leaves the session looking like one from a peer too old to send it.
+        let text = |key: &str, extra: &str| {
             json.get(key)
                 .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty() && !s.starts_with('-'))
+                .filter(|s| {
+                    s.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || "._-".contains(c) || extra.contains(c)
+                    })
+                })
                 .map(str::to_string)
         };
-        session.tmux_target = text("tmux_target");
-        session.remote_user = text("os_user");
+        session.tmux_target = text("tmux_target", ": ");
+        session.remote_user = text("os_user", "");
 
         // Populate metrics from JSON when available
         if let Some(cost) = json.get("cost_usd").and_then(|v| v.as_f64()) {
@@ -1156,6 +1164,23 @@ mod tests {
         let session = ClaudeSession::from_remote_json("mini", &json).unwrap();
         assert_eq!(session.tmux_target.as_deref(), Some("claude-staffai:0.0"));
         assert_eq!(session.remote_user.as_deref(), Some("baradas"));
+    }
+
+    #[test]
+    fn from_remote_json_drops_attach_fields_that_could_be_ssh_options() {
+        let json = serde_json::json!({
+            "pid": 1, "project": "p", "status": "Idle",
+            "tmux_target": "-x", "os_user": "-oProxyCommand=sh",
+        });
+        let session = ClaudeSession::from_remote_json("mini", &json).unwrap();
+        assert!(session.tmux_target.is_none());
+        assert!(session.remote_user.is_none());
+
+        let json = serde_json::json!({
+            "pid": 1, "project": "p", "status": "Idle", "os_user": "bob;rm",
+        });
+        let session = ClaudeSession::from_remote_json("mini", &json).unwrap();
+        assert!(session.remote_user.is_none());
     }
 
     #[test]

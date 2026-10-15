@@ -1491,6 +1491,10 @@ fn run_tui<W: io::Write>(
 
         if let Some(argv) = app.pending_foreground.take() {
             app.status_msg = run_foreground(terminal, &argv)?;
+            // The attach held the loop for as long as the user stayed, so a
+            // tick is overdue, and `tick` clears the status line first. Restart
+            // the clock so the outcome — above all an ssh failure — is drawn.
+            last_tick = Instant::now();
         }
 
         if last_tick.elapsed() >= tick_rate {
