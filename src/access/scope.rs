@@ -1,8 +1,25 @@
 //! Capability scopes — `<resource>.<verb>:<qualifier>` (#427, RFC §3.3).
 //!
-//! Every verb is read-only. There is deliberately no write verb in this
-//! grammar, which is the point of the whole access model: a grant can let
-//! someone look, never touch.
+//! Every verb here was read-only until #537, and the read-only property is the
+//! point of the access model: a grant lets someone look, never touch.
+//!
+//! #537 needs one verb that is **not** read-only — `credential.use`, which asks
+//! the *owner's* machine to perform an authenticated step on a delegated task's
+//! behalf, so a worker can reach a credential that never leaves the owner.
+//! The issue asks for the grammar to be "extended, not loosened", so rather
+//! than letting a blanket claim quietly become false:
+//!
+//! - [`Scope::is_read_only`] states the property per scope, so it is checkable
+//!   instead of implied by a comment;
+//! - the read-only surfaces assert it. `query::core` derives the scope it
+//!   requires from the project it serves, so a `credential.use` grant could
+//!   never have satisfied it — but the assertion makes that a property of the
+//!   code rather than a consequence of how the derivation happens to be
+//!   written today.
+//!
+//! A grant carrying `credential.use` therefore cannot read a project, and a
+//! grant carrying `project.query` cannot spend a credential, whatever else a
+//! future surface does.
 //!
 //! The qualifier grammar is deliberately narrow because scopes are signed into
 //! the grant MAC (see `token.rs`). The canonical MAC input joins scopes with
@@ -32,6 +49,12 @@ pub enum Scope {
     HiveRead(String),
     /// Mesh as a hive peer. Needs #424.
     HiveJoin(String),
+    /// Ask the owner's machine to perform one configured credentialed step
+    /// (#537). The qualifier is the **credential name** the owner configured,
+    /// not a project — the secret itself never reaches the grant holder.
+    ///
+    /// The only non-read-only verb in the grammar. See the module docs.
+    CredentialUse(String),
 }
 
 impl Scope {
@@ -43,6 +66,25 @@ impl Scope {
             Scope::FleetRead(_) => "fleet.read",
             Scope::HiveRead(_) => "hive.read",
             Scope::HiveJoin(_) => "hive.join",
+            Scope::CredentialUse(_) => "credential.use",
+        }
+    }
+
+    /// Whether this scope can only observe.
+    ///
+    /// Stated per scope so the read-only surfaces can assert it, rather than
+    /// resting on the module-wide claim that #537 made false. A new variant has
+    /// to answer this question explicitly, which is the point: the compiler
+    /// asks, instead of the reviewer having to notice.
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            Scope::ProjectQuery(_)
+            | Scope::ProjectDocs(_)
+            | Scope::FleetRead(_)
+            | Scope::HiveRead(_)
+            | Scope::HiveJoin(_) => true,
+            // Spends the owner's credential. Observing is not what it does.
+            Scope::CredentialUse(_) => false,
         }
     }
 
@@ -53,7 +95,8 @@ impl Scope {
             | Scope::ProjectDocs(q)
             | Scope::FleetRead(q)
             | Scope::HiveRead(q)
-            | Scope::HiveJoin(q) => q,
+            | Scope::HiveJoin(q)
+            | Scope::CredentialUse(q) => q,
         }
     }
 
@@ -86,6 +129,16 @@ impl Scope {
                  invite (`claudectl hive join`), and `hive.read` is the scope that \
                  grants membership without contribution",
             ),
+            // Parseable now, mintable when the callback surface lands. Same
+            // reasoning as `fleet.read`: a grant file written by a later
+            // version still loads here, and a scope nothing honours yet must
+            // not be issuable, or an owner could mint a capability that
+            // silently does nothing.
+            Scope::CredentialUse(_) => Some(
+                "credential.use is defined but not issued yet (#537) — the \
+                 callback surface that honours it is not shipped, so a grant \
+                 carrying it would authorise nothing",
+            ),
         }
     }
 
@@ -101,9 +154,10 @@ impl Scope {
             "fleet.read" => Ok(Scope::FleetRead(q)),
             "hive.read" => Ok(Scope::HiveRead(q)),
             "hive.join" => Ok(Scope::HiveJoin(q)),
+            "credential.use" => Ok(Scope::CredentialUse(q)),
             other => Err(format!(
                 "unknown scope '{other}' (expected one of: project.query, \
-                 project.docs, fleet.read, hive.read, hive.join)"
+                 project.docs, fleet.read, hive.read, hive.join, credential.use)"
             )),
         }
     }
@@ -208,9 +262,69 @@ mod tests {
             "fleet.read:claudectl",
             "hive.read:team-hive",
             "hive.join:team-hive",
+            "credential.use:npm-registry",
         ] {
             let scope: Scope = text.parse().expect("should parse");
             assert_eq!(scope.to_string(), text);
+        }
+    }
+
+    /// The grammar's read-only claim, now that exactly one verb breaks it
+    /// (#537). A new variant has to answer `is_read_only` explicitly, and this
+    /// is where the answer is recorded — so adding a second acting verb is a
+    /// deliberate edit here, not a silent one.
+    #[test]
+    fn only_credential_use_can_act() {
+        let read_only = [
+            Scope::ProjectQuery("p".into()),
+            Scope::ProjectDocs("p".into()),
+            Scope::FleetRead("p".into()),
+            Scope::HiveRead("h".into()),
+            Scope::HiveJoin("h".into()),
+        ];
+        for scope in &read_only {
+            assert!(scope.is_read_only(), "{scope} should be read-only");
+        }
+        assert!(
+            !Scope::CredentialUse("npm".into()).is_read_only(),
+            "credential.use spends the owner's credential; it is not read-only"
+        );
+    }
+
+    /// `query::core` asserts the scope it requires is read-only. That
+    /// assertion can only hold if the scopes it builds — derived from the
+    /// served project — are read-only, which is what this pins.
+    #[test]
+    fn the_scopes_the_query_surface_derives_are_read_only() {
+        for scope in [
+            Scope::ProjectQuery("served-project".into()),
+            Scope::ProjectDocs("served-project".into()),
+        ] {
+            assert!(scope.is_read_only(), "{scope}");
+        }
+    }
+
+    /// A scope nothing honours yet must not be mintable, or an owner could
+    /// hand out a capability that authorises nothing. Same reasoning as
+    /// `fleet.read`.
+    #[test]
+    fn credential_use_is_not_issuable_until_its_surface_ships() {
+        let reason = Scope::CredentialUse("npm".into())
+            .unissuable_reason()
+            .expect("credential.use must not be mintable yet");
+        assert!(reason.contains("#537"), "{reason}");
+    }
+
+    /// The qualifier is a credential *name*, so it goes through the same
+    /// narrowing as every other qualifier — it reaches the MAC payload.
+    #[test]
+    fn a_credential_name_is_validated_like_any_qualifier() {
+        assert!(Scope::from_verb_and_qualifier("credential.use", "npm-registry").is_ok());
+        for bad in ["", "has space", "colon:inside", "../escape", "dot..dot"] {
+            assert!(
+                Scope::from_verb_and_qualifier("credential.use", bad).is_err(),
+                "{bad:?} should be refused as a credential name"
+            );
         }
     }
 
@@ -240,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn there_is_no_write_verb() {
+    fn nothing_can_write_to_a_project_a_fleet_or_a_hive() {
         for text in [
             "project.write:x",
             "project.edit:x",
@@ -249,6 +363,17 @@ mod tests {
         ] {
             assert!(text.parse::<Scope>().is_err(), "{text} must not parse");
         }
+        // #537 added `credential.use`, the one verb that acts. It acts on the
+        // *owner's* machine, through a step the owner configured — it is still
+        // no way to write to a project, a fleet or a hive, which is what the
+        // cases above pin.
+        assert!("credential.use:npm".parse::<Scope>().is_ok());
+        assert!(
+            !"credential.use:npm"
+                .parse::<Scope>()
+                .unwrap()
+                .is_read_only()
+        );
     }
 
     #[test]
@@ -264,6 +389,12 @@ mod tests {
         // Parseable so later-written grant files still load, but not mintable.
         assert!(Scope::FleetRead("p".into()).unissuable_reason().is_some());
         assert!(Scope::HiveJoin("h".into()).unissuable_reason().is_some());
+        // #537: parseable, and mintable once the callback surface ships.
+        assert!(
+            Scope::CredentialUse("npm".into())
+                .unissuable_reason()
+                .is_some()
+        );
     }
 
     #[test]
