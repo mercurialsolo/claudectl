@@ -191,8 +191,19 @@ pub struct ClaudeSession {
     /// Cached composite decay score (0-100), recomputed each tick.
     pub decay_score: u32,
     /// If set, this session is from a remote worker (not local).
-    /// Terminal actions (approve, kill, etc.) are disabled for remote sessions.
+    /// Terminal actions (approve, kill, etc.) are disabled for remote sessions;
+    /// switching attaches over ssh when the fields below are known.
     pub worker_origin: Option<String>,
+    /// The tmux pane (`session:window.pane`) this session runs in, on the
+    /// machine that owns it. Filled by the relay's collector, which ships it
+    /// to peers so they can attach; `None` when the session isn't in tmux.
+    pub tmux_target: Option<String>,
+    /// Remote sessions only: the login on the owning machine, as that machine
+    /// advertised it. `None` from a peer too old to send it.
+    pub remote_user: Option<String>,
+    /// Remote sessions only: the address this machine reaches the owning peer
+    /// at, from the relay connection. `None` when the relay doesn't know it.
+    pub remote_host: Option<String>,
 }
 
 /// A captured tool error with context.
@@ -393,6 +404,9 @@ impl ClaudeSession {
             total_error_count: 0,
             decay_score: 0,
             worker_origin: None,
+            tmux_target: None,
+            remote_user: None,
+            remote_host: None,
         }
     }
 
@@ -523,6 +537,14 @@ impl ClaudeSession {
         session.status = status;
         session.worker_origin = Some(worker_id.to_string());
         session.project_name = format!("[{worker_id}] {project}");
+        let text = |key: &str| {
+            json.get(key)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        session.tmux_target = text("tmux_target");
+        session.remote_user = text("os_user");
 
         // Populate metrics from JSON when available
         if let Some(cost) = json.get("cost_usd").and_then(|v| v.as_f64()) {
@@ -824,6 +846,7 @@ impl ClaudeSession {
                 (k.clone(), serde_json::json!({"calls": v.calls}))
             }).collect::<serde_json::Map<String, serde_json::Value>>(),
             "worker_origin": self.worker_origin,
+            "tmux_target": self.tmux_target,
         })
     }
 
@@ -1122,6 +1145,25 @@ mod tests {
         let json = serde_json::json!({"pid": 1, "project": "api-server", "status": "Idle"});
         let session = ClaudeSession::from_remote_json("laptop-01", &json).unwrap();
         assert_eq!(session.display_name(), "[laptop-01] api-server");
+    }
+
+    #[test]
+    fn from_remote_json_reads_attach_fields() {
+        let json = serde_json::json!({
+            "pid": 1, "project": "p", "status": "Idle",
+            "tmux_target": "claude-staffai:0.0", "os_user": "baradas",
+        });
+        let session = ClaudeSession::from_remote_json("mini", &json).unwrap();
+        assert_eq!(session.tmux_target.as_deref(), Some("claude-staffai:0.0"));
+        assert_eq!(session.remote_user.as_deref(), Some("baradas"));
+    }
+
+    #[test]
+    fn from_remote_json_from_an_older_peer_has_no_attach_fields() {
+        let json = serde_json::json!({"pid": 1, "project": "p", "status": "Idle"});
+        let session = ClaudeSession::from_remote_json("mini", &json).unwrap();
+        assert!(session.tmux_target.is_none());
+        assert!(session.remote_user.is_none());
     }
 
     #[test]

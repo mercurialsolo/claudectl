@@ -12,6 +12,8 @@ mod warp;
 mod wezterm;
 mod windows_terminal;
 
+pub use tmux::{open_in_new_window as open_in_tmux_window, pane_targets as tmux_pane_targets};
+
 use crate::session::ClaudeSession;
 use std::path::PathBuf;
 
@@ -991,6 +993,29 @@ pub fn launch_session(
     }
 }
 
+/// The ssh + tmux argv that attaches to a remote session's pane, or why it
+/// can't. Each refusal names what's missing, because the fix differs: start the
+/// session under tmux, upgrade the peer, or reconnect the relay.
+pub fn remote_attach_argv(session: &ClaudeSession) -> Result<Vec<String>, String> {
+    let peer = session.worker_origin.as_deref().unwrap_or("peer");
+    let target = session.tmux_target.as_deref().ok_or_else(|| {
+        if session.remote_user.is_none() {
+            format!("{peer} runs an older claudectl that doesn't report tmux panes — upgrade it")
+        } else {
+            format!("Not in tmux on {peer} — start it under tmux there to attach from here")
+        }
+    })?;
+    let host = session
+        .remote_host
+        .as_deref()
+        .ok_or_else(|| format!("No address known for {peer} — is `relay serve` connected?"))?;
+    let destination = match session.remote_user.as_deref() {
+        Some(user) => format!("{user}@{host}"),
+        None => host.to_string(),
+    };
+    Ok(tmux::remote_attach_argv(&destination, target))
+}
+
 pub fn switch_to_terminal(session: &ClaudeSession) -> Result<(), String> {
     let terminal = detect_terminal();
 
@@ -1109,6 +1134,44 @@ pub fn run_osascript(script: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn remote(target: Option<&str>, user: Option<&str>, host: Option<&str>) -> ClaudeSession {
+        let json = serde_json::json!({"pid": 1, "project": "staffai", "status": "Idle"});
+        let mut s = ClaudeSession::from_remote_json("mini", &json).unwrap();
+        s.tmux_target = target.map(str::to_string);
+        s.remote_user = user.map(str::to_string);
+        s.remote_host = host.map(str::to_string);
+        s
+    }
+
+    #[test]
+    fn remote_attach_sshes_as_the_advertised_user() {
+        let argv = remote_attach_argv(&remote(
+            Some("claude-staffai:0.0"),
+            Some("baradas"),
+            Some("100.109.212.89"),
+        ))
+        .unwrap();
+        assert_eq!(argv[2], "baradas@100.109.212.89");
+    }
+
+    #[test]
+    fn remote_attach_refuses_a_session_outside_tmux() {
+        let err = remote_attach_argv(&remote(None, Some("baradas"), Some("h"))).unwrap_err();
+        assert!(err.contains("Not in tmux on mini"), "{err}");
+    }
+
+    #[test]
+    fn remote_attach_names_an_old_peer() {
+        let err = remote_attach_argv(&remote(None, None, Some("h"))).unwrap_err();
+        assert!(err.contains("older claudectl"), "{err}");
+    }
+
+    #[test]
+    fn remote_attach_needs_an_address() {
+        let err = remote_attach_argv(&remote(Some("s:0.0"), Some("u"), None)).unwrap_err();
+        assert!(err.contains("No address known for mini"), "{err}");
+    }
 
     #[test]
     fn help_summary_lists_kitty_actions() {

@@ -1266,6 +1266,34 @@ fn run_main(cli: Cli) -> io::Result<()> {
     }
 }
 
+/// Give the terminal to `argv` until it exits, then take it back. Used to attach
+/// to a remote session's tmux pane when the TUI isn't itself inside tmux. The
+/// returned text is the status line to show; only a failure to restore the
+/// screen is an error.
+fn run_foreground<W: io::Write>(
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+    argv: &[String],
+) -> io::Result<String> {
+    let Some((program, args)) = argv.split_first() else {
+        return Ok("Nothing to run".into());
+    };
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    let outcome = std::process::Command::new(program).args(args).status();
+
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    terminal.clear()?;
+
+    Ok(match outcome {
+        Ok(status) if status.success() => "Detached — back in the dashboard".into(),
+        Ok(status) => format!("{program} exited with {status}"),
+        Err(e) => format!("Could not run {program}: {e}"),
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_tui<W: io::Write>(
     terminal: &mut Terminal<CrosstermBackend<W>>,
@@ -1459,6 +1487,10 @@ fn run_tui<W: io::Write>(
                     return Ok(());
                 }
             }
+        }
+
+        if let Some(argv) = app.pending_foreground.take() {
+            app.status_msg = run_foreground(terminal, &argv)?;
         }
 
         if last_tick.elapsed() >= tick_rate {

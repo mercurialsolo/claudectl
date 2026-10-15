@@ -40,6 +40,11 @@ pub struct FleetWorker {
     pub sessions: Vec<serde_json::Value>,
     /// When that peer's heartbeat last arrived (epoch ms).
     pub updated_ms: u64,
+    /// The host this machine reaches that peer at, from the relay connection —
+    /// what the TUI sshes to when attaching to one of its sessions. Defaulted
+    /// so a `fleet.json` written before this field existed still parses.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 /// What `relay serve` publishes for local readers.
@@ -130,7 +135,8 @@ pub fn sessions_from(snapshot: FleetSnapshot) -> Vec<ClaudeSession> {
     let mut out = Vec::new();
     for worker in snapshot.live_workers() {
         for value in &worker.sessions {
-            if let Some(session) = ClaudeSession::from_remote_json(&worker.worker_id, value) {
+            if let Some(mut session) = ClaudeSession::from_remote_json(&worker.worker_id, value) {
+                session.remote_host = worker.host.clone();
                 out.push(session);
             }
         }
@@ -191,6 +197,10 @@ impl LocalSessionCollector {
         for session in &mut sessions {
             crate::monitor::update_tokens(session);
         }
+        let panes = crate::terminals::tmux_pane_targets();
+        for session in &mut sessions {
+            session.tmux_target = pane_for(&panes, &session.tty);
+        }
 
         self.sessions = sessions;
         &self.sessions
@@ -203,11 +213,48 @@ impl LocalSessionCollector {
     /// The sessions in the JSON shape peers parse with
     /// [`ClaudeSession::from_remote_json`].
     pub fn as_json(&self) -> Vec<serde_json::Value> {
+        let user = local_login();
         self.sessions
             .iter()
-            .map(ClaudeSession::to_json_value)
+            .map(|s| {
+                let mut value = s.to_json_value();
+                if let (Some(user), Some(obj)) = (&user, value.as_object_mut()) {
+                    obj.insert("os_user".into(), serde_json::json!(user));
+                }
+                value
+            })
             .collect()
     }
+}
+
+/// The tmux target for a session's TTY. `ps` may report `s002` or `ttys002`
+/// for the same terminal, so an exact key miss falls back to a suffix match.
+fn pane_for(panes: &std::collections::HashMap<String, String>, tty: &str) -> Option<String> {
+    let tty = tty.trim().trim_start_matches("/dev/");
+    if tty.is_empty() || tty == "??" {
+        return None;
+    }
+    panes.get(tty).cloned().or_else(|| {
+        panes
+            .iter()
+            .find(|(pane_tty, _)| pane_tty.ends_with(tty))
+            .map(|(_, target)| target.clone())
+    })
+}
+
+/// This machine's login name, which a peer needs to ssh in as. launchd sets
+/// `USER` for a user agent; `HOME`'s last component is the fallback.
+fn local_login() -> Option<String> {
+    std::env::var("USER")
+        .ok()
+        .filter(|u| !u.is_empty())
+        .or_else(|| {
+            std::env::var("HOME").ok().and_then(|h| {
+                std::path::Path::new(&h)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+        })
 }
 
 /// One-shot collection, for callers that run once and exit (`relay fleet`).
@@ -260,6 +307,7 @@ mod tests {
                 worker_id: "mini".into(),
                 sessions: vec![sample_session_json()],
                 updated_ms: now_ms(),
+                host: None,
             }],
         );
         write_snapshot_to(&dir, &snapshot).unwrap();
@@ -322,11 +370,13 @@ mod tests {
                     worker_id: "live".into(),
                     sessions: vec![sample_session_json()],
                     updated_ms: now_ms(),
+                    host: None,
                 },
                 FleetWorker {
                     worker_id: "gone".into(),
                     sessions: vec![sample_session_json()],
                     updated_ms: now_ms().saturating_sub((WORKER_STALE_SECS + 10) * 1000),
+                    host: None,
                 },
             ],
         );
@@ -347,11 +397,13 @@ mod tests {
                     worker_id: "live".into(),
                     sessions: vec![sample_session_json(), sample_session_json()],
                     updated_ms: now_ms(),
+                    host: None,
                 },
                 FleetWorker {
                     worker_id: "gone".into(),
                     sessions: vec![sample_session_json()],
                     updated_ms: now_ms().saturating_sub((WORKER_STALE_SECS + 10) * 1000),
+                    host: None,
                 },
             ],
         );
@@ -405,6 +457,48 @@ mod tests {
             "a surviving PID must keep its JSONL offset"
         );
         assert_eq!(merged.total_input_tokens, 9_000);
+    }
+
+    #[test]
+    fn worker_host_reaches_its_sessions() {
+        let snapshot = build_snapshot(
+            "laptop",
+            vec![FleetWorker {
+                worker_id: "mini".into(),
+                sessions: vec![sample_session_json()],
+                updated_ms: now_ms(),
+                host: Some("100.109.212.89".into()),
+            }],
+        );
+        let sessions = sessions_from(snapshot);
+        assert_eq!(sessions[0].remote_host.as_deref(), Some("100.109.212.89"));
+    }
+
+    #[test]
+    fn snapshot_without_host_field_still_parses() {
+        let raw = format!(
+            r#"{{"updated_ms":{},"local_worker_id":"laptop","workers":[{{"worker_id":"mini","sessions":[],"updated_ms":1}}]}}"#,
+            now_ms()
+        );
+        let snapshot: FleetSnapshot = serde_json::from_str(&raw).unwrap();
+        assert!(snapshot.workers[0].host.is_none());
+    }
+
+    #[test]
+    fn pane_for_matches_exact_and_short_ttys() {
+        let panes: std::collections::HashMap<String, String> =
+            [("ttys002".to_string(), "claude-staffai:0.0".to_string())].into();
+        assert_eq!(
+            pane_for(&panes, "ttys002").as_deref(),
+            Some("claude-staffai:0.0")
+        );
+        assert_eq!(
+            pane_for(&panes, "s002").as_deref(),
+            Some("claude-staffai:0.0")
+        );
+        assert_eq!(pane_for(&panes, "??"), None);
+        assert_eq!(pane_for(&panes, ""), None);
+        assert_eq!(pane_for(&panes, "ttys009"), None);
     }
 
     #[test]
