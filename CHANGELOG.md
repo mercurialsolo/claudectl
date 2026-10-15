@@ -4,6 +4,35 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **The scope grammar gains `credential.use`, and the read-only claim becomes
+  checkable (#537, step 1).** The access model's point is that a grant lets
+  someone look and never touch, and `src/access/scope.rs` asserted that as a
+  blanket comment: "every verb is read-only".
+
+  #537 needs one verb that is not — a delegated task has to reach a credential
+  the owner holds, by asking the owner's machine to perform the authenticated
+  step, so the secret never moves. The issue asks for the grammar to be
+  "extended, not loosened", so rather than letting that comment quietly become
+  false: `Scope::is_read_only` states the property per scope, and the read-only
+  surfaces assert it. `query::core` derives the scope it requires from the
+  project it serves, so a `credential.use` grant could never have satisfied it —
+  the assertion makes that a property of the code rather than a consequence of
+  how the derivation happens to be written today.
+
+  The scope parses but is **not mintable yet**, on the `fleet.read` precedent: a
+  capability nothing honours must not be issuable, or an owner could hand out a
+  grant that authorises nothing. The delivery mechanism is decided — the grant
+  rides `DelegateTask` and the persisted copy keeps only its id — and the
+  surface follows.
+
+### Fixed
+
+- **`docs/access.md` still listed `hive.read` as unissuable.** #435 made it
+  mintable once #432 gave hives a name to qualify on. The scope table now also
+  says which verbs are read-only, since that stopped being all of them.
+
 ### Changed
 
 - **The hive is where the README leads, not section eleven.** `Hive Mind &
