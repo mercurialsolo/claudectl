@@ -9,7 +9,7 @@
 
 | Phase (§11) | Issue | Status | Module / artifact |
 | --- | --- | --- | --- |
-| 1. Wire protocol v1: handshake negotiation, unknown-type tolerance | #559 | Not started | `src/relay/{protocol,peer,mod}.rs` |
+| 1. Wire protocol v1: handshake negotiation, unknown-type tolerance | #559 | In review | `src/relay/{features,protocol,peer,listener}.rs`, `docs/relay-protocol.md` |
 | 2. Agent manifests (other agents appear in the TUI and fleet) | #563 | Not started, after #533 | `crates/claudectl-core/src/agent/`, `process.rs` |
 | 3. Per-agent delivery into a running agent | #560 | Not started | `src/bus/`, hook installers per agent |
 | 4. ACP runner for delegated work | #561 | Not started | `src/relay/worker.rs`, new `src/acp/` |
@@ -198,7 +198,7 @@ body (after decompression) = one RelayMessage as JSON
 
 ### 6.5 Message catalogue
 
-v1 publishes, in this document, the payload schema of every existing type (`Heartbeat`, `DelegateTask`, `TaskStatus`, `TaskHandoff`, `TaskInterrupt`, `Knowledge*`, `HiveJoin*`, `SessionTransfer`, `SessionReceived`). Each gets required keys, optional keys, and the feature that introduced the optional ones. The coord event schema (`src/coord/events.rs`, "v1 frozen") is the precedent for how that's written. A test round-trips one fixture per type against the schema, so the document and the code can't drift silently.
+v1 publishes the payload of every existing type in its own reference, `docs/relay-protocol.md` (#559): required keys, optional keys, and the issue that added each optional one. A test round-trips every message type and matches the enum exhaustively, so a type added to the code fails to compile there until it's listed.
 
 ### 6.6 Capability manifest
 
