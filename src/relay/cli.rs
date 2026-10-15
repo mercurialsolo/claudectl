@@ -57,12 +57,25 @@ pub enum RelayCommand {
         /// under ~/Library/LaunchAgents, which is readable by your user.
         #[arg(long)]
         auth_token: Option<String>,
+        /// Also install the headless service: the supervisor reconciler and
+        /// (with --brain) the brain, which otherwise only run while a terminal
+        /// is open (#546).
+        #[arg(long)]
+        headless: bool,
+        /// Enable the local-LLM brain in the headless service. Off by default;
+        /// with no reachable endpoint the service warns and runs on without it.
+        #[arg(long, requires = "headless")]
+        brain: bool,
+        /// Let the headless brain execute its suggestions without asking.
+        /// Implies --brain.
+        #[arg(long, requires = "headless")]
+        auto_run: bool,
     },
 
-    /// Remove the launchd agent (#438, macOS)
+    /// Remove the background services — relay and headless (#438, #546)
     UninstallAgent,
 
-    /// Whether the launchd agent is installed and running (#438, macOS)
+    /// Whether the background services are installed and running (#438, #546)
     AgentStatus,
 
     /// Generate a raw PSK pairing code
@@ -112,6 +125,10 @@ pub enum RelayCommand {
         /// Git ref for the task context
         #[arg(long)]
         git_ref: Option<String>,
+        /// Refuse before sending if the peer does not advertise these, e.g.
+        /// `cargo>=1.88,claude:auth` (#536).
+        #[arg(long)]
+        requires: Option<String>,
     },
 
     /// Move a conversation to a paired peer, so it can be resumed there
@@ -197,6 +214,9 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
             http_port,
             http_addr,
             auth_token,
+            headless,
+            brain,
+            auto_run,
         } => cmd_install_agent(
             super::agent::AgentConfig {
                 port: *port,
@@ -204,6 +224,10 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
                 http_addr: http_addr.clone(),
                 auth_token: auth_token.clone(),
             },
+            headless.then(|| super::agent::HeadlessConfig {
+                brain: *brain,
+                auto_run: *auto_run,
+            }),
             json_mode,
         ),
         RelayCommand::UninstallAgent => cmd_uninstall_agent(json_mode),
@@ -220,7 +244,15 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
             prompt,
             cwd,
             git_ref,
-        } => cmd_delegate(peer, prompt, cwd.as_deref(), git_ref.clone(), json_mode),
+            requires,
+        } => cmd_delegate(
+            peer,
+            prompt,
+            cwd.as_deref(),
+            git_ref.clone(),
+            requires.as_deref(),
+            json_mode,
+        ),
         RelayCommand::SendSession {
             peer,
             session,
@@ -293,6 +325,22 @@ fn cmd_serve(
         relay_cfg.heartbeat_interval_secs,
         identity.as_str(),
     )));
+    // #536: probe this machine once and advertise it on every heartbeat, so a
+    // delegator can refuse work this host cannot run before spending anything.
+    if let Ok(mut reg) = registry.lock() {
+        let caps = super::capabilities::local();
+        println!("Capabilities: {}", caps.summary());
+        if let Ok(value) = serde_json::to_value(&caps) {
+            reg.set_local_capabilities(value);
+        }
+        // #541: where we can be reached, so a peer that loses the path it has
+        // can try another instead of retrying a dead address forever.
+        let addrs = super::netif::advertised_addrs(port);
+        if !addrs.is_empty() {
+            println!("Reachable at: {}", addrs.join(", "));
+        }
+        reg.set_local_addrs(addrs);
+    }
     // Write handles for in-flight one-shot deliveries (#511). Beside the
     // registry, never in it.
     let replies = super::transient::TransientReplies::new();
@@ -508,6 +556,20 @@ fn cmd_serve(
         None
     };
 
+    // #506: listen as well as announce. `start_announcer` tells the LAN where
+    // we are; without a listener this machine never hears anyone else move, so
+    // a paired peer that changed network stayed unreachable until a human ran
+    // `relay discover` at the right moment. Started whenever announcing is on,
+    // since a machine unwilling to say where it is has no claim on others.
+    let lan_seen = if relay_cfg.lan_announce {
+        Some(super::lan::start_listener(
+            identity.0.clone(),
+            Arc::clone(&lan_shutdown),
+        ))
+    } else {
+        None
+    };
+
     // This machine's sessions, advertised to peers on every heartbeat.
     let mut local_feed = super::advertise::LocalSessionFeed::new();
 
@@ -540,6 +602,8 @@ fn cmd_serve(
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(&from_peer, &msg.payload);
+                        persist_peer_capabilities(from_peer.as_str(), &msg.payload);
+                        record_advertised_addrs(from_peer.as_str(), &msg.payload);
                     }
                     super::MessageType::DelegateTask => {
                         match super::delegation::parse_delegate_message(&msg) {
@@ -882,6 +946,20 @@ fn cmd_serve(
                 let _ = reg.send_to(target.as_str(), &sync_msg);
             }
 
+            // #506: a paired peer that moved announces itself from its new
+            // address; record it so `reconnect_peer`'s existing fallback (#484)
+            // has somewhere to go. Cheap per tick — the map is small, and only
+            // a genuinely new address writes anything.
+            if let Some(seen) = lan_seen.as_ref() {
+                relearn_moved_peers(seen);
+                // Publish what we have heard: a second process cannot bind the
+                // discovery port and expect a copy of each datagram, so
+                // `relay discover` reads this instead. See the note in lan.rs.
+                if let Ok(map) = seen.lock() {
+                    super::lan::publish_seen(&map);
+                }
+            }
+
             let events = reg.tick(identity.as_str(), Some(local_feed.sessions()));
             for event in events {
                 match event {
@@ -952,14 +1030,38 @@ fn cmd_serve(
 
 /// `claudectl relay pair`
 /// Generate a new PSK and display it.
-/// `relay install-agent` (#438).
-fn cmd_install_agent(cfg: super::agent::AgentConfig, json_mode: bool) -> io::Result<()> {
-    let path = super::agent::install(&cfg).map_err(io::Error::other)?;
-    let (out_log, err_log) = super::agent::log_paths();
-    let loaded = super::agent::is_loaded();
+/// `relay install-agent` (#438, and the headless service in #546).
+///
+/// The relay is always installed; `headless` adds the second service. Both are
+/// idempotent — re-running after an upgrade or a port change is the supported
+/// way to update them.
+fn cmd_install_agent(
+    cfg: super::agent::AgentConfig,
+    headless: Option<super::agent::HeadlessConfig>,
+    json_mode: bool,
+) -> io::Result<()> {
+    use super::agent::{Service, ServiceConfig};
+
+    let relay = ServiceConfig::Relay(cfg.clone());
+    let path = super::agent::install(&relay).map_err(io::Error::other)?;
+    let (out_log, err_log) = super::agent::log_paths(Service::Relay);
+    let loaded = super::agent::is_loaded(Service::Relay);
+
+    // The headless install is reported but not fatal: a relay that installed
+    // cleanly should not be rolled back because the second service failed.
+    let headless_result = headless.as_ref().map(|h| {
+        let cfg = ServiceConfig::Headless(h.clone());
+        super::agent::install(&cfg).map(|p| {
+            (
+                p,
+                super::agent::is_loaded(Service::Headless),
+                super::agent::log_paths(Service::Headless),
+            )
+        })
+    });
 
     if json_mode {
-        let json = serde_json::json!({
+        let mut json = serde_json::json!({
             "installed": true,
             "loaded": loaded,
             "plist": path.display().to_string(),
@@ -968,6 +1070,22 @@ fn cmd_install_agent(cfg: super::agent::AgentConfig, json_mode: bool) -> io::Res
             "stdout_log": out_log.display().to_string(),
             "stderr_log": err_log.display().to_string(),
         });
+        if let Some(result) = &headless_result {
+            json["headless"] = match result {
+                Ok((p, loaded, (out, err))) => serde_json::json!({
+                    "installed": true,
+                    "loaded": loaded,
+                    "service": p.display().to_string(),
+                    "label": super::agent::HEADLESS_LABEL,
+                    "brain": headless.as_ref().map(|h| h.brain || h.auto_run),
+                    "auto_run": headless.as_ref().map(|h| h.auto_run),
+                    "stdout_log": out.display().to_string(),
+                    "stderr_log": err.display().to_string(),
+                    "heartbeat": claudectl_core::heartbeat::path().display().to_string(),
+                }),
+                Err(e) => serde_json::json!({"installed": false, "error": e}),
+            };
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&json).unwrap_or_default()
@@ -995,19 +1113,83 @@ fn cmd_install_agent(cfg: super::agent::AgentConfig, json_mode: bool) -> io::Res
         println!();
         println!("Note: --auth-token is stored in the plist, which is readable by your user.");
     }
+
+    match (&headless_result, headless.as_ref()) {
+        (Some(Ok((p, hl_loaded, (hl_out, hl_err)))), Some(h)) => {
+            println!();
+            println!(
+                "Installed the headless service (supervisor reconciler{}).",
+                if h.brain || h.auto_run {
+                    " + brain"
+                } else {
+                    ""
+                }
+            );
+            println!();
+            println!("  service:   {}", p.display());
+            println!("  label:     {}", super::agent::HEADLESS_LABEL);
+            println!("  logs:      {}", hl_out.display());
+            println!("             {}", hl_err.display());
+            println!(
+                "  heartbeat: {}",
+                claudectl_core::heartbeat::path().display()
+            );
+            println!();
+            if *hl_loaded {
+                println!("It is running now and ticks the supervisor even with no terminal open.");
+            } else {
+                println!("The service is written but is not reported as loaded.");
+                println!("Check the error log above, then: claudectl relay agent-status");
+            }
+            if h.auto_run {
+                println!();
+                println!("Note: --auto-run lets the brain act without asking you first.");
+            }
+        }
+        (Some(Err(e)), _) => {
+            println!();
+            println!("The relay agent installed, but the headless service did not: {e}");
+            println!("Re-run with --headless once that is fixed; the relay is unaffected.");
+        }
+        _ => {}
+    }
+
     println!();
-    println!("Remove it with: claudectl relay uninstall-agent");
+    println!("Remove them with: claudectl relay uninstall-agent");
     Ok(())
 }
 
-/// `relay uninstall-agent` (#438).
+/// `relay uninstall-agent` (#438, both services since #546).
+///
+/// Removes every service rather than taking a name: the command's job is "stop
+/// claudectl from coming back at login", and leaving the second service
+/// installed would not do that.
 fn cmd_uninstall_agent(json_mode: bool) -> io::Result<()> {
-    let (was_present, note) = super::agent::uninstall().map_err(io::Error::other)?;
+    use super::agent::Service;
+
+    let mut removed: Vec<(Service, bool, Option<String>)> = Vec::new();
+    for service in Service::ALL {
+        let (was_present, note) = super::agent::uninstall(service).map_err(io::Error::other)?;
+        removed.push((service, was_present, note));
+    }
+    let any = removed.iter().any(|(_, present, _)| *present);
 
     if json_mode {
+        // `removed` and `note` keep their old shape and meaning for the relay,
+        // so anything scripted against #438 still reads the same answer.
+        let relay = removed
+            .iter()
+            .find(|(s, _, _)| *s == Service::Relay)
+            .expect("relay is in Service::ALL");
+        let headless = removed
+            .iter()
+            .find(|(s, _, _)| *s == Service::Headless)
+            .expect("headless is in Service::ALL");
         let json = serde_json::json!({
-            "removed": was_present,
-            "note": note,
+            "removed": relay.1,
+            "note": relay.2,
+            "headless": {"removed": headless.1, "note": headless.2},
+            "any_removed": any,
         });
         println!(
             "{}",
@@ -1016,34 +1198,59 @@ fn cmd_uninstall_agent(json_mode: bool) -> io::Result<()> {
         return Ok(());
     }
 
-    if was_present {
-        println!("Removed the relay agent. It will not come back at login.");
-    } else {
-        println!("No relay agent was installed — nothing to remove.");
+    if !any {
+        println!("No background services were installed — nothing to remove.");
+        return Ok(());
     }
-    if let Some(n) = note {
-        // The plist is gone either way; this only explains why unloading was
-        // noisy, usually "it was not running".
-        println!();
-        println!("(launchctl said: {n})");
-        println!("The plist was removed regardless, so nothing will restart it.");
+
+    for (service, was_present, note) in &removed {
+        if *was_present {
+            println!(
+                "Removed {}. It will not come back at login.",
+                service.description()
+            );
+        }
+        if let Some(n) = note {
+            // The service file is gone either way; this only explains why
+            // unloading was noisy, usually "it was not running".
+            println!("  (service manager said: {n})");
+            println!("  It was removed regardless, so nothing will restart it.");
+        }
     }
     Ok(())
 }
 
-/// `relay agent-status` (#438).
+/// `relay agent-status` (#438, both services since #546).
 fn cmd_agent_status(json_mode: bool) -> io::Result<()> {
-    let st = super::agent::status();
-    let (out_log, err_log) = super::agent::log_paths();
+    use super::agent::Service;
+
+    let st = super::agent::status(Service::Relay);
+    let (out_log, err_log) = super::agent::log_paths(Service::Relay);
+    let hl = super::agent::status(Service::Headless);
+    let (hl_out, hl_err) = super::agent::log_paths(Service::Headless);
+    // Loaded answers "is it installed"; the heartbeat answers "is it working".
+    // #546 was filed because only the first question was being asked.
+    let hl_beat = claudectl_core::heartbeat::read();
 
     if json_mode {
         let json = serde_json::json!({
-            "plist_exists": st.plist_exists,
+            "service_exists": st.service_exists,
             "loaded": st.loaded,
-            "plist": st.plist.display().to_string(),
+            "plist": st.service.display().to_string(),
             "label": super::agent::AGENT_LABEL,
             "stdout_log": out_log.display().to_string(),
             "stderr_log": err_log.display().to_string(),
+            "headless": {
+                "service_exists": hl.service_exists,
+                "loaded": hl.loaded,
+                "service": hl.service.display().to_string(),
+                "label": super::agent::HEADLESS_LABEL,
+                "stdout_log": hl_out.display().to_string(),
+                "stderr_log": hl_err.display().to_string(),
+                "heartbeat": claudectl_core::heartbeat::path().display().to_string(),
+                "publishing": hl_beat.is_some(),
+                "pid": hl_beat.as_ref().map(|b| b.pid),
+            },
         });
         println!(
             "{}",
@@ -1052,15 +1259,15 @@ fn cmd_agent_status(json_mode: bool) -> io::Result<()> {
         return Ok(());
     }
 
-    match (st.plist_exists, st.loaded) {
+    match (st.service_exists, st.loaded) {
         (true, true) => {
             println!("Relay agent: running.");
-            println!("  plist: {}", st.plist.display());
+            println!("  plist: {}", st.service.display());
             println!("  logs:  {}", out_log.display());
         }
         (true, false) => {
             println!("Relay agent: installed but NOT running.");
-            println!("  plist: {}", st.plist.display());
+            println!("  plist: {}", st.service.display());
             println!("  error log: {}", err_log.display());
             println!();
             println!("Re-run `claudectl relay install-agent` to reload it.");
@@ -1076,6 +1283,45 @@ fn cmd_agent_status(json_mode: bool) -> io::Result<()> {
             println!();
             println!("Nothing keeps `relay serve` alive across logout. Install it with:");
             println!("  claudectl relay install-agent");
+        }
+    }
+
+    println!();
+    match (hl.service_exists, hl.loaded) {
+        (true, true) if hl_beat.is_some() => {
+            println!("Headless service: running.");
+            println!("  service: {}", hl.service.display());
+            if let Some(b) = &hl_beat {
+                println!("  pid:     {}", b.pid);
+            }
+            println!("  logs:    {}", hl_out.display());
+        }
+        (true, true) => {
+            // Loaded but not publishing — alive and doing nothing, which is
+            // the case a service manager cannot see.
+            println!("Headless service: loaded, but it has stopped publishing.");
+            println!(
+                "  heartbeat: {}",
+                claudectl_core::heartbeat::path().display()
+            );
+            println!("  error log: {}", hl_err.display());
+            println!();
+            println!("That is wedged, not running. Check the log, then re-install it.");
+        }
+        (true, false) => {
+            println!("Headless service: installed but NOT running.");
+            println!("  service:   {}", hl.service.display());
+            println!("  error log: {}", hl_err.display());
+        }
+        (false, true) => {
+            println!("Headless service: loaded, but its service file is gone.");
+            println!("Clean it up with: claudectl relay uninstall-agent");
+        }
+        (false, false) => {
+            println!("Headless service: not installed.");
+            println!();
+            println!("The supervisor and brain only run while a terminal is open. To keep");
+            println!("them up: claudectl relay install-agent --headless");
         }
     }
     Ok(())
@@ -1177,6 +1423,8 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(peer_id, &msg.payload);
+                        persist_peer_capabilities(peer_id.as_str(), &msg.payload);
+                        record_advertised_addrs(peer_id.as_str(), &msg.payload);
                     }
                     // #434: the owner of a `join_policy: ask` hive usually
                     // approves long after `hive join` exited, so this is where
@@ -1271,6 +1519,140 @@ fn try_connect_with(
         reg.add_peer(conn);
     }
     Ok((remote_id, registry))
+}
+
+/// Refuse a delegation the target cannot run, before anything goes on the wire
+/// (#536).
+///
+/// Checked here rather than on the worker because the whole point is to spend
+/// nothing: no message, no authenticated connection, no `claude` session whose
+/// only output is "Not logged in".
+///
+/// Two cases deliberately pass: no `--requires` at all, and a peer that has
+/// never advertised a manifest. The second is what keeps an older peer usable —
+/// unknown is not the same as missing, and a refusal here would break setups
+/// that work today. The failure mode is therefore one-directional: this can let
+/// through work that then fails the old way, never block work that would have
+/// succeeded.
+fn check_requirements(peer_id: &str, requires: Option<&str>, json_mode: bool) -> io::Result<()> {
+    let Some(spec) = requires else {
+        return Ok(());
+    };
+    let reqs = super::capabilities::Requirement::parse_list(spec)
+        .map_err(|e| io::Error::other(format!("invalid --requires: {e}")))?;
+    if reqs.is_empty() {
+        return Ok(());
+    }
+    let Some(caps) = super::capabilities::load_peer_capabilities(peer_id) else {
+        if !json_mode {
+            eprintln!("note: {peer_id} has not advertised its capabilities yet.");
+            eprintln!("      Delegating without checking --requires.");
+        }
+        return Ok(());
+    };
+    let unmet = caps.unmet(&reqs);
+    if unmet.is_empty() {
+        return Ok(());
+    }
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::json!({
+                "error": "requirements not met",
+                "peer": peer_id,
+                "unmet": unmet,
+            })
+        );
+    } else {
+        eprintln!("{peer_id} cannot run this task:");
+        for miss in &unmet {
+            eprintln!("  - {miss}");
+        }
+        eprintln!(
+            "
+Nothing was sent. `claudectl relay peers` shows what each peer advertises."
+        );
+    }
+    Err(io::Error::other(format!(
+        "{peer_id} does not meet: {}",
+        unmet.join("; ")
+    )))
+}
+
+/// Record a new address for any *already paired* peer heard on the LAN (#506).
+///
+/// Pairing is the filter: an announcement is unauthenticated, so anyone on the
+/// network can claim any identity. Writing an address for a peer we hold no PSK
+/// for would let a stranger seed candidates we later dial. For a paired peer the
+/// cost of a wrong address is a failed dial and the next candidate, because the
+/// PSK still has to check out — so this widens where we look, never who we will
+/// talk to.
+///
+/// Only genuinely new addresses are written; `save_peer_meta` merges and keeps
+/// the most recent at the front (#484).
+fn relearn_moved_peers(
+    seen: &Arc<Mutex<std::collections::HashMap<String, super::lan::DiscoveredPeer>>>,
+) {
+    let Ok(map) = seen.lock() else {
+        return;
+    };
+    for (peer_id, found) in map.iter() {
+        if found.is_stale() {
+            continue;
+        }
+        if load_peer_psk(peer_id).is_none() {
+            continue; // not paired — see above
+        }
+        let addr = found.relay_addr().to_string();
+        let known = super::peer_addrs(load_peer_meta(peer_id).as_ref());
+        if known.iter().any(|a| a.addr == addr) {
+            continue;
+        }
+        match super::save_peer_meta(peer_id, &addr) {
+            Ok(()) => println!("Learned new address for {peer_id}: {addr}"),
+            Err(e) => eprintln!("warning: could not record {addr} for {peer_id}: {e}"),
+        }
+    }
+}
+
+/// Record the addresses a peer says it can be reached at (#541).
+///
+/// Only addresses that parse as a literal `address:port` are kept: there is no
+/// resolver on the dial path, so a hostname is not something we could use, and
+/// an unparseable entry from a peer should never reach the record.
+///
+/// Best-effort, like the manifest beside it: a heartbeat that cannot be
+/// recorded must not disturb the loop that received it.
+fn record_advertised_addrs(peer_id: &str, payload: &serde_json::Value) {
+    let Some(list) = payload.get("listen_addrs").and_then(|v| v.as_array()) else {
+        return;
+    };
+    let addrs: Vec<String> = list
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|s| s.parse::<SocketAddr>().is_ok())
+        .map(str::to_string)
+        .collect();
+    match super::merge_advertised_addrs(peer_id, &addrs) {
+        Ok(0) => {}
+        Ok(n) => println!("Learned {n} more address(es) for {peer_id}"),
+        Err(e) => eprintln!("warning: could not record addresses for {peer_id}: {e}"),
+    }
+}
+
+/// Write a peer's advertised manifest to disk so the standalone CLI commands
+/// can see it (#536).
+///
+/// Best-effort by construction: a heartbeat that cannot be recorded must never
+/// take down the loop that received it, and the only cost of a failed write is
+/// a `delegate` that does not pre-check.
+fn persist_peer_capabilities(peer_id: &str, payload: &serde_json::Value) {
+    let Some(caps) = payload.get("capabilities") else {
+        return;
+    };
+    if let Ok(parsed) = serde_json::from_value::<super::capabilities::Capabilities>(caps.clone()) {
+        let _ = super::capabilities::save_peer_capabilities(peer_id, &parsed);
+    }
 }
 
 /// What a successful invite dial yields: the resolved peer id, the registry
@@ -1791,6 +2173,20 @@ fn spawn_startup_dials(
                 break;
             }
             let (Some(conn), Some(addr)) = (connected, addr_used) else {
+                // #543: every address failed. Leave a placeholder so the
+                // reconnect loop keeps trying — including any address learned
+                // after startup (#506, #541) — instead of forgetting this peer
+                // until the process restarts. A relay is usually a launchd
+                // agent running for weeks, so "restart it" is not a fix.
+                if let (Ok(mut reg), Some(first)) = (registry.lock(), addrs.first()) {
+                    let mut pending = PeerConnection::pending(peer_id.clone(), Some(*first));
+                    // Back off from the start rather than redialling on the
+                    // very next tick, which for an unreachable host is a dial
+                    // storm against a 10s connect timeout.
+                    pending.schedule_reconnect();
+                    reg.add_peer(pending);
+                    println!("Peer {id} unreachable for now; will keep retrying");
+                }
                 continue;
             };
 
@@ -1952,6 +2348,12 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
                     "no"
                 };
                 println!("{:<20} {:<24} {}", id, addr, has_psk);
+                // #536: what that peer says it can run. Indented under the row
+                // rather than given a column, because the manifest is long and
+                // the table is already at the width of a terminal.
+                if let Some(caps) = super::capabilities::load_peer_capabilities(id) {
+                    println!("  └ {} ({}/{})", caps.summary(), caps.os, caps.arch);
+                }
             }
         }
     }
@@ -2113,9 +2515,11 @@ fn cmd_delegate(
     prompt: &str,
     cwd: Option<&str>,
     git_ref: Option<String>,
+    requires: Option<&str>,
     json_mode: bool,
 ) -> io::Result<()> {
     let identity = load_or_create_identity();
+    check_requirements(peer_id, requires, json_mode)?;
     let task_id = gen_msg_id().replace("msg_", "task_");
 
     let context = DelegationContext {
@@ -2720,13 +3124,32 @@ fn cmd_join(input: &[String]) -> io::Result<()> {
 fn cmd_discover(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
 
-    println!(
-        "Scanning LAN for claudectl instances ({} seconds)...",
-        super::lan::SCAN_DURATION.as_secs()
-    );
-    println!();
-
-    let peers = super::lan::scan_lan(super::lan::SCAN_DURATION, identity.as_str());
+    // A relay running on this machine already holds the discovery port and has
+    // been listening continuously, so ask it rather than binding alongside it:
+    // `SO_REUSEPORT` splits datagrams between sockets instead of copying them,
+    // and a six-second window next to a long-lived listener can see nothing at
+    // all. Reading its published view is also immediate and covers longer than
+    // one window. Falls back to scanning when no relay is running.
+    let peers = match super::lan::read_seen() {
+        Some(snapshot) => {
+            println!("Peers seen by the relay running on this machine:");
+            println!();
+            snapshot
+                .peers
+                .into_iter()
+                .filter(|p| p.identity != identity.0)
+                .map(|p| super::lan::DiscoveredPeer::from_seen(&p))
+                .collect()
+        }
+        None => {
+            println!(
+                "Scanning LAN for claudectl instances ({} seconds)...",
+                super::lan::SCAN_DURATION.as_secs()
+            );
+            println!();
+            super::lan::scan_lan(super::lan::SCAN_DURATION, identity.as_str())
+        }
+    };
 
     if json_mode {
         let json_peers: Vec<serde_json::Value> = peers

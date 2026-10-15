@@ -59,6 +59,13 @@ See every session's status, burn rate, context usage, activity sparkline, CPU, m
 </div>
 <div class="feature-item" markdown>
 
+### Relay & Hive Mind
+
+Name a hive and it becomes joinable: it advertises on the LAN, hands out invites, and queues join requests for you to approve. Members exchange what their brains learned, so a second machine starts with what the first one worked out. Nothing is advertised until you name one. [Learn more](relay.md)
+
+</div>
+<div class="feature-item" markdown>
+
 ### Intervene Fast
 
 Approve prompts, send input, jump to the right terminal tab, or kill a runaway session - without leaving the dashboard.
@@ -80,6 +87,13 @@ A local model (ollama/gemma) watches sessions, auto-approves safe commands, deni
 </div>
 <div class="feature-item" markdown>
 
+### Supervisor
+
+Submit a task and it outlives the session running it. A SQLite ledger where every state has a cause, declared verifiers (`run` / `brain` / `agent`) that gate DONE, and a resume path that hands the next attempt the autopsy of the last one. [Learn more](team-observability.md)
+
+</div>
+<div class="feature-item" markdown>
+
 ### Auto-Rules Engine
 
 TOML rules to approve, deny, send, terminate, route, or spawn based on tool name, command pattern, project, or cost threshold.
@@ -90,6 +104,13 @@ TOML rules to approve, deny, send, terminate, route, or spawn based on tool name
 ### Health Monitoring
 
 10 automatic checks: stalled sessions, context saturation, cache ratio, cost spikes, retry loops, cognitive decay, proactive compaction, token efficiency, error acceleration, and repetition detection - no config needed.
+
+</div>
+<div class="feature-item" markdown>
+
+### Open Cluster
+
+Let someone outside your trust boundary ask about one project and get cited doc spans back — scoped, expiring, revocable, and with no write verb anywhere in the surface. [Learn more](access.md)
 
 </div>
 <div class="feature-item" markdown>
@@ -111,13 +132,6 @@ Trigger desktop notifications, shell commands, and webhooks when sessions need a
 ### Session Recording
 
 Press `R` to record a session highlight reel as a GIF. Extracts edits, commands, errors - strips idle time.
-
-</div>
-<div class="feature-item" markdown>
-
-### Relay & Hive Mind
-
-Connect claudectl instances across machines. Share brain learnings, delegate tasks, and build a convergent hive mind - all peer-to-peer. [Learn more](relay.md)
 
 </div>
 <div class="feature-item" markdown>

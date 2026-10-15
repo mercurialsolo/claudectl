@@ -26,6 +26,14 @@ pub struct PeerRegistry {
     seen_ids: VecDeque<String>,
     heartbeat_interval: Duration,
     last_heartbeat_tick: Instant,
+    /// This machine's probed capability manifest, sent on each heartbeat
+    /// (#536). `None` until something probes, so a registry that never sets it
+    /// sends exactly what it sent before.
+    local_capabilities: Option<serde_json::Value>,
+    /// Where this machine can be reached, advertised on every heartbeat (#541).
+    /// Empty until something probes, so a registry that never sets it sends
+    /// exactly what it sent before.
+    local_addrs: Vec<String>,
     /// Session state received from each connected peer's heartbeat.
     worker_states: HashMap<String, WorkerState>,
     /// Our own peer id, for resolving simultaneous-dial collisions.
@@ -42,6 +50,8 @@ impl PeerRegistry {
             seen_ids: VecDeque::with_capacity(DEDUP_CAPACITY + 1),
             heartbeat_interval: Duration::from_secs(heartbeat_interval_secs),
             last_heartbeat_tick: Instant::now(),
+            local_capabilities: None,
+            local_addrs: Vec::new(),
             worker_states: HashMap::new(),
             identity: identity.to_string(),
         }
@@ -81,7 +91,10 @@ impl PeerRegistry {
     pub fn add_peer(&mut self, conn: PeerConnection) -> bool {
         let id = conn.peer_id.0.clone();
         if let Some(old) = self.peers.remove(&id) {
-            if old.reader_alive() && !self.replaces(&old, &conn) {
+            // A placeholder (#543) holds no socket, so a real connection always
+            // wins — otherwise the collision rule could keep an entry that
+            // cannot carry a single message and close the one that can.
+            if !old.is_placeholder() && old.reader_alive() && !self.replaces(&old, &conn) {
                 // Keep what we have. The peer applies the same rule to the
                 // same two ids and keeps the other end of this same socket.
                 conn.shutdown();
@@ -208,6 +221,8 @@ impl PeerRegistry {
             self.last_heartbeat_tick = now;
         }
 
+        let caps = self.local_capabilities.clone();
+        let addrs = self.local_addrs.clone();
         let peer_ids: Vec<String> = self.peers.keys().cloned().collect();
         for id in peer_ids {
             let peer = match self.peers.get_mut(&id) {
@@ -221,7 +236,13 @@ impl PeerRegistry {
                     if should_heartbeat {
                         let send_ok = match local_sessions {
                             Some(sessions) => peer
-                                .send_heartbeat_with_sessions(identity, sessions)
+                                .send_heartbeat_with(identity, sessions, caps.as_ref(), &addrs)
+                                .is_ok(),
+                            // No sessions but a manifest to advertise is still
+                            // worth a payload, so capability-only peers are
+                            // visible to a delegator.
+                            None if caps.is_some() || !addrs.is_empty() => peer
+                                .send_heartbeat_with(identity, &[], caps.as_ref(), &addrs)
                                 .is_ok(),
                             None => peer.send_heartbeat(identity).is_ok(),
                         };
@@ -262,6 +283,16 @@ impl PeerRegistry {
 
     /// Process an incoming heartbeat for a peer.
     /// If the payload contains session data, store the worker state.
+    /// Set the manifest advertised on subsequent heartbeats (#536).
+    pub fn set_local_capabilities(&mut self, caps: serde_json::Value) {
+        self.local_capabilities = Some(caps);
+    }
+
+    /// Set the addresses advertised on subsequent heartbeats (#541).
+    pub fn set_local_addrs(&mut self, addrs: Vec<String>) {
+        self.local_addrs = addrs;
+    }
+
     pub fn handle_heartbeat(&mut self, peer_id: &PeerId, payload: &serde_json::Value) {
         if let Some(peer) = self.peers.get_mut(&peer_id.0) {
             peer.record_heartbeat();
@@ -471,6 +502,96 @@ mod tests {
     /// Both ends dial at once, so each holds an inbound and an outbound socket
     /// for the one peer. Whichever order the two arrive in, and whichever way
     /// the ids compare, the two ends must keep opposite ends of the SAME
+    /// #543: a peer that could not be reached at startup must still be
+    /// retried, and must never beat a real connection.
+    mod unreachable_at_startup {
+        use super::super::*;
+        use std::net::{SocketAddr, TcpListener, TcpStream};
+
+        fn addr() -> SocketAddr {
+            "127.0.0.1:9999".parse().unwrap()
+        }
+
+        #[test]
+        fn a_placeholder_is_offered_for_reconnect() {
+            let mut reg = PeerRegistry::new(30, "local-test");
+            // Not scheduled, so it is due immediately — the production path
+            // schedules once to back off, which is asserted separately.
+            reg.add_peer(PeerConnection::pending(PeerId("gone".into()), Some(addr())));
+
+            let events = reg.tick("local-test", None);
+            assert!(
+                events.iter().any(|e| matches!(
+                    e,
+                    MeshEvent::ReconnectNeeded(id, Some(a)) if id.0 == "gone" && *a == addr()
+                )),
+                "an unreachable peer must be offered for reconnect, got {events:?}"
+            );
+        }
+
+        #[test]
+        fn scheduling_backs_off_instead_of_retrying_every_tick() {
+            let mut pending = PeerConnection::pending(PeerId("gone".into()), Some(addr()));
+            assert!(
+                pending.should_reconnect(),
+                "an unscheduled placeholder is due at once"
+            );
+            pending.schedule_reconnect();
+            assert!(
+                !pending.should_reconnect(),
+                "after scheduling it must wait, not redial on the next tick"
+            );
+        }
+
+        /// The hazard the placeholder introduces: it holds no socket, so if it
+        /// won a collision the registry would keep an entry that cannot carry a
+        /// message and close the one that can.
+        #[test]
+        fn a_real_connection_always_displaces_a_placeholder() {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let remote = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (accepted, _) = listener.accept().unwrap();
+
+            let mut reg = PeerRegistry::new(30, "aaa-local");
+            // "zzz-peer" sorts above ours, so the collision rule would keep the
+            // existing entry if it were ever consulted here.
+            reg.add_peer(PeerConnection::pending(
+                PeerId("zzz-peer".into()),
+                Some(addr()),
+            ));
+
+            let tx = reg.message_tx();
+            let real = PeerConnection::from_authenticated(PeerId("zzz-peer".into()), accepted, tx);
+            assert!(
+                reg.add_peer(real),
+                "the real connection must be the one kept"
+            );
+            assert_eq!(reg.connected_peers().len(), 1);
+            drop(remote);
+        }
+
+        #[test]
+        fn a_placeholder_is_not_a_connected_peer() {
+            let mut reg = PeerRegistry::new(30, "local-test");
+            reg.add_peer(PeerConnection::pending(PeerId("gone".into()), Some(addr())));
+            assert!(
+                reg.connected_peers().is_empty(),
+                "a placeholder must not look connected"
+            );
+            let msg = RelayMessage {
+                id: "m1".into(),
+                msg_type: super::super::super::MessageType::Heartbeat,
+                from_peer: "local-test".into(),
+                timestamp: 0,
+                payload: serde_json::json!({}),
+            };
+            assert!(
+                reg.send_to("gone", &msg).is_err(),
+                "nothing can be sent to a placeholder"
+            );
+        }
+    }
+
     /// socket — otherwise both survivors are half-dead and the pair never
     /// recovers. That is what #464's startup dial made reachable.
     mod simultaneous_dial {

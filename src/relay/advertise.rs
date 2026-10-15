@@ -92,13 +92,39 @@ impl Default for LocalSessionFeed {
 pub fn workers_from(registry: &PeerRegistry) -> Vec<fleet::FleetWorker> {
     registry
         .all_worker_states()
-        .values()
-        .map(|ws| fleet::FleetWorker {
+        .iter()
+        .map(|(peer_id, ws)| fleet::FleetWorker {
             worker_id: ws.worker_id.clone(),
             sessions: ws.sessions.clone(),
             updated_ms: ws.last_updated,
+            host: peer_host(registry, peer_id),
         })
         .collect()
+}
+
+/// Where to reach a peer's machine: the live connection's address when this
+/// side dialled, else the most recent address on file. An accepted connection
+/// carries no address, which is the usual case for the host of an invite.
+fn peer_host(registry: &PeerRegistry, peer_id: &str) -> Option<String> {
+    let live = registry
+        .get_peer(peer_id)
+        .and_then(|p| p.addr)
+        .map(|a| a.ip().to_string());
+    live.or_else(|| {
+        super::peer_addrs(super::load_peer_meta(peer_id).as_ref())
+            .first()
+            .and_then(|a| host_of(&a.addr))
+    })
+}
+
+/// The host part of a stored `host:port` address.
+fn host_of(addr: &str) -> Option<String> {
+    if let Ok(sock) = addr.parse::<std::net::SocketAddr>() {
+        return Some(sock.ip().to_string());
+    }
+    addr.rsplit_once(':')
+        .map(|(host, _)| host.to_string())
+        .filter(|h| !h.is_empty())
 }
 
 /// Write the fleet snapshot for local readers (the TUI, `claudectl --json`).
@@ -144,6 +170,17 @@ mod tests {
 
         // Past the interval: due again.
         assert!(feed.is_due(now + Duration::from_secs(6)));
+    }
+
+    #[test]
+    fn host_of_strips_the_port() {
+        assert_eq!(
+            host_of("100.109.212.89:9910").as_deref(),
+            Some("100.109.212.89")
+        );
+        assert_eq!(host_of("[fd7a::1]:9910").as_deref(), Some("fd7a::1"));
+        assert_eq!(host_of("mini.local:9910").as_deref(), Some("mini.local"));
+        assert_eq!(host_of("nonsense"), None);
     }
 
     #[test]

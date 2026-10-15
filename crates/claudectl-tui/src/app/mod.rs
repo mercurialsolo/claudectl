@@ -400,6 +400,11 @@ pub struct App {
     /// Remote sessions received from connected worker peers (relay heartbeats).
     #[cfg(feature = "relay")]
     pub remote_sessions: Vec<claudectl_core::session::ClaudeSession>,
+    /// A command that needs this terminal to itself — attaching to a remote
+    /// session's tmux pane when the TUI isn't inside tmux. `App` can't suspend
+    /// the screen it draws on, so the render loop takes this, hands the
+    /// terminal over, and redraws when the command exits.
+    pub pending_foreground: Option<Vec<String>>,
 
     // ── Skills & Hive overlay state ────────────────────────────────────────
     /// Whether the skills/hive overlay is open.
@@ -700,6 +705,7 @@ impl App {
             relay_peers: Vec::new(),
             #[cfg(feature = "relay")]
             remote_sessions: Vec::new(),
+            pending_foreground: None,
             show_skills: false,
             skills_tab: SkillsTab::Skills,
             skills_selected: 0,

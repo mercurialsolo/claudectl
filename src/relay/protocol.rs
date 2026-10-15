@@ -261,17 +261,42 @@ pub fn heartbeat_message(identity: &str) -> RelayMessage {
 }
 
 /// Build a heartbeat message carrying the worker's current session state.
-pub fn heartbeat_with_sessions(identity: &str, sessions: &[serde_json::Value]) -> RelayMessage {
+/// A heartbeat carrying sessions and, when the caller has probed them, this
+/// machine's capabilities (#536).
+///
+/// `capabilities` is omitted rather than sent empty when absent: a peer running
+/// an older build sends no such key, and the receiver has to tell "did not say"
+/// from "said nothing is installed". Conflating them would make every older
+/// peer look unusable.
+pub fn heartbeat_full(
+    identity: &str,
+    sessions: &[serde_json::Value],
+    capabilities: Option<&serde_json::Value>,
+    listen_addrs: &[String],
+) -> RelayMessage {
+    let mut payload = serde_json::json!({
+        "worker_id": identity,
+        "timestamp": epoch_ms(),
+        "sessions": sessions,
+    });
+    if let (Some(caps), Some(obj)) = (capabilities, payload.as_object_mut()) {
+        obj.insert("capabilities".into(), caps.clone());
+    }
+    // #541: where this machine can be reached, so a peer that loses the path it
+    // has can try another. Omitted when empty for the same reason
+    // `capabilities` is: an older peer sends no such key, and "did not say"
+    // must stay distinguishable from "has no addresses".
+    if !listen_addrs.is_empty() {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("listen_addrs".into(), serde_json::json!(listen_addrs));
+        }
+    }
     RelayMessage {
         id: gen_msg_id(),
         msg_type: MessageType::Heartbeat,
         from_peer: identity.to_string(),
         timestamp: epoch_ms(),
-        payload: serde_json::json!({
-            "worker_id": identity,
-            "timestamp": epoch_ms(),
-            "sessions": sessions,
-        }),
+        payload,
     }
 }
 
@@ -351,7 +376,7 @@ mod tests {
             serde_json::json!({"pid": 1234, "project": "backend", "status": "Processing"}),
             serde_json::json!({"pid": 5678, "project": "frontend", "status": "Idle"}),
         ];
-        let msg = heartbeat_with_sessions("worker-01", &sessions);
+        let msg = heartbeat_full("worker-01", &sessions, None, &[]);
         assert_eq!(msg.msg_type, MessageType::Heartbeat);
         assert_eq!(msg.from_peer, "worker-01");
         assert_eq!(
@@ -365,10 +390,40 @@ mod tests {
 
     #[test]
     fn heartbeat_with_empty_sessions() {
-        let msg = heartbeat_with_sessions("worker-02", &[]);
+        let msg = heartbeat_full("worker-02", &[], None, &[]);
         let sessions = msg.payload.get("sessions").and_then(|v| v.as_array());
         assert!(sessions.is_some());
         assert_eq!(sessions.unwrap().len(), 0);
+    }
+
+    /// A peer older than #536 sends no `capabilities` key, and a peer that has
+    /// not probed yet sends none either. Both must stay indistinguishable from
+    /// the heartbeat this protocol has always sent, or every older peer in a
+    /// hive starts looking like it has nothing installed.
+    #[test]
+    fn a_heartbeat_without_capabilities_is_byte_identical_to_the_old_one() {
+        let msg = heartbeat_full("worker-03", &[], None, &[]);
+        assert!(msg.payload.get("capabilities").is_none());
+        let keys: Vec<&str> = msg
+            .payload
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, vec!["sessions", "timestamp", "worker_id"]);
+    }
+
+    #[test]
+    fn a_heartbeat_carries_the_manifest_when_one_is_probed() {
+        let caps = serde_json::json!({
+            "claudectl_version": "0.79.0",
+            "os": "linux",
+            "arch": "x86_64",
+            "tools": {"claude": {"state": "present", "version": "2.1.0"}},
+        });
+        let msg = heartbeat_full("worker-04", &[], Some(&caps), &[]);
+        assert_eq!(msg.payload.get("capabilities"), Some(&caps));
     }
 }
 
