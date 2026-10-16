@@ -354,10 +354,19 @@ impl BusServer {
         policy::validate_hop_count(outgoing_hop, DEFAULT_MAX_HOPS)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
+        // The sender is the caller's own role unless it names one (#527).
+        // The field always said "otherwise inferred from caller cwd", and
+        // nothing inferred it, so a reply from any agent that didn't pass
+        // it arrived with no sender to answer.
+        let sender_role = {
+            let conn = self.conn.lock().expect("bus db mutex poisoned");
+            sender_for(&conn, args.sender_role.clone(), &Self::caller_cwd(None))
+        };
+
         // Rate limit per sender role. Anonymous sends (no role) skip the
         // limiter — that path is rare and not the vector RFC v2 §9 calls
         // out; the reserved-role guard handles the privileged endpoints.
-        if let Some(sender) = args.sender_role.as_deref() {
+        if let Some(sender) = sender_role.as_deref() {
             if !self
                 .rate_limiter
                 .try_acquire(sender, std::time::Instant::now())
@@ -380,7 +389,7 @@ impl BusServer {
             &conn,
             &args.subject,
             &args.msg_type,
-            args.sender_role.as_deref(),
+            sender_role.as_deref(),
             args.addressed_to.as_deref(),
             args.thread_id.as_deref(),
             &sanitized_body,
@@ -543,6 +552,20 @@ impl ServerHandler for BusServer {
     }
 }
 
+/// Who a `publish` is from: the role it names, or else the caller's own
+/// role when that resolves to exactly one (#527). Ambiguous or unbound stays
+/// anonymous rather than guessing.
+fn sender_for(
+    conn: &rusqlite::Connection,
+    explicit: Option<String>,
+    cwd: &std::path::Path,
+) -> Option<String> {
+    explicit.or_else(|| match roles::resolve(conn, None, cwd) {
+        Ok(RoleResolution::Resolved(r)) => Some(r.name),
+        _ => None,
+    })
+}
+
 /// Run the bus MCP server on stdio until the peer disconnects.
 pub fn run_stdio() -> Result<(), String> {
     let conn = store::open()?;
@@ -562,4 +585,37 @@ pub fn run_stdio() -> Result<(), String> {
             .map_err(|e| format!("server loop: {e}"))?;
         Ok::<(), String>(())
     })
+}
+
+#[cfg(test)]
+mod sender_tests {
+    use super::sender_for;
+    use crate::bus::store;
+    use std::path::Path;
+
+    /// A reply from an agent that didn't name itself used to arrive with no
+    /// sender at all; it's the caller's own role now (#527).
+    #[test]
+    fn an_unnamed_sender_is_the_callers_role() {
+        let conn = store::open_memory();
+        store::upsert_role(&conn, "codex-worker", "/work/codex", None, None).unwrap();
+        assert_eq!(
+            sender_for(&conn, None, Path::new("/work/codex/sub")).as_deref(),
+            Some("codex-worker")
+        );
+        assert_eq!(
+            sender_for(&conn, Some("explicit".into()), Path::new("/work/codex")).as_deref(),
+            Some("explicit"),
+            "a named sender wins"
+        );
+        assert_eq!(sender_for(&conn, None, Path::new("/elsewhere")), None);
+    }
+
+    #[test]
+    fn an_ambiguous_caller_stays_anonymous() {
+        let conn = store::open_memory();
+        store::upsert_role(&conn, "a", "/shared", None, None).unwrap();
+        store::upsert_role(&conn, "b", "/shared", None, None).unwrap();
+        assert_eq!(sender_for(&conn, None, Path::new("/shared")), None);
+    }
 }

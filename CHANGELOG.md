@@ -4,6 +4,21 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Codex sessions can hold bus roles (#527, part 1).**
+  - `claudectl bus role bind <name> --self` works from inside a Codex session and records which agent holds the role. `bus role list` shows `agent=codex` or `agent=claude`, and `whoami` returns it.
+  - With a Codex config snippet ([docs/agent-bus.md](docs/agent-bus.md#codex-sessions)), a Codex session reads its inbox and replies like any other.
+  - Verified with Codex 0.162: a Codex session bound itself and was resolved by its own process, even with a second role on the same directory. It answered a message addressed to it, and the reply was signed with its role.
+
+### Fixed
+
+- **`bus role bind --self` bound the wrong process, in Claude Code too.**
+  - It looked for any ancestor whose command line contained "claude". The first one it found was the shell running `claudectl bus role bind`, which exits a moment later, so the role was pinned to a dead pid.
+  - It now matches the agent program itself (`claude`, `codex`, or the script a `node` launcher runs). Checked from a Claude Code session: the role went to the live `claude` process.
+- **The process tree is read from the kernel instead of by running `ps`.** Codex's sandbox forbids running `ps` at all, so nothing in the bus could find the session it was called from there. `proc_pidinfo` (macOS) and `/proc` (Linux) are allowed, and they spare one `ps` process per ancestor on every role lookup. `ps` remains the fallback.
+- **`publish` never filled in the sender.** The field's own documentation said it was "inferred from caller cwd", but nothing inferred it, so a reply from any agent that didn't name itself arrived anonymous. The sender is now the caller's role when it resolves to exactly one.
+
 ### Fixed
 
 - **A task could run twice on a peer (#584).**
