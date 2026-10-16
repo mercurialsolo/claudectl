@@ -63,6 +63,9 @@ pub trait SideEffects: VerifierBackend {
     fn delegate(&self, req: &super::remote::DelegateRequest) -> Result<(), String>;
     /// What a remote attempt reported, verdicts included, once it has.
     fn remote_result(&self, attempt_id: &str) -> Option<super::remote::RemoteResult>;
+    /// Ask a peer to stop an attempt the supervisor gave up on (#584).
+    /// Best effort.
+    fn stop_remote(&self, attempt_id: &str, peer: &str);
 }
 
 /// Carry out one action against the SQL store and the side-effect
@@ -345,6 +348,16 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             // Close the attempt that's being given up on, with why (#570), so
             // it's never adopted as a live session again.
             if let Some(attempt_id) = super::tasks::latest_attempt_id(conn, task_id)? {
+                // An attempt on a peer that was given up on while it may still
+                // be running there (never acknowledged, or its health failed):
+                // ask the peer to stop it before it's placed again (#584). A
+                // refused or failed attempt isn't running, so there's nothing
+                // to stop.
+                if cause != super::tasks::PEER_REFUSED && cause != "session_failed" {
+                    if let Some(peer) = super::tasks::attempt_peer(conn, &attempt_id)? {
+                        fx.stop_remote(&attempt_id, &peer);
+                    }
+                }
                 let cost = attempt_outcome(fx, &attempt_id).and_then(|(_, c)| c);
                 super::tasks::finish_attempt(conn, &attempt_id, cause, cost)?;
             }
@@ -659,6 +672,7 @@ mod tests {
         delegated: std::cell::RefCell<Vec<crate::coord::remote::DelegateRequest>>,
         delegate_error: std::cell::RefCell<Option<String>>,
         remote: std::cell::RefCell<Option<crate::coord::remote::RemoteResult>>,
+        stopped: std::cell::RefCell<Vec<(String, String)>>,
         shell_cwds: std::cell::RefCell<Vec<std::path::PathBuf>>,
     }
 
@@ -681,6 +695,7 @@ mod tests {
                 delegated: Default::default(),
                 delegate_error: Default::default(),
                 remote: Default::default(),
+                stopped: Default::default(),
                 shell_cwds: Default::default(),
             }
         }
@@ -788,6 +803,11 @@ mod tests {
         }
         fn remote_result(&self, _attempt_id: &str) -> Option<crate::coord::remote::RemoteResult> {
             self.remote.borrow().clone()
+        }
+        fn stop_remote(&self, attempt_id: &str, peer: &str) {
+            self.stopped
+                .borrow_mut()
+                .push((attempt_id.to_string(), peer.to_string()));
         }
     }
 
@@ -1678,6 +1698,40 @@ mod tests {
         // A first prompt still: nothing ran, so there's nothing to recover.
         delegate(&mut conn, &fx, &id).unwrap();
         assert_eq!(fx.delegated.borrow().last().unwrap().prompt, "do it");
+    }
+
+    /// #584: an attempt on a peer that's given up on as dead is asked to
+    /// stop there before the task is placed again; a refused one isn't.
+    #[test]
+    fn a_remote_attempt_given_up_on_is_stopped_on_its_peer() {
+        let mut conn = store::open_memory();
+        let fx = RecordingFx::default();
+        let id = insert_task(&conn, &remote_task()).unwrap();
+        delegate(&mut conn, &fx, &id).unwrap();
+        let first = crate::coord::tasks::latest_attempt_id(&conn, &id)
+            .unwrap()
+            .unwrap();
+        let resume = |conn: &mut Connection, cause: &str| {
+            apply(
+                conn,
+                &fx,
+                &Action::Resume {
+                    task_id: id.clone(),
+                    cause: cause.into(),
+                },
+            )
+            .unwrap()
+        };
+        resume(&mut conn, "session_died");
+        assert_eq!(*fx.stopped.borrow(), vec![(first, "mini".to_string())]);
+
+        delegate(&mut conn, &fx, &id).unwrap();
+        resume(&mut conn, crate::coord::tasks::PEER_REFUSED);
+        assert_eq!(
+            fx.stopped.borrow().len(),
+            1,
+            "a refusal ran nothing to stop"
+        );
     }
 
     /// An older worker runs the task and ignores the verifiers. A verdict

@@ -173,6 +173,27 @@ pub fn delegate(req: &DelegateRequest) -> Result<(), String> {
     Ok(())
 }
 
+/// Ask the peer to stop an attempt the supervisor has given up on (#584).
+/// Best effort: the worker refuses a second attempt of a task that's still
+/// running there regardless, so a stop that doesn't arrive costs a wait,
+/// not a duplicate.
+#[cfg(feature = "relay")]
+pub fn stop(attempt_id: &str, peer: &str) -> Result<(), String> {
+    let identity = crate::relay::load_or_create_identity();
+    let msg = crate::relay::delegation::build_interrupt_message(
+        attempt_id,
+        "stop",
+        "the supervisor gave up on this attempt",
+        identity.as_str(),
+    );
+    crate::relay::cli::send_message_to_peer(peer, &identity, &msg).map(|_| ())
+}
+
+#[cfg(not(feature = "relay"))]
+pub fn stop(_attempt_id: &str, _peer: &str) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg(not(feature = "relay"))]
 pub fn delegate(req: &DelegateRequest) -> Result<(), String> {
     Err(format!(

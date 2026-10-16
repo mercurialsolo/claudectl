@@ -263,6 +263,11 @@ impl crate::coord::actuator::SideEffects for LiveSideEffects {
     fn remote_result(&self, attempt_id: &str) -> Option<crate::coord::remote::RemoteResult> {
         crate::coord::remote::read_result(attempt_id)
     }
+    fn stop_remote(&self, attempt_id: &str, peer: &str) {
+        if let Err(e) = crate::coord::remote::stop(attempt_id, peer) {
+            eprintln!("supervisor: couldn't ask {peer} to stop {attempt_id}: {e}");
+        }
+    }
 }
 
 /// Bus-less fallback so the supervisor can run in a `--no-default-
@@ -307,6 +312,11 @@ impl crate::coord::actuator::SideEffects for NoopSideEffects {
     }
     fn remote_result(&self, attempt_id: &str) -> Option<crate::coord::remote::RemoteResult> {
         crate::coord::remote::read_result(attempt_id)
+    }
+    fn stop_remote(&self, attempt_id: &str, peer: &str) {
+        if let Err(e) = crate::coord::remote::stop(attempt_id, peer) {
+            eprintln!("supervisor: couldn't ask {peer} to stop {attempt_id}: {e}");
+        }
     }
 }
 
