@@ -47,6 +47,20 @@ pub struct PeerRegistry {
     identity: String,
 }
 
+/// A dropped `PeerConnection` closes nothing, because its reader thread holds
+/// its own handle on the socket (see `PeerConnection::shutdown`). A one-shot
+/// send drops its registry when it's done, so the registry closes what it
+/// holds. Without this, a long-running caller such as the supervisor left one
+/// connection open at both ends per send, and a peer that kept refusing
+/// delegations ran out of file descriptors and died.
+impl Drop for PeerRegistry {
+    fn drop(&mut self) {
+        for conn in self.peers.values() {
+            conn.shutdown();
+        }
+    }
+}
+
 impl PeerRegistry {
     pub fn new(heartbeat_interval_secs: u64, identity: &str) -> Self {
         let (tx, rx) = channel();
