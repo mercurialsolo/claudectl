@@ -276,6 +276,13 @@ pub fn summarize_for_routing(
     Ok(response.trim().to_string())
 }
 
+/// Plain text completion from the configured brain model. What a supervisor
+/// `brain = "…"` verifier asks (#574); its PASS/FAIL marker is parsed by the
+/// caller.
+pub fn complete(config: &BrainConfig, prompt: &str) -> Result<String, String> {
+    call_llm(config, prompt)
+}
+
 /// Make an LLM API call, auto-detecting ollama vs OpenAI format from the endpoint URL.
 fn call_llm(config: &BrainConfig, prompt: &str) -> Result<String, String> {
     let is_openai = is_openai_compatible(&config.endpoint);

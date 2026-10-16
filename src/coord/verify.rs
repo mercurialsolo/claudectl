@@ -136,17 +136,68 @@ pub trait VerifierBackend {
     /// reply text; verdict parsing happens in `run_verifier`.
     fn query_brain(&self, prompt: &str) -> Result<String, String>;
 
-    /// Run a headless `claude -p` agent with `prompt`. Honor the budget
-    /// cap by killing the process if it exceeds spend; report the cost
-    /// regardless so the ledger reflects what was actually spent.
+    /// Run a headless `claude -p` agent with `prompt` in `cwd`, the task's
+    /// workdir, so it can inspect the change it's judging (#574). Honor the
+    /// budget cap; report the cost regardless so the ledger reflects what was
+    /// actually spent.
     fn run_agent(
         &self,
+        cwd: &Path,
         prompt: &str,
         model: Option<&str>,
         budget_usd: Option<f64>,
     ) -> Result<AgentResult, String>;
 }
 
+/// The most of a diff a brain verifier is shown. A local model's context is
+/// small; the head of a diff says the most.
+pub const DIFF_MAX_BYTES: usize = 24 * 1024;
+
+/// The change a task made in `cwd`, for a verifier that can't look for itself
+/// (#574): commits since `base` when the task ran from a ref, plus anything
+/// uncommitted. Empty outside a git repo.
+pub fn change_under_review(cwd: &Path, base: Option<&str>) -> String {
+    let git = |args: &[&str]| -> String {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let mut out = String::new();
+    if let Some(b) = base.filter(|b| !b.starts_with('-')) {
+        out.push_str(&git(&["diff", &format!("{b}...HEAD")]));
+    }
+    out.push_str(&git(&["diff", "HEAD"]));
+    if out.len() > DIFF_MAX_BYTES {
+        let mut cut = DIFF_MAX_BYTES;
+        while !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
+        out.push_str("\n[diff truncated]\n");
+    }
+    out
+}
+
+/// A brain verifier's prompt with the change it's judging appended.
+pub fn brain_prompt_with_change(prompt: &str, change: &str) -> String {
+    if change.trim().is_empty() {
+        format!(
+            "{prompt}\n\n(No changes were found in the task's workdir.)\nAnswer starting with PASS or FAIL."
+        )
+    } else {
+        format!(
+            "{prompt}\n\nThe change under review:\n```diff\n{change}\n```\nAnswer starting with PASS or FAIL."
+        )
+    }
+}
+
+#[derive(Debug)]
 pub struct ShellResult {
     pub exit_code: i32,
     pub combined_output: String,
@@ -167,6 +218,7 @@ pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 pub fn run_verifier(
     backend: &dyn VerifierBackend,
     cwd: &Path,
+    base: Option<&str>,
     verifier: &Verifier,
 ) -> Result<Verdict, String> {
     match verifier {
@@ -184,7 +236,9 @@ pub fn run_verifier(
             })
         }
         Verifier::Brain { prompt } => {
-            let reply = backend.query_brain(prompt)?;
+            // The brain can't read files, so it's shown the change.
+            let full = brain_prompt_with_change(prompt, &change_under_review(cwd, base));
+            let reply = backend.query_brain(&full)?;
             let verdict = parse_brain_verdict(&reply);
             Ok(Verdict {
                 verdict,
@@ -197,7 +251,7 @@ pub fn run_verifier(
             model,
             budget_usd,
         } => {
-            let r = backend.run_agent(prompt, model.as_deref(), *budget_usd)?;
+            let r = backend.run_agent(cwd, prompt, model.as_deref(), *budget_usd)?;
             let verdict = parse_brain_verdict(&r.reply);
             Ok(Verdict {
                 verdict,
@@ -271,6 +325,7 @@ mod tests {
         }
         fn run_agent(
             &self,
+            _cwd: &Path,
             prompt: &str,
             _model: Option<&str>,
             _budget_usd: Option<f64>,
@@ -289,6 +344,7 @@ mod tests {
         let v = run_verifier(
             &backend,
             &PathBuf::from("/x"),
+            None,
             &Verifier::Run {
                 command: "cargo test".into(),
             },
@@ -308,6 +364,7 @@ mod tests {
         let v = run_verifier(
             &backend,
             &PathBuf::from("/x"),
+            None,
             &Verifier::Run {
                 command: "cargo test".into(),
             },
@@ -326,6 +383,7 @@ mod tests {
         let v = run_verifier(
             &backend,
             &PathBuf::from("/x"),
+            None,
             &Verifier::Brain {
                 prompt: "Review the diff for JWT coverage".into(),
             },
@@ -341,6 +399,7 @@ mod tests {
         let v2 = run_verifier(
             &backend2,
             &PathBuf::from("/x"),
+            None,
             &Verifier::Brain {
                 prompt: "Review the diff".into(),
             },
@@ -368,6 +427,7 @@ mod tests {
         let v = run_verifier(
             &backend,
             &PathBuf::from("/x"),
+            None,
             &Verifier::Agent {
                 prompt: "Adversarial review: find a bypass".into(),
                 model: Some("haiku".into()),
@@ -377,6 +437,52 @@ mod tests {
         .unwrap();
         assert_eq!(v.verdict, VerdictKind::Pass);
         assert_eq!(v.cost_usd, 0.24);
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    /// A brain verifier can't read files, so it's shown the task's commits
+    /// since its ref plus anything uncommitted.
+    #[test]
+    fn the_change_under_review_is_commits_since_the_ref_and_uncommitted_edits() {
+        let tmp = std::env::temp_dir().join(format!("cctl-review-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        git(&tmp, &["init", "-q", "-b", "main"]);
+        git(&tmp, &["config", "user.email", "t@example.com"]);
+        git(&tmp, &["config", "user.name", "t"]);
+        std::fs::write(tmp.join("a.txt"), "base\n").unwrap();
+        git(&tmp, &["add", "a.txt"]);
+        git(&tmp, &["commit", "-qm", "base"]);
+        git(&tmp, &["checkout", "-q", "-b", "task"]);
+        std::fs::write(tmp.join("a.txt"), "committed\n").unwrap();
+        git(&tmp, &["commit", "-qam", "work"]);
+        std::fs::write(tmp.join("a.txt"), "uncommitted\n").unwrap();
+
+        let change = change_under_review(&tmp, Some("main"));
+        assert!(change.contains("+committed"), "{change}");
+        assert!(change.contains("+uncommitted"), "{change}");
+        // An option-looking ref is ignored, not passed to git.
+        let no_base = change_under_review(&tmp, Some("--output=/tmp/x"));
+        assert!(!no_base.contains("+committed\n-base"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_brain_verifier_is_told_when_there_is_nothing_to_review() {
+        assert!(brain_prompt_with_change("Review it.", "").contains("No changes were found"));
+        let p = brain_prompt_with_change("Review it.", "+x\n");
+        assert!(p.starts_with("Review it.") && p.contains("```diff\n+x"));
     }
 
     #[test]

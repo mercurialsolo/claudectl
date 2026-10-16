@@ -213,11 +213,12 @@ Durable task lifecycles on top of the bus. See the [README's Supervisor section]
 | Command | Description |
 |---------|-------------|
 | `supervisor init [--force]` | Scaffold a documented starter `tasks.toml` in the cwd (won't clobber without `--force`) |
-| `supervisor validate <tasks.toml>` | Parse + validate without submitting — reports the first problem (missing field, dangling `depends_on`, duplicate name) |
+| `supervisor validate <tasks.toml>` | Parse + validate without submitting — reports the first problem (missing field, dangling or cyclic `depends_on`, duplicate name) |
 | `supervisor run <tasks.toml> [--dry-run]` | Batch-submit one or more tasks from a TOML file (RFC §4 shape); validated before insert |
 | `supervisor submit --name --cwd --prompt [--role ...] [--git-ref REF [--branch B]] [--permission-mode M]` | One-shot inline submission. With `--git-ref`, the task runs in its own worktree of `cwd`'s repo on its own branch |
 | `supervisor work [--interval SECS] [--until-idle] [--timeout SECS]` | Run the queue: spawn each task's `claude` session (detached; output under `~/.claudectl/supervisor/runs/`), watch it, run its verifiers in its workdir, remove a clean worktree after DONE. Touches no session it didn't start |
 | `supervisor status [--state STATE]` | Compact task table; optional state filter (`PENDING` / `RUNNING` / `DONE` / `NEEDS_HUMAN` / …) |
+| `supervisor status --graph` | Every task as its `depends_on` tree, each under the task it waits for, with the cause of any NEEDS_HUMAN |
 | `supervisor logs <task_id>` | Task detail + full transition log |
 | `supervisor cancel <task_id>` | Idempotent move to CANCELLED |
 | `supervisor pr <task_id>` | Post a task summary comment on its branch's PR **and** set a `claudectl/verifier` commit status from the latest verdict, via `gh` (#369). Best-effort — no open PR / no `gh` / not a repo prints a skip and exits 0 |
