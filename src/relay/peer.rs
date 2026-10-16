@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use super::features::Features;
 use super::protocol;
 use super::{PeerId, RelayMessage};
 
@@ -40,6 +41,10 @@ pub struct PeerConnection {
     /// Reconnect backoff state.
     pub reconnect_attempts: u32,
     pub next_reconnect_at: Option<Instant>,
+    /// What this link agreed to in the handshake (#559). Empty for a peer
+    /// from before #559, and for a placeholder. Anything new on the wire is
+    /// sent only when this says the peer has it.
+    pub features: Features,
 }
 
 impl PeerConnection {
@@ -65,10 +70,18 @@ impl PeerConnection {
             is_initiator: false,
             reconnect_attempts: 0,
             next_reconnect_at: None,
+            features: Features::default(),
         };
 
         conn.spawn_reader(stream_arc, tx);
         conn
+    }
+
+    /// Record what the handshake agreed (#559). The listener negotiates
+    /// before it builds the connection, so it sets this afterwards.
+    pub fn with_features(mut self, features: Features) -> Self {
+        self.features = features;
+        self
     }
 
     /// A peer we know about and have not reached (#543).
@@ -97,6 +110,7 @@ impl PeerConnection {
             is_initiator: true,
             reconnect_attempts: 0,
             next_reconnect_at: None,
+            features: Features::default(),
         }
     }
 
@@ -155,7 +169,7 @@ impl PeerConnection {
             .map_err(|e| format!("send handshake: {e}"))?;
 
         // Await ack
-        let remote_peer_id =
+        let (remote_peer_id, features) =
             protocol::await_handshake_ack(&mut reader).map_err(|e| format!("auth failed: {e}"))?;
 
         let now = Instant::now();
@@ -173,6 +187,7 @@ impl PeerConnection {
             is_initiator: true,
             reconnect_attempts: 0,
             next_reconnect_at: None,
+            features,
         };
 
         conn.spawn_reader(stream_arc, tx);
@@ -400,6 +415,7 @@ mod tests {
             is_initiator: true,
             reconnect_attempts: 0,
             next_reconnect_at: None,
+            features: Features::default(),
         };
 
         assert_eq!(conn.reconnect_delay(), Duration::from_secs(5));
@@ -429,6 +445,7 @@ mod tests {
             is_initiator: false, // Not initiator
             reconnect_attempts: 0,
             next_reconnect_at: None,
+            features: Features::default(),
         };
         assert!(!conn.should_reconnect());
 
@@ -446,6 +463,7 @@ mod tests {
                 is_initiator: true,
                 reconnect_attempts: 0,
                 next_reconnect_at: None,
+                features: Features::default(),
             }
         };
         assert!(conn2.should_reconnect());
@@ -465,6 +483,7 @@ mod tests {
             is_initiator: true,
             reconnect_attempts: 0,
             next_reconnect_at: None,
+            features: Features::default(),
         };
 
         conn.schedule_reconnect();
