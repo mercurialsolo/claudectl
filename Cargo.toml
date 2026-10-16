@@ -29,7 +29,7 @@ default = ["bus", "coord", "relay", "hive"]
 # Propagated to claudectl-tui so its `App` struct can cfg-gate the matching
 # UI panels (coord widgets, relay peers panel, hive overlay tabs).
 coord = ["rusqlite", "claudectl-tui/coord"]
-relay = ["claudectl-tui/relay"]
+relay = ["claudectl-tui/relay", "dep:lz4_flex"]
 hive = ["claudectl-tui/hive"]
 # The agent bus (docs/AGENT_BUS.md). Lives on top of coord's SQLite layer and
 # pulls in an async MCP server stack (rmcp + tokio). Now in defaults; opt
@@ -70,6 +70,11 @@ rmcp = { version = "0.3", features = ["server", "macros", "transport-io", "schem
 tokio = { version = "1", features = ["rt", "macros", "io-std", "sync", "signal"], optional = true }
 schemars = { version = "1.0", optional = true }
 async-trait = { version = "0.1", optional = true }
+
+# Relay frame compression (feature = "relay", #562). Block format only: the
+# frame format would pull in twox-hash for a checksum TCP already provides.
+# safe-decode because the input comes off the network.
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"

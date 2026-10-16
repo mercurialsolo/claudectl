@@ -4,9 +4,34 @@
 
 ## Framing
 
+The challenge, handshake and ack are always NDJSON. After the ack, a link stays on NDJSON unless both ends agreed `frame-bin`, in which case every frame after the ack is binary.
+
+**NDJSON**
+
 - TCP, one JSON object per line, `\n`-terminated, at most 1 MiB per line.
 - A blank line reads as end of stream.
-- Every frame is a `RelayMessage`:
+
+**Binary frames (`frame-bin`, #562)**
+
+```
+┌──────────────┬───────────┬──────────────────────────┐
+│ len: u32 BE  │ flags: u8 │ body: len - 1 bytes      │
+└──────────────┴───────────┴──────────────────────────┘
+flags bit 0: body is raw_len (u32 LE) followed by an LZ4 block of the JSON
+flags bits 1-7: reserved, must be 0
+```
+
+- `len` is 1 to 1 MiB.
+- A sender compresses only when the JSON is at least **1024 bytes**, and only when that makes it smaller.
+- A receiver rejects any of these as a protocol error, and the link closes:
+  - a compressed frame whose `raw_len` is below 1024 or above **4 MiB**
+  - a block that doesn't decompress to exactly `raw_len`
+  - any reserved bit set
+- The 1024-byte threshold and the 4 MiB cap are part of what `frame-bin` means. Changing either needs a new feature string.
+- No base64: it would cost back a third of what LZ4 saves.
+- A read timeout before a frame's first byte is an idle link. After the first byte, the reader keeps reading until the frame is whole, because stopping mid-frame would leave every later read misaligned.
+
+Every frame, in either framing, is a `RelayMessage`:
 
 | Key | Type | Meaning |
 | --- | --- | --- |
@@ -29,6 +54,7 @@
 | Feature | Since | Meaning |
 | --- | --- | --- |
 | `unknown-ok` | proto 1 (#559) | This peer skips unknown message types instead of dropping the link |
+| `frame-bin` | proto 1 (#562) | After the ack, length-prefixed binary frames, LZ4 at or above 1024 bytes (see Framing) |
 
 ## Connection setup
 
