@@ -680,6 +680,7 @@ fn cmd_serve(
                                                 total_tokens: 0,
                                                 model: None,
                                                 usage: serde_json::json!({}),
+                                                branch: None,
                                             },
                                             identity.as_str(),
                                         );

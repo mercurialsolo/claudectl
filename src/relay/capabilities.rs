@@ -241,7 +241,15 @@ fn probe() -> Capabilities {
 }
 
 fn probe_tool(name: &str) -> ToolState {
-    let out = std::process::Command::new(name).arg("--version").output();
+    // Resolved, not looked up on PATH: under launchd the relay has a bare PATH
+    // and would report a tool missing that is installed in ~/.local/bin or
+    // Homebrew, and peers would refuse to delegate to it.
+    let bin = if name == "claude" {
+        claudectl_core::helpers::claude_bin()
+    } else {
+        claudectl_core::helpers::find_tool(name).unwrap_or_else(|| name.into())
+    };
+    let out = std::process::Command::new(bin).arg("--version").output();
     match out {
         Ok(o) if o.status.success() => {
             let text = String::from_utf8_lossy(&o.stdout);

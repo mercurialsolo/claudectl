@@ -726,7 +726,7 @@ fn launch_claude_session(
     }
     args.push(task.prompt.clone());
 
-    let mut child = Command::new("claude")
+    let mut child = Command::new(claudectl_core::helpers::claude_bin())
         .args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())

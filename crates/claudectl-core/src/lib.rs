@@ -35,3 +35,4 @@ pub mod skills;
 pub mod terminals;
 pub mod theme;
 pub mod transcript;
+pub mod worktree;
