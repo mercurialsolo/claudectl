@@ -1,6 +1,6 @@
 {
   "name": "claudectl",
-  "version": "0.80.0",
+  "version": "0.90.0",
   "description": "Hive mind for Claude Code that learns from you once and remembers everywhere — local LLM brain, session monitoring, spend control",
   "author": {
     "name": "mercurialsolo",

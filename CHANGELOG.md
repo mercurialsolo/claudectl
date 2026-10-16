@@ -4,6 +4,63 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.90.0] - 2026-10-16
+
+The supervisor becomes a fleet supervisor. Hand it a queue and it runs it on your machines unattended. Each task gets its own worktree and branch. A task is DONE only when its verifiers pass. A failed task goes back to work with the failure in its prompt. A task waits for its dependencies and is told what they produced. And each task goes to whichever paired machine has room. Guide: [docs/fleet-supervisor.md](docs/fleet-supervisor.md).
+
+**Upgrading:**
+- The coord schema moves from v3 (0.80.0) to **v7**. Any coord or supervisor command migrates it on first use.
+- After that, a 0.80.0 binary on the same machine refuses the newer database, with the `init --upgrade` remedy in the error.
+- `relay serve` never opens or migrates the coord database.
+
+### Added
+
+- **`claudectl supervisor work`: the queue, run (#570).**
+  - `supervisor run` only ever queued tasks. The loop that ran them lived inside `--headless`, which also delivers interrupts into every live session on the machine.
+  - `work [--interval] [--until-idle] [--timeout]` runs only the supervisor: start a `claude` session per task, watch it, run its verifiers. It touches no session it didn't start.
+  - A session whose supervisor restarts is adopted, not started twice.
+- **A worktree per task (#570).**
+  - `git_ref = "main"` runs a task in `~/.claudectl/worktrees/<id>` on its own branch (`claudectl/<name>-<id>`, or `branch =`).
+  - The checkout you work in is never touched.
+  - A clean worktree is removed after DONE; the branch is kept.
+  - `permission_mode =` is passed to `claude`. `bypassPermissions` is refused.
+- **Retries that learn from the failure (#574).** A task whose verifier fails goes back to work in the same worktree, with the verifier's output appended to its prompt, up to `max_retries`, then NEEDS_HUMAN. A resumed session is told to assess the worktree before doing anything.
+- **`brain =` and `agent =` verifiers work (#574).** Both always failed before.
+  - `brain` asks the local model, which is shown the task's diff.
+  - `agent` runs a headless `claude` reviewer in the worktree, **read-only**: in a real run it was told to fix what it found, and it reported FAIL without touching the file.
+- **`depends_on` (#572).**
+  - A task starts once every dependency is DONE, and its prompt names each one's branch and closing summary.
+  - A cancelled or failed dependency blocks the tasks after it, with the reason.
+  - Cycles are refused at validate.
+  - `supervisor status --graph` prints the tree.
+- **Placement across machines (#571).**
+  - `relay serve` advertises free memory, load per core, free disk, running tasks, its own `max_tasks` and `[relay] tags` on every heartbeat (`relay peers` shows them).
+  - `~/.claudectl/coord/policy.toml` sets per-machine limits.
+  - Tasks can say `requires = [...]` (tags or probed tools) and `peer = "…"`.
+  - A task that can't start says why, once per change of reason.
+  - **Behaviour change:** with a peer connected, an unpinned task can run on that peer when it has more room. Set `[peers]` `drain = true` to keep everything local.
+- **Tasks run on peers, verified there (#571).**
+  - A placed task is sent over the relay. It runs in the peer's worktree, its `run =` verifiers run there, and the verdicts come back. A missing verdict is a FAIL.
+  - A retry goes back to the same peer and worktree. A peer's refusal doesn't use a retry.
+  - Requires both machines on 0.90.0 (the `supervised-task` relay feature), with the repo at the same path on both.
+- **Leases for any resource, fleet-wide (#569).**
+  - `coord claim --resource`, with TTLs and FIFO `--wait`. Concurrent claims can no longer overwrite each other.
+  - `coord claim --fleet` asks one lease authority over the relay, so two machines can't both hold `db:staging`.
+- **Relay wire protocol v1 (#559).** Peers negotiate features at the handshake, an unknown message type is skipped instead of dropping the link, and the catalogue is published in [docs/relay-protocol.md](docs/relay-protocol.md).
+- **Binary relay frames, LZ4 above 1 KiB (#562).**
+- **Attach to a remote session's tmux pane from the TUI (#557).**
+- **Codex sessions are discovered and monitored (#524)**, with one canonical tool vocabulary across agents (#522) and unit provenance (#523).
+
+### Fixed
+
+- **A roleless supervisor task could never start**, and a running one never left RUNNING: the headless loop's sensors were stubs (#570).
+- **`relay delegate --git-ref` was accepted and ignored.** The worker now runs the task in a worktree of that ref, refuses the task if the ref can't be checked out, and names the branch in the handoff (#570).
+- **`claude` was invisible to a relay started by launchd**, whose PATH is `/usr/bin:/bin:/usr/sbin:/sbin`. Peers advertised no `claude`, and delegation to them was refused. `install-agent` now writes a real PATH, and the binary is found in the usual install locations regardless.
+- **Shell verifiers that printed more than a pipe buffer hung** until the 15-minute timeout (`cargo test` prints that much).
+- **`tasks.toml` kept `\"` literally and cut values at `#`**, so every verifier with quotes failed.
+- **`supervisor drain` didn't drain.** Only `doctor` read the marker; the reconciler now holds the queue.
+- **`relay delegate --requires docker` always passed.** A name that isn't a probed tool is now checked against the peer's tags.
+
 ### Added
 
 - **The scope grammar gains `credential.use`, and the read-only claim becomes

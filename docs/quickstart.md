@@ -111,12 +111,15 @@ claudectl supervisor submit \
   --prompt "Rename utils.rs → helpers.rs and update every import" \
   --role backend
 
+# Run the queue: a session per task, its verifiers, retries
+claudectl supervisor work --until-idle
+
 # Inspect what's running
 claudectl supervisor status            # compact table
 claudectl supervisor logs <task_id>    # transitions + verifier history
 ```
 
-Batch from a `tasks.toml` file (RFC §4 shape) with `claudectl supervisor run tasks.toml --dry-run` to preview, then without `--dry-run` to commit. See the [README's Supervisor section](../README.md#supervisor) for the verifier syntax (`run` / `brain` / `agent`) and the full design overview.
+Batch from a `tasks.toml` file (RFC §4 shape) with `claudectl supervisor run tasks.toml --dry-run` to preview, then without `--dry-run` to commit. See the [Fleet Supervisor guide](fleet-supervisor.md) for worktrees, verifiers (`run` / `brain` / `agent`), retries, `depends_on`, and running tasks across machines.
 
 `claudectl supervisor drain` halts new assignments without killing running tasks; the `supervisor drain` row in `claudectl doctor` surfaces the state.
 
