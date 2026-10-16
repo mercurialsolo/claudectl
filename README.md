@@ -522,6 +522,7 @@ Design specs — the reasoning, not the current surface:
 | [Relay & Hive](docs/relay-and-hive.md) | Why transport, coordination and knowledge are three layers |
 | [Relay Discovery](docs/relay-discovery.md) | Pairing UX: codes, phrases, QR, LAN |
 | [Hive Storage](docs/hive-storage.md) | Tiered knowledge, archive, distillation |
+| [Agent Protocol](docs/agent-protocol.md) | Any coding agent on the hive; the relay wire protocol (proposed) |
 
 ## Community
 
