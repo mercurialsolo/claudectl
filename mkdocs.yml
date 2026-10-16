@@ -60,6 +60,7 @@ nav:
       - Relay Wire Protocol: relay-protocol.md
       - Relay Discovery: relay-discovery.md
       - Hive Storage: hive-storage.md
+      - Agent Protocol: agent-protocol.md
 
 markdown_extensions:
   - admonition

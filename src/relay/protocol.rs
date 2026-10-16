@@ -1,6 +1,7 @@
-// NDJSON wire protocol and HMAC challenge-response authentication.
+// Wire framing (NDJSON, and binary frames under `frame-bin`) and HMAC
+// challenge-response authentication.
 
-use std::io::{self, BufReader, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::net::TcpStream;
 
 use super::crypto;
@@ -15,7 +16,7 @@ const MAX_LINE_SIZE: usize = 1_048_576;
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Write a RelayMessage as a single JSON line to the stream.
-pub fn write_message(stream: &mut TcpStream, msg: &RelayMessage) -> io::Result<()> {
+pub fn write_message<W: Write>(stream: &mut W, msg: &RelayMessage) -> io::Result<()> {
     let json =
         serde_json::to_string(msg).map_err(|e| io::Error::other(format!("serialize: {e}")))?;
     let line = format!("{json}\n");
@@ -146,6 +147,217 @@ fn read_line<R: io::Read>(reader: &mut BufReader<R>) -> io::Result<Option<Vec<u8
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Binary framing (feature `frame-bin`, #562)
+// ────────────────────────────────────────────────────────────────────────────
+//
+//   ┌──────────────┬───────────┬──────────────────────────┐
+//   │ len: u32 BE  │ flags: u8 │ body: len - 1 bytes      │
+//   └──────────────┴───────────┴──────────────────────────┘
+//   flags bit 0: body is `raw_len: u32 LE` + an LZ4 block of the JSON
+//   flags bits 1-7: reserved, must be 0
+//   body, decompressed if bit 0 is set: one RelayMessage as JSON
+//
+// The challenge, handshake and ack are always NDJSON. A link switches only
+// after both ends agreed `frame-bin`, so an older peer never sees a binary
+// byte. No base64 anywhere: it would cost back a third of what LZ4 saves.
+
+/// Compress a frame only when its JSON is at least this long. Bus messages
+/// and acks are tens of bytes, and LZ4 makes those bigger.
+///
+/// Part of what `frame-bin` means: a receiver rejects a compressed frame
+/// below it, so changing it needs a new feature string.
+pub const COMPRESS_THRESHOLD: usize = 1024;
+
+/// The most a frame may carry on the wire (`len`), matching the NDJSON line cap.
+pub const MAX_FRAME_LEN: usize = MAX_LINE_SIZE;
+
+/// The most a compressed frame may expand to. Checked against the declared
+/// size before anything is allocated, so a small frame can't expand into a
+/// memory exhaustion. Part of what `frame-bin` means.
+pub const MAX_RAW_LEN: usize = 4 * 1024 * 1024;
+
+const FLAG_LZ4: u8 = 0b0000_0001;
+
+/// How one connection's bytes are framed after its handshake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Framing {
+    /// One JSON object per line: every peer from before #562.
+    Lines,
+    /// Length-prefixed frames, LZ4 above the threshold.
+    Binary,
+}
+
+impl Framing {
+    /// The framing a link uses, from what its handshake agreed.
+    pub fn for_link(features: &Features) -> Self {
+        if features.has(features::FRAME_BIN) {
+            Framing::Binary
+        } else {
+            Framing::Lines
+        }
+    }
+}
+
+/// Write one message in this connection's framing.
+///
+/// A binary frame is built whole and written with one `write_all`, so its
+/// header can't interleave with another write on a cloned handle.
+pub fn write_frame<W: Write>(w: &mut W, msg: &RelayMessage, framing: Framing) -> io::Result<()> {
+    match framing {
+        Framing::Lines => write_message(w, msg),
+        Framing::Binary => {
+            let frame = encode_frame(msg)?;
+            w.write_all(&frame)?;
+            w.flush()
+        }
+    }
+}
+
+/// Read one message in this connection's framing. `None` on a clean EOF.
+/// Unknown message types are skipped in both framings (#559).
+pub fn read_frame<R: Read>(
+    reader: &mut BufReader<R>,
+    framing: Framing,
+) -> io::Result<Option<RelayMessage>> {
+    match framing {
+        Framing::Lines => read_message(reader),
+        Framing::Binary => loop {
+            let Some(json) = read_binary_body(reader)? else {
+                return Ok(None);
+            };
+            let msg = parse_message(&json)?;
+            if msg.msg_type != MessageType::Unknown {
+                return Ok(Some(msg));
+            }
+            note_unknown(&json, &msg.from_peer);
+        },
+    }
+}
+
+/// Encode one message as a binary frame. Compressed only at or above the
+/// threshold, and only when that actually makes it smaller.
+pub fn encode_frame(msg: &RelayMessage) -> io::Result<Vec<u8>> {
+    let json = serde_json::to_vec(msg).map_err(|e| io::Error::other(format!("serialize: {e}")))?;
+    if json.len() > MAX_RAW_LEN {
+        return Err(io::Error::other(format!(
+            "message is {} bytes; the most a frame can carry is {MAX_RAW_LEN}",
+            json.len()
+        )));
+    }
+
+    let mut flags = 0u8;
+    let mut body = json;
+    if body.len() >= COMPRESS_THRESHOLD {
+        let block = lz4_flex::block::compress(&body);
+        if block.len() + 4 < body.len() {
+            let mut packed = Vec::with_capacity(4 + block.len());
+            packed.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            packed.extend_from_slice(&block);
+            body = packed;
+            flags |= FLAG_LZ4;
+        }
+    }
+
+    let len = 1 + body.len();
+    if len > MAX_FRAME_LEN {
+        return Err(io::Error::other(format!(
+            "frame is {len} bytes after compression; the most the wire allows is {MAX_FRAME_LEN}"
+        )));
+    }
+    let mut frame = Vec::with_capacity(4 + len);
+    frame.extend_from_slice(&(len as u32).to_be_bytes());
+    frame.push(flags);
+    frame.extend_from_slice(&body);
+    Ok(frame)
+}
+
+/// Read one binary frame and return its JSON, decompressed. Every bound is
+/// checked before the allocation it guards.
+fn read_binary_body<R: Read>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
+    let mut header = [0u8; 4];
+    if !fill(reader, &mut header, false)? {
+        return Ok(None);
+    }
+    let len = u32::from_be_bytes(header) as usize;
+    if len == 0 || len > MAX_FRAME_LEN {
+        return Err(frame_error(format!("frame length {len} out of range")));
+    }
+
+    let mut frame = vec![0u8; len];
+    fill(reader, &mut frame, true)?;
+    let flags = frame[0];
+    if flags & !FLAG_LZ4 != 0 {
+        return Err(frame_error(format!(
+            "reserved flag bits set: {flags:#010b}"
+        )));
+    }
+    let body = &frame[1..];
+    if flags & FLAG_LZ4 == 0 {
+        return Ok(Some(body.to_vec()));
+    }
+
+    if body.len() < 4 {
+        return Err(frame_error("compressed frame has no size prefix".into()));
+    }
+    let raw_len = u32::from_le_bytes([body[0], body[1], body[2], body[3]]) as usize;
+    // A sender never compresses below the threshold, so a frame that claims
+    // to has been built by something that isn't following `frame-bin`.
+    if !(COMPRESS_THRESHOLD..=MAX_RAW_LEN).contains(&raw_len) {
+        return Err(frame_error(format!(
+            "compressed frame claims {raw_len} bytes"
+        )));
+    }
+    let json = lz4_flex::block::decompress(&body[4..], raw_len)
+        .map_err(|e| frame_error(format!("lz4: {e}")))?;
+    if json.len() != raw_len {
+        return Err(frame_error(format!(
+            "compressed frame claimed {raw_len} bytes and held {}",
+            json.len()
+        )));
+    }
+    Ok(Some(json))
+}
+
+fn frame_error(msg: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, msg)
+}
+
+/// Fill `buf` completely. `Ok(false)` only for EOF before the first byte of a
+/// frame, which is a clean close.
+///
+/// A read timeout before the first byte is returned so the reader loop can
+/// treat it as an idle link, as it always has. After the first byte it's
+/// retried instead: giving up mid-frame would leave the next read starting in
+/// the middle of this one, and every frame after it would be garbage.
+fn fill<R: Read>(reader: &mut R, buf: &mut [u8], mut started: bool) -> io::Result<bool> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..]) {
+            Ok(0) if filled == 0 && !started => return Ok(false),
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "connection closed mid-frame",
+                ));
+            }
+            Ok(n) => {
+                filled += n;
+                started = true;
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e)
+                if started
+                    && matches!(
+                        e.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(true)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Server-side authentication
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -198,8 +410,8 @@ pub fn send_handshake_ack(stream: &mut TcpStream, identity: &str, status: &str) 
 /// Server: accept a handshake, answering with the protocol and features both
 /// sides have (#559). Returns what was agreed, to store on the connection. A
 /// dialler from before #559 gets the same ack it always did, and no features.
-pub fn send_handshake_ack_negotiated(
-    stream: &mut TcpStream,
+pub fn send_handshake_ack_negotiated<W: Write>(
+    stream: &mut W,
     identity: &str,
     handshake: &RelayMessage,
 ) -> io::Result<Features> {
@@ -523,7 +735,320 @@ mod tests {
             let mut reader = frames(&[&line]);
             let back = read_message(&mut reader).unwrap().unwrap();
             assert_eq!(back.msg_type, t, "{t:?} did not survive the wire");
+
+            // And through binary frames (#562), both below the compression
+            // threshold and padded well past it.
+            for payload in [
+                serde_json::json!({}),
+                serde_json::json!({"pad": "session data ".repeat(400)}),
+            ] {
+                let msg = RelayMessage {
+                    payload: payload.clone(),
+                    ..msg.clone()
+                };
+                let back = binary_round_trip(&msg);
+                assert_eq!(back.msg_type, t, "{t:?} did not survive a binary frame");
+                assert_eq!(
+                    back.payload, payload,
+                    "{t:?} payload changed in a binary frame"
+                );
+            }
         }
+    }
+
+    // ── Binary framing (#562) ───────────────────────────────────────────
+
+    fn msg_with(payload: serde_json::Value) -> RelayMessage {
+        RelayMessage {
+            id: "id-1".into(),
+            msg_type: MessageType::Heartbeat,
+            from_peer: "peer-a".into(),
+            timestamp: 7,
+            payload,
+        }
+    }
+
+    fn binary_round_trip(msg: &RelayMessage) -> RelayMessage {
+        let mut wire = Vec::new();
+        write_frame(&mut wire, msg, Framing::Binary).unwrap();
+        let mut reader = BufReader::new(std::io::Cursor::new(wire));
+        read_frame(&mut reader, Framing::Binary).unwrap().unwrap()
+    }
+
+    fn read_binary(bytes: Vec<u8>) -> io::Result<Option<RelayMessage>> {
+        read_frame(
+            &mut BufReader::new(std::io::Cursor::new(bytes)),
+            Framing::Binary,
+        )
+    }
+
+    /// A frame with an arbitrary header and body, for the malformed cases.
+    fn raw_frame(flags: u8, body: &[u8]) -> Vec<u8> {
+        let mut f = ((1 + body.len()) as u32).to_be_bytes().to_vec();
+        f.push(flags);
+        f.extend_from_slice(body);
+        f
+    }
+
+    fn lz4_body(raw_len: u32, block: &[u8]) -> Vec<u8> {
+        let mut b = raw_len.to_le_bytes().to_vec();
+        b.extend_from_slice(block);
+        b
+    }
+
+    /// Text that LZ4 can't shrink: a deterministic byte soup.
+    fn incompressible(n: usize) -> String {
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                char::from(b'!' + (x % 90) as u8)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_small_frame_goes_uncompressed() {
+        let frame = encode_frame(&msg_with(serde_json::json!({"a": 1}))).unwrap();
+        assert_eq!(frame[4] & FLAG_LZ4, 0);
+        let json_len = serde_json::to_vec(&msg_with(serde_json::json!({"a": 1})))
+            .unwrap()
+            .len();
+        assert!(json_len < COMPRESS_THRESHOLD);
+        assert_eq!(frame.len(), 4 + 1 + json_len);
+    }
+
+    #[test]
+    fn a_large_frame_is_compressed_and_smaller() {
+        let msg = msg_with(serde_json::json!({"sessions": "status Idle cost 1.23 ".repeat(500)}));
+        let json_len = serde_json::to_vec(&msg).unwrap().len();
+        let frame = encode_frame(&msg).unwrap();
+        assert_eq!(frame[4] & FLAG_LZ4, FLAG_LZ4);
+        assert!(frame.len() * 3 < json_len, "{} vs {json_len}", frame.len());
+        assert_eq!(binary_round_trip(&msg).payload, msg.payload);
+    }
+
+    #[test]
+    fn a_large_frame_that_wont_shrink_goes_uncompressed() {
+        let msg = msg_with(serde_json::json!({"noise": incompressible(4000)}));
+        let frame = encode_frame(&msg).unwrap();
+        assert_eq!(frame[4] & FLAG_LZ4, 0);
+        assert_eq!(binary_round_trip(&msg).payload, msg.payload);
+    }
+
+    #[test]
+    fn a_frame_at_exactly_the_threshold_round_trips() {
+        // Pad until the JSON is exactly COMPRESS_THRESHOLD bytes.
+        let base = serde_json::to_vec(&msg_with(serde_json::json!({"p": ""})))
+            .unwrap()
+            .len();
+        let msg = msg_with(serde_json::json!({"p": "a".repeat(COMPRESS_THRESHOLD - base)}));
+        assert_eq!(serde_json::to_vec(&msg).unwrap().len(), COMPRESS_THRESHOLD);
+        assert_eq!(binary_round_trip(&msg).payload, msg.payload);
+    }
+
+    #[test]
+    fn several_frames_in_a_row_each_read_whole() {
+        let mut wire = Vec::new();
+        let msgs = [
+            msg_with(serde_json::json!({"n": 1})),
+            msg_with(serde_json::json!({"n": "big ".repeat(1000)})),
+            msg_with(serde_json::json!({"n": 3})),
+        ];
+        for m in &msgs {
+            write_frame(&mut wire, m, Framing::Binary).unwrap();
+        }
+        let mut reader = BufReader::new(std::io::Cursor::new(wire));
+        for m in &msgs {
+            let back = read_frame(&mut reader, Framing::Binary).unwrap().unwrap();
+            assert_eq!(back.payload, m.payload);
+        }
+        assert!(read_frame(&mut reader, Framing::Binary).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_unknown_type_in_a_binary_frame_is_skipped() {
+        let mut wire = raw_frame(0, FUTURE_FRAME.as_bytes());
+        wire.extend(raw_frame(0, HEARTBEAT_FRAME.as_bytes()));
+        let back = read_binary(wire).unwrap().unwrap();
+        assert_eq!(back.msg_type, MessageType::Heartbeat);
+    }
+
+    #[test]
+    fn eof_at_a_frame_boundary_is_a_clean_close() {
+        assert!(read_binary(Vec::new()).unwrap().is_none());
+    }
+
+    #[test]
+    fn eof_inside_a_frame_is_an_error() {
+        let mut frame = encode_frame(&msg_with(serde_json::json!({"a": 1}))).unwrap();
+        frame.truncate(frame.len() - 3);
+        let err = read_binary(frame).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        // Inside the header too.
+        let err = read_binary(vec![0, 0]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn a_zero_length_frame_is_refused() {
+        assert!(read_binary(0u32.to_be_bytes().to_vec()).is_err());
+    }
+
+    #[test]
+    fn an_oversized_length_is_refused_before_reading_it() {
+        let header = ((MAX_FRAME_LEN + 1) as u32).to_be_bytes().to_vec();
+        let err = read_binary(header).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn reserved_flag_bits_are_refused() {
+        for bit in 1..8 {
+            let err = read_binary(raw_frame(1 << bit, HEARTBEAT_FRAME.as_bytes())).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "bit {bit}");
+        }
+    }
+
+    #[test]
+    fn a_compressed_frame_without_a_size_prefix_is_refused() {
+        assert!(read_binary(raw_frame(FLAG_LZ4, &[1, 2])).is_err());
+    }
+
+    #[test]
+    fn a_compressed_frame_claiming_less_than_the_threshold_is_refused() {
+        let json = HEARTBEAT_FRAME.as_bytes();
+        let block = lz4_flex::block::compress(json);
+        let body = lz4_body(json.len() as u32, &block);
+        assert!(json.len() < COMPRESS_THRESHOLD);
+        let err = read_binary(raw_frame(FLAG_LZ4, &body)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    /// The decompression bomb: a tiny frame that says it expands past the cap
+    /// is refused on the declared size, before any allocation.
+    #[test]
+    fn a_compressed_frame_claiming_more_than_the_cap_is_refused() {
+        let block = lz4_flex::block::compress(&vec![b'a'; 64 * 1024]);
+        let body = lz4_body((MAX_RAW_LEN + 1) as u32, &block);
+        let err = read_binary(raw_frame(FLAG_LZ4, &body)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_size_prefix_that_disagrees_with_the_block_is_refused() {
+        let json =
+            serde_json::to_vec(&msg_with(serde_json::json!({"p": "x".repeat(3000)}))).unwrap();
+        let block = lz4_flex::block::compress(&json);
+        // Claims more than the block holds.
+        let body = lz4_body(json.len() as u32 + 10, &block);
+        assert!(read_binary(raw_frame(FLAG_LZ4, &body)).is_err());
+        // Claims less than the block holds.
+        let body = lz4_body(json.len() as u32 - 10, &block);
+        assert!(read_binary(raw_frame(FLAG_LZ4, &body)).is_err());
+    }
+
+    #[test]
+    fn a_corrupted_block_is_refused_not_panicked_on() {
+        let json =
+            serde_json::to_vec(&msg_with(serde_json::json!({"p": "y".repeat(3000)}))).unwrap();
+        let mut block = lz4_flex::block::compress(&json);
+        // Flip bytes through the block; every variant must error or produce
+        // something that fails to parse, never panic.
+        for i in (0..block.len()).step_by(7) {
+            block[i] ^= 0xA5;
+            let body = lz4_body(json.len() as u32, &block);
+            let _ = read_binary(raw_frame(FLAG_LZ4, &body));
+            block[i] ^= 0xA5;
+        }
+        // A block that's pure garbage.
+        let body = lz4_body(json.len() as u32, &[0xFF; 32]);
+        assert!(read_binary(raw_frame(FLAG_LZ4, &body)).is_err());
+    }
+
+    #[test]
+    fn a_valid_frame_holding_invalid_json_is_refused() {
+        assert!(read_binary(raw_frame(0, b"{not json")).is_err());
+    }
+
+    #[test]
+    fn a_message_too_big_for_a_frame_is_refused_at_send() {
+        let msg = msg_with(serde_json::json!({"p": incompressible(MAX_RAW_LEN)}));
+        assert!(encode_frame(&msg).is_err());
+        // And one that fits the raw cap but can't compress under the wire cap.
+        let msg = msg_with(serde_json::json!({"p": incompressible(MAX_FRAME_LEN + 10)}));
+        assert!(encode_frame(&msg).is_err());
+    }
+
+    #[test]
+    fn framing_follows_the_agreed_features() {
+        assert_eq!(Framing::for_link(&Features::default()), Framing::Lines);
+        let (_, agreed) =
+            features::negotiate(&serde_json::json!({"proto": 1, "features": ["frame-bin"]}))
+                .unwrap();
+        assert_eq!(Framing::for_link(&agreed), Framing::Binary);
+    }
+
+    /// The mini on 0.80 sends no `proto`. Its link must stay on NDJSON, or
+    /// this release would disconnect every peer that hasn't upgraded.
+    #[test]
+    fn a_peer_from_before_559_stays_on_lines() {
+        let agreed = features::negotiate(&serde_json::json!({"proof": "x", "version": "0.80.0"}))
+            .map(|(_, f)| f)
+            .unwrap_or_default();
+        assert_eq!(Framing::for_link(&agreed), Framing::Lines);
+    }
+
+    /// A read timeout part-way through a frame must not desync the stream:
+    /// the reader keeps going until the frame is whole (#562).
+    #[test]
+    fn a_frame_split_across_a_read_timeout_still_arrives_whole() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut writer = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(std::time::Duration::from_millis(10)))
+            .unwrap();
+
+        let msg = msg_with(serde_json::json!({"p": "split ".repeat(400)}));
+        let frame = encode_frame(&msg).unwrap();
+        let (a, b) = frame.split_at(3);
+        let rest = b.to_vec();
+        writer.write_all(a).unwrap();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            writer.write_all(&rest).unwrap();
+            writer
+        });
+
+        let mut reader = BufReader::new(server);
+        let back = read_frame(&mut reader, Framing::Binary).unwrap().unwrap();
+        assert_eq!(back.payload, msg.payload);
+        drop(t.join().unwrap());
+    }
+
+    /// Before the first byte, a timeout is still returned, so the reader
+    /// loop can treat an idle link as idle, as it always has.
+    #[test]
+    fn a_timeout_before_any_byte_is_returned_to_the_caller() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _writer = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(std::time::Duration::from_millis(10)))
+            .unwrap();
+        let err = read_frame(&mut BufReader::new(server), Framing::Binary).unwrap_err();
+        assert!(
+            matches!(
+                err.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

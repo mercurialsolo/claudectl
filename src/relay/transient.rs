@@ -22,7 +22,8 @@ use std::collections::HashMap;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 
-use super::{PeerId, RelayMessage, protocol};
+use super::protocol::{self, Framing};
+use super::{PeerId, RelayMessage};
 
 /// Write handles for in-flight one-shot deliveries, keyed by the peer that
 /// dialled. Cloneable; every clone shares the one map.
@@ -38,7 +39,9 @@ use super::{PeerId, RelayMessage, protocol};
 /// nothing about replies.
 #[derive(Clone, Default)]
 pub struct TransientReplies {
-    inner: Arc<Mutex<HashMap<String, TcpStream>>>,
+    /// Each handle with the framing its connection agreed (#562): a reply in
+    /// the wrong framing is garbage to the reader waiting on the other end.
+    inner: Arc<Mutex<HashMap<String, (TcpStream, Framing)>>>,
 }
 
 impl TransientReplies {
@@ -53,9 +56,9 @@ impl TransientReplies {
     /// unanswerable — acceptable because an ack names its session id, so a
     /// sender can tell the difference, and because the alternative is keying
     /// on something the message channel does not carry.
-    pub fn remember(&self, peer: &PeerId, stream: TcpStream) {
+    pub fn remember(&self, peer: &PeerId, stream: TcpStream, framing: Framing) {
         if let Ok(mut map) = self.inner.lock() {
-            map.insert(peer.as_str().to_string(), stream);
+            map.insert(peer.as_str().to_string(), (stream, framing));
         }
     }
 
@@ -66,13 +69,13 @@ impl TransientReplies {
     /// gone", and keeping it would make the next delivery's ack fail for the
     /// previous connection's reason.
     pub fn reply(&self, peer: &PeerId, msg: &RelayMessage) -> Result<(), String> {
-        let Some(mut stream) = self.take(peer) else {
+        let Some((mut stream, framing)) = self.take(peer) else {
             return Err(format!("no open one-shot connection from {peer}"));
         };
-        protocol::write_message(&mut stream, msg).map_err(|e| e.to_string())
+        protocol::write_frame(&mut stream, msg, framing).map_err(|e| e.to_string())
     }
 
-    fn take(&self, peer: &PeerId) -> Option<TcpStream> {
+    fn take(&self, peer: &PeerId) -> Option<(TcpStream, Framing)> {
         self.inner.lock().ok()?.remove(peer.as_str())
     }
 
@@ -102,7 +105,7 @@ mod tests {
     fn a_remembered_handle_is_taken_once() {
         let replies = TransientReplies::new();
         let peer = PeerId("sender-1".into());
-        replies.remember(&peer, a_socket());
+        replies.remember(&peer, a_socket(), Framing::Lines);
         assert_eq!(replies.len(), 1);
 
         // The first reply consumes the handle; a second has nothing to use,
@@ -126,8 +129,8 @@ mod tests {
     fn a_second_delivery_from_one_peer_replaces_the_first() {
         let replies = TransientReplies::new();
         let peer = PeerId("sender-3".into());
-        replies.remember(&peer, a_socket());
-        replies.remember(&peer, a_socket());
+        replies.remember(&peer, a_socket(), Framing::Lines);
+        replies.remember(&peer, a_socket(), Framing::Lines);
         assert_eq!(replies.len(), 1);
     }
 }

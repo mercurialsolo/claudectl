@@ -190,7 +190,10 @@ fn handle_incoming(
         Ok(s) => s,
         Err(_) => return false,
     };
-    let mut reader = BufReader::new(stream);
+    // Capacity 1, so nothing past the handshake is buffered: `into_inner`
+    // below would throw it away, and under `frame-bin` that desyncs the link
+    // (#562).
+    let mut reader = BufReader::with_capacity(1, stream);
 
     // Step 1: Send challenge
     let nonce = match protocol::send_challenge(&mut write_stream) {
@@ -369,9 +372,11 @@ fn handle_incoming(
     // A clone that fails is not fatal: the delivery itself still works, and
     // the sender falls back to the behaviour it had before, which is a row
     // that stays at `sent`.
+    // The reply goes out on the same connection, so in the same framing.
+    let framing = protocol::Framing::for_link(&features);
     if transient {
         match stream.try_clone() {
-            Ok(back_channel) => replies.remember(&peer_id, back_channel),
+            Ok(back_channel) => replies.remember(&peer_id, back_channel, framing),
             Err(e) => crate::logger::log(
                 "RELAY",
                 &format!("delivery from {peer_id}: cannot keep a reply handle: {e}"),
@@ -379,8 +384,7 @@ fn handle_incoming(
         }
     }
 
-    let conn =
-        PeerConnection::from_authenticated(peer_id.clone(), stream, tx).with_features(features);
+    let conn = PeerConnection::from_authenticated_with(peer_id.clone(), stream, tx, features);
     if transient {
         crate::logger::log(
             "RELAY",
