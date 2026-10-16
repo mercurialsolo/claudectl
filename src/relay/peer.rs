@@ -641,6 +641,35 @@ mod tests {
         server.shutdown();
     }
 
+    /// A one-shot send drops its registry when it's done. That has to close
+    /// the socket: the reader thread holds its own handle, so before it did,
+    /// every send left a connection open at both ends, and a supervisor
+    /// re-delegating to a peer that kept refusing ran that peer out of file
+    /// descriptors.
+    #[test]
+    fn dropping_a_registry_closes_its_connections() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let psk = super::super::crypto::generate_psk();
+        let acceptor = std::thread::spawn(move || accept_like_the_listener(&listener, psk, None));
+        let (client, _client_rx) = dial(addr, &psk);
+        let (server, _server_rx) = acceptor.join().unwrap();
+
+        let mut registry = super::super::mesh::PeerRegistry::new(30, "dialler");
+        registry.add_peer(client);
+        drop(registry);
+
+        let deadline = Instant::now() + WAIT;
+        while server.reader_alive() && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            !server.reader_alive(),
+            "the far end never saw the connection close"
+        );
+        server.shutdown();
+    }
+
     /// The acceptor's first frame can arrive in the same TCP segment as its
     /// ack. A buffered handshake reader would swallow it and the link would
     /// start mid-frame.

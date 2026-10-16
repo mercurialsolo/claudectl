@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.90.1] - 2026-10-16
+
 ### Added
 
 - **Codex sessions can hold bus roles (#527, part 1).**
@@ -16,17 +18,19 @@ All notable changes to claudectl are documented here.
 - **`bus role bind --self` bound the wrong process, in Claude Code too.**
   - It looked for any ancestor whose command line contained "claude". The first one it found was the shell running `claudectl bus role bind`, which exits a moment later, so the role was pinned to a dead pid.
   - It now matches the agent program itself (`claude`, `codex`, or the script a `node` launcher runs). Checked from a Claude Code session: the role went to the live `claude` process.
-- **The process tree is read from the kernel instead of by running `ps`.** Codex's sandbox forbids running `ps` at all, so nothing in the bus could find the session it was called from there. `proc_pidinfo` (macOS) and `/proc` (Linux) are allowed, and they spare one `ps` process per ancestor on every role lookup. `ps` remains the fallback.
+  - With Claude Code's native installer, the kernel names the process after its version file (`2.1.301`), not `claude`. `--self` now falls back to the name the process was launched as. Before this fix, a native-installer session got "no coding agent above this command" on the mini; the Homebrew install on the other machine hadn't shown it.
+- **The process tree is read from the kernel instead of by running `ps`.** Codex's sandbox forbids running `ps` at all, so nothing in the bus could find the session it was called from there. `proc_pidinfo` (macOS) and `/proc` (Linux) are allowed, and they spare one `ps` process per ancestor on every role lookup. `ps` remains the fallback, and `bind --self` still asks it for the launch name of any ancestor the kernel doesn't name as an agent.
 - **`publish` never filled in the sender.** The field's own documentation said it was "inferred from caller cwd", but nothing inferred it, so a reply from any agent that didn't name itself arrived anonymous. The sender is now the caller's role when it resolves to exactly one.
-
-### Fixed
-
 - **A task could run twice on a peer (#584).**
   - If the supervising machine's relay went down after it sent a task, the supervisor declared the unacknowledged attempt dead after 2 minutes and sent the task again. The first copy could still be running on the peer, in the same worktree.
   - Now the supervisor asks the peer to stop the attempt it gave up on, and the peer refuses a second attempt of a task that's still running there. That refusal doesn't use up a retry.
   - Verified by stopping the supervising relay right after a task was sent and restarting it three minutes later: the peer never ran two sessions.
 - **Stopping a delegated task left its processes running.** The worker killed `claude` but not what it had started, and never reaped it, so the session lingered as a zombie that every liveness check counted as alive. A delegated session now runs in its own process group, and stopping it kills the group and reaps it.
 - **Any paired peer could stop any delegated task.** Only the peer that delegated a task can stop or nudge it now.
+- **Every one-shot relay send left its connection open at both ends.**
+  - Dropping a connection closed nothing, because its reader thread holds its own handle on the socket. A command that exits right after sending never noticed, but the supervisor is a long-running process.
+  - In a two-machine test, a supervisor kept re-delegating to a peer that refused every task. After about 120 sends, the peer's relay ran out of file descriptors and died.
+  - A one-shot connection is now closed when the send is done, and the worker's descriptor count stays flat however many tasks it refuses.
 
 ## [0.90.0] - 2026-10-16
 

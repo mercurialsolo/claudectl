@@ -181,15 +181,15 @@ fn proc_info(_pid: u32) -> Option<ProcInfo> {
     None
 }
 
-/// Which agent a process is: by its kernel name, or, for a `node`/`bun`/
-/// `deno` launcher (or when the kernel won't say), by its `ps` command line.
+/// Which agent a process is: by its kernel name, or else by its `ps` command
+/// line. The kernel names a process after its executable file, which isn't
+/// always the program: Claude Code's native installer runs a file named for
+/// its version (`~/.local/share/claude/versions/2.1.301`), and a `node`
+/// launcher is `node`. The command line starts with what it was launched as.
 fn agent_of_process(pid: u32) -> Option<&'static str> {
-    match proc_info(pid) {
-        Some(info) if !matches!(info.name.as_str(), "node" | "bun" | "deno") => {
-            agent_program_of(&info.name)
-        }
-        _ => process_command_for(pid).and_then(|c| agent_program_of(&c)),
-    }
+    proc_info(pid)
+        .and_then(|info| agent_program_of(&info.name))
+        .or_else(|| process_command_for(pid).and_then(|c| agent_program_of(&c)))
 }
 
 /// The coding agents a role can be bound to, by the program name `ps`
@@ -346,6 +346,25 @@ mod agent_programs {
         assert_eq!(info.ppid, unsafe { libc::getppid() } as u32);
         assert!(!info.name.is_empty());
         assert!(super::proc_info(u32::MAX - 1).is_none(), "no such process");
+    }
+
+    /// Claude Code's native installer launches `~/.local/bin/claude`, a
+    /// symlink to a file named for its version, so the kernel calls the
+    /// process `2.1.301` and only the name it was launched as says claude.
+    /// `sleep` launched as `claude` is the same shape.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn an_agent_is_found_by_the_name_it_was_launched_as() {
+        use std::os::unix::process::CommandExt;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg0("/Users/me/.local/bin/claude")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let agent = super::agent_of_process(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(agent, Some("claude"));
     }
 }
 
