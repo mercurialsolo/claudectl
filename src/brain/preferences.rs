@@ -829,7 +829,7 @@ pub fn distill_preferences(decisions: &[DecisionRecord]) -> DistilledPreferences
 
 /// Extract a command keyword for pattern grouping.
 /// e.g., "rm -rf /tmp/foo" → "rm -rf", "cargo test --release" → "cargo test"
-pub(super) fn extract_command_keyword(command: Option<&str>) -> Option<String> {
+pub(crate) fn extract_command_keyword(command: Option<&str>) -> Option<String> {
     let cmd = command?.trim();
     if cmd.is_empty() {
         return None;
