@@ -732,9 +732,12 @@ fn cmd_serve(
                                     itype,
                                     from_peer
                                 );
-                                if let Some(resp) =
-                                    worker.handle_interrupt(&task_id, &itype, &reason)
-                                {
+                                if let Some(resp) = worker.handle_interrupt(
+                                    &task_id,
+                                    &itype,
+                                    &reason,
+                                    from_peer.as_str(),
+                                ) {
                                     let _ = reg.send_to(from_peer.as_str(), &resp);
                                 }
                             }

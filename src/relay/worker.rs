@@ -46,9 +46,25 @@ pub struct WorkerTask {
     pub work_dir: PathBuf,
     /// A supervised task's `run =` verifiers (#571).
     pub verify_run: Vec<String>,
+    /// A supervised task's worktree key, shared by all its attempts (#584).
+    pub worktree_key: Option<String>,
     /// While verifying: the handoff to send once the verdicts are in, and
     /// the thread running them.
     pub pending: Option<(TaskReport, std::thread::JoinHandle<Vec<RemoteVerdict>>)>,
+}
+
+/// Stop a session and everything it started, then reap it (#584). Without
+/// the reap, a killed session stays a zombie, which `kill(pid, 0)` and every
+/// liveness check built on it report as alive.
+fn stop_session(child: &mut Child) {
+    #[cfg(unix)]
+    // SAFETY: plain syscall; a negative pid names the process group the
+    // session was started in (`process_group(0)` makes its pgid its pid).
+    unsafe {
+        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// This machine's own `[local] max_tasks` from the supervisor's
@@ -200,6 +216,27 @@ impl RemoteWorker {
         // A supervisor that placed this task here counted on this machine's
         // headroom, but two supervisors can count on the same slot. Its own
         // `max_tasks` is the last word (#571).
+        // Never two attempts of one supervised task at once (#584). A
+        // supervisor that stopped hearing about attempt 1 (its relay was down)
+        // declares it dead and sends attempt 2, while attempt 1 may still be
+        // running here in the same worktree. Refused, it's placed again
+        // without using a retry, and lands once attempt 1 has finished.
+        if let Some(key) = context
+            .supervised
+            .as_ref()
+            .map(|s| s.worktree_key.as_str())
+            .filter(|k| !k.is_empty())
+        {
+            let busy = self.tasks.values().any(|t| {
+                matches!(
+                    t.state,
+                    WorkerTaskState::Running | WorkerTaskState::Verifying
+                ) && t.worktree_key.as_deref() == Some(key)
+            });
+            if busy {
+                return Err("an earlier attempt of this task is still running here".into());
+            }
+        }
         if context.supervised.is_some() {
             if let Some(max) = local_max_tasks() {
                 let running = self.running_count();
@@ -265,30 +302,38 @@ impl RemoteWorker {
             args.extend(["--model", m.as_str()]);
         }
         args.push(prompt);
-        let child = Command::new(claudectl_core::helpers::claude_bin())
+        let mut command = Command::new(claudectl_core::helpers::claude_bin());
+        command
             .args(&args)
             .current_dir(work_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::from(out_file))
-            .stderr(Stdio::from(err_file))
-            .spawn()
-            .map_err(|e| {
-                // The captures exist before the spawn, so a spawn that fails
-                // would otherwise leave two files behind for a task that never
-                // ran and is never tracked.
-                let _ = std::fs::remove_file(&out_path);
-                let _ = std::fs::remove_file(&err_path);
-                // `spawn` reports a missing working directory as the same
-                // ENOENT as a missing binary, so the bare message reads
-                // "spawn claude: No such file or directory" and sends whoever
-                // delegated the task looking for a Claude Code install that is
-                // in fact fine. Name the real cause while we still can.
-                if !std::path::Path::new(work_dir).is_dir() {
-                    format!("working directory does not exist on this host: {work_dir}")
-                } else {
-                    format!("spawn claude in {work_dir}: {e}")
-                }
-            })?;
+            .stderr(Stdio::from(err_file));
+        // Its own process group, so stopping the session also stops what it
+        // started: a stop that killed only `claude` left a running `cargo
+        // test` (or any tool) behind in the worktree (#584).
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let child = command.spawn().map_err(|e| {
+            // The captures exist before the spawn, so a spawn that fails
+            // would otherwise leave two files behind for a task that never
+            // ran and is never tracked.
+            let _ = std::fs::remove_file(&out_path);
+            let _ = std::fs::remove_file(&err_path);
+            // `spawn` reports a missing working directory as the same
+            // ENOENT as a missing binary, so the bare message reads
+            // "spawn claude: No such file or directory" and sends whoever
+            // delegated the task looking for a Claude Code install that is
+            // in fact fine. Name the real cause while we still can.
+            if !std::path::Path::new(work_dir).is_dir() {
+                format!("working directory does not exist on this host: {work_dir}")
+            } else {
+                format!("spawn claude in {work_dir}: {e}")
+            }
+        })?;
 
         let pid = child.id();
 
@@ -306,6 +351,7 @@ impl RemoteWorker {
             branch,
             work_dir: PathBuf::from(work_dir),
             verify_run: supervised.verify_run,
+            worktree_key: Some(supervised.worktree_key).filter(|k| !k.is_empty()),
             pending: None,
         };
 
@@ -477,13 +523,19 @@ impl RemoteWorker {
         task_id: &str,
         interrupt_type: &str,
         _reason: &str,
+        from_peer: &str,
     ) -> Option<RelayMessage> {
         let task = self.tasks.get_mut(task_id)?;
+        // Only the peer that delegated a task may stop or nudge it. Any
+        // paired peer could stop any task before (#584).
+        if task.from_peer != from_peer {
+            return None;
+        }
 
         match interrupt_type {
             "stop" => {
                 if let Some(mut child) = task.child.take() {
-                    let _ = child.kill();
+                    stop_session(&mut child);
                 }
                 task.state = WorkerTaskState::Failed;
                 task.pid = None;
@@ -566,6 +618,7 @@ mod tests {
             branch: None,
             work_dir: PathBuf::new(),
             verify_run: Vec::new(),
+            worktree_key: None,
             pending: None,
         }
     }
@@ -691,7 +744,7 @@ mod tests {
             .tasks
             .insert("t_1".into(), task(WorkerTaskState::Running));
 
-        let msg = worker.handle_interrupt("t_1", "stop", "no longer needed");
+        let msg = worker.handle_interrupt("t_1", "stop", "no longer needed", "peer-a");
         assert!(msg.is_some());
         let msg = msg.unwrap();
         assert_eq!(msg.msg_type, super::super::MessageType::TaskHandoff);
@@ -705,6 +758,82 @@ mod tests {
         );
     }
 
+    /// #584: a stopped session and the processes it started are gone, and
+    /// it's reaped rather than left a zombie that liveness checks call alive.
+    #[cfg(unix)]
+    #[test]
+    fn stopping_a_session_kills_its_whole_group_and_reaps_it() {
+        use std::os::unix::process::CommandExt;
+        let marker = std::env::temp_dir().join(format!("cctl-stop-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("(sleep 2; touch {}) & wait", marker.display()))
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        super::stop_session(&mut child);
+        assert!(
+            unsafe { libc::kill(pid as libc::pid_t, 0) } != 0,
+            "the session is still a process (a zombie)"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        assert!(
+            !marker.exists(),
+            "a process the session started outlived the stop"
+        );
+    }
+
+    /// #584: a peer that didn't delegate a task can't stop it.
+    #[test]
+    fn only_the_delegating_peer_can_stop_a_task() {
+        let mut worker = RemoteWorker::new("test-peer");
+        worker
+            .tasks
+            .insert("t_1".into(), task(WorkerTaskState::Running));
+        assert!(
+            worker
+                .handle_interrupt("t_1", "stop", "x", "someone-else")
+                .is_none()
+        );
+        assert_eq!(worker.tasks["t_1"].state, WorkerTaskState::Running);
+    }
+
+    /// #584: never two attempts of one supervised task at once.
+    #[test]
+    fn a_second_attempt_of_a_running_supervised_task_is_refused() {
+        let mut worker = RemoteWorker::new("test-peer");
+        let mut first = task(WorkerTaskState::Running);
+        first.worktree_key = Some("task_9".into());
+        worker.tasks.insert("attempt_1".into(), first);
+        let ctx = DelegationContext {
+            supervised: Some(super::super::delegation::SupervisedSpec {
+                worktree_key: "task_9".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let err = worker
+            .accept_task(
+                "attempt_2",
+                "p",
+                Some("/nonexistent"),
+                ctx.clone(),
+                "peer-a",
+            )
+            .unwrap_err();
+        assert!(err.contains("earlier attempt"), "{err}");
+        // Once the first has finished, the check no longer applies (the
+        // attempt then fails for its own reason: this directory doesn't exist).
+        worker.tasks.get_mut("attempt_1").unwrap().state = WorkerTaskState::Completed;
+        let err = worker
+            .accept_task("attempt_2", "p", Some("/nonexistent"), ctx, "peer-a")
+            .unwrap_err();
+        assert!(!err.contains("earlier attempt"), "{err}");
+    }
+
     #[test]
     fn handle_nudge_interrupt() {
         let mut worker = RemoteWorker::new("test-peer");
@@ -712,7 +841,7 @@ mod tests {
             .tasks
             .insert("t_1".into(), task(WorkerTaskState::Running));
 
-        let msg = worker.handle_interrupt("t_1", "nudge", "dependency resolved");
+        let msg = worker.handle_interrupt("t_1", "nudge", "dependency resolved", "peer-a");
         assert!(msg.is_some());
         let msg = msg.unwrap();
         assert_eq!(msg.msg_type, super::super::MessageType::TaskStatus);

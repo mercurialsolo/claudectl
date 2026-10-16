@@ -152,6 +152,7 @@ waiting: task_…_5: this machine is draining; baradas-mac-mini-508f9c0e has not
 
 - **The repo lives at the same path on both machines.** A task's `cwd` is used on the peer as-is. If it doesn't exist there, that attempt fails with "working directory does not exist on this host".
 - **The work comes back as a branch on the peer.** The handoff names it (`claudectl/<name>-<id>`). Fetch it the way you'd fetch any branch from that machine, for example over ssh.
+- **A peer never runs two attempts of one task at once.** If the supervising machine stops hearing about an attempt (its relay was down, say), it asks the peer to stop that attempt before sending the task again. The peer also refuses a second attempt while the first is still running.
 - **Both machines need `relay serve` running**, on builds that agree the `supervised-task` feature (each `relay serve` logs the features a link agreed). The supervisor won't send a supervised task to an older peer, which would skip the verifiers.
 
 ## Worked example: two Macs
@@ -166,7 +167,6 @@ The run used to verify this release had a laptop supervising, drained so it ran 
 
 ## Known gaps
 
-- If the supervising machine's `relay serve` dies after a task was sent, the task can be sent again while the first copy may still be running on the peer ([#584](https://github.com/mercurialsolo/claudectl/issues/584)).
 - The handoff carries the branch and a summary, not a PR link.
 - `brain =` and `agent =` verifiers run only on the supervising machine, so tasks that use them aren't sent to peers.
 

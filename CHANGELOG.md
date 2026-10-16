@@ -4,6 +4,15 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A task could run twice on a peer (#584).**
+  - If the supervising machine's relay went down after it sent a task, the supervisor declared the unacknowledged attempt dead after 2 minutes and sent the task again. The first copy could still be running on the peer, in the same worktree.
+  - Now the supervisor asks the peer to stop the attempt it gave up on, and the peer refuses a second attempt of a task that's still running there. That refusal doesn't use up a retry.
+  - Verified by stopping the supervising relay right after a task was sent and restarting it three minutes later: the peer never ran two sessions.
+- **Stopping a delegated task left its processes running.** The worker killed `claude` but not what it had started, and never reaped it, so the session lingered as a zombie that every liveness check counted as alive. A delegated session now runs in its own process group, and stopping it kills the group and reaps it.
+- **Any paired peer could stop any delegated task.** Only the peer that delegated a task can stop or nudge it now.
+
 ## [0.90.0] - 2026-10-16
 
 The supervisor becomes a fleet supervisor. Hand it a queue and it runs it on your machines unattended. Each task gets its own worktree and branch. A task is DONE only when its verifiers pass. A failed task goes back to work with the failure in its prompt. A task waits for its dependencies and is told what they produced. And each task goes to whichever paired machine has room. Guide: [docs/fleet-supervisor.md](docs/fleet-supervisor.md).
