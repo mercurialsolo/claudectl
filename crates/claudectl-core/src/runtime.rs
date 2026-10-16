@@ -678,7 +678,11 @@ pub trait Orchestrator: Send + Sync {
     /// Expire stale leases and interrupts that have passed their deadline.
     /// Bookkeeping side-effect; best-effort, no return. Implementations
     /// log failures rather than propagating them.
-    fn expire_stale(&self);
+    ///
+    /// `live_session_ids` are the sessions running now. Their leases are
+    /// renewed before anything expires (#569), so the caller passes what it
+    /// already discovered rather than the runtime scanning again.
+    fn expire_stale(&self, live_session_ids: &[String]);
 }
 
 // ============================================================================
@@ -935,7 +939,7 @@ impl Orchestrator for MockRuntime {
     fn deliver_interrupts(&self, _sessions: &[SessionSnapshot]) -> Vec<(String, String)> {
         Vec::new()
     }
-    fn expire_stale(&self) {}
+    fn expire_stale(&self, _live_session_ids: &[String]) {}
 }
 
 impl HiveActions for MockRuntime {

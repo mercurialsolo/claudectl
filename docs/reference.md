@@ -191,7 +191,10 @@ Inspect multi-session coordination state. Enabled by default since the superviso
 | Command | Description |
 |---------|-------------|
 | `coord events [N] [type]` | Show last N coordination events (default 50), optionally filtered by type |
-| `coord leases` | Show active ownership leases |
+| `coord leases` | Show active ownership leases, with expiry |
+| `coord claim --session S (--path P \| --resource KIND:VALUE) [--mode exclusive\|advisory] [--ttl SECS] [--wait [--timeout SECS]]` | Take a lease. Paths overlap by prefix; any other kind matches exactly. `--wait` queues FIFO instead of failing. A lease lives `--ttl` seconds (default 300) and is renewed automatically while its session is running |
+| `coord release LEASE` | Release a lease |
+| `coord renew LEASE [--ttl SECS]` | Extend a lease whose owner isn't a running session |
 | `coord blockers` | Show open blockers |
 | `coord handoffs` | Show handoffs |
 | `coord interrupts` | Show pending interrupts |

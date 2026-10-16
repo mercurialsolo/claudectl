@@ -295,6 +295,10 @@ Enabled by default. For the minimal sync-only build, use `cargo build --no-defau
 # Ownership leases — prevent two agents from editing the same file
 claudectl coord claim --session sess_1 --path src/app.rs --mode exclusive
 claudectl coord release lease_123
+# Any resource, not only paths; wait in line instead of failing
+claudectl coord claim --session sess_2 --resource res:dev-db --wait --timeout 300
+# Leases expire after --ttl (default 300s) unless the owning session is running
+claudectl coord renew lease_123 --ttl 900
 
 # Handoffs — structured context transfer between sessions
 claudectl coord handoff --from sess_1 --to sess_2 --task task_1 --summary 'Fix path normalization'

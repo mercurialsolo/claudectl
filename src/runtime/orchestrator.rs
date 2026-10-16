@@ -34,14 +34,17 @@ impl Orchestrator for LiveOrchestrator {
         }
     }
 
-    fn expire_stale(&self) {
+    fn expire_stale(&self, live_session_ids: &[String]) {
         #[cfg(feature = "coord")]
         {
             if let Ok(conn) = crate::coord::store::open() {
-                let _ = crate::coord::store::expire_stale_leases(&conn);
+                let live = live_session_ids.iter().cloned().collect();
+                let _ = crate::coord::store::sweep_leases(&conn, &live);
                 let _ = crate::coord::store::expire_stale_interrupts(&conn);
             }
         }
+        #[cfg(not(feature = "coord"))]
+        let _ = live_session_ids;
     }
 }
 

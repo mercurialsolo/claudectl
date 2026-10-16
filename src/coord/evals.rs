@@ -67,6 +67,7 @@ fn eval_lease_conflict_prevention() -> EvalResult {
         acquired_at: "2026-04-20T10:00:00Z".into(),
         expires_at: None,
         status: LeaseStatus::Active,
+        ttl_secs: None,
     };
     store::upsert_lease(&conn, &lease1).unwrap();
 
@@ -107,6 +108,7 @@ fn eval_lease_release() -> EvalResult {
         acquired_at: "2026-04-20T10:00:00Z".into(),
         expires_at: None,
         status: LeaseStatus::Active,
+        ttl_secs: None,
     };
     store::upsert_lease(&conn, &lease).unwrap();
 
@@ -143,6 +145,7 @@ fn eval_lease_expiry() -> EvalResult {
         acquired_at: "2020-01-01T00:00:00Z".into(),
         expires_at: Some("2020-01-01T01:00:00Z".into()),
         status: LeaseStatus::Active,
+        ttl_secs: None,
     };
     store::upsert_lease(&conn, &lease).unwrap();
 

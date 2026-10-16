@@ -39,21 +39,48 @@ pub enum CoordCommand {
         /// Session ID
         #[arg(long)]
         session: String,
-        /// Resource path to claim
+        /// Resource path to claim (shorthand for `--resource path_glob:<path>`)
+        #[arg(
+            long,
+            conflicts_with = "resource",
+            required_unless_present = "resource"
+        )]
+        path: Option<String>,
+        /// Any resource as `<kind>:<value>`, e.g. `res:dev-db` or `port:5432`.
+        /// Paths overlap by prefix; every other kind matches exactly
         #[arg(long)]
-        path: String,
+        resource: Option<String>,
         /// Lease mode (exclusive or advisory)
         #[arg(long, default_value = "exclusive")]
         mode: String,
         /// Reason for the claim
         #[arg(long)]
         reason: Option<String>,
+        /// Seconds the lease lives without renewal. A lease whose session is
+        /// running is renewed automatically; otherwise renew with `coord renew`
+        #[arg(long, default_value_t = store::DEFAULT_LEASE_TTL_SECS)]
+        ttl: u64,
+        /// If the resource is held, wait for it in FIFO order instead of failing
+        #[arg(long)]
+        wait: bool,
+        /// With --wait, give up after this many seconds (default: wait indefinitely)
+        #[arg(long, requires = "wait")]
+        timeout: Option<u64>,
     },
 
     /// Release an ownership lease
     Release {
         /// Lease ID to release
         lease_id: String,
+    },
+
+    /// Extend a lease's expiry (for an owner that isn't a running session)
+    Renew {
+        /// Lease ID to renew
+        lease_id: String,
+        /// New TTL in seconds, from now
+        #[arg(long, default_value_t = store::DEFAULT_LEASE_TTL_SECS)]
+        ttl: u64,
     },
 
     /// Create a handoff between sessions
@@ -185,10 +212,28 @@ pub fn dispatch_command(command: &CoordCommand, json_mode: bool) -> io::Result<(
         CoordCommand::Claim {
             session,
             path,
+            resource,
             mode,
             reason,
-        } => cmd_claim(session, path, mode, reason.as_deref(), json_mode),
+            ttl,
+            wait,
+            timeout,
+        } => {
+            let target = match (path, resource) {
+                (Some(p), _) => Ok((store::PATH_GLOB.to_string(), p.clone())),
+                (None, Some(r)) => parse_resource(r),
+                (None, None) => Err("give --path or --resource".to_string()),
+            }
+            .map_err(io::Error::other)?;
+            let opts = ClaimOpts {
+                ttl: *ttl,
+                wait: *wait,
+                timeout: timeout.map(std::time::Duration::from_secs),
+            };
+            cmd_claim(session, &target, mode, reason.as_deref(), &opts, json_mode)
+        }
         CoordCommand::Release { lease_id } => cmd_release(lease_id, json_mode),
+        CoordCommand::Renew { lease_id, ttl } => cmd_renew(lease_id, *ttl, json_mode),
         CoordCommand::Handoff {
             from,
             task,
@@ -285,7 +330,7 @@ fn list_leases(json_mode: bool) -> io::Result<()> {
     let conn = open_or_exit();
 
     // Expire stale leases before listing
-    let _ = store::expire_stale_leases(&conn);
+    let _ = store::sweep_leases(&conn, &live_session_ids());
 
     let leases = store::list_leases(&conn, Some(LeaseStatus::Active)).map_err(io::Error::other)?;
 
@@ -502,61 +547,160 @@ fn handle_memory(args: &[String], json_mode: bool) -> io::Result<()> {
 
 // -- Claim Ownership -----------------------------------------------------------
 
+/// How a claim behaves when the resource is taken.
+struct ClaimOpts {
+    ttl: u64,
+    wait: bool,
+    timeout: Option<std::time::Duration>,
+}
+
+/// How often a waiting claim re-checks the queue. Well inside
+/// `store::WAITER_STALE_SECS`, so a live waiter never loses its place.
+const WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Parse `--resource <kind>:<value>`. The kind is a short lowercase name and
+/// the value any non-empty printable text, both bounded, because they're
+/// stored and printed.
+fn parse_resource(raw: &str) -> Result<(String, String), String> {
+    let (kind, value) = raw
+        .split_once(':')
+        .ok_or_else(|| format!("--resource takes <kind>:<value>, got '{raw}'"))?;
+    let kind_ok = !kind.is_empty()
+        && kind.len() <= 32
+        && kind
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+    if !kind_ok {
+        return Err(format!(
+            "resource kind '{kind}' must be 1-32 characters of a-z, 0-9, _ or -"
+        ));
+    }
+    if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
+        return Err("resource value must be 1-512 printable characters".to_string());
+    }
+    Ok((kind.to_string(), value.to_string()))
+}
+
+/// Session ids running on this machine, whose leases a sweep renews.
+pub(crate) fn live_session_ids() -> std::collections::HashSet<String> {
+    crate::discovery::scan_sessions()
+        .into_iter()
+        .map(|s| s.session_id)
+        .collect()
+}
+
+fn check_ttl(ttl: u64) -> io::Result<()> {
+    if ttl == 0 || ttl > store::MAX_LEASE_TTL_SECS {
+        return Err(io::Error::other(format!(
+            "--ttl must be between 1 and {} seconds",
+            store::MAX_LEASE_TTL_SECS
+        )));
+    }
+    Ok(())
+}
+
 fn cmd_claim(
     session_id: &str,
-    resource: &str,
+    (kind, value): &(String, String),
     mode_str: &str,
     reason: Option<&str>,
+    opts: &ClaimOpts,
     json_mode: bool,
 ) -> io::Result<()> {
     let mode = LeaseMode::parse(mode_str).unwrap_or(LeaseMode::Exclusive);
     let reason = reason.unwrap_or("").to_string();
+    check_ttl(opts.ttl)?;
+    let resource = format!("{kind}:{value}");
 
     let conn = open_or_exit();
-    let _ = store::expire_stale_leases(&conn);
-
     let lease_id = store::gen_id("lease");
-    let now = crate::logger::timestamp_now();
-    let lease = Lease {
-        id: lease_id.clone(),
-        owner_session_id: session_id.to_string(),
-        owner_agent: "claude-code".into(),
-        resource_kind: "path_glob".into(),
-        resource_value: resource.to_string(),
-        mode,
-        reason,
-        acquired_at: now.clone(),
-        expires_at: None,
-        status: LeaseStatus::Active,
-    };
 
-    // Atomic check-and-claim in a single transaction
-    if let Some(conflict) = store::claim_lease_atomic(&conn, &lease).map_err(io::Error::other)? {
-        let msg = format!(
-            "Conflict: {} already holds exclusive lease on {} (lease {})",
-            conflict.owner_session_id, resource, conflict.id
-        );
-        if json_mode {
-            let json = serde_json::json!({"error": msg, "conflicting_lease": conflict.id});
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).unwrap_or_default()
-            );
-        } else {
-            eprintln!("{msg}");
+    let started = std::time::Instant::now();
+    let mut waiter: Option<String> = None;
+    let mut announced = false;
+    let lease = loop {
+        let _ = store::sweep_leases(&conn, &live_session_ids());
+        let lease = Lease {
+            id: lease_id.clone(),
+            owner_session_id: session_id.to_string(),
+            owner_agent: "claude-code".into(),
+            resource_kind: kind.clone(),
+            resource_value: value.clone(),
+            mode,
+            reason: reason.clone(),
+            acquired_at: crate::logger::timestamp_now(),
+            expires_at: Some(store::iso_after_secs(opts.ttl)),
+            status: LeaseStatus::Active,
+            ttl_secs: Some(opts.ttl),
+        };
+
+        let blocked = match store::claim_or_queue(&conn, &lease, waiter.as_deref())
+            .map_err(io::Error::other)?
+        {
+            store::ClaimOutcome::Granted => break lease,
+            store::ClaimOutcome::Conflict(c) => format!(
+                "{} already holds an exclusive lease on {resource} (lease {}, expires {})",
+                c.owner_session_id,
+                c.id,
+                c.expires_at.as_deref().unwrap_or("never")
+            ),
+            store::ClaimOutcome::Queued { ahead } => {
+                format!("{ahead} claim(s) for {resource} are queued ahead of this one")
+            }
+            store::ClaimOutcome::WaiterGone => {
+                // Lost our place: this process was stalled past the stale
+                // window. Rejoin at the back rather than fail.
+                waiter = None;
+                format!("lost its place in the queue for {resource}; rejoining")
+            }
+        };
+
+        if !opts.wait {
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({"error": format!("Conflict: {blocked}")})
+                );
+            } else {
+                eprintln!("Conflict: {blocked}");
+            }
+            return Err(io::Error::other("lease conflict"));
         }
-        return Err(io::Error::other("lease conflict"));
-    }
+        if waiter.is_none() {
+            waiter = Some(
+                store::enqueue_waiter(&conn, session_id, kind, value).map_err(io::Error::other)?,
+            );
+        }
+        if !announced && !json_mode {
+            eprintln!("Waiting: {blocked}");
+            announced = true;
+        }
+        if opts.timeout.is_some_and(|t| started.elapsed() >= t) {
+            if let Some(w) = &waiter {
+                let _ = store::drop_waiter(&conn, w);
+            }
+            let msg = format!("timed out waiting for {resource}: {blocked}");
+            if json_mode {
+                println!("{}", serde_json::json!({"error": msg}));
+            } else {
+                eprintln!("{msg}");
+            }
+            return Err(io::Error::other("lease wait timed out"));
+        }
+        std::thread::sleep(WAIT_POLL);
+    };
 
     let event = CoordEvent {
         id: None,
         event_type: EventType::LeaseAcquired,
-        timestamp: now,
+        timestamp: lease.acquired_at.clone(),
         session_id: Some(session_id.to_string()),
         payload: serde_json::json!({
             "lease_id": lease_id,
             "resource": resource,
             "mode": mode.as_str(),
+            "ttl_secs": opts.ttl,
+            "waited_ms": started.elapsed().as_millis() as u64,
         }),
     };
     let _ = store::append_event(&conn, &event);
@@ -569,6 +713,39 @@ fn cmd_claim(
         println!("  Session:  {session_id}");
         println!("  Resource: {resource}");
         println!("  Mode:     {mode}");
+        println!(
+            "  Expires:  {} (renewed while the session runs)",
+            lease.expires_at.as_deref().unwrap_or("never")
+        );
+    }
+    Ok(())
+}
+
+fn cmd_renew(lease_id: &str, ttl: u64, json_mode: bool) -> io::Result<()> {
+    check_ttl(ttl)?;
+    let conn = open_or_exit();
+    let _ = store::sweep_leases(&conn, &live_session_ids());
+    if !store::renew_lease(&conn, lease_id, ttl).map_err(io::Error::other)? {
+        let msg = format!("No active lease {lease_id}; it may have expired or been released");
+        if json_mode {
+            println!("{}", serde_json::json!({"error": msg}));
+        } else {
+            eprintln!("{msg}");
+        }
+        return Err(io::Error::other("not active"));
+    }
+    let lease = store::get_lease(&conn, lease_id).map_err(io::Error::other)?;
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&lease).unwrap_or_default()
+        );
+    } else {
+        let expires = lease.and_then(|l| l.expires_at);
+        println!(
+            "Lease {lease_id} renewed until {}",
+            expires.as_deref().unwrap_or("?")
+        );
     }
     Ok(())
 }
@@ -1188,5 +1365,53 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}...", &s[..max.saturating_sub(3)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_resource_splits_on_the_first_colon() {
+        assert_eq!(
+            parse_resource("res:dev-db").unwrap(),
+            ("res".to_string(), "dev-db".to_string())
+        );
+        // Values may contain colons themselves.
+        assert_eq!(
+            parse_resource("url:http://localhost:5432").unwrap().1,
+            "http://localhost:5432"
+        );
+    }
+
+    #[test]
+    fn a_resource_without_a_kind_is_refused() {
+        assert!(parse_resource("dev-db").is_err());
+        assert!(parse_resource(":dev-db").is_err());
+    }
+
+    #[test]
+    fn a_resource_kind_is_short_and_lowercase() {
+        assert!(parse_resource("Res:x").is_err());
+        assert!(parse_resource("a b:x").is_err());
+        assert!(parse_resource(&format!("{}:x", "k".repeat(33))).is_err());
+        assert!(parse_resource("port_5432-x:y").is_ok());
+    }
+
+    #[test]
+    fn a_resource_value_is_bounded_and_printable() {
+        assert!(parse_resource("res:").is_err());
+        assert!(parse_resource("res:a\nb").is_err());
+        assert!(parse_resource(&format!("res:{}", "v".repeat(513))).is_err());
+        assert!(parse_resource(&format!("res:{}", "v".repeat(512))).is_ok());
+    }
+
+    #[test]
+    fn a_ttl_must_be_positive_and_bounded() {
+        assert!(check_ttl(0).is_err());
+        assert!(check_ttl(1).is_ok());
+        assert!(check_ttl(store::MAX_LEASE_TTL_SECS).is_ok());
+        assert!(check_ttl(store::MAX_LEASE_TTL_SECS + 1).is_err());
     }
 }

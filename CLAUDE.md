@@ -138,7 +138,7 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 - `supervisor_cli.rs` — `claudectl supervisor` subcommand (run / submit / status / logs / cancel / drain / undrain). Hand-rolled TOML reader for the `tasks.toml` subset.
 - `src/ingest.rs` — `claudectl ingest --hook <name>` subcommand. Bash hooks call `claudectl ingest --hook PostToolUse 2>/dev/null || true`. Best-effort by construction.
 
-Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION = 3` today). A binary that meets a newer schema refuses to start with the exact `init --upgrade` remediation in the error.
+Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION = 4` today; v4 added lease TTLs and the `lease_waiters` queue, #569). A binary that meets a newer schema refuses to start with the exact `init --upgrade` remediation in the error.
 
 **Hive** (`src/hive/`): Gossip-based knowledge sharing across connected brains (feature-gated behind `relay`).
 - `mod.rs` — KnowledgeUnit, KnowledgeScope, KnowledgeContent types, semantic key, broadcast channel
