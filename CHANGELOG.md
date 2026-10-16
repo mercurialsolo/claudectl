@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.90.1] - 2026-10-16
+
 ### Added
 
 - **Codex sessions can hold bus roles (#527, part 1).**
@@ -18,9 +20,6 @@ All notable changes to claudectl are documented here.
   - It now matches the agent program itself (`claude`, `codex`, or the script a `node` launcher runs). Checked from a Claude Code session: the role went to the live `claude` process.
 - **The process tree is read from the kernel instead of by running `ps`.** Codex's sandbox forbids running `ps` at all, so nothing in the bus could find the session it was called from there. `proc_pidinfo` (macOS) and `/proc` (Linux) are allowed, and they spare one `ps` process per ancestor on every role lookup. `ps` remains the fallback.
 - **`publish` never filled in the sender.** The field's own documentation said it was "inferred from caller cwd", but nothing inferred it, so a reply from any agent that didn't name itself arrived anonymous. The sender is now the caller's role when it resolves to exactly one.
-
-### Fixed
-
 - **A task could run twice on a peer (#584).**
   - If the supervising machine's relay went down after it sent a task, the supervisor declared the unacknowledged attempt dead after 2 minutes and sent the task again. The first copy could still be running on the peer, in the same worktree.
   - Now the supervisor asks the peer to stop the attempt it gave up on, and the peer refuses a second attempt of a task that's still running there. That refusal doesn't use up a retry.
