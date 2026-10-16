@@ -7,7 +7,8 @@ use std::time::Instant;
 
 use super::RelayMessage;
 use super::delegation::{
-    DelegationContext, TaskReport, TaskStats, build_report_message, build_status_message,
+    DelegationContext, RemoteVerdict, TaskReport, TaskStats, build_report_message,
+    build_status_message,
 };
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -18,6 +19,9 @@ use super::delegation::{
 pub enum WorkerTaskState {
     Preparing,
     Running,
+    /// The session finished and its supervisor's `run =` verifiers are
+    /// running in the worktree (#571).
+    Verifying,
     Completed,
     Failed,
 }
@@ -38,6 +42,107 @@ pub struct WorkerTask {
     pub err_path: PathBuf,
     /// The worktree branch the task runs on, when it was given a ref (#570).
     pub branch: Option<String>,
+    /// Where the session ran; a supervised task's verifiers run here too.
+    pub work_dir: PathBuf,
+    /// A supervised task's `run =` verifiers (#571).
+    pub verify_run: Vec<String>,
+    /// While verifying: the handoff to send once the verdicts are in, and
+    /// the thread running them.
+    pub pending: Option<(TaskReport, std::thread::JoinHandle<Vec<RemoteVerdict>>)>,
+}
+
+/// This machine's own `[local] max_tasks` from the supervisor's
+/// `policy.toml`, if it has one. Without coord there's no policy to read.
+pub fn local_max_tasks() -> Option<u32> {
+    #[cfg(feature = "coord")]
+    {
+        crate::coord::placement::load_policy()
+            .ok()
+            .and_then(|p| p.local.max_tasks)
+    }
+    #[cfg(not(feature = "coord"))]
+    {
+        None
+    }
+}
+
+/// How long one supervised verifier may run on the worker.
+const VERIFIER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+/// How much of a verifier's output travels back: its tail, where the failure is.
+const VERDICT_OUTPUT_MAX: usize = 4096;
+
+/// Run `run =` verifiers in order in `dir`, stopping at the first failure,
+/// as the supervisor does locally (#571). Runs on its own thread.
+fn run_verifiers(dir: &std::path::Path, commands: &[String]) -> Vec<RemoteVerdict> {
+    let mut out = Vec::new();
+    for command in commands {
+        let (passed, output) = match run_one(dir, command) {
+            Ok((code, output)) => (code == 0, output),
+            Err(e) => (false, e),
+        };
+        out.push(RemoteVerdict {
+            command: command.clone(),
+            passed,
+            output: tail(&output, VERDICT_OUTPUT_MAX),
+        });
+        if !passed {
+            break;
+        }
+    }
+    out
+}
+
+fn run_one(dir: &std::path::Path, command: &str) -> Result<(i32, String), String> {
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn verifier: {e}"))?;
+    // Drained while it runs, or a verifier printing more than a pipe buffer
+    // never exits.
+    fn drain<R: std::io::Read + Send + 'static>(p: Option<R>) -> std::thread::JoinHandle<String> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = p {
+                let _ = p.read_to_end(&mut buf);
+            }
+            String::from_utf8_lossy(&buf).into_owned()
+        })
+    }
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if start.elapsed() >= VERIFIER_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("verifier timed out after {VERIFIER_TIMEOUT:?}"));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            Err(e) => return Err(format!("wait verifier: {e}")),
+        }
+    };
+    let mut output = stdout.join().unwrap_or_default();
+    output.push_str(&stderr.join().unwrap_or_default());
+    Ok((status.code().unwrap_or(-1), output))
+}
+
+/// The last `max` bytes of `s`, on a character boundary.
+fn tail(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut start = s.len() - max;
+    while !s.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("[…]{}", &s[start..])
 }
 
 /// Where a run's captured output lives while it runs.
@@ -68,7 +173,12 @@ impl RemoteWorker {
     pub fn running_count(&self) -> u32 {
         self.tasks
             .values()
-            .filter(|t| t.state == WorkerTaskState::Running)
+            .filter(|t| {
+                matches!(
+                    t.state,
+                    WorkerTaskState::Running | WorkerTaskState::Verifying
+                )
+            })
             .count() as u32
     }
 
@@ -87,20 +197,40 @@ impl RemoteWorker {
         if self.tasks.contains_key(task_id) {
             return Err(format!("task {task_id} already exists"));
         }
+        // A supervisor that placed this task here counted on this machine's
+        // headroom, but two supervisors can count on the same slot. Its own
+        // `max_tasks` is the last word (#571).
+        if context.supervised.is_some() {
+            if let Some(max) = local_max_tasks() {
+                let running = self.running_count();
+                if running >= max {
+                    return Err(format!("this machine is running {running} of {max} tasks"));
+                }
+            }
+        }
 
         // A ref means a worktree of the repo at `cwd`, on its own branch, so
         // a delegated task never edits the checkout someone is working in.
         // It used to be accepted and silently ignored. A ref that can't be
         // checked out refuses the task rather than running in `cwd` instead.
         let start_ref = context.git_commit.as_deref().or(context.git_ref.as_deref());
+        let supervised = context.supervised.clone().unwrap_or_default();
         let (work_dir, branch) = match start_ref {
             Some(r) => {
-                let branch = claudectl_core::worktree::default_branch("delegated", task_id);
+                // A supervised task names its worktree and branch, so a retry
+                // lands in the one its last attempt used (#571).
+                let key = Some(supervised.worktree_key.as_str())
+                    .filter(|k| !k.is_empty())
+                    .unwrap_or(task_id);
+                let branch = supervised
+                    .branch
+                    .clone()
+                    .unwrap_or_else(|| claudectl_core::worktree::default_branch("delegated", key));
                 let wt = claudectl_core::worktree::ensure(
                     std::path::Path::new(cwd.unwrap_or(".")),
                     r,
                     &branch,
-                    &claudectl_core::worktree::path_for(task_id),
+                    &claudectl_core::worktree::path_for(key),
                 )?;
                 (wt.path.to_string_lossy().into_owned(), Some(wt.branch))
             }
@@ -127,8 +257,16 @@ impl RemoteWorker {
         let err_file = std::fs::File::create(&err_path)
             .map_err(|e| format!("create {}: {e}", err_path.display()))?;
 
+        let mut args: Vec<&str> = vec!["--print", "--output-format", "json"];
+        if let Some(m) = &supervised.permission_mode {
+            args.extend(["--permission-mode", m.as_str()]);
+        }
+        if let Some(m) = &supervised.model {
+            args.extend(["--model", m.as_str()]);
+        }
+        args.push(prompt);
         let child = Command::new(claudectl_core::helpers::claude_bin())
-            .args(["--print", "--output-format", "json", prompt])
+            .args(&args)
             .current_dir(work_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::from(out_file))
@@ -166,6 +304,9 @@ impl RemoteWorker {
             out_path,
             err_path,
             branch,
+            work_dir: PathBuf::from(work_dir),
+            verify_run: supervised.verify_run,
+            pending: None,
         };
 
         self.tasks.insert(task_id.to_string(), task);
@@ -194,6 +335,26 @@ impl RemoteWorker {
                 None => continue,
             };
 
+            // Verifiers running on their thread: send the handoff once
+            // they're done, never block the relay loop on them.
+            if task.state == WorkerTaskState::Verifying {
+                if task.pending.as_ref().is_some_and(|(_, h)| h.is_finished()) {
+                    let (mut report, handle) = task.pending.take().expect("checked");
+                    report.verifications = handle.join().unwrap_or_else(|_| {
+                        vec![RemoteVerdict {
+                            command: "(verifier runner)".into(),
+                            passed: false,
+                            output: "the verifier thread panicked".into(),
+                        }]
+                    });
+                    task.state = WorkerTaskState::Completed;
+                    messages.push((
+                        task.from_peer.clone(),
+                        build_report_message(&task_id, &report, &self.identity),
+                    ));
+                }
+                continue;
+            }
             if task.state != WorkerTaskState::Running {
                 continue;
             }
@@ -272,7 +433,19 @@ impl RemoteWorker {
                         model,
                         usage,
                         branch: task.branch.clone(),
+                        verifications: Vec::new(),
+                        refused: false,
                     };
+                    // A supervised task that finished its work goes to its
+                    // verifiers, in the worktree, before anything is reported.
+                    if !failed && !task.verify_run.is_empty() {
+                        let commands = task.verify_run.clone();
+                        let dir = task.work_dir.clone();
+                        let handle = std::thread::spawn(move || run_verifiers(&dir, &commands));
+                        task.state = WorkerTaskState::Verifying;
+                        task.pending = Some((report, handle));
+                        continue;
+                    }
                     messages.push((
                         peer,
                         build_report_message(&task_id, &report, &self.identity),
@@ -328,6 +501,8 @@ impl RemoteWorker {
                         model: None,
                         usage: serde_json::json!({}),
                         branch: task.branch.clone(),
+                        verifications: Vec::new(),
+                        refused: false,
                     },
                     &self.identity,
                 ))
@@ -355,7 +530,10 @@ impl RemoteWorker {
     /// Clean up completed/failed tasks older than the given age.
     pub fn cleanup_finished(&mut self, max_age_secs: u64) {
         self.tasks.retain(|_, task| {
-            if task.state == WorkerTaskState::Running || task.state == WorkerTaskState::Preparing {
+            if task.state == WorkerTaskState::Running
+                || task.state == WorkerTaskState::Preparing
+                || task.state == WorkerTaskState::Verifying
+            {
                 return true;
             }
             task.start_time.elapsed().as_secs() < max_age_secs
@@ -386,7 +564,52 @@ mod tests {
             out_path: PathBuf::new(),
             err_path: PathBuf::new(),
             branch: None,
+            work_dir: PathBuf::new(),
+            verify_run: Vec::new(),
+            pending: None,
         }
+    }
+
+    /// #571: a supervised task's verifiers run in order in its worktree and
+    /// stop at the first failure, as they do locally; its output tail travels.
+    #[test]
+    fn supervised_verifiers_run_in_order_and_stop_at_the_first_failure() {
+        let dir = std::env::temp_dir();
+        let v = super::run_verifiers(
+            &dir,
+            &[
+                "true".into(),
+                "echo nope; exit 3".into(),
+                "touch should-not-run".into(),
+            ],
+        );
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v[0].passed);
+        assert!(!v[1].passed);
+        assert_eq!(v[1].output.trim(), "nope");
+        assert!(!dir.join("should-not-run").exists());
+    }
+
+    #[test]
+    fn a_long_verifier_output_keeps_its_tail() {
+        let long = format!("{}END", "x".repeat(10_000));
+        let t = super::tail(&long, super::VERDICT_OUTPUT_MAX);
+        assert!(
+            t.ends_with("END") && t.len() <= super::VERDICT_OUTPUT_MAX + 8,
+            "{}",
+            t.len()
+        );
+    }
+
+    /// A task that's verifying is still running as far as headroom and
+    /// cleanup are concerned.
+    #[test]
+    fn a_verifying_task_counts_as_running_and_is_not_cleaned_up() {
+        let mut w = RemoteWorker::new("me");
+        w.tasks.insert("t".into(), task(WorkerTaskState::Verifying));
+        assert_eq!(w.running_count(), 1);
+        w.cleanup_finished(0);
+        assert!(w.tasks.contains_key("t"));
     }
 
     /// `relay delegate --git-ref` used to be accepted and ignored. A ref

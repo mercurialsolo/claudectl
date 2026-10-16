@@ -77,7 +77,8 @@ pub fn gen_id(prefix: &str) -> String {
 /// v5 = a worktree per task (#570): `tasks.git_ref`, `branch`,
 ///       `permission_mode`; `task_attempts.pid`, `workdir`.
 /// v6 = placement (#571): `tasks.requires`, `tasks.peer`.
-pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 6;
+/// v7 = tasks run on peers (#571): `task_attempts.peer`.
+pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 7;
 
 /// Open (or create) the coordination database and run migrations.
 pub fn open() -> Result<Connection, String> {
@@ -426,6 +427,9 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     // means run wherever there's room, which before this was always here.
     ensure_column(conn, "tasks", "requires", "requires TEXT")?;
     ensure_column(conn, "tasks", "peer", "peer TEXT")?;
+    // Schema v7 — an attempt on a relay peer (#571). `peer` set means the
+    // session ran there and its relay task id is the attempt's own id.
+    ensure_column(conn, "task_attempts", "peer", "peer TEXT")?;
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS lease_waiters (

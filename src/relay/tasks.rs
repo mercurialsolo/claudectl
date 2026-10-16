@@ -76,6 +76,15 @@ pub fn record_delegated(
     write_record(&path, &record)
 }
 
+/// Drop a record written for a delegation whose send then failed (#571): a
+/// task that never left must not sit in the ledger as in flight.
+#[cfg_attr(not(feature = "coord"), allow(dead_code))]
+pub fn forget(task_id: &str) {
+    if let Some(path) = task_path(task_id) {
+        let _ = fs::remove_file(path);
+    }
+}
+
 fn write_record(path: &PathBuf, record: &serde_json::Value) -> Result<(), String> {
     fs::write(
         path,
@@ -110,6 +119,11 @@ pub enum Report {
         model: Option<String>,
         /// The token breakdown as the worker reported it, kept verbatim.
         usage: serde_json::Value,
+        /// A supervised task's verifier verdicts (#571), kept verbatim.
+        /// `null` when the worker sent none.
+        verifications: serde_json::Value,
+        /// The worker never started it (#571).
+        refused: bool,
     },
 }
 
@@ -189,6 +203,11 @@ pub fn parse_report(is_handoff: bool, payload: &serde_json::Value) -> Option<(St
                 .get("usage")
                 .cloned()
                 .unwrap_or(serde_json::json!({})),
+            verifications: payload
+                .get("verifications")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            refused: payload.get("refused").and_then(|v| v.as_bool()) == Some(true),
         },
     ))
 }
@@ -274,6 +293,8 @@ pub fn apply(task_id: &str, report: &Report) -> Applied {
             total_tokens,
             model,
             usage,
+            verifications,
+            refused,
         } => {
             obj.insert("state".into(), serde_json::json!(state));
             obj.insert("summary".into(), serde_json::json!(summary));
@@ -283,6 +304,8 @@ pub fn apply(task_id: &str, report: &Report) -> Applied {
             obj.insert("total_tokens".into(), serde_json::json!(total_tokens));
             obj.insert("model".into(), serde_json::json!(model));
             obj.insert("usage".into(), usage.clone());
+            obj.insert("verifications".into(), verifications.clone());
+            obj.insert("refused".into(), serde_json::json!(refused));
             obj.insert("settled_at".into(), serde_json::json!(epoch_ms()));
         }
     }
@@ -346,6 +369,8 @@ mod reports {
                 total_tokens: 456,
                 model: None,
                 usage: serde_json::json!({}),
+                verifications: serde_json::Value::Null,
+                refused: false,
             }
         );
     }

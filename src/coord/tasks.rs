@@ -469,17 +469,18 @@ pub fn resolve_dependency(conn: &Connection, key: &str) -> Result<Option<TaskRow
 
 /// The latest attempt that ran and how it ended, `None` for the outcome
 /// while it's still open. What the next attempt's prompt is built from
-/// (#574). A spawn that failed before anything ran is skipped: it says
-/// nothing about the work, and would hide the verifier failure before it.
+/// (#574). An attempt that never ran (it failed to spawn, couldn't be sent,
+/// or a peer declined it) is skipped: it says nothing about the work, and
+/// would hide the verifier failure before it.
 pub fn latest_attempt_outcome(
     conn: &Connection,
     task_id: &str,
 ) -> Result<Option<(String, Option<String>)>, String> {
     conn.query_row(
         "SELECT id, outcome FROM task_attempts
-         WHERE task_id = ?1 AND (outcome IS NULL OR outcome != 'spawn_failed')
+         WHERE task_id = ?1 AND (outcome IS NULL OR outcome NOT IN (?2, ?3, ?4))
          ORDER BY attempt_num DESC LIMIT 1",
-        params![task_id],
+        params![task_id, SPAWN_FAILED, DELEGATE_FAILED, PEER_REFUSED],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
     )
     .optional()
@@ -548,6 +549,64 @@ pub fn running_spawned_attempts(conn: &Connection) -> Result<Vec<SpawnedAttempt>
         .map_err(|e| format!("row: {e}"))
 }
 
+/// Mark an attempt as run on `peer` (#571). Its session id becomes its own
+/// id, which is also the relay task id, so the reconciler maps the task to
+/// what the sensor observes the same way it does for a local session.
+pub fn set_attempt_remote(conn: &Connection, attempt_id: &str, peer: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE task_attempts SET peer = ?1, session_id = id WHERE id = ?2",
+        params![peer, attempt_id],
+    )
+    .map_err(|e| format!("set attempt peer: {e}"))?;
+    Ok(())
+}
+
+/// The peer an attempt ran on; `None` for one that ran here.
+pub fn attempt_peer(conn: &Connection, attempt_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT peer FROM task_attempts WHERE id = ?1",
+        params![attempt_id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(Option::flatten)
+    .map_err(|e| format!("attempt peer: {e}"))
+}
+
+/// A remote attempt as the sensor reads it (#571).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteAttempt {
+    pub attempt_id: String,
+    pub task_id: String,
+    pub peer: String,
+    pub started_at: String,
+}
+
+/// The latest attempt of every RUNNING task that runs on a peer.
+pub fn running_remote_attempts(conn: &Connection) -> Result<Vec<RemoteAttempt>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.id, a.task_id, a.peer, a.started_at
+             FROM task_attempts a
+             JOIN tasks t ON t.id = a.task_id
+             WHERE t.state = 'RUNNING' AND a.peer IS NOT NULL
+               AND a.attempt_num = (SELECT MAX(attempt_num) FROM task_attempts WHERE task_id = a.task_id)",
+        )
+        .map_err(|e| format!("prepare: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(RemoteAttempt {
+                attempt_id: r.get(0)?,
+                task_id: r.get(1)?,
+                peer: r.get(2)?,
+                started_at: r.get(3)?,
+            })
+        })
+        .map_err(|e| format!("query: {e}"))?;
+    rows.collect::<Result<_, _>>()
+        .map_err(|e| format!("row: {e}"))
+}
+
 /// The task's latest attempt if it was spawned and hasn't ended, whatever
 /// state the task is in. What the actuator checks before spawning, so a
 /// session started just before a daemon crash is adopted, not duplicated.
@@ -603,6 +662,26 @@ pub fn age_secs(iso: &str) -> Option<u64> {
 
 /// Count attempts so the actuator can pick the next `attempt_num` without
 /// a race against itself. Cheap — indexed on `task_id`.
+/// How an attempt that never ran the task ends. Not counted against
+/// `max_retries`: nothing was tried (#571).
+pub const SPAWN_FAILED: &str = "spawn_failed";
+pub const DELEGATE_FAILED: &str = "delegate_failed";
+pub const PEER_REFUSED: &str = "peer_refused";
+
+/// Attempts that ran the task, which is what `max_retries` limits. One that
+/// failed to start, couldn't be sent, or that a peer declined isn't one.
+pub fn attempts_that_ran(conn: &Connection, task_id: &str) -> Result<u32, String> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_attempts WHERE task_id = ?1
+               AND (outcome IS NULL OR outcome NOT IN (?2, ?3, ?4))",
+            params![task_id, SPAWN_FAILED, DELEGATE_FAILED, PEER_REFUSED],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("count attempts: {e}"))?;
+    Ok(n as u32)
+}
+
 pub fn attempt_count(conn: &Connection, task_id: &str) -> Result<u32, String> {
     let n: i64 = conn
         .query_row(

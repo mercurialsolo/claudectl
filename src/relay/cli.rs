@@ -352,8 +352,13 @@ fn cmd_serve(
             let running =
                 delegated.load(std::sync::atomic::Ordering::Relaxed) + supervisor_running();
             let disk = super::relay_dir();
-            serde_json::to_value(super::headroom::local(&tags, &disk, running))
-                .unwrap_or(serde_json::Value::Null)
+            serde_json::to_value(super::headroom::local(
+                &tags,
+                &disk,
+                running,
+                super::worker::local_max_tasks(),
+            ))
+            .unwrap_or(serde_json::Value::Null)
         }));
     }
     // Write handles for in-flight one-shot deliveries (#511). Beside the
@@ -701,6 +706,8 @@ fn cmd_serve(
                                                 model: None,
                                                 usage: serde_json::json!({}),
                                                 branch: None,
+                                                verifications: Vec::new(),
+                                                refused: true,
                                             },
                                             identity.as_str(),
                                         );
@@ -2100,6 +2107,17 @@ pub fn send_message_to_peer(
     identity: &super::PeerId,
     msg: &RelayMessage,
 ) -> Result<String, String> {
+    send_message_requiring(peer_id, identity, msg, None)
+}
+
+/// `send_message_to_peer`, refusing before sending when the link didn't agree
+/// `feature`: a peer that would ignore what the message relies on (#571).
+pub fn send_message_requiring(
+    peer_id: &str,
+    identity: &super::PeerId,
+    msg: &RelayMessage,
+    feature: Option<&str>,
+) -> Result<String, String> {
     let psk = load_peer_psk(peer_id).ok_or_else(|| {
         format!("peer '{peer_id}' is not paired — run `claudectl relay pair` first")
     })?;
@@ -2131,6 +2149,18 @@ pub fn send_message_to_peer(
             return Err(format!(
                 "remote identity mismatch at {addr}: expected {peer_id}, got {remote_id}"
             ));
+        }
+        if let Some(f) = feature {
+            let agreed = registry
+                .lock()
+                .map_err(|_| "registry lock poisoned".to_string())?
+                .get_peer(&remote_id)
+                .is_some_and(|c| c.features.has(f));
+            if !agreed {
+                return Err(format!(
+                    "peer '{peer_id}' runs a claudectl without `{f}`; upgrade it"
+                ));
+            }
         }
         registry
             .lock()

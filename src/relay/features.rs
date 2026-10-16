@@ -37,8 +37,21 @@ pub const LEASE_FLEET: &str = "lease-fleet";
 /// for placing supervisor tasks. Sent only on links that agreed to it.
 pub const HEADROOM: &str = "headroom";
 
+/// This peer runs a supervisor task delegated to it (#571): a `DelegateTask`
+/// whose context carries `supervised`, with the worktree key and branch to use,
+/// the `run =` verifiers to run in it afterwards, and the verdicts sent back
+/// in the handoff. An older worker would run the task and skip the verifiers,
+/// so the supervisor refuses to send one to a peer that didn't agree this.
+pub const SUPERVISED_TASK: &str = "supervised-task";
+
 /// Every feature this build supports.
-const LOCAL: &[&str] = &[UNKNOWN_OK, FRAME_BIN, LEASE_FLEET, HEADROOM];
+const LOCAL: &[&str] = &[
+    UNKNOWN_OK,
+    FRAME_BIN,
+    LEASE_FLEET,
+    HEADROOM,
+    SUPERVISED_TASK,
+];
 
 /// A peer controls this list, so it's bounded and filtered before it's kept.
 const MAX_FEATURES: usize = 64;

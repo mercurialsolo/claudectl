@@ -14,6 +14,7 @@ pub mod metrics;
 pub mod placement;
 pub mod pr;
 pub mod promotion;
+pub mod remote;
 pub mod resume;
 pub mod session_policy;
 pub mod spawn;

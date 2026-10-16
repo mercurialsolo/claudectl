@@ -44,9 +44,16 @@ pub fn valid_tag(t: &str) -> bool {
 }
 
 /// This machine's headroom as a heartbeat carries it.
-pub fn local(tags: &[String], disk_path: &std::path::Path, running_tasks: u32) -> Advertised {
+pub fn local(
+    tags: &[String],
+    disk_path: &std::path::Path,
+    running_tasks: u32,
+    max_tasks: Option<u32>,
+) -> Advertised {
+    let mut headroom = claudectl_core::headroom::probe(disk_path, running_tasks);
+    headroom.max_tasks = max_tasks;
     Advertised {
-        headroom: claudectl_core::headroom::probe(disk_path, running_tasks),
+        headroom,
         tags: tags.iter().filter(|t| valid_tag(t)).cloned().collect(),
     }
 }
@@ -110,6 +117,7 @@ mod tests {
                 load_per_core: Some(0.5),
                 disk_free_mb: Some(9000),
                 running_tasks: 1,
+                max_tasks: None,
             },
             tags: vec!["docker".into()],
         };
