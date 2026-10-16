@@ -369,7 +369,11 @@ claudectl supervisor submit \
 
 # Batch submission from a TOML file
 claudectl supervisor run tasks.toml --dry-run    # preview
-claudectl supervisor run tasks.toml              # commit
+claudectl supervisor run tasks.toml              # commit (queues; doesn't run)
+
+# Run the queue: a session per task (in its own worktree when it names a
+# git_ref), watched until it ends, then its verifiers. Touches no other session.
+claudectl supervisor work --until-idle
 
 # Inspect fleet state
 claudectl supervisor status
@@ -394,9 +398,12 @@ model       = "sonnet"
 budget_usd  = 3.00
 max_retries = 2
 timeout_min = 45
+git_ref     = "main"          # run in a new worktree from this ref, on its own branch
+branch      = "feat/auth"     # optional; default claudectl/<name>-<id>
+permission_mode = "acceptEdits"   # optional; passed to claude --permission-mode
 
   [[task.verify]]
-  run  = "cargo test --all-targets"            # exit code is the verdict
+  run  = "cargo test --all-targets"            # exit code is the verdict, run in the worktree
 
   [[task.verify]]
   brain = "Review the diff for auth-coverage gaps. PASS or FAIL with reasons."
