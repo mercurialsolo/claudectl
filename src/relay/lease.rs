@@ -73,13 +73,20 @@ pub fn live_owners<'a>(
         live.insert(s);
     }
     for (peer, sessions) in peers {
-        for s in sessions {
+        for s in sessions.iter().filter(|s| reported_running(s)) {
             if let Some(id) = s.get("session_id").and_then(Value::as_str) {
                 live.insert(fleet_owner(id, peer));
             }
         }
     }
     live
+}
+
+/// Whether a session in a heartbeat is still running. A peer keeps a session
+/// whose process exited in its list for a while, marked `Finished`; renewing
+/// its leases would hold them until the peer forgot it.
+pub fn reported_running(session: &Value) -> bool {
+    session.get("status").and_then(Value::as_str) != Some("Finished")
 }
 
 // ── Requests ────────────────────────────────────────────────────────────
@@ -327,6 +334,7 @@ impl Authority {
         let stale_ms = claudectl_core::fleet::WORKER_STALE_SECS * 1000;
         let local_ids = local
             .iter()
+            .filter(|s| reported_running(s))
             .filter_map(|s| s.get("session_id").and_then(Value::as_str))
             .map(str::to_string);
         let peers = reg
@@ -729,6 +737,19 @@ mod tests {
     }
 
     /// A session id on one peer must not renew the same id on another.
+    #[test]
+    fn a_finished_session_in_a_heartbeat_does_not_renew() {
+        // What the two-machine test caught: the peer kept the killed
+        // session in its heartbeat, marked Finished, and it kept renewing.
+        let hb = vec![
+            json!({"session_id": "gone", "status": "Finished"}),
+            json!({"session_id": "here", "status": "Idle"}),
+        ];
+        let live = live_owners("authority", Vec::new(), [("mini", hb.as_slice())]);
+        assert!(!live.contains("gone@mini"));
+        assert!(live.contains("here@mini"));
+    }
+
     #[test]
     fn a_session_on_one_peer_does_not_renew_another_peers_lease() {
         let hb = vec![json!({"session_id": "worker"})];
