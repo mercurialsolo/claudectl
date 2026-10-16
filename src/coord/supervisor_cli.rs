@@ -72,6 +72,20 @@ pub enum SupervisorCommand {
         #[arg(long)]
         permission_mode: Option<String>,
     },
+    /// Run the supervisor loop by itself: spawn queued tasks (each in its
+    /// worktree when it names a git_ref), watch their sessions, and run their
+    /// verifiers. Unlike `--headless`, it touches no session it didn't start.
+    Work {
+        /// Seconds between passes
+        #[arg(long, default_value_t = 2)]
+        interval: u64,
+        /// Exit once no task is pending, assigned, running or verifying
+        #[arg(long)]
+        until_idle: bool,
+        /// Give up after this many seconds
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
     /// Compact task table: state, attempt count, role, age. Optional
     /// `--state` filter.
     Status {
@@ -142,6 +156,11 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
                 permission_mode: permission_mode.clone(),
             },
         ),
+        SupervisorCommand::Work {
+            interval,
+            until_idle,
+            timeout,
+        } => work(*interval, *until_idle, *timeout),
         SupervisorCommand::Status { state } => render_status(state.as_deref()),
         SupervisorCommand::Logs { task_id } => render_logs(task_id),
         SupervisorCommand::Cancel { task_id } => cancel_task(task_id),
@@ -149,6 +168,55 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
         SupervisorCommand::Drain => set_drain(true),
         SupervisorCommand::Undrain => set_drain(false),
         SupervisorCommand::Metrics { bind } => serve_metrics(bind),
+    }
+}
+
+/// States that still have work in front of them. RETRYING is left out: it
+/// has no way forward until #574 respawns it, so waiting on it would never end.
+const ACTIVE_STATES: &[TaskState] = &[
+    TaskState::Pending,
+    TaskState::Ready,
+    TaskState::Assigned,
+    TaskState::Running,
+    TaskState::Verifying,
+    TaskState::Resuming,
+];
+
+/// `supervisor work`: the reconcile loop on its own (#570).
+fn work(interval: u64, until_idle: bool, timeout: Option<u64>) -> io::Result<()> {
+    let supervisor = super::supervisor::Supervisor::with_defaults();
+    let started = std::time::Instant::now();
+    let interval = std::time::Duration::from_secs(interval.max(1));
+    println!("supervisor: working (every {}s)", interval.as_secs());
+    loop {
+        let ts = crate::logger::timestamp_now();
+        match super::live_fx::tick_once(&supervisor) {
+            Ok(r) if r.emitted > 0 => {
+                println!("[{ts}] {} action(s), {} done", r.emitted, r.actuated);
+                for e in &r.errors {
+                    println!("[{ts}]   failed: {e}");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => println!("[{ts}] supervisor error: {e}"),
+        }
+        if until_idle {
+            let conn = store::open().map_err(io::Error::other)?;
+            let active = tasks::list_tasks(&conn, None)
+                .map_err(io::Error::other)?
+                .iter()
+                .filter(|t| ACTIVE_STATES.contains(&t.state))
+                .count();
+            if active == 0 {
+                println!("supervisor: no task left in progress");
+                return render_status(None);
+            }
+        }
+        if timeout.is_some_and(|t| started.elapsed().as_secs() >= t) {
+            render_status(None)?;
+            return Err(io::Error::other("supervisor work: timed out"));
+        }
+        std::thread::sleep(interval);
     }
 }
 
@@ -575,6 +643,67 @@ struct TaskEntry {
 /// inline tables) the caller should hand-author JSON via the `submit`
 /// verb instead. The intent of `tasks.toml` is readable per-task
 /// declarations, not arbitrary TOML.
+/// The line without its `#` comment. A `#` inside a quoted string is text,
+/// not a comment: cutting there truncated any prompt that mentioned an issue
+/// number.
+fn strip_comment(line: &str) -> &str {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in line.char_indices() {
+        match quote {
+            Some('"') if escaped => escaped = false,
+            Some('"') if c == '\\' => escaped = true,
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '#' => return &line[..i],
+            None => {}
+        }
+    }
+    line
+}
+
+/// A TOML value as text. A basic string (`"…"`) has its escapes decoded, so
+/// `run = "test \"$(cat F)\" = x"` reaches the shell as `test "$(cat F)" = x`
+/// rather than with the backslashes still in it, which failed every verifier
+/// that quoted anything. A literal string (`'…'`) is taken verbatim; anything
+/// else (numbers, booleans, arrays) is returned trimmed.
+fn toml_value(v: &str) -> Result<String, String> {
+    if let Some(rest) = v.strip_prefix('\'') {
+        return rest
+            .strip_suffix('\'')
+            .map(str::to_string)
+            .ok_or_else(|| format!("unterminated string: {v}"));
+    }
+    let Some(rest) = v.strip_prefix('"') else {
+        return Ok(v.to_string());
+    };
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                return if chars.as_str().trim().is_empty() {
+                    Ok(out)
+                } else {
+                    Err(format!("text after a closing quote: {v}"))
+                };
+            }
+            '\\' => match chars.next() {
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some(other) => return Err(format!("unsupported escape \\{other} in {v}")),
+                None => return Err(format!("unterminated string: {v}")),
+            },
+            other => out.push(other),
+        }
+    }
+    Err(format!("unterminated string: {v}"))
+}
+
 fn toml_parse(input: &str) -> Result<TaskFile, String> {
     let mut tasks: Vec<TaskEntry> = Vec::new();
     let mut current: Option<TaskEntry> = None;
@@ -614,7 +743,7 @@ fn toml_parse(input: &str) -> Result<TaskFile, String> {
     }
 
     for raw in input.lines() {
-        let line = raw.split('#').next().unwrap_or("").trim();
+        let line = strip_comment(raw).trim();
         if line.is_empty() {
             continue;
         }
@@ -660,7 +789,7 @@ fn toml_parse(input: &str) -> Result<TaskFile, String> {
             return Err(format!("unparseable TOML line: {line}"));
         };
         let key = k.trim().to_string();
-        let val = v.trim().trim_matches('"').to_string();
+        let val = toml_value(v.trim())?;
         if verify_open {
             verify_buf.push((key, val));
             continue;
@@ -707,6 +836,79 @@ fn toml_parse(input: &str) -> Result<TaskFile, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the supervisor E2E caught: every verifier that quoted anything
+    /// failed, because `\"` reached the shell with its backslash.
+    #[test]
+    fn escaped_quotes_in_a_verifier_reach_the_shell_unescaped() {
+        let tf = toml_parse(
+            r#"
+[[task]]
+name = "t"
+cwd = "/tmp"
+prompt = "Say \"hi\""
+[[task.verify]]
+run = "test \"$(cat ONE.txt)\" = one"
+"#,
+        )
+        .unwrap();
+        assert_eq!(tf.task[0].prompt, r#"Say "hi""#);
+        match &tf.task[0].verify.as_ref().unwrap()[0] {
+            super::super::verify::Verifier::Run { command } => {
+                assert_eq!(command, r#"test "$(cat ONE.txt)" = one"#);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_hash_inside_a_string_is_text_and_outside_is_a_comment() {
+        let tf = toml_parse(
+            "[[task]]\nname = \"t\" # the name\ncwd = \"/tmp\"\nprompt = \"Fix #570 and #571\" # two issues\n",
+        )
+        .unwrap();
+        assert_eq!(tf.task[0].name, "t");
+        assert_eq!(tf.task[0].prompt, "Fix #570 and #571");
+    }
+
+    #[test]
+    fn literal_strings_and_bad_strings() {
+        assert_eq!(toml_value(r"'C:\path\x'").unwrap(), r"C:\path\x");
+        assert_eq!(toml_value("42").unwrap(), "42");
+        assert_eq!(toml_value(r#""a\\b\tc""#).unwrap(), "a\\b\tc");
+        assert!(toml_value(r#""unterminated"#).is_err());
+        assert!(toml_value(r#""bad \q escape""#).is_err());
+        assert!(toml_value(r#""x" y"#).is_err());
+    }
+
+    #[test]
+    fn worktree_fields_parse_and_validate() {
+        let ok = toml_parse(
+            "[[task]]\nname = \"t\"\ncwd = \"/tmp\"\nprompt = \"p\"\ngit_ref = \"main\"\nbranch = \"feat/x\"\npermission_mode = \"acceptEdits\"\n",
+        )
+        .unwrap();
+        assert_eq!(ok.task[0].git_ref.as_deref(), Some("main"));
+        assert!(validate_tasks(&ok).is_ok());
+        for bad in [
+            "git_ref = \"--force\"",
+            "branch = \"x\"",
+            "permission_mode = \"bypassPermissions\"",
+        ] {
+            let tf = toml_parse(&format!(
+                "[[task]]\nname = \"t\"\ncwd = \"/tmp\"\nprompt = \"p\"\n{bad}\n"
+            ))
+            .unwrap();
+            assert!(validate_tasks(&tf).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_relative_cwd_is_resolved_against_the_tasks_file() {
+        let base = std::env::temp_dir();
+        let got = absolute_cwd(".", &base).unwrap();
+        assert_eq!(got, base.canonicalize().unwrap().to_string_lossy());
+        assert!(absolute_cwd("/definitely/not/here", &base).is_err());
+    }
 
     #[test]
     fn toml_parse_handles_full_task_block() {

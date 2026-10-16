@@ -9,6 +9,7 @@ pub mod exporter;
 pub mod hook_events;
 pub mod injection;
 pub mod interrupt_bus;
+pub mod live_fx;
 pub mod metrics;
 pub mod pr;
 pub mod promotion;
