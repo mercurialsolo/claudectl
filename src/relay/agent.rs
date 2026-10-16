@@ -328,6 +328,13 @@ pub fn render_plist_in(binary: &Path, cfg: &ServiceConfig, home: &Path) -> Strin
   <string>{err}</string>
   <key>WorkingDirectory</key>
   <string>{home}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>{home}</string>
+    <key>PATH</key>
+    <string>{path}</string>
+  </dict>
 </dict>
 </plist>
 "#,
@@ -336,6 +343,23 @@ pub fn render_plist_in(binary: &Path, cfg: &ServiceConfig, home: &Path) -> Strin
         out = xml_escape(&out_log.display().to_string()),
         err = xml_escape(&err_log.display().to_string()),
         home = xml_escape(&home.display().to_string()),
+        path = xml_escape(&agent_path(home)),
+    )
+}
+
+/// The PATH the agent runs with: where `claude`, `node`, `cargo` and Homebrew
+/// tools are normally installed, then the system directories.
+///
+/// launchd's own default is `/usr/bin:/bin:/usr/sbin:/sbin`, under which a
+/// relay can't find `claude` to run delegated work, and its capability probe
+/// reports it missing so peers refuse to delegate at all. Built from `home`
+/// rather than copied from the installing shell, so `install-agent` over ssh
+/// (a non-login shell with a bare PATH) produces the same agent as from a
+/// terminal.
+pub fn agent_path(home: &Path) -> String {
+    let h = home.display();
+    format!(
+        "{h}/.local/bin:{h}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:{h}/.claude/local:/usr/bin:/bin:/usr/sbin:/sbin"
     )
 }
 
@@ -744,6 +768,30 @@ mod tests {
         let bare = AgentConfig::default().argv(Path::new("/x/claudectl"));
         assert!(!bare.iter().any(|a| a.starts_with("--http")));
         assert!(!bare.iter().any(|a| a == "--auth-token"));
+    }
+
+    /// Without this a relay under launchd can't find `claude` to run
+    /// delegated work, and reports it missing so peers refuse to delegate.
+    #[test]
+    fn the_plist_gives_the_agent_a_path_with_the_usual_tool_dirs() {
+        let xml = render_plist_in(
+            Path::new("/opt/homebrew/bin/claudectl"),
+            &ServiceConfig::Relay(AgentConfig::default()),
+            &home(),
+        );
+        assert!(xml.contains("<key>EnvironmentVariables</key>"), "{xml}");
+        let path = agent_path(&home());
+        assert!(xml.contains(&format!("<string>{path}</string>")), "{xml}");
+        for dir in [
+            "/.local/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+        ] {
+            assert!(path.contains(dir), "{path} lacks {dir}");
+        }
+        // The plist is still valid XML plist structure for launchd.
+        assert!(xml.trim_end().ends_with("</plist>"));
     }
 
     #[test]

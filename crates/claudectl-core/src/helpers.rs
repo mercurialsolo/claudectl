@@ -124,6 +124,57 @@ pub fn dirs_home() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
 }
 
+/// Where command-line tools are usually installed when PATH doesn't say.
+/// launchd starts the relay with `/usr/bin:/bin:/usr/sbin:/sbin`, which has
+/// none of `claude` (`~/.local/bin` or Homebrew), `node` or `cargo`.
+fn fallback_tool_dirs(home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    vec![
+        home.join(".local/bin"),
+        home.join(".cargo/bin"),
+        std::path::PathBuf::from("/opt/homebrew/bin"),
+        std::path::PathBuf::from("/usr/local/bin"),
+        home.join(".claude/local"),
+    ]
+}
+
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// Find a tool on PATH, then in the usual install directories. `None` if it
+/// isn't anywhere. Used for everything claudectl runs from the relay or the
+/// supervisor, which may be started with launchd's bare PATH.
+pub fn find_tool(name: &str) -> Option<std::path::PathBuf> {
+    find_tool_in(name, std::env::var_os("PATH").as_deref(), &dirs_home())
+}
+
+/// [`find_tool`] with the search inputs explicit, for tests.
+pub fn find_tool_in(
+    name: &str,
+    path_var: Option<&std::ffi::OsStr>,
+    home: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let from_path = path_var
+        .map(|p| std::env::split_paths(p).collect::<Vec<_>>())
+        .unwrap_or_default();
+    from_path
+        .into_iter()
+        .chain(fallback_tool_dirs(home))
+        .map(|dir| dir.join(name))
+        .find(|candidate| is_executable(candidate))
+}
+
+/// The `claude` binary to run. `CLAUDECTL_CLAUDE_BIN` overrides the search,
+/// which is also how tests substitute a stand-in. Falls back to the bare name,
+/// so the error, if any, comes from the spawn and names `claude`.
+pub fn claude_bin() -> std::path::PathBuf {
+    if let Some(explicit) = std::env::var_os("CLAUDECTL_CLAUDE_BIN").filter(|v| !v.is_empty()) {
+        return std::path::PathBuf::from(explicit);
+    }
+    find_tool("claude").unwrap_or_else(|| std::path::PathBuf::from("claude"))
+}
+
 /// Kill a process by PID. Tries SIGTERM first, then SIGKILL on failure.
 pub fn kill_process(pid: u32) -> Result<(), String> {
     let output = std::process::Command::new("kill")
@@ -212,6 +263,61 @@ pub fn fmt_ms_at(ms: u64, now_ms: u64) -> String {
         format!("in {span}")
     } else {
         format!("{span} ago")
+    }
+}
+
+#[cfg(test)]
+mod find_tool_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("cctl-findtool-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn tool(dir: &std::path::Path, name: &str, exec: bool) {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, "#!/bin/sh\n").unwrap();
+        let mode = if exec { 0o755 } else { 0o644 };
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// The mini's case: launchd's PATH, `claude` in `~/.local/bin`.
+    #[test]
+    fn a_tool_outside_a_bare_path_is_found_in_the_usual_dirs() {
+        let home = scratch("fallback");
+        tool(&home.join(".local/bin"), "claude", true);
+        let bare = std::ffi::OsString::from("/usr/bin:/bin:/usr/sbin:/sbin");
+        assert_eq!(
+            find_tool_in("claude", Some(&bare), &home),
+            Some(home.join(".local/bin/claude"))
+        );
+    }
+
+    #[test]
+    fn path_wins_over_the_fallback_dirs() {
+        let home = scratch("pathwins");
+        tool(&home.join("onpath"), "claude", true);
+        tool(&home.join(".local/bin"), "claude", true);
+        let path = std::env::join_paths([home.join("onpath")]).unwrap();
+        assert_eq!(
+            find_tool_in("claude", Some(&path), &home),
+            Some(home.join("onpath/claude"))
+        );
+    }
+
+    #[test]
+    fn a_non_executable_file_is_not_a_tool() {
+        // A name no real machine has, since the fallback dirs include the
+        // system's own /opt/homebrew/bin and /usr/local/bin.
+        let name = "cctl-test-tool-not-installed";
+        let home = scratch("noexec");
+        tool(&home.join(".local/bin"), name, false);
+        assert_eq!(find_tool_in(name, None, &home), None);
     }
 }
 

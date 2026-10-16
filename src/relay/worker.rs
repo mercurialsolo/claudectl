@@ -100,7 +100,7 @@ impl RemoteWorker {
         let err_file = std::fs::File::create(&err_path)
             .map_err(|e| format!("create {}: {e}", err_path.display()))?;
 
-        let child = Command::new("claude")
+        let child = Command::new(claudectl_core::helpers::claude_bin())
             .args(["--print", "--output-format", "json", prompt])
             .current_dir(work_dir)
             .stdin(Stdio::null())
