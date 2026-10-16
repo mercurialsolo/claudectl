@@ -101,6 +101,35 @@ pub fn open() -> Result<Connection, String> {
     Ok(conn)
 }
 
+/// The coord database for a reader that must change nothing (#571): the
+/// relay counts supervisor tasks for its heartbeat on every machine, most of
+/// which never ran the supervisor. `None` when there's no database (nothing
+/// is created), or its schema is newer than this binary knows. Read-only and
+/// never migrated, so a relay heartbeating never upgrades someone's coord
+/// store behind their back; a short busy timeout, because the caller holds
+/// the relay's registry lock.
+pub fn open_existing_read_only(path: &std::path::Path) -> Option<Connection> {
+    if !path.is_file() {
+        return None;
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    conn.busy_timeout(std::time::Duration::from_millis(100))
+        .ok()?;
+    let version: u32 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .ok()?;
+    (version <= EXPECTED_COORD_SCHEMA_VERSION).then_some(conn)
+}
+
+/// Where `open` keeps the database.
+pub fn db_file() -> PathBuf {
+    db_path()
+}
+
 /// Open an in-memory database (for testing and evals).
 pub fn open_memory() -> Connection {
     let conn = Connection::open_in_memory().unwrap();

@@ -1734,20 +1734,25 @@ fn record_advertised_addrs(peer_id: &str, payload: &serde_json::Value) {
 /// take down the loop that received it, and the only cost of a failed write is
 /// a `delegate` that does not pre-check.
 /// Supervisor sessions running on this machine. Zero when coord is not built
-/// in or its store can't be opened: headroom is advisory, and a relay must
-/// not fail to heartbeat over it.
+/// in, or there's no coord database, or it can't be read: headroom is
+/// advisory, and a relay must not fail to heartbeat over it. Never creates
+/// or migrates the database (see `open_existing_read_only`).
 fn supervisor_running() -> u32 {
     #[cfg(feature = "coord")]
     {
-        crate::coord::store::open()
-            .and_then(|c| crate::coord::tasks::running_spawned_attempts(&c))
-            .map(|a| a.len() as u32)
-            .unwrap_or(0)
+        supervisor_running_in(&crate::coord::store::db_file())
     }
     #[cfg(not(feature = "coord"))]
     {
         0
     }
+}
+
+#[cfg(feature = "coord")]
+fn supervisor_running_in(db: &std::path::Path) -> u32 {
+    crate::coord::store::open_existing_read_only(db)
+        .and_then(|c| crate::coord::tasks::running_spawned_attempts(&c).ok())
+        .map_or(0, |a| a.len() as u32)
 }
 
 fn persist_peer_capabilities(peer_id: &str, payload: &serde_json::Value) {
@@ -3367,6 +3372,48 @@ fn detect_local_ip() -> Option<String> {
 // ────────────────────────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────────────────────────
+
+/// #571: the relay counts supervisor tasks on every heartbeat, on every
+/// machine. It must never create or upgrade a coord database to do it.
+#[cfg(all(test, feature = "coord"))]
+mod heartbeat_never_touches_coord {
+    use super::supervisor_running_in;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("cctl-hb-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn no_database_is_zero_and_creates_nothing() {
+        let dir = scratch("none");
+        assert_eq!(
+            supervisor_running_in(&dir.join("coord").join("coord.db")),
+            0
+        );
+        assert!(!dir.exists(), "the relay created {}", dir.display());
+    }
+
+    #[test]
+    fn an_older_or_newer_database_is_read_as_zero_and_left_as_it_was() {
+        let dir = scratch("versions");
+        std::fs::create_dir_all(&dir).unwrap();
+        for version in [3u32, crate::coord::store::EXPECTED_COORD_SCHEMA_VERSION + 1] {
+            let db = dir.join(format!("v{version}.db"));
+            let c = rusqlite::Connection::open(&db).unwrap();
+            c.pragma_update(None, "user_version", version).unwrap();
+            drop(c);
+            assert_eq!(supervisor_running_in(&db), 0);
+            let after: u32 = rusqlite::Connection::open(&db)
+                .unwrap()
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(after, version, "the relay migrated a coord database");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
 
 #[cfg(test)]
 mod tests {

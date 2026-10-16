@@ -410,8 +410,15 @@ pub fn live_views() -> Vec<PeerView> {
     if super::supervisor_cli::is_draining() || policy_error.is_some() {
         local.slots.drain = true;
     }
-    if let Some(e) = policy_error {
-        eprintln!("supervisor: {e}; starting nothing here until it's fixed");
+    // Said once per distinct error, not on every pass of a daemon.
+    static LAST_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    if let Ok(mut last) = LAST_ERROR.lock() {
+        if *last != policy_error {
+            if let Some(e) = &policy_error {
+                eprintln!("supervisor: {e}; starting nothing here until it's fixed");
+            }
+            *last = policy_error;
+        }
     }
     let mut views = vec![local];
     views.extend(peer_views(&policy));
