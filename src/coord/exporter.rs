@@ -305,6 +305,8 @@ mod tests {
             git_ref: None,
             branch: None,
             permission_mode: None,
+            requires: vec![],
+            peer: None,
         }
     }
 

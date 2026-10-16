@@ -215,14 +215,14 @@ Durable task lifecycles on top of the bus. See the [README's Supervisor section]
 | `supervisor init [--force]` | Scaffold a documented starter `tasks.toml` in the cwd (won't clobber without `--force`) |
 | `supervisor validate <tasks.toml>` | Parse + validate without submitting — reports the first problem (missing field, dangling or cyclic `depends_on`, duplicate name) |
 | `supervisor run <tasks.toml> [--dry-run]` | Batch-submit one or more tasks from a TOML file (RFC §4 shape); validated before insert |
-| `supervisor submit --name --cwd --prompt [--role ...] [--git-ref REF [--branch B]] [--permission-mode M]` | One-shot inline submission. With `--git-ref`, the task runs in its own worktree of `cwd`'s repo on its own branch |
+| `supervisor submit --name --cwd --prompt [--role ...] [--git-ref REF [--branch B]] [--permission-mode M] [--requires a,b] [--peer ID]` | One-shot inline submission. With `--git-ref`, the task runs in its own worktree of `cwd`'s repo on its own branch |
 | `supervisor work [--interval SECS] [--until-idle] [--timeout SECS]` | Run the queue: spawn each task's `claude` session (detached; output under `~/.claudectl/supervisor/runs/`), watch it, run its verifiers in its workdir, remove a clean worktree after DONE. Touches no session it didn't start |
 | `supervisor status [--state STATE]` | Compact task table; optional state filter (`PENDING` / `RUNNING` / `DONE` / `NEEDS_HUMAN` / …) |
 | `supervisor status --graph` | Every task as its `depends_on` tree, each under the task it waits for, with the cause of any NEEDS_HUMAN |
 | `supervisor logs <task_id>` | Task detail + full transition log |
 | `supervisor cancel <task_id>` | Idempotent move to CANCELLED |
 | `supervisor pr <task_id>` | Post a task summary comment on its branch's PR **and** set a `claudectl/verifier` commit status from the latest verdict, via `gh` (#369). Best-effort — no open PR / no `gh` / not a repo prints a skip and exits 0 |
-| `supervisor drain` | Set sentinel file at `~/.claudectl/coord/drain`; reconciler stops issuing new assignments |
+| `supervisor drain` | Set sentinel file at `~/.claudectl/coord/drain`; the reconciler starts no new task on this machine (queued tasks wait, with the reason) |
 | `supervisor undrain` | Clear the drain marker |
 
 Set `CLAUDECTL_PR_AUTO_POST=1` in the supervisor daemon's environment to run the `supervisor pr` flow automatically whenever a task reaches DONE (#369). Off by default; the post runs on a detached thread so it never blocks the reconciler tick.
@@ -245,7 +245,7 @@ Connect machines, delegate tasks. See the [full relay guide](relay.md).
 | `relay invite [--qr] [--words]` | Generate invite code, link, and word phrase |
 | `relay join <code>` | Connect using any invite format (code, words, or link) |
 | `relay discover` | Scan LAN for nearby claudectl instances |
-| `relay peers` | List known and connected peers |
+| `relay peers` | List known and connected peers, with each one's advertised capabilities, headroom (free memory, load per core, free disk, running tasks) and tags |
 | `relay delegate <peer> <prompt>` | Delegate a task to a remote peer |
 | `relay identity` | Show this instance's relay identity |
 | `relay install-agent` | Install a service so the relay survives logout (launchd on macOS, `systemd --user` on Linux) |

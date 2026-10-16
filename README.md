@@ -403,6 +403,7 @@ git_ref     = "main"          # run in a new worktree from this ref, on its own 
 branch      = "feat/auth"     # optional; default claudectl/<name>-<id>
 permission_mode = "acceptEdits"   # optional; passed to claude --permission-mode
 depends_on  = ["user-schema"] # start only after these tasks (by name, same file) are DONE
+requires    = ["docker", "node>=22"]   # tools the relay probes, or tags a machine advertises
 
   [[task.verify]]
   run  = "cargo test --all-targets"            # exit code is the verdict, run in the worktree
@@ -418,6 +419,28 @@ depends_on  = ["user-schema"] # start only after these tasks (by name, same file
 ```
 
 When a verifier fails, the task goes back to work in the same worktree with the failing verifier's output added to its prompt, up to `max_retries`; after that it's NEEDS_HUMAN. A session that dies is resumed with a prompt that tells it to assess the worktree before continuing. A task with `depends_on` starts once each dependency is DONE, and its prompt names each dependency's branch and closing summary; if a dependency is cancelled or needs a human, the tasks after it move to NEEDS_HUMAN with the reason (`dependency_cancelled:<name>`).
+
+**Where tasks run.** Each machine has a slot policy in `~/.claudectl/coord/policy.toml`, and a task starts only where it fits. Without the file, this machine runs four tasks at a time, as before.
+
+```toml
+stale_after_secs = 90          # a peer heard from longer ago is skipped
+
+[local]                        # this machine
+max_tasks = 4
+min_free_mem_mb = 2048         # floors; an unmeasured value never counts as room
+max_load_per_core = 1.5
+min_free_disk_mb = 5120
+mem_per_task_mb = 1024         # assumed per task until the next measurement
+drain = false                  # same as `supervisor drain`
+
+[peers]                        # defaults for every relay peer
+max_tasks = 2
+
+[peers.baradas-mac-mini-508f9c0e]
+max_tasks = 6
+```
+
+`relay serve` advertises its machine's free memory, load per core, free disk, running tasks and `[relay] tags` on every heartbeat, and `relay peers` shows what each peer last said. A task that can't start says why in `supervisor work`'s output, once per change of reason: `this machine is running 4 of 4 tasks`, ``this machine lacks `docker`; mini has room, …``. Tasks don't run on peers yet. A task only a peer could take, or one pinned with `peer = "…"`, waits and names that peer.
 
 Tasks are submittable three ways: this CLI, a `task.created` bus message addressed to the `supervisor` role, or the `submit_task` MCP tool from inside a Claude Code session. All three land as the same SQLite row.
 

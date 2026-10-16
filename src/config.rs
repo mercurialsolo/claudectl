@@ -122,6 +122,10 @@ pub struct RelayConfig {
     /// leases stay machine-local, as they always were. On the authority
     /// itself, set it to the machine's own relay identity.
     pub lease_authority: Option<String>,
+    /// Capability tags this machine advertises to its peers, beyond the
+    /// probed tools (#571): `docker`, `gpu`, a tunnel's name. A supervisor
+    /// task's `requires` matches against them.
+    pub tags: Vec<String>,
 }
 
 impl Default for RelayConfig {
@@ -140,6 +144,7 @@ impl Default for RelayConfig {
             lan_announce: true,
             auth_token: None,
             lease_authority: None,
+            tags: Vec::new(),
         }
     }
 }
@@ -324,6 +329,7 @@ struct RawRelayConfig {
     lease_authority: Option<String>,
     reconnect_max_secs: Option<u64>,
     auto_connect: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
     http_port: Option<u16>,
     http_addr: Option<String>,
     auth_token: Option<String>,
@@ -518,6 +524,9 @@ impl Config {
             }
             if let Some(v) = raw_relay.auto_connect {
                 relay.auto_connect = v;
+            }
+            if let Some(v) = raw_relay.tags {
+                relay.tags = v;
             }
             if let Some(v) = raw_relay.http_port {
                 relay.http_port = Some(v);
@@ -950,6 +959,7 @@ impl Config {
 # heartbeat_interval_secs = 30
 # reconnect_max_secs = 60
 # auto_connect = []
+# tags = ["docker"]             # advertised to peers; matched by a task's `requires`
 # http_port = 9876              # coordinator HTTP API; unset = not served
 # http_addr = "127.0.0.1"       # plaintext + bearer token: keep loopback,
 #                               # front with a tunnel for off-machine access
@@ -1247,6 +1257,9 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     "reconnect_max" | "reconnect_max_secs" => {
                         relay.reconnect_max_secs = value.parse().ok();
                     }
+                    "tags" => {
+                        relay.tags = Some(parse_string_array(value));
+                    }
                     "auto_connect" => {
                         relay.auto_connect = Some(parse_string_array(value));
                     }
@@ -1436,6 +1449,7 @@ fn known_keys(section: &str) -> Option<&'static [&'static str]> {
             "reconnect_max",
             "reconnect_max_secs",
             "auto_connect",
+            "tags",
             "http_port",
             "http_addr",
             "auth_token",
@@ -2082,6 +2096,7 @@ listen_port = 9999
 listen_addr = "127.0.0.1"
 max_peers = 3
 auto_connect = ["peer-a:9847"]
+tags = ["docker", "gpu"]
 
 [hive]
 enabled = true
@@ -2101,6 +2116,7 @@ inject_unverified = false
         assert_eq!(relay.listen_addr.as_deref(), Some("127.0.0.1"));
         assert_eq!(relay.max_peers, Some(3));
         assert_eq!(relay.auto_connect, Some(vec!["peer-a:9847".into()]));
+        assert_eq!(relay.tags, Some(vec!["docker".into(), "gpu".into()]));
 
         let hive = raw.hive.expect("hive config should be parsed");
         assert_eq!(hive.enabled, Some(true));

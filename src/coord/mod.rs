@@ -11,6 +11,7 @@ pub mod injection;
 pub mod interrupt_bus;
 pub mod live_fx;
 pub mod metrics;
+pub mod placement;
 pub mod pr;
 pub mod promotion;
 pub mod resume;

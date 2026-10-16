@@ -341,6 +341,21 @@ fn cmd_serve(
         }
         reg.set_local_addrs(addrs);
     }
+    // #571: room for another task, measured on every heartbeat (not once, like
+    // the capabilities) because placement acts on it. Running tasks are the
+    // supervisor's sessions plus delegated work this daemon is running.
+    let delegated_running = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    if let Ok(mut reg) = registry.lock() {
+        let tags = relay_cfg.tags.clone();
+        let delegated = Arc::clone(&delegated_running);
+        reg.set_headroom_source(Box::new(move || {
+            let running =
+                delegated.load(std::sync::atomic::Ordering::Relaxed) + supervisor_running();
+            let disk = super::relay_dir();
+            serde_json::to_value(super::headroom::local(&tags, &disk, running))
+                .unwrap_or(serde_json::Value::Null)
+        }));
+    }
     // Write handles for in-flight one-shot deliveries (#511). Beside the
     // registry, never in it.
     let replies = super::transient::TransientReplies::new();
@@ -635,6 +650,11 @@ fn cmd_serve(
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(&from_peer, &msg.payload);
                         persist_peer_capabilities(from_peer.as_str(), &msg.payload);
+                        let _ = super::headroom::record(
+                            from_peer.as_str(),
+                            &msg.payload,
+                            super::epoch_ms(),
+                        );
                         record_advertised_addrs(from_peer.as_str(), &msg.payload);
                     }
                     super::MessageType::DelegateTask => {
@@ -935,6 +955,7 @@ fn cmd_serve(
             // A discarded error here is how a lost handoff stayed invisible:
             // the task finished, the reply went nowhere, and nothing said so.
             let worker_msgs = worker.tick();
+            delegated_running.store(worker.running_count(), std::sync::atomic::Ordering::Relaxed);
             for (target_peer, msg) in worker_msgs {
                 if let Err(e) = reg.send_to(&target_peer, &msg) {
                     eprintln!(
@@ -1587,7 +1608,36 @@ fn check_requirements(peer_id: &str, requires: Option<&str>, json_mode: bool) ->
         }
         return Ok(());
     };
-    let unmet = caps.unmet(&reqs);
+    let mut unmet = caps.unmet(&reqs);
+    // #571: a name that isn't a probed tool is a tag. It used to pass
+    // silently, as "never probed"; now it's checked against the tags the
+    // peer advertises. A peer that advertises no headroom at all is an older
+    // build, and stays let through, as above.
+    let tags = super::headroom::load_all()
+        .into_iter()
+        .find(|r| r.peer == peer_id)
+        .map(|r| r.advertised.tags);
+    for req in &reqs {
+        if super::capabilities::PROBED_TOOLS.contains(&req.tool.as_str()) {
+            continue;
+        }
+        match &tags {
+            Some(tags) if !tags.contains(&req.tool) => {
+                unmet.push(format!(
+                    "{} does not advertise the tag `{}`",
+                    peer_id, req.tool
+                ));
+            }
+            Some(_) => {}
+            None if !json_mode => {
+                eprintln!(
+                    "note: {peer_id} advertises no tags; not checking `{}`.",
+                    req.tool
+                );
+            }
+            None => {}
+        }
+    }
     if unmet.is_empty() {
         return Ok(());
     }
@@ -1683,6 +1733,23 @@ fn record_advertised_addrs(peer_id: &str, payload: &serde_json::Value) {
 /// Best-effort by construction: a heartbeat that cannot be recorded must never
 /// take down the loop that received it, and the only cost of a failed write is
 /// a `delegate` that does not pre-check.
+/// Supervisor sessions running on this machine. Zero when coord is not built
+/// in or its store can't be opened: headroom is advisory, and a relay must
+/// not fail to heartbeat over it.
+fn supervisor_running() -> u32 {
+    #[cfg(feature = "coord")]
+    {
+        crate::coord::store::open()
+            .and_then(|c| crate::coord::tasks::running_spawned_attempts(&c))
+            .map(|a| a.len() as u32)
+            .unwrap_or(0)
+    }
+    #[cfg(not(feature = "coord"))]
+    {
+        0
+    }
+}
+
 fn persist_peer_capabilities(peer_id: &str, payload: &serde_json::Value) {
     let Some(caps) = payload.get("capabilities") else {
         return;
@@ -2347,6 +2414,12 @@ fn cmd_connect(addr_str: &str) -> io::Result<()> {
 fn cmd_peers(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
     let known = list_known_peers();
+    // #571: each peer's last advertised headroom, by peer id.
+    let headroom: std::collections::HashMap<String, super::headroom::Received> =
+        super::headroom::load_all()
+            .into_iter()
+            .map(|r| (r.peer.clone(), r))
+            .collect();
 
     if json_mode {
         let peers: Vec<serde_json::Value> = known
@@ -2358,6 +2431,7 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
                     "addr": meta.get("addr").and_then(|v| v.as_str()).unwrap_or("unknown"),
                     "last_seen": meta.get("last_seen").and_then(|v| v.as_u64()).unwrap_or(0),
                     "has_psk": load_peer_psk(id).is_some(),
+                    "headroom": headroom.get(id.as_str()),
                 })
             })
             .collect();
@@ -2392,10 +2466,34 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
                 if let Some(caps) = super::capabilities::load_peer_capabilities(id) {
                     println!("  └ {} ({}/{})", caps.summary(), caps.os, caps.arch);
                 }
+                if let Some(h) = headroom.get(id.as_str()) {
+                    println!("  └ {}", headroom_line(h, super::epoch_ms()));
+                }
             }
         }
     }
     Ok(())
+}
+
+/// One line for `relay peers`: free memory, load, disk, tasks, tags, age.
+fn headroom_line(r: &super::headroom::Received, now_ms: u64) -> String {
+    let h = &r.advertised.headroom;
+    let or_dash = |v: Option<String>| v.unwrap_or_else(|| "-".into());
+    let mut s = format!(
+        "{} MB free · load {}/core · {} MB disk · {} running",
+        or_dash(h.mem_free_mb.map(|m| m.to_string())),
+        or_dash(h.load_per_core.map(|l| format!("{l:.2}"))),
+        or_dash(h.disk_free_mb.map(|d| d.to_string())),
+        h.running_tasks
+    );
+    if !r.advertised.tags.is_empty() {
+        s.push_str(&format!(" · tags {}", r.advertised.tags.join(", ")));
+    }
+    s.push_str(&format!(
+        " ({}s ago)",
+        now_ms.saturating_sub(r.received_ms) / 1000
+    ));
+    s
 }
 
 /// `claudectl relay fleet`

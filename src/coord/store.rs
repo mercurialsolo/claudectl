@@ -10,12 +10,14 @@ use super::types::*;
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn db_path() -> PathBuf {
+/// `~/.claudectl/coord`: the database, the drain marker, `policy.toml`.
+pub fn coord_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home)
-        .join(".claudectl")
-        .join("coord")
-        .join("coord.db")
+    PathBuf::from(home).join(".claudectl").join("coord")
+}
+
+fn db_path() -> PathBuf {
+    coord_dir().join("coord.db")
 }
 
 fn now_iso() -> String {
@@ -74,7 +76,8 @@ pub fn gen_id(prefix: &str) -> String {
 /// v4 = lease TTLs (`leases.ttl_secs`) and the `lease_waiters` queue (#569).
 /// v5 = a worktree per task (#570): `tasks.git_ref`, `branch`,
 ///       `permission_mode`; `task_attempts.pid`, `workdir`.
-pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 5;
+/// v6 = placement (#571): `tasks.requires`, `tasks.peer`.
+pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 6;
 
 /// Open (or create) the coordination database and run migrations.
 pub fn open() -> Result<Connection, String> {
@@ -390,6 +393,10 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     ensure_column(conn, "tasks", "permission_mode", "permission_mode TEXT")?;
     ensure_column(conn, "task_attempts", "pid", "pid INTEGER")?;
     ensure_column(conn, "task_attempts", "workdir", "workdir TEXT")?;
+    // Schema v6 — placement (#571). Additive: no `requires` and no `peer`
+    // means run wherever there's room, which before this was always here.
+    ensure_column(conn, "tasks", "requires", "requires TEXT")?;
+    ensure_column(conn, "tasks", "peer", "peer TEXT")?;
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS lease_waiters (

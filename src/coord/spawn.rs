@@ -271,6 +271,10 @@ impl Sensors for LiveSensors {
             })
             .collect()
     }
+
+    fn placement(&self) -> Vec<super::placement::PeerView> {
+        super::placement::live_views()
+    }
 }
 
 #[cfg(test)]
@@ -444,6 +448,8 @@ mod tests {
             git_ref: None,
             branch: None,
             permission_mode: None,
+            requires: vec![],
+            peer: None,
         };
         assert_eq!(prepare_workdir(&t).unwrap(), PathBuf::from("/tmp"));
         // And a task that ran in its cwd never has that cwd removed.

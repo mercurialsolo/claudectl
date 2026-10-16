@@ -332,6 +332,8 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
         // reconciler can emit them today without the actuator
         // panicking. Implementation lands with the resume protocol.
         Action::WriteSessionPolicy { .. } | Action::ClearSessionPolicy { .. } => Ok(()),
+        // Nothing to do: the task stays where it is until there's room.
+        Action::Hold { .. } => Ok(()),
     }
 }
 
@@ -624,6 +626,8 @@ mod tests {
             git_ref: None,
             branch: None,
             permission_mode: None,
+            requires: vec![],
+            peer: None,
         }
     }
 

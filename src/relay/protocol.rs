@@ -601,6 +601,7 @@ pub fn heartbeat_full(
     sessions: &[serde_json::Value],
     capabilities: Option<&serde_json::Value>,
     listen_addrs: &[String],
+    headroom: Option<&serde_json::Value>,
 ) -> RelayMessage {
     let mut payload = serde_json::json!({
         "worker_id": identity,
@@ -618,6 +619,11 @@ pub fn heartbeat_full(
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("listen_addrs".into(), serde_json::json!(listen_addrs));
         }
+    }
+    // #571: room for another task, for placement. Omitted when absent, and
+    // the caller only passes it on a link that agreed to `features::HEADROOM`.
+    if let (Some(h), Some(obj)) = (headroom, payload.as_object_mut()) {
+        obj.insert("headroom".into(), h.clone());
     }
     RelayMessage {
         id: gen_msg_id(),
@@ -1198,7 +1204,7 @@ mod tests {
             serde_json::json!({"pid": 1234, "project": "backend", "status": "Processing"}),
             serde_json::json!({"pid": 5678, "project": "frontend", "status": "Idle"}),
         ];
-        let msg = heartbeat_full("worker-01", &sessions, None, &[]);
+        let msg = heartbeat_full("worker-01", &sessions, None, &[], None);
         assert_eq!(msg.msg_type, MessageType::Heartbeat);
         assert_eq!(msg.from_peer, "worker-01");
         assert_eq!(
@@ -1212,7 +1218,7 @@ mod tests {
 
     #[test]
     fn heartbeat_with_empty_sessions() {
-        let msg = heartbeat_full("worker-02", &[], None, &[]);
+        let msg = heartbeat_full("worker-02", &[], None, &[], None);
         let sessions = msg.payload.get("sessions").and_then(|v| v.as_array());
         assert!(sessions.is_some());
         assert_eq!(sessions.unwrap().len(), 0);
@@ -1224,7 +1230,7 @@ mod tests {
     /// hive starts looking like it has nothing installed.
     #[test]
     fn a_heartbeat_without_capabilities_is_byte_identical_to_the_old_one() {
-        let msg = heartbeat_full("worker-03", &[], None, &[]);
+        let msg = heartbeat_full("worker-03", &[], None, &[], None);
         assert!(msg.payload.get("capabilities").is_none());
         let keys: Vec<&str> = msg
             .payload
@@ -1244,8 +1250,24 @@ mod tests {
             "arch": "x86_64",
             "tools": {"claude": {"state": "present", "version": "2.1.0"}},
         });
-        let msg = heartbeat_full("worker-04", &[], Some(&caps), &[]);
+        let msg = heartbeat_full("worker-04", &[], Some(&caps), &[], None);
         assert_eq!(msg.payload.get("capabilities"), Some(&caps));
+    }
+}
+
+#[cfg(test)]
+mod heartbeat_headroom {
+    use super::heartbeat_full;
+
+    /// #571: headroom rides the heartbeat when there is some, and is absent
+    /// otherwise, so an older peer's silence stays distinguishable.
+    #[test]
+    fn headroom_is_a_key_only_when_given() {
+        let h = serde_json::json!({"mem_free_mb": 4096, "running_tasks": 1, "tags": ["docker"]});
+        let with = heartbeat_full("w", &[], None, &[], Some(&h));
+        assert_eq!(with.payload["headroom"], h);
+        let without = heartbeat_full("w", &[], None, &[], None);
+        assert!(without.payload.get("headroom").is_none());
     }
 }
 
