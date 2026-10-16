@@ -36,6 +36,8 @@ pub struct WorkerTask {
     /// fills a pipe buffer with nobody reading blocks forever.
     pub out_path: PathBuf,
     pub err_path: PathBuf,
+    /// The worktree branch the task runs on, when it was given a ref (#570).
+    pub branch: Option<String>,
 }
 
 /// Where a run's captured output lives while it runs.
@@ -67,19 +69,35 @@ impl RemoteWorker {
         task_id: &str,
         prompt: &str,
         cwd: Option<&str>,
-        // Received and then dropped: the worker spawns `claude` in
-        // `work_dir` and consults none of `git_remote`, `git_ref`,
-        // `git_commit`, `relevant_files` or the brain summary. So
-        // `relay delegate --git-ref X` is accepted, sent, and silently
-        // ignored. Tracked separately; found by the #465 audit.
-        _context: DelegationContext,
+        // `git_commit` or else `git_ref` starts the task in its own worktree
+        // (#570). `git_remote`, `relevant_files` and the brain summary are
+        // still unused.
+        context: DelegationContext,
         from_peer: &str,
     ) -> Result<RelayMessage, String> {
         if self.tasks.contains_key(task_id) {
             return Err(format!("task {task_id} already exists"));
         }
 
-        let work_dir = cwd.unwrap_or(".");
+        // A ref means a worktree of the repo at `cwd`, on its own branch, so
+        // a delegated task never edits the checkout someone is working in.
+        // It used to be accepted and silently ignored. A ref that can't be
+        // checked out refuses the task rather than running in `cwd` instead.
+        let start_ref = context.git_commit.as_deref().or(context.git_ref.as_deref());
+        let (work_dir, branch) = match start_ref {
+            Some(r) => {
+                let branch = claudectl_core::worktree::default_branch("delegated", task_id);
+                let wt = claudectl_core::worktree::ensure(
+                    std::path::Path::new(cwd.unwrap_or(".")),
+                    r,
+                    &branch,
+                    &claudectl_core::worktree::path_for(task_id),
+                )?;
+                (wt.path.to_string_lossy().into_owned(), Some(wt.branch))
+            }
+            None => (cwd.unwrap_or(".").to_string(), None),
+        };
+        let work_dir = work_dir.as_str();
         let now = Instant::now();
 
         // `--output-format json` is what makes a delegated task's cost
@@ -138,6 +156,7 @@ impl RemoteWorker {
             from_peer: from_peer.to_string(),
             out_path,
             err_path,
+            branch,
         };
 
         self.tasks.insert(task_id.to_string(), task);
@@ -243,6 +262,7 @@ impl RemoteWorker {
                         total_tokens: tokens,
                         model,
                         usage,
+                        branch: task.branch.clone(),
                     };
                     messages.push((
                         peer,
@@ -298,6 +318,7 @@ impl RemoteWorker {
                         total_tokens: 0,
                         model: None,
                         usage: serde_json::json!({}),
+                        branch: task.branch.clone(),
                     },
                     &self.identity,
                 ))
@@ -355,7 +376,28 @@ mod tests {
             from_peer: "peer-a".into(),
             out_path: PathBuf::new(),
             err_path: PathBuf::new(),
+            branch: None,
         }
+    }
+
+    /// `relay delegate --git-ref` used to be accepted and ignored. A ref
+    /// the worker can't check out now refuses the task before any session
+    /// starts, instead of running in the plain cwd.
+    #[test]
+    fn a_ref_that_cannot_be_checked_out_refuses_the_task() {
+        let dir = std::env::temp_dir().join(format!("cctl-worker-norepo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut worker = RemoteWorker::new("test-peer");
+        let ctx = DelegationContext {
+            git_ref: Some("main".into()),
+            ..Default::default()
+        };
+        let err = worker
+            .accept_task("t-ref", "hi", Some(dir.to_str().unwrap()), ctx, "peer-a")
+            .unwrap_err();
+        assert!(err.contains("not in a git repo"), "{err}");
+        assert!(worker.tasks.is_empty(), "nothing should have started");
     }
 
     #[test]

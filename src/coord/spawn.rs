@@ -26,7 +26,7 @@ use std::process::Command;
 
 use super::supervisor::{ObservedSession, ObservedStatus, Sensors};
 use super::tasks::TaskRow;
-use super::worktree;
+use claudectl_core::worktree;
 
 /// How long an attempt may go without a recorded pid before it counts as
 /// dead: long enough for a worktree checkout and a spawn, short enough that a

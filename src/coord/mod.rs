@@ -21,4 +21,3 @@ pub mod supervisor_cli;
 pub mod tasks;
 pub mod types;
 pub mod verify;
-pub mod worktree;

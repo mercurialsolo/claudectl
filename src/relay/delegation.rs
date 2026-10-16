@@ -179,25 +179,33 @@ pub struct TaskReport {
     pub model: Option<String>,
     /// The `usage` object verbatim, so the token breakdown survives the trip.
     pub usage: serde_json::Value,
+    /// The branch the work is on, when the task ran in a worktree (#570).
+    pub branch: Option<String>,
 }
 
 /// Build the TaskHandoff for a finished task, either way it went.
 pub fn build_report_message(task_id: &str, report: &TaskReport, identity: &str) -> RelayMessage {
+    let mut payload = serde_json::json!({
+        "task_id": task_id,
+        "state": if report.failed { "failed" } else { "completed" },
+        "summary": report.summary,
+        "artifacts": [],
+        "total_cost_usd": report.total_cost_usd,
+        "total_tokens": report.total_tokens,
+        "model": report.model,
+        "usage": report.usage,
+    });
+    // `git_ref` was read by the delegator and never sent (#570): where the
+    // delegated work is, so it can be fetched. Omitted when there's none.
+    if let Some(b) = &report.branch {
+        payload["git_ref"] = serde_json::json!(b);
+    }
     RelayMessage {
         id: gen_msg_id(),
         msg_type: MessageType::TaskHandoff,
         from_peer: identity.to_string(),
         timestamp: epoch_ms(),
-        payload: serde_json::json!({
-            "task_id": task_id,
-            "state": if report.failed { "failed" } else { "completed" },
-            "summary": report.summary,
-            "artifacts": [],
-            "total_cost_usd": report.total_cost_usd,
-            "total_tokens": report.total_tokens,
-            "model": report.model,
-            "usage": report.usage,
-        }),
+        payload,
     }
 }
 
@@ -323,7 +331,22 @@ mod tests {
             total_tokens: 50000,
             model: Some("claude-opus-5".into()),
             usage: serde_json::json!({"input_tokens": 10, "output_tokens": 20}),
+            branch: None,
         }
+    }
+
+    /// The branch goes out as `git_ref`, the key the delegator already reads
+    /// (#570), and only when the task ran in a worktree.
+    #[test]
+    fn a_handoff_names_the_branch_only_when_there_is_one() {
+        let without = build_report_message("t1", &report(false, "done"), "w");
+        assert!(without.payload.get("git_ref").is_none());
+        let with = TaskReport {
+            branch: Some("claudectl/delegated-t1".into()),
+            ..report(false, "done")
+        };
+        let msg = build_report_message("t1", &with, "w");
+        assert_eq!(msg.payload["git_ref"], "claudectl/delegated-t1");
     }
 
     /// A finished task, read back by the arm that records it.

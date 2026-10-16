@@ -175,13 +175,13 @@ const PERMISSION_MODES: &[&str] = &[
 impl Placement {
     fn validate(&self) -> Result<(), String> {
         if let Some(r) = &self.git_ref {
-            super::worktree::validate_ref("git_ref", r)?;
+            claudectl_core::worktree::validate_ref("git_ref", r)?;
         }
         if let Some(b) = &self.branch {
             if self.git_ref.is_none() {
                 return Err("branch needs a git_ref to start the worktree from".into());
             }
-            super::worktree::validate_ref("branch", b)?;
+            claudectl_core::worktree::validate_ref("branch", b)?;
         }
         if let Some(m) = &self.permission_mode {
             if !PERMISSION_MODES.contains(&m.as_str()) {

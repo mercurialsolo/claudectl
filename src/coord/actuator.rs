@@ -763,7 +763,7 @@ mod tests {
         )
         .unwrap();
         let wt = std::path::PathBuf::from(format!("/wt/{id}"));
-        assert_eq!(fx.shell_cwds.borrow().as_slice(), [wt.clone()]);
+        assert_eq!(fx.shell_cwds.borrow().as_slice(), std::slice::from_ref(&wt));
         assert_eq!(
             get_task(&conn, &id).unwrap().unwrap().state,
             TaskState::Done

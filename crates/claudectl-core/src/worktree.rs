@@ -25,7 +25,7 @@ pub struct Worktree {
 
 /// Where task `task_id`'s worktree goes.
 pub fn path_for(task_id: &str) -> PathBuf {
-    claudectl_core::helpers::dirs_home()
+    crate::helpers::dirs_home()
         .join(".claudectl")
         .join("worktrees")
         .join(task_id)
