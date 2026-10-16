@@ -22,7 +22,7 @@ fn now_iso() -> String {
     crate::logger::timestamp_now()
 }
 
-fn iso_after_secs(secs_from_now: u64) -> String {
+pub fn iso_after_secs(secs_from_now: u64) -> String {
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -39,14 +39,19 @@ fn iso_after_secs(secs_from_now: u64) -> String {
     )
 }
 
-/// Generate a simple unique ID: `{prefix}_{epoch_secs}_{counter}`.
+/// Generate a unique ID: `{prefix}_{epoch_secs}_{pid}_{counter}`.
+///
+/// The pid is what makes it unique across processes. Without it, two
+/// `claudectl` processes started in the same second both produced
+/// `{prefix}_{secs}_0`. Two `coord claim`s at once got the same lease id, and
+/// the second silently replaced the first's lease (#569).
 pub fn gen_id(prefix: &str) -> String {
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     let seq = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{prefix}_{epoch}_{seq}")
+    format!("{prefix}_{epoch}_{}_{seq}", std::process::id())
 }
 
 /// Schema version the running binary expects to see in
@@ -66,7 +71,8 @@ pub fn gen_id(prefix: &str) -> String {
 /// v2 = supervisor tables (#345): tasks, task_attempts,
 ///       task_verifications, task_transitions, hook_events.
 /// v3 = supervisor verifier list on `tasks.verifiers` (#347).
-pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 3;
+/// v4 = lease TTLs (`leases.ttl_secs`) and the `lease_waiters` queue (#569).
+pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 4;
 
 /// Open (or create) the coordination database and run migrations.
 pub fn open() -> Result<Connection, String> {
@@ -75,6 +81,12 @@ pub fn open() -> Result<Connection, String> {
         fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
     }
     let conn = Connection::open(&path).map_err(|e| format!("open db: {e}"))?;
+    // Several claudectl processes write this file at once (every agent's
+    // `coord claim`, the TUI, the supervisor). Without a busy timeout a
+    // writer that finds the lock held fails immediately with "database is
+    // locked" instead of waiting its turn (#569).
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| format!("busy timeout: {e}"))?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("WAL mode: {e}"))?;
     conn.pragma_update(None, "foreign_keys", "ON")
@@ -360,6 +372,27 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     // discovery rather than safety.
     ensure_column(conn, "tasks", "verifiers", "verifiers TEXT")?;
 
+    // Schema v4 — lease TTLs and FIFO waiting (#569). Additive: a lease from
+    // before has a NULL `ttl_secs` and never expires, as it never did.
+    // `lease_waiters` orders blocked claims; `seq` is the queue order, and
+    // `polled_at` (epoch seconds) is how a waiter that stopped polling is
+    // told apart from one still waiting.
+    ensure_column(conn, "leases", "ttl_secs", "ttl_secs INTEGER")?;
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS lease_waiters (
+            seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+            id              TEXT NOT NULL UNIQUE,
+            session_id      TEXT NOT NULL,
+            resource_kind   TEXT NOT NULL,
+            resource_value  TEXT NOT NULL,
+            polled_at       INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_lease_waiters_resource
+            ON lease_waiters(resource_kind, resource_value);
+        ",
+    )?;
+
     // Bump `user_version` last — table creation runs first so a partially
     // migrated DB never gets the version stamp; the gate then refuses to
     // start if anything drifted.
@@ -523,8 +556,8 @@ pub fn upsert_lease(conn: &Connection, lease: &Lease) -> Result<(), String> {
     conn.execute(
         "INSERT OR REPLACE INTO leases
          (id, owner_session_id, owner_agent, resource_kind, resource_value,
-          mode, reason, acquired_at, expires_at, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+          mode, reason, acquired_at, expires_at, status, ttl_secs)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             lease.id,
             lease.owner_session_id,
@@ -536,6 +569,7 @@ pub fn upsert_lease(conn: &Connection, lease: &Lease) -> Result<(), String> {
             lease.acquired_at,
             lease.expires_at,
             lease.status.as_str(),
+            lease.ttl_secs.map(|s| s as i64),
         ],
     )
     .map_err(|e| format!("upsert lease: {e}"))?;
@@ -545,11 +579,11 @@ pub fn upsert_lease(conn: &Connection, lease: &Lease) -> Result<(), String> {
 pub fn list_leases(conn: &Connection, status: Option<LeaseStatus>) -> Result<Vec<Lease>, String> {
     let sql = if status.is_some() {
         "SELECT id, owner_session_id, owner_agent, resource_kind, resource_value,
-                mode, reason, acquired_at, expires_at, status
+                mode, reason, acquired_at, expires_at, status, ttl_secs
          FROM leases WHERE status = ?1 ORDER BY acquired_at DESC"
     } else {
         "SELECT id, owner_session_id, owner_agent, resource_kind, resource_value,
-                mode, reason, acquired_at, expires_at, status
+                mode, reason, acquired_at, expires_at, status, ttl_secs
          FROM leases ORDER BY acquired_at DESC"
     };
 
@@ -583,6 +617,9 @@ fn row_to_lease(row: &rusqlite::Row) -> rusqlite::Result<Lease> {
         acquired_at: row.get(7)?,
         expires_at: row.get(8)?,
         status: LeaseStatus::parse(&status_str).unwrap_or(LeaseStatus::Active),
+        ttl_secs: row
+            .get::<_, Option<i64>>(10)?
+            .and_then(|s| u64::try_from(s).ok()),
     })
 }
 
@@ -602,7 +639,7 @@ pub fn get_lease(conn: &Connection, lease_id: &str) -> Result<Option<Lease>, Str
     let mut stmt = conn
         .prepare(
             "SELECT id, owner_session_id, owner_agent, resource_kind, resource_value,
-                    mode, reason, acquired_at, expires_at, status
+                    mode, reason, acquired_at, expires_at, status, ttl_secs
              FROM leases WHERE id = ?1",
         )
         .map_err(|e| format!("prepare: {e}"))?;
@@ -630,7 +667,7 @@ pub fn find_conflicting_lease(
     let mut stmt = conn
         .prepare(
             "SELECT id, owner_session_id, owner_agent, resource_kind, resource_value,
-                    mode, reason, acquired_at, expires_at, status
+                    mode, reason, acquired_at, expires_at, status, ttl_secs
              FROM leases
              WHERE resource_kind = ?1
                AND status = 'active' AND mode = 'exclusive'
@@ -644,12 +681,26 @@ pub fn find_conflicting_lease(
 
     for row in rows {
         let lease = row.map_err(|e| format!("row: {e}"))?;
-        if paths_overlap(&lease.resource_value, resource_value) {
+        if resources_overlap(resource_kind, &lease.resource_value, resource_value) {
             return Ok(Some(lease));
         }
     }
     Ok(None)
 }
+
+/// Whether two values of one resource kind collide. Only paths have
+/// containment; any other kind names one thing, so `res:db` and `res:db-test`
+/// are different resources (#569). Prefix matching would make them collide.
+fn resources_overlap(kind: &str, existing: &str, requested: &str) -> bool {
+    if kind == PATH_GLOB {
+        paths_overlap(existing, requested)
+    } else {
+        existing == requested
+    }
+}
+
+/// The resource kind `coord claim --path` has always used.
+pub const PATH_GLOB: &str = "path_glob";
 
 /// Check if two path patterns overlap.
 /// A glob like `src/**` overlaps with `src/app.rs`.
@@ -683,33 +734,219 @@ fn paths_overlap(existing: &str, requested: &str) -> bool {
     false
 }
 
-/// Atomically check for conflicts and claim a lease in a single transaction.
-/// Returns Ok(None) on success, Ok(Some(conflict)) if a conflicting lease exists.
-pub fn claim_lease_atomic(conn: &Connection, lease: &Lease) -> Result<Option<Lease>, String> {
-    let tx = conn
-        .unchecked_transaction()
+pub fn release_lease(conn: &Connection, lease_id: &str) -> Result<bool, String> {
+    conn.execute(
+        "UPDATE leases SET status = 'released' WHERE id = ?1 AND status = 'active'",
+        params![lease_id],
+    )
+    .map_err(|e| format!("release lease: {e}"))?;
+    Ok(conn.changes() > 0)
+}
+
+// -- Lease TTL, renewal and waiting (#569) -------------------------------------
+
+/// How long a new lease lives without renewal. A lease whose owner session is
+/// alive is renewed by every sweep, so in practice this is how long a dead or
+/// unknown owner keeps a resource.
+pub const DEFAULT_LEASE_TTL_SECS: u64 = 300;
+
+/// The longest TTL a claim may ask for.
+pub const MAX_LEASE_TTL_SECS: u64 = 7 * 24 * 3600;
+
+/// A waiter that hasn't polled for this long has gone away, and stops holding
+/// its place in the queue.
+pub const WAITER_STALE_SECS: u64 = 10;
+
+fn epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// What a sweep changed.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SweepReport {
+    pub renewed: u64,
+    pub expired: u64,
+    pub waiters_dropped: u64,
+}
+
+/// Renew, then expire, then drop stale waiters, in that order.
+///
+/// `live_sessions` is the set of session ids running on this machine. Every
+/// active lease with a TTL and a live owner gets `expires_at` pushed out by
+/// its TTL; anything past `expires_at` after that expires. Renewing first is
+/// what lets a sweep that runs late keep a live owner's lease rather than
+/// expiring it. The caller supplies the set so this never scans sessions
+/// itself: discovery deletes stale session files as a side effect, and a test
+/// must not touch the real `~/.claude`.
+///
+/// An owner that isn't in the set is never released early. It might be dead,
+/// or it might be a `--session` name that was never a discoverable session,
+/// and the TTL is the only honest answer to both.
+pub fn sweep_leases(
+    conn: &Connection,
+    live_sessions: &std::collections::HashSet<String>,
+) -> Result<SweepReport, String> {
+    let mut report = SweepReport::default();
+
+    let renewable: Vec<(String, String, i64)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, owner_session_id, ttl_secs FROM leases
+                 WHERE status = 'active' AND ttl_secs IS NOT NULL",
+            )
+            .map_err(|e| format!("prepare: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| format!("query: {e}"))?;
+        rows.collect::<Result<_, _>>()
+            .map_err(|e| format!("row: {e}"))?
+    };
+    for (id, owner, ttl) in renewable {
+        if live_sessions.contains(&owner) {
+            let ttl = u64::try_from(ttl).unwrap_or(DEFAULT_LEASE_TTL_SECS);
+            conn.execute(
+                "UPDATE leases SET expires_at = ?1 WHERE id = ?2 AND status = 'active'",
+                params![iso_after_secs(ttl), id],
+            )
+            .map_err(|e| format!("renew lease: {e}"))?;
+            report.renewed += 1;
+        }
+    }
+
+    report.expired = expire_stale_leases(conn)?;
+    report.waiters_dropped = conn
+        .execute(
+            "DELETE FROM lease_waiters WHERE polled_at < ?1",
+            params![epoch_secs() - WAITER_STALE_SECS as i64],
+        )
+        .map_err(|e| format!("drop stale waiters: {e}"))? as u64;
+    Ok(report)
+}
+
+/// Push a lease's expiry out by `ttl_secs` from now, and make that its TTL.
+/// `false` if no active lease has that id.
+pub fn renew_lease(conn: &Connection, lease_id: &str, ttl_secs: u64) -> Result<bool, String> {
+    conn.execute(
+        "UPDATE leases SET expires_at = ?1, ttl_secs = ?2 WHERE id = ?3 AND status = 'active'",
+        params![iso_after_secs(ttl_secs), ttl_secs as i64, lease_id],
+    )
+    .map_err(|e| format!("renew lease: {e}"))?;
+    Ok(conn.changes() > 0)
+}
+
+/// Join the queue for a resource. The returned id is presented on each poll.
+pub fn enqueue_waiter(
+    conn: &Connection,
+    session_id: &str,
+    resource_kind: &str,
+    resource_value: &str,
+) -> Result<String, String> {
+    let id = gen_id("wait");
+    conn.execute(
+        "INSERT INTO lease_waiters (id, session_id, resource_kind, resource_value, polled_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, session_id, resource_kind, resource_value, epoch_secs()],
+    )
+    .map_err(|e| format!("enqueue waiter: {e}"))?;
+    Ok(id)
+}
+
+/// Leave the queue: on a grant, a timeout, or giving up.
+pub fn drop_waiter(conn: &Connection, waiter_id: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM lease_waiters WHERE id = ?1",
+        params![waiter_id],
+    )
+    .map_err(|e| format!("drop waiter: {e}"))?;
+    Ok(())
+}
+
+/// The result of one claim attempt.
+#[derive(Debug)]
+pub enum ClaimOutcome {
+    /// The lease is held.
+    Granted,
+    /// An active exclusive lease is in the way.
+    Conflict(Box<Lease>),
+    /// Nothing holds it, but this many claimants are queued ahead.
+    Queued { ahead: usize },
+    /// The waiter id is no longer in the queue: it stopped polling for longer
+    /// than `WAITER_STALE_SECS` and lost its place.
+    WaiterGone,
+}
+
+/// Claim `lease` if nothing holds an overlapping exclusive lease and nobody
+/// is queued ahead, all in one transaction.
+///
+/// With `waiter_id`, this is a poll from a queued claimant: its place is
+/// refreshed, and it's granted only at the head of the queue. Without one,
+/// the claim still respects the queue: a claimant that isn't waiting must not
+/// jump ahead of one that is. Advisory leases neither conflict nor queue.
+pub fn claim_or_queue(
+    conn: &Connection,
+    lease: &Lease,
+    waiter_id: Option<&str>,
+) -> Result<ClaimOutcome, String> {
+    // IMMEDIATE takes the write lock up front. A deferred transaction reads
+    // first and upgrades to a write later, and under WAL that upgrade fails
+    // outright when another claim committed in between: the busy timeout
+    // can't help a stale snapshot.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| format!("begin tx: {e}"))?;
 
-    // Check for conflicts within the transaction
     if lease.mode == LeaseMode::Exclusive {
-        let conflict = find_conflicting_lease(
+        let my_seq: Option<i64> = match waiter_id {
+            Some(w) => {
+                let touched = tx
+                    .execute(
+                        "UPDATE lease_waiters SET polled_at = ?1 WHERE id = ?2",
+                        params![epoch_secs(), w],
+                    )
+                    .map_err(|e| format!("touch waiter: {e}"))?;
+                if touched == 0 {
+                    tx.rollback().map_err(|e| format!("rollback: {e}"))?;
+                    return Ok(ClaimOutcome::WaiterGone);
+                }
+                Some(
+                    tx.query_row(
+                        "SELECT seq FROM lease_waiters WHERE id = ?1",
+                        params![w],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| format!("waiter seq: {e}"))?,
+                )
+            }
+            None => None,
+        };
+
+        if let Some(c) = find_conflicting_lease(
             &tx,
             &lease.resource_kind,
             &lease.resource_value,
             &lease.owner_session_id,
-        )?;
-        if let Some(c) = conflict {
-            tx.rollback().map_err(|e| format!("rollback: {e}"))?;
-            return Ok(Some(c));
+        )? {
+            tx.commit().map_err(|e| format!("commit: {e}"))?;
+            return Ok(ClaimOutcome::Conflict(Box::new(c)));
+        }
+
+        let ahead = waiters_ahead(&tx, lease, my_seq)?;
+        if ahead > 0 {
+            tx.commit().map_err(|e| format!("commit: {e}"))?;
+            return Ok(ClaimOutcome::Queued { ahead });
         }
     }
 
-    // No conflict -- insert the lease
+    // A plain INSERT, never OR REPLACE: a claim must not be able to overwrite
+    // another lease, even under an id collision. Failing loudly is the only
+    // safe outcome.
     tx.execute(
-        "INSERT OR REPLACE INTO leases
+        "INSERT INTO leases
          (id, owner_session_id, owner_agent, resource_kind, resource_value,
-          mode, reason, acquired_at, expires_at, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+          mode, reason, acquired_at, expires_at, status, ttl_secs)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             lease.id,
             lease.owner_session_id,
@@ -721,28 +958,50 @@ pub fn claim_lease_atomic(conn: &Connection, lease: &Lease) -> Result<Option<Lea
             lease.acquired_at,
             lease.expires_at,
             lease.status.as_str(),
+            lease.ttl_secs.map(|s| s as i64),
         ],
     )
     .map_err(|e| format!("insert lease: {e}"))?;
-
+    if let Some(w) = waiter_id {
+        tx.execute("DELETE FROM lease_waiters WHERE id = ?1", params![w])
+            .map_err(|e| format!("drop waiter: {e}"))?;
+    }
     tx.commit().map_err(|e| format!("commit: {e}"))?;
-    Ok(None)
+    Ok(ClaimOutcome::Granted)
 }
 
-pub fn release_lease(conn: &Connection, lease_id: &str) -> Result<bool, String> {
-    conn.execute(
-        "UPDATE leases SET status = 'released' WHERE id = ?1 AND status = 'active'",
-        params![lease_id],
-    )
-    .map_err(|e| format!("release lease: {e}"))?;
-    Ok(conn.changes() > 0)
+/// Live waiters for an overlapping resource queued before `my_seq` (or at
+/// all, for a claimant not in the queue), from other sessions.
+fn waiters_ahead(conn: &Connection, lease: &Lease, my_seq: Option<i64>) -> Result<usize, String> {
+    let fresh = epoch_secs() - WAITER_STALE_SECS as i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT seq, resource_value FROM lease_waiters
+             WHERE resource_kind = ?1 AND session_id != ?2 AND polled_at >= ?3",
+        )
+        .map_err(|e| format!("prepare: {e}"))?;
+    let rows = stmt
+        .query_map(
+            params![lease.resource_kind, lease.owner_session_id, fresh],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+        )
+        .map_err(|e| format!("query: {e}"))?;
+    let mut ahead = 0;
+    for row in rows {
+        let (seq, value) = row.map_err(|e| format!("row: {e}"))?;
+        let earlier = my_seq.is_none_or(|mine| seq < mine);
+        if earlier && resources_overlap(&lease.resource_kind, &value, &lease.resource_value) {
+            ahead += 1;
+        }
+    }
+    Ok(ahead)
 }
 
 pub fn list_leases_for_session(conn: &Connection, session_id: &str) -> Result<Vec<Lease>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, owner_session_id, owner_agent, resource_kind, resource_value,
-                    mode, reason, acquired_at, expires_at, status
+                    mode, reason, acquired_at, expires_at, status, ttl_secs
              FROM leases WHERE owner_session_id = ?1 AND status = 'active'
              ORDER BY acquired_at DESC",
         )
@@ -1422,6 +1681,307 @@ pub fn prune(conn: &Connection, retention_days: Option<u64>) -> Result<u64, Stri
 mod tests {
     use super::*;
 
+    // ── Lease TTL, renewal and waiting (#569) ───────────────────────────
+
+    use std::collections::HashSet;
+
+    fn ttl_lease(id: &str, session: &str, kind: &str, value: &str) -> Lease {
+        Lease {
+            id: id.into(),
+            owner_session_id: session.into(),
+            owner_agent: "claude-code".into(),
+            resource_kind: kind.into(),
+            resource_value: value.into(),
+            mode: LeaseMode::Exclusive,
+            reason: String::new(),
+            acquired_at: now_iso(),
+            expires_at: Some(iso_after_secs(300)),
+            status: LeaseStatus::Active,
+            ttl_secs: Some(300),
+        }
+    }
+
+    fn live(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    fn lapse(conn: &Connection, id: &str) {
+        conn.execute(
+            "UPDATE leases SET expires_at = '2000-01-01T00:00:00Z' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+    }
+
+    fn status_of(conn: &Connection, id: &str) -> LeaseStatus {
+        get_lease(conn, id).unwrap().unwrap().status
+    }
+
+    fn granted(o: ClaimOutcome) -> bool {
+        matches!(o, ClaimOutcome::Granted)
+    }
+
+    #[test]
+    fn a_ttl_round_trips_through_the_store() {
+        let conn = open_memory();
+        upsert_lease(&conn, &ttl_lease("l1", "s1", "res", "db")).unwrap();
+        assert_eq!(get_lease(&conn, "l1").unwrap().unwrap().ttl_secs, Some(300));
+    }
+
+    #[test]
+    fn named_resources_match_exactly_and_paths_by_prefix() {
+        assert!(resources_overlap("res", "db", "db"));
+        assert!(!resources_overlap("res", "db", "db-test"));
+        assert!(!resources_overlap("res", "db-test", "db"));
+        assert!(resources_overlap(PATH_GLOB, "src/**", "src/app.rs"));
+        assert!(resources_overlap(PATH_GLOB, "src/app.rs", "src/**"));
+    }
+
+    /// A sweep that runs late must renew a live owner before it expires
+    /// anything, or a lease held the whole time is lost.
+    #[test]
+    fn a_live_owner_is_renewed_even_after_its_expiry_lapsed() {
+        let conn = open_memory();
+        upsert_lease(&conn, &ttl_lease("l1", "alive", "res", "db")).unwrap();
+        lapse(&conn, "l1");
+        let r = sweep_leases(&conn, &live(&["alive"])).unwrap();
+        assert_eq!(r.renewed, 1);
+        assert_eq!(r.expired, 0);
+        assert_eq!(status_of(&conn, "l1"), LeaseStatus::Active);
+        let expires = get_lease(&conn, "l1").unwrap().unwrap().expires_at.unwrap();
+        assert!(expires > now_iso(), "{expires}");
+    }
+
+    #[test]
+    fn a_dead_or_unknown_owner_expires_at_its_ttl() {
+        let conn = open_memory();
+        upsert_lease(&conn, &ttl_lease("l1", "gone", "res", "db")).unwrap();
+        lapse(&conn, "l1");
+        let r = sweep_leases(&conn, &live(&["someone-else"])).unwrap();
+        assert_eq!(r.expired, 1);
+        assert_eq!(status_of(&conn, "l1"), LeaseStatus::Expired);
+    }
+
+    #[test]
+    fn an_unknown_owner_is_not_released_before_its_ttl() {
+        let conn = open_memory();
+        upsert_lease(&conn, &ttl_lease("l1", "sess_1", "res", "db")).unwrap();
+        let r = sweep_leases(&conn, &live(&[])).unwrap();
+        assert_eq!(r, SweepReport::default());
+        assert_eq!(status_of(&conn, "l1"), LeaseStatus::Active);
+    }
+
+    /// Rows written before #569 have no TTL and no expiry. A sweep leaves
+    /// them exactly as they were.
+    #[test]
+    fn a_lease_from_before_569_never_expires() {
+        let conn = open_memory();
+        let mut old = ttl_lease("l1", "sess_1", PATH_GLOB, "src/**");
+        old.ttl_secs = None;
+        old.expires_at = None;
+        upsert_lease(&conn, &old).unwrap();
+        sweep_leases(&conn, &live(&[])).unwrap();
+        assert_eq!(status_of(&conn, "l1"), LeaseStatus::Active);
+        assert!(
+            get_lease(&conn, "l1")
+                .unwrap()
+                .unwrap()
+                .expires_at
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn renew_extends_an_active_lease_and_refuses_an_inactive_one() {
+        let conn = open_memory();
+        upsert_lease(&conn, &ttl_lease("l1", "s1", "res", "db")).unwrap();
+        lapse(&conn, "l1");
+        assert!(renew_lease(&conn, "l1", 600).unwrap());
+        let l = get_lease(&conn, "l1").unwrap().unwrap();
+        assert_eq!(l.ttl_secs, Some(600));
+        assert!(l.expires_at.unwrap() > now_iso());
+        release_lease(&conn, "l1").unwrap();
+        assert!(!renew_lease(&conn, "l1", 600).unwrap());
+        assert!(!renew_lease(&conn, "missing", 600).unwrap());
+    }
+
+    #[test]
+    fn a_free_resource_is_granted() {
+        let conn = open_memory();
+        assert!(granted(
+            claim_or_queue(&conn, &ttl_lease("l1", "a", "res", "db"), None).unwrap()
+        ));
+        assert_eq!(status_of(&conn, "l1"), LeaseStatus::Active);
+    }
+
+    #[test]
+    fn a_held_resource_conflicts() {
+        let conn = open_memory();
+        claim_or_queue(&conn, &ttl_lease("l1", "a", "res", "db"), None).unwrap();
+        match claim_or_queue(&conn, &ttl_lease("l2", "b", "res", "db"), None).unwrap() {
+            ClaimOutcome::Conflict(c) => assert_eq!(c.id, "l1"),
+            other => panic!("{other:?}"),
+        }
+        // A different named resource is free.
+        assert!(granted(
+            claim_or_queue(&conn, &ttl_lease("l3", "b", "res", "db-test"), None).unwrap()
+        ));
+    }
+
+    #[test]
+    fn waiters_are_granted_in_the_order_they_queued() {
+        let conn = open_memory();
+        claim_or_queue(&conn, &ttl_lease("held", "a", "res", "db"), None).unwrap();
+        let wb = enqueue_waiter(&conn, "b", "res", "db").unwrap();
+        let wc = enqueue_waiter(&conn, "c", "res", "db").unwrap();
+
+        release_lease(&conn, "held").unwrap();
+        // c queued second: it must not overtake b.
+        match claim_or_queue(&conn, &ttl_lease("lc", "c", "res", "db"), Some(&wc)).unwrap() {
+            ClaimOutcome::Queued { ahead } => assert_eq!(ahead, 1),
+            other => panic!("{other:?}"),
+        }
+        assert!(granted(
+            claim_or_queue(&conn, &ttl_lease("lb", "b", "res", "db"), Some(&wb)).unwrap()
+        ));
+        // b holds it now; c conflicts with b rather than queueing behind it.
+        assert!(matches!(
+            claim_or_queue(&conn, &ttl_lease("lc", "c", "res", "db"), Some(&wc)).unwrap(),
+            ClaimOutcome::Conflict(_)
+        ));
+        release_lease(&conn, "lb").unwrap();
+        assert!(granted(
+            claim_or_queue(&conn, &ttl_lease("lc", "c", "res", "db"), Some(&wc)).unwrap()
+        ));
+        // A granted waiter leaves the queue.
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM lease_waiters", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn a_claim_that_isnt_waiting_cannot_jump_the_queue() {
+        let conn = open_memory();
+        enqueue_waiter(&conn, "b", "res", "db").unwrap();
+        match claim_or_queue(&conn, &ttl_lease("l1", "a", "res", "db"), None).unwrap() {
+            ClaimOutcome::Queued { ahead } => assert_eq!(ahead, 1),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_waiter_on_another_resource_does_not_block() {
+        let conn = open_memory();
+        enqueue_waiter(&conn, "b", "res", "other").unwrap();
+        assert!(granted(
+            claim_or_queue(&conn, &ttl_lease("l1", "a", "res", "db"), None).unwrap()
+        ));
+    }
+
+    #[test]
+    fn a_waiter_that_stopped_polling_loses_its_place() {
+        let conn = open_memory();
+        let w = enqueue_waiter(&conn, "b", "res", "db").unwrap();
+        conn.execute("UPDATE lease_waiters SET polled_at = 0", [])
+            .unwrap();
+        // It no longer blocks others...
+        assert!(granted(
+            claim_or_queue(&conn, &ttl_lease("l1", "a", "res", "db"), None).unwrap()
+        ));
+        // ...and the sweep removes it, after which its own poll says so.
+        assert_eq!(sweep_leases(&conn, &live(&[])).unwrap().waiters_dropped, 1);
+        assert!(matches!(
+            claim_or_queue(&conn, &ttl_lease("l2", "b", "res", "db"), Some(&w)).unwrap(),
+            ClaimOutcome::WaiterGone
+        ));
+    }
+
+    #[test]
+    fn advisory_claims_never_conflict_or_queue() {
+        let conn = open_memory();
+        claim_or_queue(&conn, &ttl_lease("l1", "a", "res", "db"), None).unwrap();
+        enqueue_waiter(&conn, "b", "res", "db").unwrap();
+        let mut adv = ttl_lease("l2", "c", "res", "db");
+        adv.mode = LeaseMode::Advisory;
+        assert!(granted(claim_or_queue(&conn, &adv, None).unwrap()));
+    }
+
+    /// The bug the CLI test caught: two processes in the same second got the
+    /// same lease id, and the second claim replaced the first's lease.
+    #[test]
+    fn a_claim_never_replaces_an_existing_lease() {
+        let conn = open_memory();
+        claim_or_queue(&conn, &ttl_lease("same-id", "a", "res", "one"), None).unwrap();
+        assert!(claim_or_queue(&conn, &ttl_lease("same-id", "b", "res", "two"), None).is_err());
+        let kept = get_lease(&conn, "same-id").unwrap().unwrap();
+        assert_eq!(kept.owner_session_id, "a");
+        assert_eq!(kept.resource_value, "one");
+    }
+
+    #[test]
+    fn ids_from_different_processes_differ() {
+        let id = gen_id("lease");
+        assert!(
+            id.contains(&format!("_{}_", std::process::id())),
+            "{id} should carry the pid"
+        );
+    }
+
+    #[test]
+    fn a_session_does_not_conflict_with_or_queue_behind_itself() {
+        let conn = open_memory();
+        claim_or_queue(&conn, &ttl_lease("l1", "a", "res", "db"), None).unwrap();
+        enqueue_waiter(&conn, "a", "res", "db").unwrap();
+        assert!(granted(
+            claim_or_queue(&conn, &ttl_lease("l2", "a", "res", "db"), None).unwrap()
+        ));
+    }
+
+    #[test]
+    fn the_schema_has_the_lease_columns_and_queue() {
+        let conn = open_memory();
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(leases)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(cols.contains(&"ttl_secs".to_string()));
+        conn.query_row("SELECT COUNT(*) FROM lease_waiters", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap();
+    }
+
+    /// A v3 database gains the column on open, and its existing leases keep
+    /// meaning what they meant.
+    #[test]
+    fn a_v3_database_migrates_forward_without_touching_existing_leases() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE leases (
+                id TEXT PRIMARY KEY, owner_session_id TEXT NOT NULL,
+                owner_agent TEXT NOT NULL DEFAULT 'claude-code',
+                resource_kind TEXT NOT NULL, resource_value TEXT NOT NULL,
+                mode TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+                acquired_at TEXT NOT NULL, expires_at TEXT,
+                status TEXT NOT NULL DEFAULT 'active');
+             INSERT INTO leases (id, owner_session_id, resource_kind, resource_value, mode, acquired_at)
+             VALUES ('old', 's', 'path_glob', 'src/**', 'exclusive', '2026-01-01T00:00:00Z');
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        check_schema_version(&conn).unwrap();
+        let old = get_lease(&conn, "old").unwrap().unwrap();
+        assert_eq!(old.ttl_secs, None);
+        assert_eq!(old.status, LeaseStatus::Active);
+        sweep_leases(&conn, &HashSet::new()).unwrap();
+        assert_eq!(status_of(&conn, "old"), LeaseStatus::Active);
+    }
+
     #[test]
     fn migrate_idempotent() {
         let conn = open_memory();
@@ -1542,6 +2102,7 @@ mod tests {
             acquired_at: "2026-04-20T10:00:00Z".into(),
             expires_at: Some("2026-04-20T10:20:00Z".into()),
             status: LeaseStatus::Active,
+            ttl_secs: None,
         };
 
         upsert_lease(&conn, &lease).unwrap();
@@ -1571,6 +2132,7 @@ mod tests {
             acquired_at: "2020-01-01T00:00:00Z".into(),
             expires_at: Some("2020-01-01T00:20:00Z".into()),
             status: LeaseStatus::Active,
+            ttl_secs: None,
         };
         upsert_lease(&conn, &lease).unwrap();
 
@@ -1794,6 +2356,7 @@ mod tests {
             acquired_at: "2026-04-20T10:00:00Z".into(),
             expires_at: None,
             status: LeaseStatus::Active,
+            ttl_secs: None,
         };
         upsert_lease(&conn, &lease).unwrap();
 
@@ -1846,6 +2409,7 @@ mod tests {
             acquired_at: "2026-04-20T10:00:00Z".into(),
             expires_at: None,
             status: LeaseStatus::Active,
+            ttl_secs: None,
         }
     }
 

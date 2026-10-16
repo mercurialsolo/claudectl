@@ -154,6 +154,12 @@ pub struct Lease {
     pub acquired_at: String,
     pub expires_at: Option<String>,
     pub status: LeaseStatus,
+    /// How long the lease lives without renewal (#569). A lease whose owner
+    /// session is alive is renewed by every sweep, so this only bounds how
+    /// long a dead or unknown owner keeps it. `None` for a lease from before
+    /// #569, which never expires, as before.
+    #[serde(default)]
+    pub ttl_secs: Option<u64>,
 }
 
 // -- Blocker -------------------------------------------------------------------
