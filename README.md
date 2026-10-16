@@ -420,6 +420,8 @@ requires    = ["docker", "node>=22"]   # tools the relay probes, or tags a machi
 
 When a verifier fails, the task goes back to work in the same worktree with the failing verifier's output added to its prompt, up to `max_retries`; after that it's NEEDS_HUMAN. A session that dies is resumed with a prompt that tells it to assess the worktree before continuing. A task with `depends_on` starts once each dependency is DONE, and its prompt names each dependency's branch and closing summary; if a dependency is cancelled or needs a human, the tasks after it move to NEEDS_HUMAN with the reason (`dependency_cancelled:<name>`).
 
+<img src="assets/fleet-supervisor.gif" alt="A laptop hands two Claude Code tasks to a Mac mini: one fails its verifier on the mini, is retried there with the failure, and passes" width="100%" />
+
 The full guide, with a two-machine walkthrough: [docs/fleet-supervisor.md](docs/fleet-supervisor.md).
 
 **Where tasks run.** Each machine has a slot policy in `~/.claudectl/coord/policy.toml`, and a task starts only where it fits. Without the file, this machine runs four tasks at a time, as before.
