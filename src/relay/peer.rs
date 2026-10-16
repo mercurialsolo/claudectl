@@ -302,8 +302,12 @@ impl PeerConnection {
         sessions: &[serde_json::Value],
         capabilities: Option<&serde_json::Value>,
         listen_addrs: &[String],
+        headroom: Option<&serde_json::Value>,
     ) -> io::Result<()> {
-        let msg = protocol::heartbeat_full(identity, sessions, capabilities, listen_addrs);
+        // Only a link that agreed to it gets the headroom key.
+        let headroom = headroom.filter(|_| self.features.has(super::features::HEADROOM));
+        let msg =
+            protocol::heartbeat_full(identity, sessions, capabilities, listen_addrs, headroom);
         self.send(&msg)?;
         self.last_heartbeat_sent = Instant::now();
         Ok(())

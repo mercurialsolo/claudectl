@@ -301,9 +301,12 @@ impl crate::coord::actuator::SideEffects for NoopSideEffects {
 /// What one supervisor pass did.
 #[derive(Debug, Default)]
 pub struct TickReport {
+    /// Actions that change something; holds aren't counted.
     pub emitted: usize,
     pub actuated: usize,
     pub errors: Vec<String>,
+    /// Ready tasks left waiting this pass, with why (#571).
+    pub holds: Vec<(String, String)>,
 }
 
 /// One supervisor pass: read tasks and the live sensor, carry out the
@@ -316,11 +319,13 @@ pub fn tick_once(supervisor: &super::supervisor::Supervisor) -> Result<TickRepor
     let fx = LiveSideEffects;
     #[cfg(not(feature = "bus"))]
     let fx = NoopSideEffects;
-    let mut report = TickReport {
-        emitted: actions.len(),
-        ..TickReport::default()
-    };
+    let mut report = TickReport::default();
     for action in &actions {
+        if let super::supervisor::Action::Hold { task_id, reason } = action {
+            report.holds.push((task_id.clone(), reason.clone()));
+            continue;
+        }
+        report.emitted += 1;
         match super::actuator::apply(&mut conn, &fx, action) {
             Ok(()) => report.actuated += 1,
             Err(e) => report.errors.push(e),

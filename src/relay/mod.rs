@@ -5,6 +5,7 @@ pub mod cli;
 pub mod crypto;
 pub mod delegation;
 pub mod features;
+pub mod headroom;
 /// The hive join handshake — needs the hive module, which `relay` does not imply.
 #[cfg(feature = "hive")]
 pub mod hivejoin;
@@ -148,7 +149,7 @@ pub fn epoch_ms() -> u64 {
 // Identity and peer persistence
 // ────────────────────────────────────────────────────────────────────────────
 
-fn relay_dir() -> PathBuf {
+pub(crate) fn relay_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     PathBuf::from(home).join(".claudectl").join("relay")
 }

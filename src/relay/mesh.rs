@@ -19,6 +19,9 @@ pub struct WorkerState {
 }
 
 /// The peer registry: central state for all peer connections.
+/// Measures this machine's headroom, as the JSON a heartbeat carries.
+pub type HeadroomSource = Box<dyn Fn() -> serde_json::Value + Send>;
+
 pub struct PeerRegistry {
     peers: HashMap<String, PeerConnection>, // peer_id string -> connection
     tx: Sender<(PeerId, RelayMessage)>,
@@ -34,6 +37,10 @@ pub struct PeerRegistry {
     /// Empty until something probes, so a registry that never sets it sends
     /// exactly what it sent before.
     local_addrs: Vec<String>,
+    /// Measures this machine's headroom for the heartbeat (#571), called once
+    /// per heartbeat so what peers see is current, unlike the capabilities,
+    /// which are probed once. `None` sends no headroom.
+    headroom_source: Option<HeadroomSource>,
     /// Session state received from each connected peer's heartbeat.
     worker_states: HashMap<String, WorkerState>,
     /// Our own peer id, for resolving simultaneous-dial collisions.
@@ -52,6 +59,7 @@ impl PeerRegistry {
             last_heartbeat_tick: Instant::now(),
             local_capabilities: None,
             local_addrs: Vec::new(),
+            headroom_source: None,
             worker_states: HashMap::new(),
             identity: identity.to_string(),
         }
@@ -223,6 +231,11 @@ impl PeerRegistry {
 
         let caps = self.local_capabilities.clone();
         let addrs = self.local_addrs.clone();
+        let headroom = if should_heartbeat {
+            self.headroom_source.as_ref().map(|f| f())
+        } else {
+            None
+        };
         let peer_ids: Vec<String> = self.peers.keys().cloned().collect();
         for id in peer_ids {
             let peer = match self.peers.get_mut(&id) {
@@ -236,14 +249,27 @@ impl PeerRegistry {
                     if should_heartbeat {
                         let send_ok = match local_sessions {
                             Some(sessions) => peer
-                                .send_heartbeat_with(identity, sessions, caps.as_ref(), &addrs)
+                                .send_heartbeat_with(
+                                    identity,
+                                    sessions,
+                                    caps.as_ref(),
+                                    &addrs,
+                                    headroom.as_ref(),
+                                )
                                 .is_ok(),
                             // No sessions but a manifest to advertise is still
                             // worth a payload, so capability-only peers are
                             // visible to a delegator.
-                            None if caps.is_some() || !addrs.is_empty() => peer
-                                .send_heartbeat_with(identity, &[], caps.as_ref(), &addrs)
-                                .is_ok(),
+                            None if caps.is_some() || !addrs.is_empty() || headroom.is_some() => {
+                                peer.send_heartbeat_with(
+                                    identity,
+                                    &[],
+                                    caps.as_ref(),
+                                    &addrs,
+                                    headroom.as_ref(),
+                                )
+                                .is_ok()
+                            }
                             None => peer.send_heartbeat(identity).is_ok(),
                         };
                         if !send_ok {
@@ -286,6 +312,11 @@ impl PeerRegistry {
     /// Set the manifest advertised on subsequent heartbeats (#536).
     pub fn set_local_capabilities(&mut self, caps: serde_json::Value) {
         self.local_capabilities = Some(caps);
+    }
+
+    /// Measure headroom on each heartbeat from now on (#571).
+    pub fn set_headroom_source(&mut self, source: HeadroomSource) {
+        self.headroom_source = Some(source);
     }
 
     /// Set the addresses advertised on subsequent heartbeats (#541).

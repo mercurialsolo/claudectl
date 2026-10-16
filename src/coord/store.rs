@@ -10,12 +10,14 @@ use super::types::*;
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn db_path() -> PathBuf {
+/// `~/.claudectl/coord`: the database, the drain marker, `policy.toml`.
+pub fn coord_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home)
-        .join(".claudectl")
-        .join("coord")
-        .join("coord.db")
+    PathBuf::from(home).join(".claudectl").join("coord")
+}
+
+fn db_path() -> PathBuf {
+    coord_dir().join("coord.db")
 }
 
 fn now_iso() -> String {
@@ -74,7 +76,8 @@ pub fn gen_id(prefix: &str) -> String {
 /// v4 = lease TTLs (`leases.ttl_secs`) and the `lease_waiters` queue (#569).
 /// v5 = a worktree per task (#570): `tasks.git_ref`, `branch`,
 ///       `permission_mode`; `task_attempts.pid`, `workdir`.
-pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 5;
+/// v6 = placement (#571): `tasks.requires`, `tasks.peer`.
+pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 6;
 
 /// Open (or create) the coordination database and run migrations.
 pub fn open() -> Result<Connection, String> {
@@ -96,6 +99,35 @@ pub fn open() -> Result<Connection, String> {
     migrate(&conn).map_err(|e| format!("migrate: {e}"))?;
     check_schema_version(&conn)?;
     Ok(conn)
+}
+
+/// The coord database for a reader that must change nothing (#571): the
+/// relay counts supervisor tasks for its heartbeat on every machine, most of
+/// which never ran the supervisor. `None` when there's no database (nothing
+/// is created), or its schema is newer than this binary knows. Read-only and
+/// never migrated, so a relay heartbeating never upgrades someone's coord
+/// store behind their back; a short busy timeout, because the caller holds
+/// the relay's registry lock.
+pub fn open_existing_read_only(path: &std::path::Path) -> Option<Connection> {
+    if !path.is_file() {
+        return None;
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    conn.busy_timeout(std::time::Duration::from_millis(100))
+        .ok()?;
+    let version: u32 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .ok()?;
+    (version <= EXPECTED_COORD_SCHEMA_VERSION).then_some(conn)
+}
+
+/// Where `open` keeps the database.
+pub fn db_file() -> PathBuf {
+    db_path()
 }
 
 /// Open an in-memory database (for testing and evals).
@@ -390,6 +422,10 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     ensure_column(conn, "tasks", "permission_mode", "permission_mode TEXT")?;
     ensure_column(conn, "task_attempts", "pid", "pid INTEGER")?;
     ensure_column(conn, "task_attempts", "workdir", "workdir TEXT")?;
+    // Schema v6 — placement (#571). Additive: no `requires` and no `peer`
+    // means run wherever there's room, which before this was always here.
+    ensure_column(conn, "tasks", "requires", "requires TEXT")?;
+    ensure_column(conn, "tasks", "peer", "peer TEXT")?;
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS lease_waiters (

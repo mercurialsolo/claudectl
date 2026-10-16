@@ -33,6 +33,10 @@ use super::tasks::{TaskState, list_tasks};
 /// outside the reconciler's pure scope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Action {
+    /// Leave a ready task where it is this pass, and say why (#571): no
+    /// machine has room, or the only machine that could take it is a peer.
+    /// Changes nothing; `supervisor work` prints it when the reason changes.
+    Hold { task_id: String, reason: String },
     /// Write a `task` message to the role's mailbox. Becomes `ASSIGNED`
     /// once the bus insert lands.
     AssignViaMailbox { task_id: String, role: String },
@@ -160,6 +164,12 @@ pub trait Sensors {
     /// Sessions currently observable on the host. Reconciler refuses to
     /// actuate on `Unknown` per RFC v2 §6.
     fn observed_sessions(&self) -> Vec<ObservedSession>;
+    /// Each machine a task could run on, measured (#571). Empty means none
+    /// was measured: this machine is assumed, with `max_concurrent` as its
+    /// only limit, which is what the reconciler did before placement.
+    fn placement(&self) -> Vec<super::placement::PeerView> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -231,15 +241,65 @@ impl Supervisor {
         //    A Pending task starts only when every task it depends on is
         //    DONE (#572). One that can never start, because a dependency
         //    ended without finishing, is escalated with the reason.
+        //
+        //    Where each one runs is placement's call (#571): this machine's
+        //    measured headroom against its slot policy, the task's `requires`,
+        //    its `peer`. Tasks can't run on a peer yet, so an unpinned task is
+        //    placed among this machine only; one that only a peer could take
+        //    is held with the reason, naming that peer.
         let in_flight = (assigned.len() + running.len()) as u32;
-        let mut slots = self.policy.max_concurrent.saturating_sub(in_flight) as usize;
-        for task in retrying.iter().take(slots) {
-            out.push(Action::Spawn {
-                task_id: task.id.clone(),
-                cwd: PathBuf::from(&task.cwd),
-            });
+        let mut views = sensors.placement();
+        if !views.iter().any(|v| v.peer.is_none()) {
+            views.push(super::placement::PeerView::local_with_ceiling(
+                self.policy.max_concurrent,
+            ));
         }
-        slots = slots.saturating_sub(retrying.len());
+        for v in views.iter_mut().filter(|v| v.peer.is_none()) {
+            // What's in flight is known exactly here; the probe can lag.
+            v.headroom.running_tasks = in_flight;
+        }
+        let mut place = |task: &super::tasks::TaskRow, out: &mut Vec<Action>| -> bool {
+            use super::placement::{Decision, place};
+            // Why this machine won't take it, unless it's pinned elsewhere.
+            let mut here = None;
+            if task.peer.is_none() {
+                let local = views.iter().position(|v| v.peer.is_none()).expect("pushed");
+                match place(&mut views[local..=local], &task.requires, None) {
+                    Decision::Local => return true,
+                    Decision::Wait(why) => here = Some(why),
+                    Decision::Remote(_) => {}
+                }
+            }
+            // Ask again over every machine, without counting it anywhere, to
+            // say whether a peer could. This machine's own reason leads: a
+            // peer with room is no help until tasks can run there.
+            let reason = match (
+                here,
+                place(&mut views.clone(), &task.requires, task.peer.as_deref()),
+            ) {
+                (Some(why), Decision::Remote(p)) => {
+                    format!("{why}; {p} has room, but running tasks on peers is not built yet")
+                }
+                (None, Decision::Remote(p)) => format!(
+                    "pinned to {p}, which has room, but running tasks on peers is not built yet"
+                ),
+                (_, Decision::Wait(why)) => why,
+                (here, Decision::Local) => here.unwrap_or_else(|| "this machine is full".into()),
+            };
+            out.push(Action::Hold {
+                task_id: task.id.clone(),
+                reason,
+            });
+            false
+        };
+        for task in &retrying {
+            if place(task, &mut out) {
+                out.push(Action::Spawn {
+                    task_id: task.id.clone(),
+                    cwd: PathBuf::from(&task.cwd),
+                });
+            }
+        }
         let mut ready = Vec::new();
         for task in &pending {
             match dependency_gate(conn, task)? {
@@ -251,7 +311,10 @@ impl Supervisor {
                 }),
             }
         }
-        for task in ready.into_iter().take(slots) {
+        for task in ready {
+            if !place(task, &mut out) {
+                continue;
+            }
             match &task.role {
                 Some(role) => out.push(Action::AssignViaMailbox {
                     task_id: task.id.clone(),
@@ -489,6 +552,8 @@ mod tests {
                 git_ref: None,
                 branch: None,
                 permission_mode: None,
+                requires: vec![],
+                peer: None,
             },
         )
         .unwrap();
@@ -524,6 +589,8 @@ mod tests {
             git_ref: None,
             branch: None,
             permission_mode: None,
+            requires: vec![],
+            peer: None,
         }
     }
 
@@ -607,6 +674,89 @@ mod tests {
 
     /// #574: a Retrying task is respawned, and takes a slot before anything
     /// Pending.
+    struct PlacedSensors(Vec<crate::coord::placement::PeerView>);
+
+    impl Sensors for PlacedSensors {
+        fn last_hook_event_id(&self) -> i64 {
+            0
+        }
+        fn observed_sessions(&self) -> Vec<ObservedSession> {
+            vec![]
+        }
+        fn placement(&self) -> Vec<crate::coord::placement::PeerView> {
+            self.0.clone()
+        }
+    }
+
+    fn held(actions: &[Action]) -> Vec<String> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Hold { reason, .. } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// #571: a task that needs something only a peer has waits, and says
+    /// which peer would take it, instead of running here without it.
+    #[test]
+    fn a_task_only_a_peer_can_run_is_held_and_names_the_peer() {
+        use crate::coord::placement::PeerView;
+        let conn = store::open_memory();
+        let id = insert_task(
+            &conn,
+            &NewTask {
+                requires: vec!["docker".into()],
+                ..task("build", &[])
+            },
+        )
+        .unwrap();
+        let mut box_ = PeerView::local_with_ceiling(2);
+        box_.peer = Some("box".into());
+        box_.tags = vec!["docker".into()];
+        let sensors = PlacedSensors(vec![PeerView::local_with_ceiling(4), box_]);
+        let actions = Supervisor::with_defaults().tick(&conn, &sensors).unwrap();
+        assert!(spawned(&actions).is_empty(), "{actions:?}");
+        assert_eq!(
+            held(&actions),
+            vec![
+                "this machine lacks `docker`; box has room, but running tasks on peers is not built yet"
+            ]
+        );
+        let _ = id;
+    }
+
+    /// #571: an unpinned task still runs here when this machine has room,
+    /// however much more a peer has: it can't run on the peer yet.
+    #[test]
+    fn an_unpinned_task_runs_here_even_when_a_peer_has_more_room() {
+        use crate::coord::placement::PeerView;
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        let mut big = PeerView::local_with_ceiling(10);
+        big.peer = Some("big".into());
+        big.headroom.mem_free_mb = Some(1_000_000);
+        let sensors = PlacedSensors(vec![PeerView::local_with_ceiling(4), big]);
+        let actions = Supervisor::with_defaults().tick(&conn, &sensors).unwrap();
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    /// #571: a drained machine starts nothing, and the queue says why. The
+    /// drain marker used to be read by `doctor` alone.
+    #[test]
+    fn a_drained_machine_holds_its_queue() {
+        use crate::coord::placement::PeerView;
+        let conn = store::open_memory();
+        insert_task(&conn, &task("t", &[])).unwrap();
+        let mut local = PeerView::local_with_ceiling(4);
+        local.slots.drain = true;
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &PlacedSensors(vec![local]))
+            .unwrap();
+        assert_eq!(held(&actions), vec!["this machine is draining"]);
+    }
+
     #[test]
     fn a_retrying_task_is_respawned_ahead_of_pending_work() {
         let conn = store::open_memory();
@@ -644,6 +794,8 @@ mod tests {
                 git_ref: None,
                 branch: None,
                 permission_mode: None,
+                requires: vec![],
+                peer: None,
             },
         )
         .unwrap();
@@ -685,6 +837,8 @@ mod tests {
                     git_ref: None,
                     branch: None,
                     permission_mode: None,
+                    requires: vec![],
+                    peer: None,
                 },
             )
             .unwrap();
@@ -698,9 +852,18 @@ mod tests {
             sessions: vec![],
         };
         let actions = sup.tick(&conn, &sensors).unwrap();
-        // Only 4 actions emitted — the fifth waits for an in-flight slot
-        // to clear.
-        assert_eq!(actions.len(), 4);
+        // Only 4 start — the fifth waits for an in-flight slot to clear,
+        // and is held with the reason.
+        let started = actions
+            .iter()
+            .filter(|a| !matches!(a, Action::Hold { .. }))
+            .count();
+        assert_eq!(started, 4);
+        assert!(
+            matches!(&actions[4], Action::Hold { reason, .. }
+                if reason == "this machine is running 4 of 4 tasks"),
+            "{actions:?}"
+        );
     }
 
     /// Helper for the resume / health tests: insert a task and drive it
@@ -725,6 +888,8 @@ mod tests {
                 git_ref: None,
                 branch: None,
                 permission_mode: None,
+                requires: vec![],
+                peer: None,
             },
         )
         .unwrap();

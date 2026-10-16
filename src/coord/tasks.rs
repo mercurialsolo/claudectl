@@ -105,6 +105,13 @@ pub struct TaskRow {
     /// Passed to `claude --permission-mode`. `None`: the user's own settings.
     #[serde(default)]
     pub permission_mode: Option<String>,
+    /// What the machine running it must have (#571): a probed tool
+    /// (`node>=22`, `claude:auth`) or a peer's tag (`docker`).
+    #[serde(default)]
+    pub requires: Vec<String>,
+    /// Run only on this peer (#571). `None`: wherever placement finds room.
+    #[serde(default)]
+    pub peer: Option<String>,
 }
 
 /// Args for creating a task. Splitting this from the full row keeps the
@@ -125,12 +132,19 @@ pub struct NewTask {
     pub git_ref: Option<String>,
     pub branch: Option<String>,
     pub permission_mode: Option<String>,
+    pub requires: Vec<String>,
+    pub peer: Option<String>,
 }
 
 pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
     let id = gen_id("task");
     let now = now();
     let depends_on = serde_json::to_string(&t.depends_on).map_err(|e| format!("json: {e}"))?;
+    let requires = if t.requires.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&t.requires).map_err(|e| format!("json: {e}"))?)
+    };
     let policy = t
         .policy
         .as_ref()
@@ -144,8 +158,10 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
     conn.execute(
         "INSERT INTO tasks (id, name, state, role, cwd, prompt, model, budget_usd,
                             max_retries, timeout_min, depends_on, policy, verifiers,
-                            created_at, updated_at, git_ref, branch, permission_mode)
-         VALUES (?1, ?2, 'PENDING', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, ?15, ?16)",
+                            created_at, updated_at, git_ref, branch, permission_mode,
+                            requires, peer)
+         VALUES (?1, ?2, 'PENDING', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, ?15, ?16,
+                 ?17, ?18)",
         params![
             id,
             t.name,
@@ -163,6 +179,8 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
             t.git_ref,
             t.branch,
             t.permission_mode,
+            requires,
+            t.peer,
         ],
     )
     .map_err(|e| format!("insert task: {e}"))?;
@@ -182,7 +200,7 @@ pub fn get_task(conn: &Connection, id: &str) -> Result<Option<TaskRow>, String> 
     conn.query_row(
         "SELECT id, name, state, role, cwd, prompt, model, budget_usd,
                 max_retries, timeout_min, depends_on, policy, verifiers,
-                created_at, updated_at, git_ref, branch, permission_mode
+                created_at, updated_at, git_ref, branch, permission_mode, requires, peer
          FROM tasks WHERE id = ?1",
         params![id],
         row_to_task,
@@ -194,7 +212,7 @@ pub fn get_task(conn: &Connection, id: &str) -> Result<Option<TaskRow>, String> 
 pub fn list_tasks(conn: &Connection, state: Option<TaskState>) -> Result<Vec<TaskRow>, String> {
     let sql = "SELECT id, name, state, role, cwd, prompt, model, budget_usd,
                       max_retries, timeout_min, depends_on, policy, verifiers,
-                      created_at, updated_at, git_ref, branch, permission_mode
+                      created_at, updated_at, git_ref, branch, permission_mode, requires, peer
                FROM tasks
                WHERE (?1 IS NULL OR state = ?1)
                ORDER BY created_at";
@@ -706,6 +724,11 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         git_ref: row.get(15)?,
         branch: row.get(16)?,
         permission_mode: row.get(17)?,
+        requires: row
+            .get::<_, Option<String>>(18)?
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
+        peer: row.get(19)?,
     })
 }
 
@@ -741,6 +764,8 @@ mod tests {
             git_ref: None,
             branch: None,
             permission_mode: None,
+            requires: vec![],
+            peer: None,
         }
     }
 

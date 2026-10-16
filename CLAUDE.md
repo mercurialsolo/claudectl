@@ -58,6 +58,7 @@ src/                   # the binary crate `claudectl`
 - `theme.rs` — Color theming (dark/light/monochrome, respects NO_COLOR)
 - `logger.rs` — Structured diagnostic logging
 - `helpers.rs` — Shared utilities (webhook, notification, kill_process, aggregate session)
+- `headroom.rs` — This machine's room for another task (#571): free memory, load per core, free disk, via `vm_stat`/`sysctl`/`df` or `/proc`. Pure parsers; a failed probe leaves its field `None`, which placement never treats as plenty
 - `hooks.rs` — Event hook system (shell commands fired on session events)
 - `launch.rs` — Launch and resume Claude Code sessions from the TUI or CLI
 - `skills.rs` — Skill registry + claude-plugin metadata
@@ -105,6 +106,7 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 
 **Relay** (`src/relay/`): Cross-machine TCP transport (feature-gated behind `relay`).
 - `mod.rs` — PeerId, RelayMessage, MessageType, identity persistence, peer PSK storage
+- `headroom.rs` — A peer's advertised headroom and `[relay] tags` (#571), carried on the heartbeat only over links that agreed the `headroom` feature, kept at `peers/<id>.headroom` stamped with *our* receive time so a quiet peer can be judged stale
 - `advertise.rs` — Collects this machine's sessions for the heartbeat (throttled to 5s) and publishes the fleet snapshot peers report; `relay fleet` and the TUI read it
 - `crypto.rs` — Inline SHA-256 + HMAC-SHA256, PSK generation/formatting
 - `protocol.rs` — NDJSON framing over TCP, HMAC challenge-response auth
@@ -126,6 +128,7 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 - `cli.rs` — `claudectl bus` subcommand (stdio, role bind/list, send, inbox + `--peek`, whoami, stop-hook driver, prune)
 
 **Supervisor** (`src/coord/{supervisor,actuator,verify,resume,tasks,session_policy,hook_events,events,exporter,supervisor_cli}.rs`, `src/ingest.rs`): Durable, verified task lifecycles on top of the bus (see `docs/AGENT_BUS.md#13-longevity-persistence-across-team-teardown-the-differentiated-layer` and README §Supervisor).
+- `placement.rs` — Where a task runs (#571). `policy.toml` (`[local]`, `[peers]`, `[peers.<id>]` slot limits, hand-rolled reader that rejects unknown keys), `PeerView`, and a pure `place()`: eligible machine with the most free memory after this pass's planned tasks. `requires` matches a tag or a probed tool; a name that is neither is unmet. Tasks don't run on peers yet: the reconciler places unpinned tasks on this machine only and holds the rest with a reason (`Action::Hold`)
 - `tasks.rs` — `tasks` / `task_attempts` / `task_verifications` / `task_transitions` CRUD + state machine. Every transition writes state + log in one transaction so the ledger invariant "every state has a cause" holds.
 - `supervisor.rs` — **pure** reconciler. Reads desired state from coord, observed state from `Sensors`, returns `Vec<Action>`. No I/O. Health-check → `HealthAction` mapping table. `Unknown` observed status is the no-actuation backstop (RFC §6).
 - `actuator.rs` — Carries out `Action`s. Three-step: insert attempt → perform side effect → log transition. Side-effect failure stops *before* the transition is recorded, so the next tick re-emits.
@@ -138,7 +141,7 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 - `supervisor_cli.rs` — `claudectl supervisor` subcommand (run / submit / status / logs / cancel / drain / undrain). Hand-rolled TOML reader for the `tasks.toml` subset.
 - `src/ingest.rs` — `claudectl ingest --hook <name>` subcommand. Bash hooks call `claudectl ingest --hook PostToolUse 2>/dev/null || true`. Best-effort by construction.
 
-Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION = 5` today; v4 added lease TTLs and the `lease_waiters` queue, #569; v5 added task worktrees, #570). A binary that meets a newer schema refuses to start with the exact `init --upgrade` remediation in the error.
+Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION = 6` today; v4 added lease TTLs and the `lease_waiters` queue, #569; v5 added task worktrees, #570; v6 added `tasks.requires` and `tasks.peer`, #571). A binary that meets a newer schema refuses to start with the exact `init --upgrade` remediation in the error.
 
 **Hive** (`src/hive/`): Gossip-based knowledge sharing across connected brains (feature-gated behind `relay`).
 - `mod.rs` — KnowledgeUnit, KnowledgeScope, KnowledgeContent types, semantic key, broadcast channel

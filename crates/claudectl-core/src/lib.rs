@@ -18,6 +18,7 @@ pub mod config;
 pub mod discovery;
 pub mod fleet;
 pub mod forecast;
+pub mod headroom;
 pub mod health;
 pub mod heartbeat;
 pub mod helpers;

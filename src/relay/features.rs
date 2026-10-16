@@ -32,8 +32,13 @@ pub const FRAME_BIN: &str = "frame-bin";
 /// lease, or be one.
 pub const LEASE_FLEET: &str = "lease-fleet";
 
+/// This peer's heartbeat may carry a `headroom` object (#571): its free
+/// memory, load per core, free disk, running task count and capability tags,
+/// for placing supervisor tasks. Sent only on links that agreed to it.
+pub const HEADROOM: &str = "headroom";
+
 /// Every feature this build supports.
-const LOCAL: &[&str] = &[UNKNOWN_OK, FRAME_BIN, LEASE_FLEET];
+const LOCAL: &[&str] = &[UNKNOWN_OK, FRAME_BIN, LEASE_FLEET, HEADROOM];
 
 /// A peer controls this list, so it's bounded and filtered before it's kept.
 const MAX_FEATURES: usize = 64;

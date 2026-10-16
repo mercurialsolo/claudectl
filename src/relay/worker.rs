@@ -63,6 +63,15 @@ impl RemoteWorker {
         }
     }
 
+    /// Delegated tasks still running here, for the headroom this machine
+    /// advertises (#571).
+    pub fn running_count(&self) -> u32 {
+        self.tasks
+            .values()
+            .filter(|t| t.state == WorkerTaskState::Running)
+            .count() as u32
+    }
+
     /// Accept a new delegated task. Spawns a `claude` session.
     pub fn accept_task(
         &mut self,

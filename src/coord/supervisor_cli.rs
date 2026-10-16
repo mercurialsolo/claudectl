@@ -16,6 +16,9 @@ use std::path::PathBuf;
 use super::store;
 use super::tasks::{self, NewTask, TaskState};
 
+// Parsed once per process; `Submit` carrying every task field inline costs
+// nothing worth boxing it for.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub enum SupervisorCommand {
     /// Submit one or more tasks from a TOML file (`--run` alias). Each
@@ -71,6 +74,13 @@ pub enum SupervisorCommand {
         /// Passed to `claude --permission-mode` (default: your own settings)
         #[arg(long)]
         permission_mode: Option<String>,
+        /// What the machine running it must have: tools (`node>=22`,
+        /// `claude:auth`) or tags (`docker`), comma-separated
+        #[arg(long, value_delimiter = ',')]
+        requires: Vec<String>,
+        /// Run only on this relay peer
+        #[arg(long)]
+        peer: Option<String>,
     },
     /// Run the supervisor loop by itself: spawn queued tasks (each in its
     /// worktree when it names a git_ref), watch their sessions, and run their
@@ -106,10 +116,10 @@ pub enum SupervisorCommand {
     /// Best-effort: no open PR / no `gh` / not a repo prints a skip and
     /// exits 0 rather than failing.
     Pr { task_id: String },
-    /// Set a "drain" marker so the reconciler stops issuing new
-    /// assignments while keeping running tasks alive. The marker is a
-    /// sentinel file at `~/.claudectl/coord/drain`. Remove with
-    /// `claudectl supervisor undrain`.
+    /// Set a "drain" marker so the reconciler starts no new task on this
+    /// machine while running ones finish; queued tasks wait, with the reason.
+    /// The marker is a sentinel file at `~/.claudectl/coord/drain`. Remove
+    /// with `claudectl supervisor undrain`.
     Drain,
     /// Clear the drain marker so the reconciler resumes new
     /// assignments.
@@ -145,6 +155,8 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
             git_ref,
             branch,
             permission_mode,
+            requires,
+            peer,
         } => submit_inline(
             name,
             cwd,
@@ -158,6 +170,8 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
                 git_ref: git_ref.clone(),
                 branch: branch.clone(),
                 permission_mode: permission_mode.clone(),
+                requires: requires.clone(),
+                peer: peer.clone(),
             },
         ),
         SupervisorCommand::Work {
@@ -199,20 +213,33 @@ const ACTIVE_STATES: &[TaskState] = &[
 
 /// `supervisor work`: the reconcile loop on its own (#570).
 fn work(interval: u64, until_idle: bool, timeout: Option<u64>) -> io::Result<()> {
+    // A policy file that doesn't parse is reported now, not as a silent
+    // drain on every pass (#571).
+    super::placement::load_policy().map_err(io::Error::other)?;
     let supervisor = super::supervisor::Supervisor::with_defaults();
     let started = std::time::Instant::now();
     let interval = std::time::Duration::from_secs(interval.max(1));
     println!("supervisor: working (every {}s)", interval.as_secs());
+    // Why each held task is waiting, printed when it changes, not every pass.
+    let mut held: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     loop {
         let ts = crate::logger::timestamp_now();
         match super::live_fx::tick_once(&supervisor) {
-            Ok(r) if r.emitted > 0 => {
-                println!("[{ts}] {} action(s), {} done", r.emitted, r.actuated);
+            Ok(r) => {
+                if r.emitted > 0 {
+                    println!("[{ts}] {} action(s), {} done", r.emitted, r.actuated);
+                }
                 for e in &r.errors {
                     println!("[{ts}]   failed: {e}");
                 }
+                let now: std::collections::HashMap<String, String> = r.holds.into_iter().collect();
+                for (task, reason) in &now {
+                    if held.get(task) != Some(reason) {
+                        println!("[{ts}]   waiting: {task}: {reason}");
+                    }
+                }
+                held = now;
             }
-            Ok(_) => {}
             Err(e) => println!("[{ts}] supervisor error: {e}"),
         }
         if until_idle {
@@ -241,6 +268,9 @@ struct Placement {
     git_ref: Option<String>,
     branch: Option<String>,
     permission_mode: Option<String>,
+    /// #571: what the machine must have, and an optional peer to pin to.
+    requires: Vec<String>,
+    peer: Option<String>,
 }
 
 /// Permission modes a task may ask for. `bypassPermissions` is left out on
@@ -272,6 +302,14 @@ impl Placement {
                     "permission_mode '{m}' is not one of {}",
                     PERMISSION_MODES.join(", ")
                 ));
+            }
+        }
+        for r in &self.requires {
+            super::placement::validate_requirement(r)?;
+        }
+        if let Some(p) = &self.peer {
+            if !super::placement::valid_peer_name(p) {
+                return Err(format!("peer `{p}` is not a relay peer id"));
             }
         }
         Ok(())
@@ -313,6 +351,8 @@ fn submit_inline(
         git_ref: placement.git_ref.clone(),
         branch: placement.branch.clone(),
         permission_mode: placement.permission_mode.clone(),
+        requires: placement.requires.clone(),
+        peer: placement.peer.clone(),
         name: name.into(),
         role: role.map(String::from),
         cwd,
@@ -365,6 +405,8 @@ fn run_from_file(path: &PathBuf, dry_run: bool) -> io::Result<()> {
             git_ref: entry.git_ref.clone(),
             branch: entry.branch.clone(),
             permission_mode: entry.permission_mode.clone(),
+            requires: entry.requires.clone().unwrap_or_default(),
+            peer: entry.peer.clone(),
             name: entry.name.clone(),
             role: entry.role.clone(),
             cwd: absolute_cwd(&entry.cwd, &base)?,
@@ -685,6 +727,8 @@ fn validate_tasks(tf: &TaskFile) -> Result<(), String> {
             git_ref: t.git_ref.clone(),
             branch: t.branch.clone(),
             permission_mode: t.permission_mode.clone(),
+            requires: t.requires.clone().unwrap_or_default(),
+            peer: t.peer.clone(),
         }
         .validate()
         .map_err(|e| format!("{label}: {e}"))?;
@@ -779,6 +823,10 @@ struct TaskEntry {
     branch: Option<String>,
     #[serde(default)]
     permission_mode: Option<String>,
+    #[serde(default)]
+    requires: Option<Vec<String>>,
+    #[serde(default)]
+    peer: Option<String>,
 }
 
 /// Tiny hand-rolled TOML reader to avoid pulling the `toml` crate just
@@ -851,6 +899,15 @@ fn toml_value(v: &str) -> Result<String, String> {
     Err(format!("unterminated string: {v}"))
 }
 
+/// `["a", "b"]` as its strings.
+fn string_list(val: &str) -> Vec<String> {
+    val.trim_matches(|c: char| c == '[' || c == ']')
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 fn toml_parse(input: &str) -> Result<TaskFile, String> {
     let mut tasks: Vec<TaskEntry> = Vec::new();
     let mut current: Option<TaskEntry> = None;
@@ -920,6 +977,8 @@ fn toml_parse(input: &str) -> Result<TaskFile, String> {
                 git_ref: None,
                 branch: None,
                 permission_mode: None,
+                requires: None,
+                peer: None,
             });
             continue;
         }
@@ -956,15 +1015,9 @@ fn toml_parse(input: &str) -> Result<TaskFile, String> {
             "git_ref" => t.git_ref = Some(val),
             "branch" => t.branch = Some(val),
             "permission_mode" => t.permission_mode = Some(val),
-            "depends_on" => {
-                let parts: Vec<String> = val
-                    .trim_matches(|c: char| c == '[' || c == ']')
-                    .split(',')
-                    .map(|s| s.trim().trim_matches('"').to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                t.depends_on = Some(parts);
-            }
+            "peer" => t.peer = Some(val),
+            "depends_on" => t.depends_on = Some(string_list(&val)),
+            "requires" => t.requires = Some(string_list(&val)),
             other => return Err(format!("unknown key in [[task]]: {other}")),
         }
     }
@@ -1026,6 +1079,31 @@ run = "test \"$(cat ONE.txt)\" = one"
         assert!(toml_value(r#""unterminated"#).is_err());
         assert!(toml_value(r#""bad \q escape""#).is_err());
         assert!(toml_value(r#""x" y"#).is_err());
+    }
+
+    #[test]
+    fn placement_fields_parse_and_validate() {
+        let ok = toml_parse(
+            "[[task]]\nname = \"t\"\ncwd = \"/tmp\"\nprompt = \"p\"\nrequires = [\"docker\", \"node>=22\"]\npeer = \"mini-508f\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            ok.task[0].requires.as_deref(),
+            Some(&["docker".to_string(), "node>=22".to_string()][..])
+        );
+        assert_eq!(ok.task[0].peer.as_deref(), Some("mini-508f"));
+        assert!(validate_tasks(&ok).is_ok());
+        for bad in [
+            "requires = [\"a b\"]",
+            "requires = [\"node>=x\"]",
+            "peer = \"-x\"",
+        ] {
+            let tf = toml_parse(&format!(
+                "[[task]]\nname = \"t\"\ncwd = \"/tmp\"\nprompt = \"p\"\n{bad}\n"
+            ))
+            .unwrap();
+            assert!(validate_tasks(&tf).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -1105,6 +1183,8 @@ run = "test \"$(cat ONE.txt)\" = one"
                     git_ref: None,
                     branch: None,
                     permission_mode: None,
+                    requires: vec![],
+                    peer: None,
                 },
             )
             .unwrap()
