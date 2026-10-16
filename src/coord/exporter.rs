@@ -302,6 +302,9 @@ mod tests {
             depends_on: vec![],
             policy: None,
             verifiers: vec![],
+            git_ref: None,
+            branch: None,
+            permission_mode: None,
         }
     }
 

@@ -62,6 +62,15 @@ pub enum SupervisorCommand {
         max_retries: Option<u32>,
         #[arg(long)]
         timeout_min: Option<u32>,
+        /// Run in a new worktree of the repo at `cwd`, started from this ref
+        #[arg(long)]
+        git_ref: Option<String>,
+        /// The worktree's branch (default `claudectl/<name>-<id>`; needs --git-ref)
+        #[arg(long, requires = "git_ref")]
+        branch: Option<String>,
+        /// Passed to `claude --permission-mode` (default: your own settings)
+        #[arg(long)]
+        permission_mode: Option<String>,
     },
     /// Compact task table: state, attempt count, role, age. Optional
     /// `--state` filter.
@@ -115,6 +124,9 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
             budget_usd,
             max_retries,
             timeout_min,
+            git_ref,
+            branch,
+            permission_mode,
         } => submit_inline(
             name,
             cwd,
@@ -124,6 +136,11 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
             *budget_usd,
             *max_retries,
             *timeout_min,
+            &Placement {
+                git_ref: git_ref.clone(),
+                branch: branch.clone(),
+                permission_mode: permission_mode.clone(),
+            },
         ),
         SupervisorCommand::Status { state } => render_status(state.as_deref()),
         SupervisorCommand::Logs { task_id } => render_logs(task_id),
@@ -133,6 +150,65 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
         SupervisorCommand::Undrain => set_drain(false),
         SupervisorCommand::Metrics { bind } => serve_metrics(bind),
     }
+}
+
+/// Where and how a task's session runs (#570).
+#[derive(Debug, Clone, Default)]
+struct Placement {
+    git_ref: Option<String>,
+    branch: Option<String>,
+    permission_mode: Option<String>,
+}
+
+/// Permission modes a task may ask for. `bypassPermissions` is left out on
+/// purpose: a daemon must not start sessions with every check disabled
+/// because a tasks file said so.
+const PERMISSION_MODES: &[&str] = &[
+    "acceptEdits",
+    "auto",
+    "default",
+    "dontAsk",
+    "manual",
+    "plan",
+];
+
+impl Placement {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(r) = &self.git_ref {
+            super::worktree::validate_ref("git_ref", r)?;
+        }
+        if let Some(b) = &self.branch {
+            if self.git_ref.is_none() {
+                return Err("branch needs a git_ref to start the worktree from".into());
+            }
+            super::worktree::validate_ref("branch", b)?;
+        }
+        if let Some(m) = &self.permission_mode {
+            if !PERMISSION_MODES.contains(&m.as_str()) {
+                return Err(format!(
+                    "permission_mode '{m}' is not one of {}",
+                    PERMISSION_MODES.join(", ")
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The task's cwd as an absolute path. Stored verbatim before, so `cwd = "."`
+/// meant wherever the supervisor daemon happened to run, not where the tasks
+/// file was.
+fn absolute_cwd(cwd: &str, base: &std::path::Path) -> io::Result<String> {
+    let p = std::path::Path::new(cwd);
+    let joined = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base.join(p)
+    };
+    joined
+        .canonicalize()
+        .map(|c| c.to_string_lossy().into_owned())
+        .map_err(|e| io::Error::other(format!("cwd '{cwd}': {e}")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -145,12 +221,18 @@ fn submit_inline(
     budget_usd: Option<f64>,
     max_retries: Option<u32>,
     timeout_min: Option<u32>,
+    placement: &Placement,
 ) -> io::Result<()> {
+    placement.validate().map_err(io::Error::other)?;
+    let cwd = absolute_cwd(cwd, &std::env::current_dir()?)?;
     let conn = store::open().map_err(io::Error::other)?;
     let new_task = NewTask {
+        git_ref: placement.git_ref.clone(),
+        branch: placement.branch.clone(),
+        permission_mode: placement.permission_mode.clone(),
         name: name.into(),
         role: role.map(String::from),
-        cwd: cwd.into(),
+        cwd,
         prompt: prompt.into(),
         model: model.map(String::from),
         budget_usd,
@@ -177,13 +259,22 @@ fn run_from_file(path: &PathBuf, dry_run: bool) -> io::Result<()> {
         }
         return Ok(());
     }
+    // A relative cwd in a tasks file means relative to that file.
+    let base = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or(std::env::current_dir()?);
     let conn = store::open().map_err(io::Error::other)?;
     let mut inserted = 0usize;
     for entry in &parsed.task {
         let new_task = NewTask {
+            git_ref: entry.git_ref.clone(),
+            branch: entry.branch.clone(),
+            permission_mode: entry.permission_mode.clone(),
             name: entry.name.clone(),
             role: entry.role.clone(),
-            cwd: entry.cwd.clone(),
+            cwd: absolute_cwd(&entry.cwd, &base)?,
             prompt: entry.prompt.clone(),
             model: entry.model.clone(),
             budget_usd: entry.budget_usd,
@@ -418,6 +509,13 @@ fn validate_tasks(tf: &TaskFile) -> Result<(), String> {
         if !seen.insert(t.name.as_str()) {
             return Err(format!("{label}: duplicate task name `{}`", t.name));
         }
+        Placement {
+            git_ref: t.git_ref.clone(),
+            branch: t.branch.clone(),
+            permission_mode: t.permission_mode.clone(),
+        }
+        .validate()
+        .map_err(|e| format!("{label}: {e}"))?;
         if let Some(deps) = &t.depends_on {
             for d in deps {
                 if !names.contains(&d.as_str()) {
@@ -460,6 +558,12 @@ struct TaskEntry {
     depends_on: Option<Vec<String>>,
     #[serde(default)]
     verify: Option<Vec<super::verify::Verifier>>,
+    #[serde(default)]
+    git_ref: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
+    #[serde(default)]
+    permission_mode: Option<String>,
 }
 
 /// Tiny hand-rolled TOML reader to avoid pulling the `toml` crate just
@@ -537,6 +641,9 @@ fn toml_parse(input: &str) -> Result<TaskFile, String> {
                 timeout_min: None,
                 depends_on: None,
                 verify: None,
+                git_ref: None,
+                branch: None,
+                permission_mode: None,
             });
             continue;
         }
@@ -570,6 +677,9 @@ fn toml_parse(input: &str) -> Result<TaskFile, String> {
             "budget_usd" => t.budget_usd = val.parse().ok(),
             "max_retries" => t.max_retries = val.parse().ok(),
             "timeout_min" => t.timeout_min = val.parse().ok(),
+            "git_ref" => t.git_ref = Some(val),
+            "branch" => t.branch = Some(val),
+            "permission_mode" => t.permission_mode = Some(val),
             "depends_on" => {
                 let parts: Vec<String> = val
                     .trim_matches(|c: char| c == '[' || c == ']')

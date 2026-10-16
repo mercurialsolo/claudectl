@@ -95,6 +95,16 @@ pub struct TaskRow {
     pub verifiers: Vec<super::verify::Verifier>,
     pub created_at: String,
     pub updated_at: String,
+    /// Run in a worktree of `cwd`'s repo started from this ref (#570).
+    /// `None`: run in `cwd` itself, as before.
+    #[serde(default)]
+    pub git_ref: Option<String>,
+    /// The worktree's branch. `None` with a `git_ref`: `claudectl/<name>-<id>`.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Passed to `claude --permission-mode`. `None`: the user's own settings.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
 }
 
 /// Args for creating a task. Splitting this from the full row keeps the
@@ -112,6 +122,9 @@ pub struct NewTask {
     pub depends_on: Vec<String>,
     pub policy: Option<serde_json::Value>,
     pub verifiers: Vec<super::verify::Verifier>,
+    pub git_ref: Option<String>,
+    pub branch: Option<String>,
+    pub permission_mode: Option<String>,
 }
 
 pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
@@ -131,8 +144,8 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
     conn.execute(
         "INSERT INTO tasks (id, name, state, role, cwd, prompt, model, budget_usd,
                             max_retries, timeout_min, depends_on, policy, verifiers,
-                            created_at, updated_at)
-         VALUES (?1, ?2, 'PENDING', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+                            created_at, updated_at, git_ref, branch, permission_mode)
+         VALUES (?1, ?2, 'PENDING', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, ?15, ?16)",
         params![
             id,
             t.name,
@@ -147,6 +160,9 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
             policy,
             verifiers,
             now,
+            t.git_ref,
+            t.branch,
+            t.permission_mode,
         ],
     )
     .map_err(|e| format!("insert task: {e}"))?;
@@ -166,7 +182,7 @@ pub fn get_task(conn: &Connection, id: &str) -> Result<Option<TaskRow>, String> 
     conn.query_row(
         "SELECT id, name, state, role, cwd, prompt, model, budget_usd,
                 max_retries, timeout_min, depends_on, policy, verifiers,
-                created_at, updated_at
+                created_at, updated_at, git_ref, branch, permission_mode
          FROM tasks WHERE id = ?1",
         params![id],
         row_to_task,
@@ -178,7 +194,7 @@ pub fn get_task(conn: &Connection, id: &str) -> Result<Option<TaskRow>, String> 
 pub fn list_tasks(conn: &Connection, state: Option<TaskState>) -> Result<Vec<TaskRow>, String> {
     let sql = "SELECT id, name, state, role, cwd, prompt, model, budget_usd,
                       max_retries, timeout_min, depends_on, policy, verifiers,
-                      created_at, updated_at
+                      created_at, updated_at, git_ref, branch, permission_mode
                FROM tasks
                WHERE (?1 IS NULL OR state = ?1)
                ORDER BY created_at";
@@ -369,6 +385,115 @@ pub fn insert_attempt(
     Ok(id)
 }
 
+/// Record where a spawned attempt runs (#570), before its process starts. A
+/// crash between this and the spawn leaves an attempt with a workdir and no
+/// pid, which the sensor reports as dead after a grace period, so the task
+/// resumes instead of waiting forever.
+pub fn set_attempt_workdir(
+    conn: &Connection,
+    attempt_id: &str,
+    workdir: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE task_attempts SET workdir = ?1 WHERE id = ?2",
+        params![workdir, attempt_id],
+    )
+    .map_err(|e| format!("set attempt workdir: {e}"))?;
+    Ok(())
+}
+
+/// Record the spawned process (#570).
+pub fn set_attempt_pid(conn: &Connection, attempt_id: &str, pid: u32) -> Result<(), String> {
+    conn.execute(
+        "UPDATE task_attempts SET pid = ?1 WHERE id = ?2",
+        params![pid as i64, attempt_id],
+    )
+    .map_err(|e| format!("set attempt pid: {e}"))?;
+    Ok(())
+}
+
+/// Close an attempt with what its session reported (#570). These columns
+/// existed from v2 and nothing wrote them.
+pub fn finish_attempt(
+    conn: &Connection,
+    attempt_id: &str,
+    outcome: &str,
+    cost_usd: Option<f64>,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE task_attempts SET ended_at = ?1, outcome = ?2, cost_usd = COALESCE(?3, cost_usd)
+         WHERE id = ?4 AND ended_at IS NULL",
+        params![now(), outcome, cost_usd, attempt_id],
+    )
+    .map_err(|e| format!("finish attempt: {e}"))?;
+    Ok(())
+}
+
+/// A spawned attempt as the live sensor reads it (#570).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpawnedAttempt {
+    pub attempt_id: String,
+    pub task_id: String,
+    pub session_id: String,
+    pub pid: Option<u32>,
+    pub workdir: String,
+    pub started_at: String,
+}
+
+/// The latest attempt of every RUNNING task that was spawned (it has a
+/// workdir), whether or not its pid was recorded yet.
+pub fn running_spawned_attempts(conn: &Connection) -> Result<Vec<SpawnedAttempt>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.id, a.task_id, a.session_id, a.pid, a.workdir, a.started_at
+             FROM task_attempts a
+             JOIN tasks t ON t.id = a.task_id
+             WHERE t.state = 'RUNNING'
+               AND a.workdir IS NOT NULL AND a.session_id IS NOT NULL
+               AND a.attempt_num = (SELECT MAX(attempt_num) FROM task_attempts WHERE task_id = a.task_id)",
+        )
+        .map_err(|e| format!("prepare: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(SpawnedAttempt {
+                attempt_id: r.get(0)?,
+                task_id: r.get(1)?,
+                session_id: r.get(2)?,
+                pid: r
+                    .get::<_, Option<i64>>(3)?
+                    .and_then(|p| u32::try_from(p).ok()),
+                workdir: r.get(4)?,
+                started_at: r.get(5)?,
+            })
+        })
+        .map_err(|e| format!("query: {e}"))?;
+    rows.collect::<Result<_, _>>()
+        .map_err(|e| format!("row: {e}"))
+}
+
+/// The workdir of a task's latest attempt, where its verifiers must run.
+pub fn latest_attempt_workdir(conn: &Connection, task_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT workdir FROM task_attempts WHERE task_id = ?1
+         ORDER BY attempt_num DESC LIMIT 1",
+        params![task_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(Option::flatten)
+    .map_err(|e| format!("latest attempt workdir: {e}"))
+}
+
+/// Seconds since an ISO timestamp from `timestamp_now`. `None` if unparseable.
+pub fn age_secs(iso: &str) -> Option<u64> {
+    let then = parse_iso_to_epoch(iso)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(now.saturating_sub(then))
+}
+
 /// Count attempts so the actuator can pick the next `attempt_num` without
 /// a race against itself. Cheap — indexed on `task_id`.
 pub fn attempt_count(conn: &Connection, task_id: &str) -> Result<u32, String> {
@@ -489,6 +614,9 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
             .unwrap_or_default(),
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
+        git_ref: row.get(15)?,
+        branch: row.get(16)?,
+        permission_mode: row.get(17)?,
     })
 }
 
@@ -521,6 +649,9 @@ mod tests {
             depends_on: vec![],
             policy: None,
             verifiers: vec![],
+            git_ref: None,
+            branch: None,
+            permission_mode: None,
         }
     }
 

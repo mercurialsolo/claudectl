@@ -429,6 +429,11 @@ impl BusServer {
             depends_on: args.depends_on.unwrap_or_default(),
             policy: args.policy,
             verifiers,
+            // Worktree placement (#570) isn't on the MCP surface yet; a task
+            // submitted here runs in its cwd, as before.
+            git_ref: None,
+            branch: None,
+            permission_mode: None,
         };
         let task_id = crate::coord::tasks::insert_task(&coord, &new_task)
             .map_err(|e| McpError::internal_error(e, None))?;

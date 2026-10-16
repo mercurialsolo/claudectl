@@ -72,7 +72,9 @@ pub fn gen_id(prefix: &str) -> String {
 ///       task_verifications, task_transitions, hook_events.
 /// v3 = supervisor verifier list on `tasks.verifiers` (#347).
 /// v4 = lease TTLs (`leases.ttl_secs`) and the `lease_waiters` queue (#569).
-pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 4;
+/// v5 = a worktree per task (#570): `tasks.git_ref`, `branch`,
+///       `permission_mode`; `task_attempts.pid`, `workdir`.
+pub const EXPECTED_COORD_SCHEMA_VERSION: u32 = 5;
 
 /// Open (or create) the coordination database and run migrations.
 pub fn open() -> Result<Connection, String> {
@@ -378,6 +380,16 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     // `polled_at` (epoch seconds) is how a waiter that stopped polling is
     // told apart from one still waiting.
     ensure_column(conn, "leases", "ttl_secs", "ttl_secs INTEGER")?;
+
+    // Schema v5 — a worktree per task (#570). Additive: a task without a
+    // `git_ref` runs in its `cwd`, as before. An attempt's `workdir` is where
+    // its session ran and its verifiers run; `pid` is how the supervisor
+    // tells a running session from a finished one across its own restarts.
+    ensure_column(conn, "tasks", "git_ref", "git_ref TEXT")?;
+    ensure_column(conn, "tasks", "branch", "branch TEXT")?;
+    ensure_column(conn, "tasks", "permission_mode", "permission_mode TEXT")?;
+    ensure_column(conn, "task_attempts", "pid", "pid INTEGER")?;
+    ensure_column(conn, "task_attempts", "workdir", "workdir TEXT")?;
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS lease_waiters (

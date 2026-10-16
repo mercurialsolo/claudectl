@@ -215,6 +215,9 @@ mod tests {
             depends_on: vec![],
             policy: None,
             verifiers: vec![],
+            git_ref: None,
+            branch: None,
+            permission_mode: None,
             created_at: "2026-06-28T10:00:00Z".into(),
             updated_at: "2026-06-28T10:05:00Z".into(),
         }
