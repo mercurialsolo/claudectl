@@ -378,6 +378,7 @@ claudectl supervisor work --until-idle
 # Inspect fleet state
 claudectl supervisor status
 claudectl supervisor status --state RUNNING
+claudectl supervisor status --graph              # the depends_on tree, with why a task is blocked
 claudectl supervisor logs <task_id>              # full transition log + verifier history
 
 # Lifecycle controls
@@ -401,19 +402,22 @@ timeout_min = 45
 git_ref     = "main"          # run in a new worktree from this ref, on its own branch
 branch      = "feat/auth"     # optional; default claudectl/<name>-<id>
 permission_mode = "acceptEdits"   # optional; passed to claude --permission-mode
+depends_on  = ["user-schema"] # start only after these tasks (by name, same file) are DONE
 
   [[task.verify]]
   run  = "cargo test --all-targets"            # exit code is the verdict, run in the worktree
 
   [[task.verify]]
   brain = "Review the diff for auth-coverage gaps. PASS or FAIL with reasons."
-                                                # routed to the local brain — free
+                                                # local brain, shown the task's diff — free
 
   [[task.verify]]
   agent = "Adversarial review: find a request that bypasses the middleware."
-  model = "haiku"                               # headless claude -p, own budget
+  model = "haiku"                               # headless claude -p in the worktree, read-only
   budget_usd = 0.25
 ```
+
+When a verifier fails, the task goes back to work in the same worktree with the failing verifier's output added to its prompt, up to `max_retries`; after that it's NEEDS_HUMAN. A session that dies is resumed with a prompt that tells it to assess the worktree before continuing. A task with `depends_on` starts once each dependency is DONE, and its prompt names each dependency's branch and closing summary; if a dependency is cancelled or needs a human, the tasks after it move to NEEDS_HUMAN with the reason (`dependency_cancelled:<name>`).
 
 Tasks are submittable three ways: this CLI, a `task.created` bus message addressed to the `supervisor` role, or the `submit_task` MCP tool from inside a Claude Code session. All three land as the same SQLite row.
 

@@ -91,6 +91,10 @@ pub enum SupervisorCommand {
     Status {
         #[arg(long)]
         state: Option<String>,
+        /// Show tasks as their `depends_on` tree, each under the task it
+        /// waits for, with why a NEEDS_HUMAN task stopped.
+        #[arg(long)]
+        graph: bool,
     },
     /// Detailed view of one task: every transition + every verifier
     /// verdict.
@@ -161,7 +165,16 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
             until_idle,
             timeout,
         } => work(*interval, *until_idle, *timeout),
-        SupervisorCommand::Status { state } => render_status(state.as_deref()),
+        SupervisorCommand::Status { state, graph: true } => {
+            if state.is_some() {
+                eprintln!("supervisor status: --graph shows every task; --state is ignored");
+            }
+            render_graph_status()
+        }
+        SupervisorCommand::Status {
+            state,
+            graph: false,
+        } => render_status(state.as_deref()),
         SupervisorCommand::Logs { task_id } => render_logs(task_id),
         SupervisorCommand::Cancel { task_id } => cancel_task(task_id),
         SupervisorCommand::Pr { task_id } => post_pr_summary(task_id),
@@ -171,8 +184,9 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
     }
 }
 
-/// States that still have work in front of them. RETRYING is left out: it
-/// has no way forward until #574 respawns it, so waiting on it would never end.
+/// States that still have work in front of them. A Pending task waiting on
+/// a dependency counts: the dependency either finishes or is escalated, and
+/// then so is the task.
 const ACTIVE_STATES: &[TaskState] = &[
     TaskState::Pending,
     TaskState::Ready,
@@ -180,6 +194,7 @@ const ACTIVE_STATES: &[TaskState] = &[
     TaskState::Running,
     TaskState::Verifying,
     TaskState::Resuming,
+    TaskState::Retrying,
 ];
 
 /// `supervisor work`: the reconcile loop on its own (#570).
@@ -335,7 +350,17 @@ fn run_from_file(path: &PathBuf, dry_run: bool) -> io::Result<()> {
         .unwrap_or(std::env::current_dir()?);
     let conn = store::open().map_err(io::Error::other)?;
     let mut inserted = 0usize;
-    for entry in &parsed.task {
+    // `depends_on` names a task in this file; what's stored is its id, so
+    // the reconciler never has to choose between two tasks with one name.
+    let mut ids: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    for i in submission_order(&parsed).map_err(io::Error::other)? {
+        let entry = &parsed.task[i];
+        let depends_on = entry
+            .depends_on
+            .iter()
+            .flatten()
+            .map(|d| ids.get(d.as_str()).cloned().unwrap_or_else(|| d.clone()))
+            .collect();
         let new_task = NewTask {
             git_ref: entry.git_ref.clone(),
             branch: entry.branch.clone(),
@@ -348,12 +373,13 @@ fn run_from_file(path: &PathBuf, dry_run: bool) -> io::Result<()> {
             budget_usd: entry.budget_usd,
             max_retries: entry.max_retries,
             timeout_min: entry.timeout_min,
-            depends_on: entry.depends_on.clone().unwrap_or_default(),
+            depends_on,
             policy: None,
             verifiers: entry.verify.clone().unwrap_or_default(),
         };
         let id = tasks::insert_task(&conn, &new_task).map_err(io::Error::other)?;
         println!("submitted {id} ({})", entry.name);
+        ids.insert(entry.name.as_str(), id);
         inserted += 1;
     }
     println!("{inserted} task(s) submitted");
@@ -379,6 +405,84 @@ fn render_status(filter: Option<&str>) -> io::Result<()> {
         );
     }
     Ok(())
+}
+
+fn render_graph_status() -> io::Result<()> {
+    let conn = store::open().map_err(io::Error::other)?;
+    let rows = tasks::list_tasks(&conn, None).map_err(io::Error::other)?;
+    let mut causes = std::collections::HashMap::new();
+    for row in rows.iter().filter(|r| r.state == TaskState::NeedsHuman) {
+        if let Some((_, _, cause, _)) = tasks::list_transitions(&conn, &row.id)
+            .map_err(io::Error::other)?
+            .pop()
+        {
+            causes.insert(row.id.clone(), cause);
+        }
+    }
+    print!("{}", graph_lines(&rows, &causes));
+    Ok(())
+}
+
+/// The `depends_on` DAG as an indented tree (#572). A task sits under its
+/// first dependency; any others are named on its line, so a diamond prints
+/// each task once.
+fn graph_lines(
+    rows: &[tasks::TaskRow],
+    causes: &std::collections::HashMap<String, String>,
+) -> String {
+    if rows.is_empty() {
+        return "(no tasks)\n".into();
+    }
+    let names: std::collections::HashMap<&str, &str> = rows
+        .iter()
+        .map(|r| (r.id.as_str(), r.name.as_str()))
+        .collect();
+    // Each task's tree parent: its first dependency that's in the list.
+    let parents: Vec<Option<&str>> = rows
+        .iter()
+        .map(|r| {
+            r.depends_on
+                .iter()
+                .map(String::as_str)
+                .find(|d| names.contains_key(d))
+        })
+        .collect();
+    let mut out = String::new();
+    let mut stack: Vec<(usize, usize)> = (0..rows.len())
+        .rev()
+        .filter(|&i| parents[i].is_none())
+        .map(|i| (i, 0))
+        .collect();
+    while let Some((i, depth)) = stack.pop() {
+        let r = &rows[i];
+        out.push_str(&format!(
+            "{}{} [{}] {}",
+            "  ".repeat(depth),
+            r.name,
+            r.state.as_str(),
+            r.id
+        ));
+        let others: Vec<&str> = r
+            .depends_on
+            .iter()
+            .map(String::as_str)
+            .filter(|d| Some(*d) != parents[i])
+            .map(|d| names.get(d).copied().unwrap_or(d))
+            .collect();
+        if !others.is_empty() {
+            out.push_str(&format!("  (also after {})", others.join(", ")));
+        }
+        if let Some(c) = causes.get(&r.id) {
+            out.push_str(&format!("  — {c}"));
+        }
+        out.push('\n');
+        for j in (0..rows.len()).rev() {
+            if parents[j] == Some(r.id.as_str()) {
+                stack.push((j, depth + 1));
+            }
+        }
+    }
+    out
 }
 
 fn render_logs(task_id: &str) -> io::Result<()> {
@@ -594,7 +698,50 @@ fn validate_tasks(tf: &TaskFile) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    submission_order(tf).map(|_| ())
+}
+
+/// Indexes into `tf.task` with every task after the ones it depends on, so
+/// a dependency's id exists before the task that names it is inserted
+/// (#572). Ties keep file order. A cycle is an error: none of its tasks
+/// could ever start.
+fn submission_order(tf: &TaskFile) -> Result<Vec<usize>, String> {
+    let index: std::collections::HashMap<&str, usize> = tf
+        .task
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.name.as_str(), i))
+        .collect();
+    let mut order = Vec::with_capacity(tf.task.len());
+    let mut placed = vec![false; tf.task.len()];
+    while order.len() < tf.task.len() {
+        let before = order.len();
+        for (i, t) in tf.task.iter().enumerate() {
+            let deps_placed = t
+                .depends_on
+                .iter()
+                .flatten()
+                .all(|d| index.get(d.as_str()).is_none_or(|&j| placed[j]));
+            if !placed[i] && deps_placed {
+                placed[i] = true;
+                order.push(i);
+            }
+        }
+        if order.len() == before {
+            let stuck: Vec<&str> = tf
+                .task
+                .iter()
+                .zip(&placed)
+                .filter(|(_, p)| !**p)
+                .map(|(t, _)| t.name.as_str())
+                .collect();
+            return Err(format!(
+                "depends_on has a cycle among: {}",
+                stuck.join(", ")
+            ));
+        }
+    }
+    Ok(order)
 }
 
 // ---------- Minimal TOML decoder for `tasks.toml` ----------------------------
@@ -908,6 +1055,86 @@ run = "test \"$(cat ONE.txt)\" = one"
         let got = absolute_cwd(".", &base).unwrap();
         assert_eq!(got, base.canonicalize().unwrap().to_string_lossy());
         assert!(absolute_cwd("/definitely/not/here", &base).is_err());
+    }
+
+    fn chain(blocks: &[(&str, &[&str])]) -> TaskFile {
+        let mut s = String::new();
+        for (name, deps) in blocks {
+            s.push_str(&format!(
+                "[[task]]\nname = \"{name}\"\ncwd = \"/tmp\"\nprompt = \"p\"\n"
+            ));
+            if !deps.is_empty() {
+                let quoted: Vec<String> = deps.iter().map(|d| format!("\"{d}\"")).collect();
+                s.push_str(&format!("depends_on = [{}]\n", quoted.join(", ")));
+            }
+        }
+        toml_parse(&s).unwrap()
+    }
+
+    /// #572: a dependency is inserted before the task naming it, so its id
+    /// exists to be stored.
+    #[test]
+    fn tasks_are_submitted_after_their_dependencies() {
+        let tf = chain(&[("c", &["b"]), ("b", &["a"]), ("a", &[]), ("x", &[])]);
+        let names: Vec<&str> = submission_order(&tf)
+            .unwrap()
+            .into_iter()
+            .map(|i| tf.task[i].name.as_str())
+            .collect();
+        assert_eq!(names, vec!["a", "x", "b", "c"]);
+    }
+
+    #[test]
+    fn the_graph_nests_each_task_under_what_it_waits_for() {
+        let conn = store::open_memory();
+        let mk = |name: &str, deps: Vec<String>| {
+            tasks::insert_task(
+                &conn,
+                &NewTask {
+                    name: name.into(),
+                    role: None,
+                    cwd: "/tmp".into(),
+                    prompt: "p".into(),
+                    model: None,
+                    budget_usd: None,
+                    max_retries: None,
+                    timeout_min: None,
+                    depends_on: deps,
+                    policy: None,
+                    verifiers: vec![],
+                    git_ref: None,
+                    branch: None,
+                    permission_mode: None,
+                },
+            )
+            .unwrap()
+        };
+        let a = mk("a", vec![]);
+        let b = mk("b", vec![a.clone()]);
+        let x = mk("x", vec![]);
+        let c = mk("c", vec![b.clone(), x.clone()]);
+        let rows = tasks::list_tasks(&conn, None).unwrap();
+        let mut causes = std::collections::HashMap::new();
+        causes.insert(c.clone(), "dependency_cancelled:x".to_string());
+        let g = graph_lines(&rows, &causes);
+        let lines: Vec<&str> = g.lines().collect();
+        assert_eq!(lines.len(), 4, "{g}");
+        assert!(lines[0].starts_with("a [PENDING]"), "{g}");
+        assert!(lines[1].starts_with("  b [PENDING]"), "{g}");
+        assert!(
+            lines[2].starts_with("    c [PENDING]")
+                && lines[2].contains("(also after x)")
+                && lines[2].ends_with("— dependency_cancelled:x"),
+            "{g}"
+        );
+        assert!(lines[3].starts_with("x [PENDING]"), "{g}");
+    }
+
+    #[test]
+    fn a_dependency_cycle_is_refused() {
+        let tf = chain(&[("a", &["b"]), ("b", &["a"]), ("ok", &[])]);
+        let err = validate_tasks(&tf).unwrap_err();
+        assert!(err.contains("cycle") && err.contains("a, b"), "{err}");
     }
 
     #[test]

@@ -106,6 +106,7 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             if from_state != TaskState::Pending
                 && from_state != TaskState::Ready
                 && from_state != TaskState::Assigned
+                && from_state != TaskState::Retrying
             {
                 return Ok(());
             }
@@ -125,6 +126,8 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                 // fallback), we bump the attempt counter so the mailbox
                 // attempt and the spawn attempt are separately addressable.
                 let next_num = attempt_count(conn, task_id)? + 1;
+                // Built before this attempt's row exists, from the ones before.
+                let prompt = attempt_prompt(conn, fx, &task)?;
                 // Record the attempt before the process exists (#570). The
                 // old order spawned first, so a crash in between started a
                 // session nothing knew about, and the next tick started
@@ -139,7 +142,7 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                     attempt_id: attempt_id.clone(),
                     session_id,
                     workdir,
-                    prompt: task.prompt.clone(),
+                    prompt,
                     permission_mode: task.permission_mode.clone(),
                     model: task.model.clone(),
                 };
@@ -158,10 +161,10 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                 task_id,
                 from_state,
                 TaskState::Running,
-                if from_state == TaskState::Assigned {
-                    "spawn-fallback"
-                } else {
-                    "spawned"
+                match from_state {
+                    TaskState::Assigned => "spawn-fallback",
+                    TaskState::Retrying => "retried",
+                    _ => "spawned",
                 },
             )?;
             Ok(())
@@ -260,7 +263,6 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                     return Ok(());
                 }
                 // PASS path: fall through to the next verifier.
-                let _ = retry_prompt_for_fail; // retain reference for clippy
             }
             // All verifiers passed.
             transition(
@@ -333,13 +335,74 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
     }
 }
 
-/// Compose the retry-prompt fed back to the agent on `Retrying`. The
-/// supervisor doesn't *use* this yet — it lands when M6's resume
-/// protocol takes the Retrying → Assigned edge — but lives here next
-/// to the verifier dispatch so the verifier output it consumes is
-/// obviously the same string the ledger recorded.
-pub fn retry_prompt_for_fail(original_prompt: &str, verifier_kind: &str, output: &str) -> String {
-    super::verify::build_retry_prompt(original_prompt, verifier_kind, output)
+/// The prompt for a task's next attempt, from how the last one ended:
+///
+/// - it completed and a verifier failed: the task's prompt plus that
+///   verifier's output, to fix (#574);
+/// - it died, failed or was stopped: a recovery prompt, so the session
+///   assesses the workdir instead of redoing the work;
+/// - first attempt: the task's prompt.
+///
+/// Then, for a task with `depends_on`, what each upstream task handed off
+/// (#572).
+pub fn attempt_prompt(
+    conn: &Connection,
+    fx: &dyn SideEffects,
+    task: &super::tasks::TaskRow,
+) -> Result<String, String> {
+    let mut prompt = match super::tasks::latest_attempt_outcome(conn, &task.id)? {
+        Some((attempt_id, Some(outcome))) => {
+            let failures = super::tasks::attempt_failures(conn, &attempt_id)?;
+            match (outcome.as_str(), failures.last()) {
+                ("completed", Some((kind, output))) => {
+                    super::verify::build_retry_prompt(&task.prompt, kind, output)
+                }
+                ("completed", None) => task.prompt.clone(),
+                _ => super::resume::build_recovery_prompt(&task.prompt, &failures, None, false),
+            }
+        }
+        _ => task.prompt.clone(),
+    };
+    let handoffs = upstream_handoffs(conn, fx, task)?;
+    if !handoffs.is_empty() {
+        prompt.push_str("\n\nThis task depends on work that has finished:\n");
+        prompt.push_str(&handoffs);
+    }
+    Ok(prompt)
+}
+
+/// One line per finished dependency: its name, the branch its work is on,
+/// and its session's closing summary.
+fn upstream_handoffs(
+    conn: &Connection,
+    fx: &dyn SideEffects,
+    task: &super::tasks::TaskRow,
+) -> Result<String, String> {
+    let mut out = String::new();
+    for key in &task.depends_on {
+        let Some(dep) = super::tasks::resolve_dependency(conn, key)? else {
+            continue;
+        };
+        out.push_str(&format!("- {}", dep.name));
+        if dep.git_ref.is_some() {
+            let branch = dep
+                .branch
+                .clone()
+                .unwrap_or_else(|| claudectl_core::worktree::default_branch(&dep.name, &dep.id));
+            out.push_str(&format!(" (branch `{branch}`)"));
+        } else {
+            out.push_str(&format!(" (in {})", dep.cwd));
+        }
+        let summary = super::tasks::latest_attempt_outcome(conn, &dep.id)?
+            .and_then(|(attempt_id, _)| fx.read_result(&attempt_id))
+            .map(|r| r.summary)
+            .filter(|s| !s.trim().is_empty());
+        match summary {
+            Some(s) => out.push_str(&format!(": {}\n", s.trim())),
+            None => out.push('\n'),
+        }
+    }
+    Ok(out)
 }
 
 /// Parse the `CLAUDECTL_PR_AUTO_POST` flag value. Pure so the gate is testable
@@ -1068,6 +1131,191 @@ mod tests {
             fx2.published.borrow().len(),
             0,
             "restart must not re-publish: ledger is the source of truth"
+        );
+    }
+
+    // ── #574: a retry goes back to work with the failure in its prompt ──
+
+    fn run_verifiers(conn: &mut Connection, fx: &RecordingFx, id: &str) {
+        let attempt_id = crate::coord::tasks::latest_attempt_id(conn, id)
+            .unwrap()
+            .unwrap();
+        apply(
+            conn,
+            fx,
+            &Action::RunVerifier {
+                task_id: id.to_string(),
+                attempt_id,
+            },
+        )
+        .unwrap();
+    }
+
+    fn failing_once(fx: &RecordingFx) {
+        fx.shell_results
+            .borrow_mut()
+            .push_back(crate::coord::verify::ShellResult {
+                exit_code: 1,
+                combined_output: "expected one, found two".into(),
+            });
+    }
+
+    fn verified_task(max_retries: u32) -> NewTask {
+        NewTask {
+            verifiers: vec![crate::coord::verify::Verifier::Run {
+                command: "test -f ONE".into(),
+            }],
+            max_retries: Some(max_retries),
+            git_ref: Some("main".into()),
+            ..sample_with_role(None)
+        }
+    }
+
+    #[test]
+    fn a_retry_runs_in_the_same_workdir_with_the_failure_in_its_prompt() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &verified_task(2)).unwrap();
+        let fx = RecordingFx::default();
+        spawn(&mut conn, &fx, &id).unwrap();
+        failing_once(&fx);
+        run_verifiers(&mut conn, &fx, &id);
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Retrying
+        );
+
+        spawn(&mut conn, &fx, &id).unwrap();
+        let reqs = fx.spawn_requests.borrow();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[0].prompt, "do it");
+        assert!(reqs[1].prompt.starts_with("do it"));
+        assert!(
+            reqs[1].prompt.contains("expected one, found two"),
+            "{}",
+            reqs[1].prompt
+        );
+        assert_eq!(reqs[1].workdir, reqs[0].workdir);
+        let task = get_task(&conn, &id).unwrap().unwrap();
+        assert_eq!(task.state, TaskState::Running);
+        let hist = list_transitions(&conn, &id).unwrap();
+        assert_eq!(hist.last().unwrap().2, "retried");
+    }
+
+    #[test]
+    fn a_retry_that_passes_is_done_and_one_that_keeps_failing_needs_a_human() {
+        let mut conn = store::open_memory();
+        let pass = insert_task(&conn, &verified_task(2)).unwrap();
+        let fx = RecordingFx::default();
+        spawn(&mut conn, &fx, &pass).unwrap();
+        failing_once(&fx);
+        run_verifiers(&mut conn, &fx, &pass);
+        spawn(&mut conn, &fx, &pass).unwrap();
+        run_verifiers(&mut conn, &fx, &pass);
+        assert_eq!(
+            get_task(&conn, &pass).unwrap().unwrap().state,
+            TaskState::Done
+        );
+
+        let fail = insert_task(&conn, &verified_task(1)).unwrap();
+        spawn(&mut conn, &fx, &fail).unwrap();
+        failing_once(&fx);
+        run_verifiers(&mut conn, &fx, &fail);
+        spawn(&mut conn, &fx, &fail).unwrap();
+        failing_once(&fx);
+        run_verifiers(&mut conn, &fx, &fail);
+        assert_eq!(
+            get_task(&conn, &fail).unwrap().unwrap().state,
+            TaskState::NeedsHuman
+        );
+        assert_eq!(attempt_count(&conn, &fail).unwrap(), 2);
+    }
+
+    #[test]
+    fn a_resumed_task_is_told_to_assess_the_workdir_first() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(None)).unwrap();
+        let fx = RecordingFx::default();
+        spawn(&mut conn, &fx, &id).unwrap();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Resume {
+                task_id: id.clone(),
+                cause: "session_died".into(),
+            },
+        )
+        .unwrap();
+        spawn(&mut conn, &fx, &id).unwrap();
+        let reqs = fx.spawn_requests.borrow();
+        assert!(
+            reqs[1].prompt.contains("resuming an interrupted task"),
+            "{}",
+            reqs[1].prompt
+        );
+    }
+
+    #[test]
+    fn a_failed_spawn_does_not_hide_the_verifier_failure_before_it() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &verified_task(3)).unwrap();
+        let fx = RecordingFx::default();
+        spawn(&mut conn, &fx, &id).unwrap();
+        failing_once(&fx);
+        run_verifiers(&mut conn, &fx, &id);
+        *fx.spawn_error.borrow_mut() = Some("fork failed".into());
+        assert!(spawn(&mut conn, &fx, &id).is_err());
+        *fx.spawn_error.borrow_mut() = None;
+        spawn(&mut conn, &fx, &id).unwrap();
+        let reqs = fx.spawn_requests.borrow();
+        assert!(
+            reqs.last()
+                .unwrap()
+                .prompt
+                .contains("expected one, found two")
+        );
+    }
+
+    // ── #572: a dependent task is told what its dependencies handed off ──
+
+    #[test]
+    fn a_dependent_task_gets_each_upstream_branch_and_summary() {
+        let mut conn = store::open_memory();
+        let fx = RecordingFx::default();
+        let a = insert_task(
+            &conn,
+            &NewTask {
+                name: "schema".into(),
+                git_ref: Some("main".into()),
+                branch: Some("feat/schema".into()),
+                ..sample_with_role(None)
+            },
+        )
+        .unwrap();
+        spawn(&mut conn, &fx, &a).unwrap();
+        *fx.result.borrow_mut() = Some(crate::coord::spawn::RunResult {
+            ok: true,
+            cost_usd: Some(0.1),
+            summary: "Added the users table.".into(),
+        });
+        run_verifiers(&mut conn, &fx, &a);
+        assert_eq!(get_task(&conn, &a).unwrap().unwrap().state, TaskState::Done);
+
+        let b = insert_task(
+            &conn,
+            &NewTask {
+                name: "api".into(),
+                depends_on: vec![a.clone()],
+                ..sample_with_role(None)
+            },
+        )
+        .unwrap();
+        spawn(&mut conn, &fx, &b).unwrap();
+        let reqs = fx.spawn_requests.borrow();
+        let p = &reqs.last().unwrap().prompt;
+        assert!(p.starts_with("do it"), "{p}");
+        assert!(
+            p.contains("- schema (branch `feat/schema`): Added the users table."),
+            "{p}"
         );
     }
 }

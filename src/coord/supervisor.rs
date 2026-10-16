@@ -217,29 +217,50 @@ impl Supervisor {
         let pending = list_tasks(conn, Some(TaskState::Pending))?;
         let assigned = list_tasks(conn, Some(TaskState::Assigned))?;
         let running = list_tasks(conn, Some(TaskState::Running))?;
+        let retrying = list_tasks(conn, Some(TaskState::Retrying))?;
 
-        // 1) Pending tasks → emit assignment actions. Tasks with a role
-        //    go to that role's mailbox first; tasks without a role go
-        //    straight to spawn. Dependency resolution is deferred (M4
-        //    will gate this on `depends_on` rows reaching Done); for now
-        //    every Pending task is treated as Ready.
+        // 1) Retrying, then Pending tasks → emit start actions, under a hard
+        //    ceiling on concurrent in-flight (Assigned + Running) so a
+        //    backlog can't push the fleet past `max_concurrent`.
         //
-        //    Hard ceiling on concurrent in-flight (Assigned + Running)
-        //    so a backlog can't push the fleet past `max_concurrent`.
+        //    A Retrying task failed a verifier and goes back to work in the
+        //    same workdir with the failure in its prompt (#574). It's further
+        //    along than anything Pending, so it takes a slot first. It's
+        //    always spawned: a role's mailbox would hand over the bare prompt.
+        //
+        //    A Pending task starts only when every task it depends on is
+        //    DONE (#572). One that can never start, because a dependency
+        //    ended without finishing, is escalated with the reason.
         let in_flight = (assigned.len() + running.len()) as u32;
-        if in_flight < self.policy.max_concurrent {
-            let slots = self.policy.max_concurrent - in_flight;
-            for task in pending.iter().take(slots as usize) {
-                match &task.role {
-                    Some(role) => out.push(Action::AssignViaMailbox {
-                        task_id: task.id.clone(),
-                        role: role.clone(),
-                    }),
-                    None => out.push(Action::Spawn {
-                        task_id: task.id.clone(),
-                        cwd: PathBuf::from(&task.cwd),
-                    }),
-                }
+        let mut slots = self.policy.max_concurrent.saturating_sub(in_flight) as usize;
+        for task in retrying.iter().take(slots) {
+            out.push(Action::Spawn {
+                task_id: task.id.clone(),
+                cwd: PathBuf::from(&task.cwd),
+            });
+        }
+        slots = slots.saturating_sub(retrying.len());
+        let mut ready = Vec::new();
+        for task in &pending {
+            match dependency_gate(conn, task)? {
+                Gate::Ready => ready.push(task),
+                Gate::Waiting => {}
+                Gate::Blocked(cause) => out.push(Action::EscalateHuman {
+                    task_id: task.id.clone(),
+                    cause,
+                }),
+            }
+        }
+        for task in ready.into_iter().take(slots) {
+            match &task.role {
+                Some(role) => out.push(Action::AssignViaMailbox {
+                    task_id: task.id.clone(),
+                    role: role.clone(),
+                }),
+                None => out.push(Action::Spawn {
+                    task_id: task.id.clone(),
+                    cwd: PathBuf::from(&task.cwd),
+                }),
             }
         }
 
@@ -384,6 +405,38 @@ fn session_cwd_matches(_session_id: &str, _task_cwd: &str) -> bool {
     true
 }
 
+/// Whether a Pending task may start, given its `depends_on` (#572).
+#[derive(Debug, PartialEq)]
+enum Gate {
+    Ready,
+    /// A dependency hasn't finished yet.
+    Waiting,
+    /// A dependency ended without finishing (NEEDS_HUMAN or CANCELLED), or
+    /// doesn't exist, so this task can never start on its own.
+    Blocked(String),
+}
+
+fn dependency_gate(conn: &Connection, task: &super::tasks::TaskRow) -> Result<Gate, String> {
+    let mut waiting = false;
+    for key in &task.depends_on {
+        let Some(dep) = super::tasks::resolve_dependency(conn, key)? else {
+            return Ok(Gate::Blocked(format!("dependency_missing:{key}")));
+        };
+        match dep.state {
+            TaskState::Done => {}
+            TaskState::NeedsHuman | TaskState::Cancelled => {
+                return Ok(Gate::Blocked(format!(
+                    "dependency_{}:{}",
+                    dep.state.as_str().to_ascii_lowercase(),
+                    dep.name
+                )));
+            }
+            _ => waiting = true,
+        }
+    }
+    Ok(if waiting { Gate::Waiting } else { Gate::Ready })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +506,122 @@ mod tests {
             }
             other => panic!("expected AssignViaMailbox, got {other:?}"),
         }
+    }
+
+    fn task(name: &str, depends_on: &[&str]) -> NewTask {
+        NewTask {
+            name: name.into(),
+            role: None,
+            cwd: "/work/x".into(),
+            prompt: "do".into(),
+            model: None,
+            budget_usd: None,
+            max_retries: None,
+            timeout_min: None,
+            depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+            policy: None,
+            verifiers: vec![],
+            git_ref: None,
+            branch: None,
+            permission_mode: None,
+        }
+    }
+
+    fn set_state(conn: &Connection, id: &str, state: TaskState) {
+        conn.execute(
+            "UPDATE tasks SET state = ?1 WHERE id = ?2",
+            rusqlite::params![state.as_str(), id],
+        )
+        .unwrap();
+    }
+
+    fn no_sensors() -> StubSensors {
+        StubSensors {
+            last_id: 0,
+            sessions: vec![],
+        }
+    }
+
+    fn spawned(actions: &[Action]) -> Vec<String> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Spawn { task_id, .. } => Some(task_id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// #572: in A → B → C, only A starts; B starts once A is DONE.
+    #[test]
+    fn a_task_waits_until_every_dependency_is_done() {
+        let conn = store::open_memory();
+        let a = insert_task(&conn, &task("a", &[])).unwrap();
+        let b = insert_task(&conn, &task("b", &[&a])).unwrap();
+        let c = insert_task(&conn, &task("c", &[&b])).unwrap();
+        let sup = Supervisor::with_defaults();
+        assert_eq!(
+            spawned(&sup.tick(&conn, &no_sensors()).unwrap()),
+            vec![a.clone()]
+        );
+
+        set_state(&conn, &a, TaskState::Running);
+        assert!(spawned(&sup.tick(&conn, &no_sensors()).unwrap()).is_empty());
+
+        set_state(&conn, &a, TaskState::Done);
+        assert_eq!(spawned(&sup.tick(&conn, &no_sensors()).unwrap()), vec![b]);
+        let _ = c;
+    }
+
+    /// #572: a dependency that ends without finishing blocks its dependents
+    /// with the reason, instead of leaving them Pending forever.
+    #[test]
+    fn a_cancelled_dependency_escalates_its_dependent_with_the_reason() {
+        let conn = store::open_memory();
+        let a = insert_task(&conn, &task("schema", &[])).unwrap();
+        let b = insert_task(&conn, &task("api", &[&a])).unwrap();
+        set_state(&conn, &a, TaskState::Cancelled);
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &no_sensors())
+            .unwrap();
+        assert!(
+            matches!(&actions[..], [Action::EscalateHuman { task_id, cause }]
+                if *task_id == b && cause == "dependency_cancelled:schema"),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_dependency_on_a_task_that_does_not_exist_is_blocked() {
+        let conn = store::open_memory();
+        let b = insert_task(&conn, &task("api", &["task_nope"])).unwrap();
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &no_sensors())
+            .unwrap();
+        assert!(
+            matches!(&actions[..], [Action::EscalateHuman { task_id, cause }]
+                if *task_id == b && cause == "dependency_missing:task_nope"),
+            "{actions:?}"
+        );
+    }
+
+    /// #574: a Retrying task is respawned, and takes a slot before anything
+    /// Pending.
+    #[test]
+    fn a_retrying_task_is_respawned_ahead_of_pending_work() {
+        let conn = store::open_memory();
+        let pending = insert_task(&conn, &task("new", &[])).unwrap();
+        let retrying = insert_task(&conn, &task("again", &[])).unwrap();
+        set_state(&conn, &retrying, TaskState::Retrying);
+        let sup = Supervisor::new(Policy {
+            max_concurrent: 1,
+            ..Policy::default()
+        });
+        assert_eq!(
+            spawned(&sup.tick(&conn, &no_sensors()).unwrap()),
+            vec![retrying]
+        );
+        let _ = pending;
     }
 
     #[test]

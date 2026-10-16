@@ -429,6 +429,65 @@ pub fn finish_attempt(
     Ok(())
 }
 
+/// The task a `depends_on` entry names (#572). Entries are task ids; a
+/// name is accepted for rows submitted before ids were stored, and must be
+/// unambiguous.
+pub fn resolve_dependency(conn: &Connection, key: &str) -> Result<Option<TaskRow>, String> {
+    if let Some(t) = get_task(conn, key)? {
+        return Ok(Some(t));
+    }
+    let ids: Vec<String> = conn
+        .prepare("SELECT id FROM tasks WHERE name = ?1")
+        .and_then(|mut s| {
+            s.query_map(params![key], |r| r.get::<_, String>(0))?
+                .collect::<Result<_, _>>()
+        })
+        .map_err(|e| format!("resolve dependency {key}: {e}"))?;
+    match ids.as_slice() {
+        [id] => get_task(conn, id),
+        _ => Ok(None),
+    }
+}
+
+/// The latest attempt that ran and how it ended, `None` for the outcome
+/// while it's still open. What the next attempt's prompt is built from
+/// (#574). A spawn that failed before anything ran is skipped: it says
+/// nothing about the work, and would hide the verifier failure before it.
+pub fn latest_attempt_outcome(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<Option<(String, Option<String>)>, String> {
+    conn.query_row(
+        "SELECT id, outcome FROM task_attempts
+         WHERE task_id = ?1 AND (outcome IS NULL OR outcome != 'spawn_failed')
+         ORDER BY attempt_num DESC LIMIT 1",
+        params![task_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .optional()
+    .map_err(|e| format!("latest attempt outcome: {e}"))
+}
+
+/// An attempt's failed verifiers as `(kind, output)`, in the order they ran.
+pub fn attempt_failures(
+    conn: &Connection,
+    attempt_id: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT kind, output FROM task_verifications
+             WHERE attempt_id = ?1 AND verdict = 'FAIL' ORDER BY ran_at, id",
+        )
+        .map_err(|e| format!("prepare attempt failures: {e}"))?;
+    let rows = stmt
+        .query_map(params![attempt_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("attempt failures: {e}"))?;
+    rows.collect::<Result<_, _>>()
+        .map_err(|e| format!("attempt failures: {e}"))
+}
+
 /// A spawned attempt as the live sensor reads it (#570).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpawnedAttempt {
