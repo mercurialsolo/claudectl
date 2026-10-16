@@ -332,6 +332,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: state,
             injection_stats: InjectionStats::default(),
             sharing_consent: None,

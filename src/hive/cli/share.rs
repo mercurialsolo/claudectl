@@ -126,6 +126,13 @@ pub(crate) fn share_inner(
 
             // For hooks: extract command binary as a CLI dep
             let mut requires = crate::hive::ArtifactRequires::default();
+            // #523: a hook config is Claude-Code-only by nature — Codex has
+            // no PreToolUse to install into, only a post-hoc `notify`. Saying
+            // so here is what lets a Codex-only peer skip the unit with a
+            // reason instead of failing to install it and looking buggy.
+            requires
+                .agents
+                .push(claudectl_core::agent::vocab::CLAUDE_CODE.to_string());
             if let Some(cmd) = parsed.get("command").and_then(|v| v.as_str()) {
                 let binary = cmd.rsplit('/').next().unwrap_or(cmd);
                 if !binary.is_empty() {
@@ -168,6 +175,7 @@ pub(crate) fn share_inner(
         propagation_count: 0,
         version: 1,
         revalidation_interval_secs: 0,
+        origin_agents: Vec::new(),
         injection_state: crate::hive::InjectionState::Live,
         injection_stats: crate::hive::InjectionStats {
             injected_count: 0,
@@ -229,10 +237,20 @@ pub(crate) fn build_requires(
 
     let min_version = fm.get("requires_min_version").cloned();
 
+    // #523: which agents this artifact can install for. Empty means any,
+    // which is right for skills and commands — Codex and Claude Code use the
+    // same `SKILL.md` frontmatter contract, so a shared skill round-trips.
+    // An author who knows better can say so with `requires_agents:`.
+    let agents = fm
+        .get("requires_agents")
+        .map(|val| val.split(',').map(|s| s.trim().to_string()).collect())
+        .unwrap_or_default();
+
     crate::hive::ArtifactRequires {
         cli,
         os,
         min_version,
+        agents,
     }
 }
 

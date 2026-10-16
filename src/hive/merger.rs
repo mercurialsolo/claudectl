@@ -58,6 +58,23 @@ pub struct MergeStats {
 // Merge logic
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Fold `other`'s agent provenance into `unit`, deduped and sorted (#523).
+///
+/// Used only where a merge actually replaces one unit with another, so the
+/// surviving unit keeps the full record of which agents its approach has
+/// been seen in. A *rejected* incoming unit's origins are deliberately not
+/// folded in: its evidence did not transfer, so claiming its agent would
+/// overstate where the stored knowledge came from.
+fn union_origin_agents(unit: &mut KnowledgeUnit, other: &[String]) {
+    if other.is_empty() {
+        return;
+    }
+    let mut merged: std::collections::BTreeSet<String> =
+        unit.origin_agents.iter().cloned().collect();
+    merged.extend(other.iter().cloned());
+    unit.origin_agents = merged.into_iter().collect();
+}
+
 /// Merge a single incoming knowledge unit into the local store.
 /// `local_peer_id` is this instance's peer identity — used to detect local-originated units.
 pub fn merge_unit(
@@ -158,6 +175,7 @@ pub fn merge_unit(
             let scores_equal = (incoming_score - existing_score).abs() < 1e-9;
             let existing_id = existing.id.clone();
             let existing_peer = existing.source_peer.clone();
+            let existing_origins = existing.origin_agents.clone();
 
             if incoming_score > existing_score
                 || (scores_equal && incoming.version > existing.version)
@@ -171,7 +189,14 @@ pub fn merge_unit(
                 } else {
                     format!("incoming score {incoming_score:.2} > existing {existing_score:.2}")
                 };
-                store.insert(incoming.clone());
+                // #523: the incoming unit replaces the existing one, but
+                // provenance is cumulative — a wholesale replace would drop
+                // the fact that this approach was also seen in the losing
+                // unit's agent, which is the "confirmed independently in two
+                // agents" case the field exists to record.
+                let mut winner = incoming.clone();
+                union_origin_agents(&mut winner, &existing_origins);
+                store.insert(winner);
                 log_resolution(MergeResolution {
                     result: MergeResult::Updated,
                     semantic_key: sk,
@@ -383,6 +408,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
@@ -426,6 +452,55 @@ mod tests {
         // Store should still have the local unit
         assert_eq!(store.len(), 1);
         assert!(store.get("ku_local").is_some());
+    }
+
+    /// Provenance is cumulative (#523). When a better peer unit replaces an
+    /// existing one, the surviving unit has to keep the record that this
+    /// approach was also seen in the losing unit's agent — that union is the
+    /// "confirmed independently in two agents" case the field exists for, and
+    /// a wholesale `store.insert(incoming)` would drop it.
+    #[test]
+    fn a_replacing_merge_unions_agent_provenance() {
+        let mut store = empty_store();
+        let mut old = make_unit("ku_old", "Bash", "peer-a", 0.5, 5);
+        old.origin_agents = vec!["claude-code".into()];
+        store.insert(old);
+
+        let mut new = make_unit("ku_new", "Bash", "peer-b", 0.9, 20);
+        new.origin_agents = vec!["codex".into()];
+        assert_eq!(merge_unit(&mut store, &new, "local"), MergeResult::Updated);
+
+        let survived = store.get("ku_new").expect("the better unit should win");
+        assert_eq!(
+            survived.origin_agents,
+            vec!["claude-code".to_string(), "codex".to_string()],
+            "the winner must carry both agents, deduped and sorted"
+        );
+    }
+
+    /// A rejected unit's origins are deliberately *not* folded in: its
+    /// evidence did not transfer, so claiming its agent would overstate where
+    /// the stored knowledge came from.
+    #[test]
+    fn a_rejected_merge_does_not_claim_the_losing_agent() {
+        let mut store = empty_store();
+        let mut local = make_unit("ku_local", "Bash", "local", 0.7, 5);
+        local.origin_agents = vec!["claude-code".into()];
+        store.insert(local);
+
+        let mut incoming = make_unit("ku_remote", "Bash", "peer-a", 0.99, 100);
+        incoming.origin_agents = vec!["codex".into()];
+        assert_eq!(
+            merge_unit(&mut store, &incoming, "local"),
+            MergeResult::RejectedLocal
+        );
+
+        let kept = store.get("ku_local").expect("local wins by policy");
+        assert_eq!(
+            kept.origin_agents,
+            vec!["claude-code".to_string()],
+            "a rejected unit's agent must not be claimed as provenance"
+        );
     }
 
     #[test]
@@ -508,6 +583,7 @@ mod tests {
             propagation_count: 0,
             version: 1,
             revalidation_interval_secs: 0,
+            origin_agents: Vec::new(),
             injection_state: crate::hive::InjectionState::Live,
             injection_stats: crate::hive::InjectionStats {
                 injected_count: 0,
