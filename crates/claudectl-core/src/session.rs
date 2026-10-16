@@ -934,6 +934,9 @@ impl ClaudeSession {
 
         serde_json::json!({
             "pid": self.pid,
+            // Carried to peers so a fleet lease authority can renew this
+            // session's leases while it's alive (#569).
+            "session_id": self.session_id,
             "project": self.display_name(),
             "status": self.status.to_string(),
             "telemetry": {

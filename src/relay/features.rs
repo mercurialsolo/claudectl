@@ -27,8 +27,13 @@ pub const UNKNOWN_OK: &str = "unknown-ok";
 /// of what this name means: changing either needs a new feature string.
 pub const FRAME_BIN: &str = "frame-bin";
 
+/// This peer understands `lease_claim`, `lease_release`, `lease_list` and
+/// `lease_result` (#569), so it can ask a lease authority for a fleet-wide
+/// lease, or be one.
+pub const LEASE_FLEET: &str = "lease-fleet";
+
 /// Every feature this build supports.
-const LOCAL: &[&str] = &[UNKNOWN_OK, FRAME_BIN];
+const LOCAL: &[&str] = &[UNKNOWN_OK, FRAME_BIN, LEASE_FLEET];
 
 /// A peer controls this list, so it's bounded and filtered before it's kept.
 const MAX_FEATURES: usize = 64;

@@ -17,7 +17,11 @@ pub enum CoordCommand {
     },
 
     /// Show active ownership leases
-    Leases,
+    Leases {
+        /// Show the fleet-wide leases held by the lease authority instead
+        #[arg(long)]
+        fleet: bool,
+    },
 
     /// Show open blockers
     Blockers,
@@ -66,12 +70,22 @@ pub enum CoordCommand {
         /// With --wait, give up after this many seconds (default: wait indefinitely)
         #[arg(long, requires = "wait")]
         timeout: Option<u64>,
+        /// Claim fleet-wide, from the peer named in `[relay] lease_authority`,
+        /// so no session on any machine in the fleet can hold it at once
+        #[arg(long)]
+        fleet: bool,
     },
 
     /// Release an ownership lease
     Release {
         /// Lease ID to release
         lease_id: String,
+        /// Release a fleet-wide lease (needs --session: only its holder can)
+        #[arg(long, requires = "session")]
+        fleet: bool,
+        /// The session that holds the fleet lease
+        #[arg(long)]
+        session: Option<String>,
     },
 
     /// Extend a lease's expiry (for an owner that isn't a running session)
@@ -204,7 +218,8 @@ pub fn dispatch_command(command: &CoordCommand, json_mode: bool) -> io::Result<(
         CoordCommand::Events { limit, type_filter } => {
             list_events(*limit, type_filter.as_deref(), json_mode)
         }
-        CoordCommand::Leases => list_leases(json_mode),
+        CoordCommand::Leases { fleet: false } => list_leases(json_mode),
+        CoordCommand::Leases { fleet: true } => fleet::list(json_mode),
         CoordCommand::Blockers => list_blockers(json_mode),
         CoordCommand::Handoffs => list_handoffs(json_mode),
         CoordCommand::Interrupts => list_interrupts(json_mode),
@@ -218,6 +233,7 @@ pub fn dispatch_command(command: &CoordCommand, json_mode: bool) -> io::Result<(
             ttl,
             wait,
             timeout,
+            fleet,
         } => {
             let target = match (path, resource) {
                 (Some(p), _) => Ok((store::PATH_GLOB.to_string(), p.clone())),
@@ -230,9 +246,18 @@ pub fn dispatch_command(command: &CoordCommand, json_mode: bool) -> io::Result<(
                 wait: *wait,
                 timeout: timeout.map(std::time::Duration::from_secs),
             };
-            cmd_claim(session, &target, mode, reason.as_deref(), &opts, json_mode)
+            if *fleet {
+                fleet::claim(session, &target, mode, reason.as_deref(), &opts, json_mode)
+            } else {
+                cmd_claim(session, &target, mode, reason.as_deref(), &opts, json_mode)
+            }
         }
-        CoordCommand::Release { lease_id } => cmd_release(lease_id, json_mode),
+        CoordCommand::Release {
+            lease_id,
+            fleet: true,
+            session: Some(session),
+        } => fleet::release(lease_id, session, json_mode),
+        CoordCommand::Release { lease_id, .. } => cmd_release(lease_id, json_mode),
         CoordCommand::Renew { lease_id, ttl } => cmd_renew(lease_id, *ttl, json_mode),
         CoordCommand::Handoff {
             from,
@@ -565,19 +590,7 @@ fn parse_resource(raw: &str) -> Result<(String, String), String> {
     let (kind, value) = raw
         .split_once(':')
         .ok_or_else(|| format!("--resource takes <kind>:<value>, got '{raw}'"))?;
-    let kind_ok = !kind.is_empty()
-        && kind.len() <= 32
-        && kind
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
-    if !kind_ok {
-        return Err(format!(
-            "resource kind '{kind}' must be 1-32 characters of a-z, 0-9, _ or -"
-        ));
-    }
-    if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
-        return Err("resource value must be 1-512 printable characters".to_string());
-    }
+    store::validate_resource(kind, value)?;
     Ok((kind.to_string(), value.to_string()))
 }
 
@@ -723,6 +736,277 @@ fn cmd_claim(
         );
     }
     Ok(())
+}
+
+/// `--fleet`: leases held by one authority for the whole fleet (#569).
+mod fleet {
+    use super::*;
+
+    #[cfg(not(feature = "relay"))]
+    fn unavailable() -> io::Result<()> {
+        Err(io::Error::other(
+            "fleet leases need the relay; this build has it compiled out",
+        ))
+    }
+
+    #[cfg(not(feature = "relay"))]
+    pub(super) fn claim(
+        _: &str,
+        _: &(String, String),
+        _: &str,
+        _: Option<&str>,
+        _: &ClaimOpts,
+        _: bool,
+    ) -> io::Result<()> {
+        unavailable()
+    }
+
+    #[cfg(not(feature = "relay"))]
+    pub(super) fn release(_: &str, _: &str, _: bool) -> io::Result<()> {
+        unavailable()
+    }
+
+    #[cfg(not(feature = "relay"))]
+    pub(super) fn list(_: bool) -> io::Result<()> {
+        unavailable()
+    }
+
+    #[cfg(feature = "relay")]
+    use crate::relay::MessageType;
+    #[cfg(feature = "relay")]
+    use crate::relay::lease::{self, ClaimRequest};
+
+    /// How often a waiting fleet claim polls the authority. Each poll is a
+    /// fresh one-shot dial, so slower than a local wait, and still well inside
+    /// the waiter stale window.
+    #[cfg(feature = "relay")]
+    const FLEET_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// Send `payload` to the authority, or answer it here when this machine
+    /// is the authority.
+    #[cfg(feature = "relay")]
+    fn ask(msg_type: MessageType, payload: serde_json::Value) -> io::Result<serde_json::Value> {
+        let cfg = crate::config::Config::load();
+        let authority = cfg
+            .relay
+            .unwrap_or_default()
+            .lease_authority
+            .ok_or_else(|| {
+                io::Error::other(
+                    "no lease authority: set `lease_authority = \"<peer-id>\"` under [relay] \
+                     in ~/.config/claudectl/config.toml, on every machine in the fleet",
+                )
+            })?;
+        let me = crate::relay::load_or_create_identity();
+        if authority == me.as_str() {
+            let conn = store::open().map_err(io::Error::other)?;
+            let peers = claudectl_core::fleet::read_snapshot()
+                .map(|s| {
+                    s.live_workers()
+                        .into_iter()
+                        .map(|w| (w.worker_id.clone(), w.sessions.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let live = lease::live_owners(
+                me.as_str(),
+                live_session_ids(),
+                peers.iter().map(|(p, s)| (p.as_str(), s.as_slice())),
+            );
+            return Ok(lease::handle(&conn, msg_type, &payload, me.as_str(), &live));
+        }
+        lease::request(&authority, &me, msg_type, payload).map_err(io::Error::other)
+    }
+
+    #[cfg(feature = "relay")]
+    fn fail(msg: String, json_mode: bool, kind: &str) -> io::Result<()> {
+        if json_mode {
+            println!("{}", serde_json::json!({"error": msg}));
+        } else {
+            eprintln!("{msg}");
+        }
+        Err(io::Error::other(kind.to_string()))
+    }
+
+    #[cfg(feature = "relay")]
+    pub(super) fn claim(
+        session_id: &str,
+        (kind, value): &(String, String),
+        mode_str: &str,
+        reason: Option<&str>,
+        opts: &ClaimOpts,
+        json_mode: bool,
+    ) -> io::Result<()> {
+        check_ttl(opts.ttl)?;
+        let mode = LeaseMode::parse(mode_str).unwrap_or(LeaseMode::Exclusive);
+        let resource = format!("{kind}:{value}");
+        let started = std::time::Instant::now();
+        // One lease id for every attempt, so a retry after a lost answer is
+        // recognised by the authority instead of creating a second lease.
+        let lease_id = store::gen_id("lease");
+        let mut waiter_id: Option<String> = None;
+        let mut announced = false;
+
+        loop {
+            let req = ClaimRequest {
+                request_id: store::gen_id("req"),
+                lease_id: lease_id.clone(),
+                session: session_id.to_string(),
+                kind: kind.clone(),
+                value: value.clone(),
+                mode,
+                ttl_secs: opts.ttl,
+                reason: reason.unwrap_or("").to_string(),
+                wait: opts.wait,
+                waiter_id: waiter_id.clone(),
+            };
+            let reply = ask(MessageType::LeaseClaim, req.to_payload())?;
+            let blocked = match reply["outcome"].as_str().unwrap_or("") {
+                "granted" => {
+                    if json_mode {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&reply["lease"]).unwrap_or_default()
+                        );
+                    } else {
+                        println!("Fleet lease acquired: {lease_id}");
+                        println!("  Session:  {session_id}");
+                        println!("  Resource: {resource}");
+                        println!("  Mode:     {mode}");
+                        println!(
+                            "  Expires:  {} (renewed while the session runs)",
+                            reply["lease"]["expires_at"].as_str().unwrap_or("?")
+                        );
+                    }
+                    return Ok(());
+                }
+                "conflict" | "queued" => {
+                    if let Some(w) = reply["waiter_id"].as_str() {
+                        waiter_id = Some(w.to_string());
+                    }
+                    match reply["holder"].as_str() {
+                        Some(h) => format!("{h} holds {resource}"),
+                        None => format!(
+                            "{} claim(s) for {resource} are queued ahead of this one",
+                            reply["ahead"].as_u64().unwrap_or(0)
+                        ),
+                    }
+                }
+                "waiter_gone" => {
+                    waiter_id = None;
+                    format!("lost its place in the fleet queue for {resource}; rejoining")
+                }
+                _ => {
+                    let msg = reply["message"].as_str().unwrap_or("unknown error");
+                    return fail(
+                        format!("lease authority: {msg}"),
+                        json_mode,
+                        "fleet lease error",
+                    );
+                }
+            };
+            if !opts.wait {
+                return fail(format!("Conflict: {blocked}"), json_mode, "lease conflict");
+            }
+            if !announced && !json_mode {
+                eprintln!("Waiting: {blocked}");
+                announced = true;
+            }
+            if opts.timeout.is_some_and(|t| started.elapsed() >= t) {
+                return fail(
+                    format!("timed out waiting for {resource}: {blocked}"),
+                    json_mode,
+                    "lease wait timed out",
+                );
+            }
+            std::thread::sleep(FLEET_POLL);
+        }
+    }
+
+    #[cfg(feature = "relay")]
+    pub(super) fn release(lease_id: &str, session: &str, json_mode: bool) -> io::Result<()> {
+        let reply = ask(
+            MessageType::LeaseRelease,
+            serde_json::json!({
+                "request_id": store::gen_id("req"),
+                "lease_id": lease_id,
+                "session": session,
+            }),
+        )?;
+        match reply["outcome"].as_str().unwrap_or("") {
+            "released" => {
+                if json_mode {
+                    println!("{}", serde_json::json!({"released": lease_id}));
+                } else {
+                    println!("Fleet lease released: {lease_id}");
+                }
+                Ok(())
+            }
+            "not_owner" => fail(
+                format!(
+                    "{lease_id} is held by {}, not {session} on this machine",
+                    reply["holder"].as_str().unwrap_or("someone else")
+                ),
+                json_mode,
+                "not owner",
+            ),
+            "not_found" => fail(format!("No fleet lease {lease_id}"), json_mode, "not found"),
+            other => fail(
+                format!(
+                    "lease authority: {}",
+                    reply["message"].as_str().unwrap_or(other)
+                ),
+                json_mode,
+                "fleet lease error",
+            ),
+        }
+    }
+
+    #[cfg(feature = "relay")]
+    pub(super) fn list(json_mode: bool) -> io::Result<()> {
+        let reply = ask(
+            MessageType::LeaseList,
+            serde_json::json!({"request_id": store::gen_id("req")}),
+        )?;
+        if reply["outcome"] != "list" {
+            let msg = reply["message"].as_str().unwrap_or("unknown error");
+            return fail(
+                format!("lease authority: {msg}"),
+                json_mode,
+                "fleet lease error",
+            );
+        }
+        let leases: Vec<Lease> =
+            serde_json::from_value(reply["leases"].clone()).unwrap_or_default();
+        if json_mode {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&leases).unwrap_or_default()
+            );
+            return Ok(());
+        }
+        if leases.is_empty() {
+            println!("No active fleet leases.");
+            return Ok(());
+        }
+        println!(
+            "{:<28} {:<36} {:<24} {:<10} EXPIRES",
+            "ID", "HOLDER (session@peer)", "RESOURCE", "MODE"
+        );
+        println!("{}", "-".repeat(118));
+        for l in &leases {
+            println!(
+                "{:<28} {:<36} {:<24} {:<10} {}",
+                truncate(&l.id, 28),
+                truncate(&l.owner_session_id, 36),
+                truncate(&format!("{}:{}", l.resource_kind, l.resource_value), 24),
+                l.mode,
+                l.expires_at.as_deref().unwrap_or("never")
+            );
+        }
+        println!("\n{} active fleet lease(s)", leases.len());
+        Ok(())
+    }
 }
 
 fn cmd_renew(lease_id: &str, ttl: u64, json_mode: bool) -> io::Result<()> {

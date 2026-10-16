@@ -117,6 +117,11 @@ pub struct RelayConfig {
     /// all the same: turning on a broadcast that never happened, with no way
     /// to decline, is not a change to make silently.
     pub lan_announce: bool,
+    /// The peer that holds fleet-wide leases (#569). `coord claim --fleet`
+    /// asks it, and only it grants. Unset means fleet leases are off and
+    /// leases stay machine-local, as they always were. On the authority
+    /// itself, set it to the machine's own relay identity.
+    pub lease_authority: Option<String>,
 }
 
 impl Default for RelayConfig {
@@ -134,6 +139,7 @@ impl Default for RelayConfig {
             http_addr: "127.0.0.1".into(),
             lan_announce: true,
             auth_token: None,
+            lease_authority: None,
         }
     }
 }
@@ -315,6 +321,7 @@ struct RawRelayConfig {
     max_peers: Option<u8>,
     heartbeat_interval_secs: Option<u64>,
     lan_announce: Option<bool>,
+    lease_authority: Option<String>,
     reconnect_max_secs: Option<u64>,
     auto_connect: Option<Vec<String>>,
     http_port: Option<u16>,
@@ -499,6 +506,9 @@ impl Config {
             }
             if let Some(v) = raw_relay.lan_announce {
                 relay.lan_announce = v;
+            }
+            if let Some(v) = raw_relay.lease_authority {
+                relay.lease_authority = Some(v).filter(|s| !s.is_empty());
             }
             if let Some(v) = raw_relay.heartbeat_interval_secs {
                 relay.heartbeat_interval_secs = v;
@@ -1231,6 +1241,9 @@ fn parse_config_file(path: &PathBuf) -> Option<RawConfig> {
                     "lan_announce" => {
                         relay.lan_announce = parse_bool(value);
                     }
+                    "lease_authority" => {
+                        relay.lease_authority = Some(unquote(value));
+                    }
                     "reconnect_max" | "reconnect_max_secs" => {
                         relay.reconnect_max_secs = value.parse().ok();
                     }
@@ -1426,6 +1439,8 @@ fn known_keys(section: &str) -> Option<&'static [&'static str]> {
             "http_port",
             "http_addr",
             "auth_token",
+            "lan_announce",
+            "lease_authority",
         ]),
         "hive" => Some(&[
             "enabled",

@@ -710,13 +710,18 @@ mod tests {
             KnowledgeRejected,
             SessionTransfer,
             SessionReceived,
+            LeaseClaim,
+            LeaseRelease,
+            LeaseList,
+            LeaseResult,
         ];
         for t in all {
             match t {
                 Challenge | Handshake | HandshakeAck | Heartbeat | Ack | DelegateTask
                 | TaskStatus | TaskHandoff | TaskInterrupt | KnowledgeSync | KnowledgeRequest
                 | KnowledgeSnapshot | HiveJoinRequest | HiveJoinResult | KnowledgeRejected
-                | SessionTransfer | SessionReceived => {}
+                | SessionTransfer | SessionReceived | LeaseClaim | LeaseRelease | LeaseList
+                | LeaseResult => {}
                 Unknown => unreachable!("never sent"),
             }
             let msg = RelayMessage {

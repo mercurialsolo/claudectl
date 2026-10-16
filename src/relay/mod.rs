@@ -14,6 +14,10 @@ pub mod hivesync;
 pub mod http;
 pub mod invite;
 pub mod lan;
+/// Fleet-wide leases (#569). The authority keeps them in its coord store, so
+/// this needs `coord` as well as `relay`.
+#[cfg(feature = "coord")]
+pub mod lease;
 pub mod listener;
 pub mod mesh;
 pub mod netif;
@@ -99,6 +103,18 @@ pub enum MessageType {
     /// command to resume it. Sent because placement is load-bearing and only
     /// the receiver knows the path it chose.
     SessionReceived,
+
+    // Layer 2: fleet leases (#569), sent only on links that agreed
+    // `lease-fleet`. A requester sends one of the first three to the lease
+    // authority; the authority answers each with a `LeaseResult`.
+    /// Ask for a fleet-wide lease, or poll a queued one.
+    LeaseClaim,
+    /// Release a fleet-wide lease.
+    LeaseRelease,
+    /// List the authority's active fleet leases.
+    LeaseList,
+    /// The authority's answer to any of the three above.
+    LeaseResult,
 
     /// A `msg_type` this build doesn't know (#559). Never sent: it exists so a
     /// newer peer's frame parses instead of failing serde, which used to end
