@@ -225,7 +225,7 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             // FAIL — RFC §5's verifier-is-the-gradient principle.
             let cwd = workdir.clone();
             for verifier in &task.verifiers {
-                let verdict = run_verifier(fx, &cwd, verifier)?;
+                let verdict = run_verifier(fx, &cwd, task.git_ref.as_deref(), verifier)?;
                 let verdict_str = match verdict.verdict {
                     VerdictKind::Pass => "PASS",
                     VerdictKind::Fail => "FAIL",
@@ -477,6 +477,7 @@ mod tests {
         }
         fn run_agent(
             &self,
+            _cwd: &std::path::Path,
             _prompt: &str,
             _model: Option<&str>,
             _budget_usd: Option<f64>,
