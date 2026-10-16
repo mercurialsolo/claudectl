@@ -42,12 +42,23 @@ pub trait SideEffects: VerifierBackend {
         hop_count: u32,
     ) -> Result<String, String>;
 
-    /// Launch a fresh Claude Code session in `cwd` with `prompt`.
-    /// Returns the session_id so the actuator can record it on the
-    /// attempt. The crash-safety guarantee means callers MUST treat a
-    /// returned session_id as durable — restarting the daemon shouldn't
-    /// re-spawn the same task.
-    fn spawn_session(&self, cwd: &std::path::Path, prompt: &str) -> Result<String, String>;
+    /// Where `task`'s session runs: its worktree when it has a `git_ref`
+    /// (created or reused), its `cwd` otherwise (#570).
+    fn prepare_workdir(&self, task: &super::tasks::TaskRow) -> Result<std::path::PathBuf, String>;
+
+    /// Start the session a request describes, detached. Returns its pid.
+    /// The attempt (session id, workdir) is recorded before this runs, so a
+    /// crash during it can't lose track of a session (#570).
+    fn spawn_session(&self, req: &super::spawn::SpawnRequest) -> Result<u32, String>;
+
+    /// Whether a recorded session process is still running.
+    fn pid_alive(&self, pid: u32) -> bool;
+
+    /// After DONE: remove a task's worktree if nothing would be lost.
+    fn cleanup_workdir(&self, task: &super::tasks::TaskRow, workdir: &std::path::Path);
+
+    /// What a finished attempt's session reported, if it has.
+    fn read_result(&self, attempt_id: &str) -> Option<super::spawn::RunResult>;
 }
 
 /// Carry out one action against the SQL store and the side-effect
@@ -98,13 +109,50 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             {
                 return Ok(());
             }
-            // For tasks transitioning Assigned → Spawn (claim_timeout
-            // fallback), we bump the attempt counter so the mailbox
-            // attempt and the spawn attempt are separately addressable.
-            let next_num = attempt_count(conn, task_id)? + 1;
-            let session_id = fx.spawn_session(cwd, &task.prompt)?;
-            let _attempt_id =
-                insert_attempt(conn, task_id, next_num, Some(&session_id), None, None)?;
+            let _ = cwd; // the task row is the source of truth for where it runs
+
+            // Adopt instead of spawning twice: a daemon that crashed after
+            // starting the session but before moving the task to RUNNING
+            // finds the session alive on the latest attempt.
+            let adopted = super::tasks::running_spawned_attempts_for(conn, task_id)?
+                .is_some_and(|a| a.pid.is_some_and(|p| fx.pid_alive(p)));
+
+            if !adopted {
+                // Workdir first: a failed checkout leaves nothing behind, and
+                // the next tick tries again.
+                let workdir = fx.prepare_workdir(&task)?;
+                // For tasks transitioning Assigned → Spawn (claim_timeout
+                // fallback), we bump the attempt counter so the mailbox
+                // attempt and the spawn attempt are separately addressable.
+                let next_num = attempt_count(conn, task_id)? + 1;
+                // Record the attempt before the process exists (#570). The
+                // old order spawned first, so a crash in between started a
+                // session nothing knew about, and the next tick started
+                // another.
+                let session_id = super::spawn::new_session_id();
+                let attempt_id =
+                    insert_attempt(conn, task_id, next_num, Some(&session_id), None, None)?;
+                let workdir_s = workdir.to_string_lossy().to_string();
+                super::tasks::set_attempt_workdir(conn, &attempt_id, &workdir_s)?;
+                let req = super::spawn::SpawnRequest {
+                    task_id: task_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                    session_id,
+                    workdir,
+                    prompt: task.prompt.clone(),
+                    permission_mode: task.permission_mode.clone(),
+                    model: task.model.clone(),
+                };
+                match fx.spawn_session(&req) {
+                    Ok(pid) => super::tasks::set_attempt_pid(conn, &attempt_id, pid)?,
+                    Err(e) => {
+                        // Close the attempt so it can't be mistaken for one
+                        // in progress; the task stays where it was.
+                        super::tasks::finish_attempt(conn, &attempt_id, "spawn_failed", None)?;
+                        return Err(e);
+                    }
+                }
+            }
             transition(
                 conn,
                 task_id,
@@ -129,6 +177,21 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             if task.state != TaskState::Running && task.state != TaskState::Verifying {
                 return Ok(());
             }
+            // Close the attempt with what its session reported (#570).
+            if task.state == TaskState::Running {
+                let result = fx.read_result(attempt_id);
+                super::tasks::finish_attempt(
+                    conn,
+                    attempt_id,
+                    "completed",
+                    result.and_then(|r| r.cost_usd),
+                )?;
+            }
+            // Verifiers check the work where it was done: the attempt's
+            // worktree, not the task's original cwd (#570).
+            let workdir = super::tasks::latest_attempt_workdir(conn, task_id)?
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from(&task.cwd));
             // Move to Verifying if we're not already there. The
             // transition is the "verifier pass started" marker an
             // operator looking at `task_status` should see.
@@ -153,13 +216,14 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                     TaskState::Done,
                     "no-verifiers",
                 )?;
+                fx.cleanup_workdir(&task, &workdir);
                 maybe_auto_post_pr(task_id);
                 return Ok(());
             }
 
             // Walk verifiers in declared order. Short-circuit on first
             // FAIL — RFC §5's verifier-is-the-gradient principle.
-            let cwd = std::path::PathBuf::from(&task.cwd);
+            let cwd = workdir.clone();
             for verifier in &task.verifiers {
                 let verdict = run_verifier(fx, &cwd, verifier)?;
                 let verdict_str = match verdict.verdict {
@@ -206,6 +270,7 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                 TaskState::Done,
                 "verify-pass",
             )?;
+            fx.cleanup_workdir(&task, &workdir);
             maybe_auto_post_pr(task_id);
             Ok(())
         }
@@ -217,6 +282,12 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             // in this branch; other states are stale-tick no-ops.
             if from_state != TaskState::Running {
                 return Ok(());
+            }
+            // Close the attempt that's being given up on, with why (#570), so
+            // it's never adopted as a live session again.
+            if let Some(attempt_id) = super::tasks::latest_attempt_id(conn, task_id)? {
+                let cost = fx.read_result(&attempt_id).and_then(|r| r.cost_usd);
+                super::tasks::finish_attempt(conn, &attempt_id, cause, cost)?;
             }
             // Attempts cap → NeedsHuman instead of resuming forever.
             let used = attempt_count(conn, task_id)?;
@@ -348,6 +419,14 @@ mod tests {
         brain_replies: std::cell::RefCell<std::collections::VecDeque<String>>,
         agent_replies:
             std::cell::RefCell<std::collections::VecDeque<crate::coord::verify::AgentResult>>,
+        // #570 spawn path.
+        spawn_requests: std::cell::RefCell<Vec<crate::coord::spawn::SpawnRequest>>,
+        spawn_error: std::cell::RefCell<Option<String>>,
+        workdir_error: std::cell::RefCell<Option<String>>,
+        alive_pids: std::cell::RefCell<Vec<u32>>,
+        cleaned: std::cell::RefCell<Vec<std::path::PathBuf>>,
+        result: std::cell::RefCell<Option<crate::coord::spawn::RunResult>>,
+        shell_cwds: std::cell::RefCell<Vec<std::path::PathBuf>>,
     }
 
     impl Default for RecordingFx {
@@ -360,6 +439,13 @@ mod tests {
                 shell_results: Default::default(),
                 brain_replies: Default::default(),
                 agent_replies: Default::default(),
+                spawn_requests: Default::default(),
+                spawn_error: Default::default(),
+                workdir_error: Default::default(),
+                alive_pids: Default::default(),
+                cleaned: Default::default(),
+                result: Default::default(),
+                shell_cwds: Default::default(),
             }
         }
     }
@@ -367,10 +453,11 @@ mod tests {
     impl VerifierBackend for RecordingFx {
         fn run_shell(
             &self,
-            _cwd: &std::path::Path,
+            cwd: &std::path::Path,
             command: &str,
             _timeout: std::time::Duration,
         ) -> Result<crate::coord::verify::ShellResult, String> {
+            self.shell_cwds.borrow_mut().push(cwd.to_path_buf());
             // Each command's exit / output is steered by the test via
             // `shell_results` queue; default is exit 0 with the command
             // echoed back so the assertions can read it without
@@ -421,14 +508,39 @@ mod tests {
             *id += 1;
             Ok(out)
         }
-        fn spawn_session(&self, cwd: &std::path::Path, prompt: &str) -> Result<String, String> {
+        fn prepare_workdir(
+            &self,
+            task: &crate::coord::tasks::TaskRow,
+        ) -> Result<std::path::PathBuf, String> {
+            if let Some(e) = self.workdir_error.borrow().clone() {
+                return Err(e);
+            }
+            Ok(match &task.git_ref {
+                Some(_) => std::path::PathBuf::from(format!("/wt/{}", task.id)),
+                None => std::path::PathBuf::from(&task.cwd),
+            })
+        }
+        fn spawn_session(&self, req: &crate::coord::spawn::SpawnRequest) -> Result<u32, String> {
+            if let Some(e) = self.spawn_error.borrow().clone() {
+                return Err(e);
+            }
             let mut id = self.next_session_id.borrow_mut();
-            let out = format!("sess_test_{id}");
+            let pid = 10_000 + *id as u32;
             *id += 1;
             self.spawned
                 .borrow_mut()
-                .push((cwd.to_path_buf(), prompt.to_string()));
-            Ok(out)
+                .push((req.workdir.clone(), req.prompt.clone()));
+            self.spawn_requests.borrow_mut().push(req.clone());
+            Ok(pid)
+        }
+        fn pid_alive(&self, pid: u32) -> bool {
+            self.alive_pids.borrow().contains(&pid)
+        }
+        fn cleanup_workdir(&self, _task: &crate::coord::tasks::TaskRow, workdir: &std::path::Path) {
+            self.cleaned.borrow_mut().push(workdir.to_path_buf());
+        }
+        fn read_result(&self, _attempt_id: &str) -> Option<crate::coord::spawn::RunResult> {
+            self.result.borrow().clone()
         }
     }
 
@@ -500,6 +612,196 @@ mod tests {
         assert_eq!(task.state, TaskState::Running);
         let hist = list_transitions(&conn, &id).unwrap();
         assert_eq!(hist.last().unwrap().2, "spawned");
+    }
+
+    // ── #570: a session per task, in its own workdir ──────────────────
+
+    fn spawn(conn: &mut Connection, fx: &RecordingFx, id: &str) -> Result<(), String> {
+        apply(
+            conn,
+            fx,
+            &Action::Spawn {
+                task_id: id.to_string(),
+                cwd: std::path::PathBuf::from("/work/x"),
+            },
+        )
+    }
+
+    fn attempt_row(
+        conn: &Connection,
+        id: &str,
+    ) -> (Option<String>, Option<i64>, Option<String>, Option<String>) {
+        conn.query_row(
+            "SELECT session_id, pid, workdir, outcome FROM task_attempts WHERE task_id = ?1
+             ORDER BY attempt_num DESC LIMIT 1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_spawn_records_the_session_workdir_and_pid() {
+        let mut conn = store::open_memory();
+        let new_task = NewTask {
+            permission_mode: Some("acceptEdits".into()),
+            model: Some("sonnet".into()),
+            ..sample_with_role(None)
+        };
+        let id = insert_task(&conn, &new_task).unwrap();
+        let fx = RecordingFx::default();
+        spawn(&mut conn, &fx, &id).unwrap();
+
+        let req = fx.spawn_requests.borrow()[0].clone();
+        assert_eq!(req.workdir, std::path::PathBuf::from("/work/x"));
+        assert_eq!(req.permission_mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(req.model.as_deref(), Some("sonnet"));
+        let (session, pid, workdir, _) = attempt_row(&conn, &id);
+        // The session id the process was told to use is the one recorded.
+        assert_eq!(session.as_deref(), Some(req.session_id.as_str()));
+        assert_eq!(pid, Some(10_001));
+        assert_eq!(workdir.as_deref(), Some("/work/x"));
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Running
+        );
+    }
+
+    #[test]
+    fn a_task_with_a_ref_runs_in_its_worktree() {
+        let mut conn = store::open_memory();
+        let new_task = NewTask {
+            git_ref: Some("main".into()),
+            ..sample_with_role(None)
+        };
+        let id = insert_task(&conn, &new_task).unwrap();
+        let fx = RecordingFx::default();
+        spawn(&mut conn, &fx, &id).unwrap();
+        let wt = format!("/wt/{id}");
+        assert_eq!(
+            fx.spawn_requests.borrow()[0].workdir,
+            std::path::PathBuf::from(&wt)
+        );
+        assert_eq!(attempt_row(&conn, &id).2.as_deref(), Some(wt.as_str()));
+    }
+
+    #[test]
+    fn a_failed_spawn_closes_its_attempt_and_leaves_the_task_pending() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(None)).unwrap();
+        let fx = RecordingFx::default();
+        *fx.spawn_error.borrow_mut() = Some("claude: not found".into());
+        assert!(spawn(&mut conn, &fx, &id).is_err());
+        assert_eq!(attempt_row(&conn, &id).3.as_deref(), Some("spawn_failed"));
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Pending
+        );
+    }
+
+    #[test]
+    fn a_failed_checkout_records_no_attempt() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(None)).unwrap();
+        let fx = RecordingFx::default();
+        *fx.workdir_error.borrow_mut() = Some("not a git repo".into());
+        assert!(spawn(&mut conn, &fx, &id).is_err());
+        assert_eq!(attempt_count(&conn, &id).unwrap(), 0);
+    }
+
+    /// The crash the old order allowed: the session started, the daemon
+    /// died before recording RUNNING, and the next tick started another.
+    #[test]
+    fn a_live_session_from_before_a_crash_is_adopted_not_doubled() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(None)).unwrap();
+        let attempt = insert_attempt(&conn, &id, 1, Some("sess-pre"), None, None).unwrap();
+        crate::coord::tasks::set_attempt_workdir(&conn, &attempt, "/work/x").unwrap();
+        crate::coord::tasks::set_attempt_pid(&conn, &attempt, 4242).unwrap();
+        let fx = RecordingFx::default();
+        fx.alive_pids.borrow_mut().push(4242);
+        spawn(&mut conn, &fx, &id).unwrap();
+        assert!(
+            fx.spawn_requests.borrow().is_empty(),
+            "spawned a second session"
+        );
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Running
+        );
+    }
+
+    #[test]
+    fn verifiers_run_in_the_attempts_workdir_and_the_attempt_is_closed() {
+        use crate::coord::verify::Verifier;
+        let mut conn = store::open_memory();
+        let new_task = NewTask {
+            git_ref: Some("main".into()),
+            verifiers: vec![Verifier::Run {
+                command: "test -f HELLO.txt".into(),
+            }],
+            ..sample_with_role(None)
+        };
+        let id = insert_task(&conn, &new_task).unwrap();
+        let fx = RecordingFx::default();
+        spawn(&mut conn, &fx, &id).unwrap();
+        *fx.result.borrow_mut() = Some(crate::coord::spawn::RunResult {
+            ok: true,
+            cost_usd: Some(0.29),
+            summary: "done".into(),
+        });
+        let attempt_id = crate::coord::tasks::latest_attempt_id(&conn, &id)
+            .unwrap()
+            .unwrap();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::RunVerifier {
+                task_id: id.clone(),
+                attempt_id,
+            },
+        )
+        .unwrap();
+        let wt = std::path::PathBuf::from(format!("/wt/{id}"));
+        assert_eq!(fx.shell_cwds.borrow().as_slice(), [wt.clone()]);
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Done
+        );
+        assert_eq!(attempt_row(&conn, &id).3.as_deref(), Some("completed"));
+        let cost: f64 = conn
+            .query_row(
+                "SELECT cost_usd FROM task_attempts WHERE task_id = ?1",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((cost - 0.29).abs() < 1e-9);
+        assert_eq!(fx.cleaned.borrow().as_slice(), [wt]);
+    }
+
+    /// A resumed attempt is closed, so its pid (alive or reused) is never
+    /// adopted as the task's session again.
+    #[test]
+    fn a_resume_closes_the_attempt_it_gives_up_on() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(None)).unwrap();
+        let fx = RecordingFx::default();
+        spawn(&mut conn, &fx, &id).unwrap();
+        fx.alive_pids.borrow_mut().push(10_001);
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Resume {
+                task_id: id.clone(),
+                cause: "session_died".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(attempt_row(&conn, &id).3.as_deref(), Some("session_died"));
+        // Back to PENDING, the next spawn starts a fresh session.
+        spawn(&mut conn, &fx, &id).unwrap();
+        assert_eq!(fx.spawn_requests.borrow().len(), 2);
     }
 
     #[test]

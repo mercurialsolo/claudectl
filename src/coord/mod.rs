@@ -14,6 +14,7 @@ pub mod pr;
 pub mod promotion;
 pub mod resume;
 pub mod session_policy;
+pub mod spawn;
 pub mod store;
 pub mod supervisor;
 pub mod supervisor_cli;

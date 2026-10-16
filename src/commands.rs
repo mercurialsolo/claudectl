@@ -1171,7 +1171,10 @@ pub(crate) fn run_headless(
         // sidesteps any lifetime tangle with the App's borrows.
         #[cfg(feature = "coord")]
         if let Ok(mut conn) = crate::coord::store::open() {
-            let sensors = NoopSensors;
+            // Live sensor (#570): every RUNNING task's spawned session, read
+            // from its attempt (pid, result file). NoopSensors reported
+            // nothing, so a task never left RUNNING.
+            let sensors = crate::coord::spawn::LiveSensors;
             match supervisor.tick(&conn, &sensors) {
                 Ok(actions) if !actions.is_empty() => {
                     let mut actuated = 0u32;
@@ -1388,11 +1391,23 @@ impl crate::coord::actuator::SideEffects for LiveSideEffects {
             hop_count,
         )
     }
-    fn spawn_session(&self, _cwd: &std::path::Path, _prompt: &str) -> Result<String, String> {
-        // Spawn path lands in PR5 once `launch::launch` has a non-tty
-        // adapter; for now report a structured error so the reconciler
-        // can log + retry without taking the session-died code path.
-        Err("spawn fallback not implemented in PR4 — pending PR5 launch adapter".into())
+    fn prepare_workdir(
+        &self,
+        task: &crate::coord::tasks::TaskRow,
+    ) -> Result<std::path::PathBuf, String> {
+        crate::coord::spawn::prepare_workdir(task)
+    }
+    fn spawn_session(&self, req: &crate::coord::spawn::SpawnRequest) -> Result<u32, String> {
+        crate::coord::spawn::spawn(req)
+    }
+    fn pid_alive(&self, pid: u32) -> bool {
+        crate::coord::spawn::pid_alive(pid)
+    }
+    fn cleanup_workdir(&self, task: &crate::coord::tasks::TaskRow, workdir: &std::path::Path) {
+        let _ = crate::coord::spawn::cleanup_workdir(task, workdir);
+    }
+    fn read_result(&self, attempt_id: &str) -> Option<crate::coord::spawn::RunResult> {
+        crate::coord::spawn::read_result(attempt_id)
     }
 }
 
@@ -1434,8 +1449,24 @@ impl crate::coord::actuator::SideEffects for NoopSideEffects {
     ) -> Result<String, String> {
         Err("bus feature not compiled in; AssignViaMailbox is unavailable".into())
     }
-    fn spawn_session(&self, _cwd: &std::path::Path, _prompt: &str) -> Result<String, String> {
-        Err("spawn fallback not implemented in PR4".into())
+    // Spawning needs no bus, so a bus-less build runs tasks too (#570).
+    fn prepare_workdir(
+        &self,
+        task: &crate::coord::tasks::TaskRow,
+    ) -> Result<std::path::PathBuf, String> {
+        crate::coord::spawn::prepare_workdir(task)
+    }
+    fn spawn_session(&self, req: &crate::coord::spawn::SpawnRequest) -> Result<u32, String> {
+        crate::coord::spawn::spawn(req)
+    }
+    fn pid_alive(&self, pid: u32) -> bool {
+        crate::coord::spawn::pid_alive(pid)
+    }
+    fn cleanup_workdir(&self, task: &crate::coord::tasks::TaskRow, workdir: &std::path::Path) {
+        let _ = crate::coord::spawn::cleanup_workdir(task, workdir);
+    }
+    fn read_result(&self, attempt_id: &str) -> Option<crate::coord::spawn::RunResult> {
+        crate::coord::spawn::read_result(attempt_id)
     }
 }
 

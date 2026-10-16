@@ -471,6 +471,36 @@ pub fn running_spawned_attempts(conn: &Connection) -> Result<Vec<SpawnedAttempt>
         .map_err(|e| format!("row: {e}"))
 }
 
+/// The task's latest attempt if it was spawned and hasn't ended, whatever
+/// state the task is in. What the actuator checks before spawning, so a
+/// session started just before a daemon crash is adopted, not duplicated.
+pub fn running_spawned_attempts_for(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<Option<SpawnedAttempt>, String> {
+    conn.query_row(
+        "SELECT id, task_id, session_id, pid, workdir, started_at FROM task_attempts
+         WHERE task_id = ?1 AND workdir IS NOT NULL AND session_id IS NOT NULL
+           AND ended_at IS NULL
+           AND attempt_num = (SELECT MAX(attempt_num) FROM task_attempts WHERE task_id = ?1)",
+        params![task_id],
+        |r| {
+            Ok(SpawnedAttempt {
+                attempt_id: r.get(0)?,
+                task_id: r.get(1)?,
+                session_id: r.get(2)?,
+                pid: r
+                    .get::<_, Option<i64>>(3)?
+                    .and_then(|p| u32::try_from(p).ok()),
+                workdir: r.get(4)?,
+                started_at: r.get(5)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("latest spawned attempt: {e}"))
+}
+
 /// The workdir of a task's latest attempt, where its verifiers must run.
 pub fn latest_attempt_workdir(conn: &Connection, task_id: &str) -> Result<Option<String>, String> {
     conn.query_row(

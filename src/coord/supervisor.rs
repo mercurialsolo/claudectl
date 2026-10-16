@@ -184,6 +184,12 @@ pub enum ObservedStatus {
     /// this the no-actuation backstop. Without it, the supervisor
     /// could re-spawn a session it thinks is dead but isn't.
     Unknown,
+    /// A spawned session ended and reported success (#570). Its task moves
+    /// on to its verifiers.
+    Completed,
+    /// A spawned session ended and reported an error (#570): not logged in,
+    /// out of budget, refused. Resumed like a death, up to the resume cap.
+    Failed,
 }
 
 /// Reconciliation core. Reads desired state (`coord.tasks`), reads
@@ -285,6 +291,25 @@ impl Supervisor {
             let Some(session) = observed_by_session.get(session_id.as_str()) else {
                 continue;
             };
+            // A session that finished its work goes to its verifiers. This
+            // is the only path from RUNNING to VERIFYING (#570); nothing
+            // emitted RunVerifier before.
+            if session.status == ObservedStatus::Completed {
+                if let Some(attempt_id) = super::tasks::latest_attempt_id(conn, &task.id)? {
+                    out.push(Action::RunVerifier {
+                        task_id: task.id.clone(),
+                        attempt_id,
+                    });
+                }
+                continue;
+            }
+            if session.status == ObservedStatus::Failed {
+                out.push(Action::Resume {
+                    task_id: task.id.clone(),
+                    cause: "session_failed".to_string(),
+                });
+                continue;
+            }
             // Dead session is the canonical resume trigger (RFC §7). It
             // wins over health alerts — a dead session has no health
             // signal worth honoring.
@@ -575,6 +600,59 @@ mod tests {
             }
             other => panic!("expected Resume, got {other:?}"),
         }
+    }
+
+    fn observed(status: ObservedStatus) -> StubSensors {
+        StubSensors {
+            last_id: 0,
+            sessions: vec![ObservedSession {
+                session_id: "sess_a".into(),
+                pid: 0,
+                status,
+                health_alerts: vec![],
+            }],
+        }
+    }
+
+    /// The only way from RUNNING to VERIFYING (#570): nothing emitted
+    /// RunVerifier before, so a task never reached its verifiers.
+    #[test]
+    fn a_completed_session_sends_its_task_to_the_verifiers() {
+        let mut conn = store::open_memory();
+        let task_id = task_in_running(&mut conn, "sess_a");
+        let attempt = crate::coord::tasks::latest_attempt_id(&conn, &task_id)
+            .unwrap()
+            .unwrap();
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &observed(ObservedStatus::Completed))
+            .unwrap();
+        assert!(
+            matches!(&actions[..], [Action::RunVerifier { task_id: t, attempt_id: a }] if *t == task_id && *a == attempt),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_session_is_resumed_with_its_own_cause() {
+        let mut conn = store::open_memory();
+        let task_id = task_in_running(&mut conn, "sess_a");
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &observed(ObservedStatus::Failed))
+            .unwrap();
+        assert!(
+            matches!(&actions[..], [Action::Resume { task_id: t, cause }] if *t == task_id && cause == "session_failed"),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_running_session_is_left_alone() {
+        let mut conn = store::open_memory();
+        let _ = task_in_running(&mut conn, "sess_a");
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &observed(ObservedStatus::Running))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
     }
 
     #[test]
