@@ -2,6 +2,10 @@
 
 Hand claudectl a queue of tasks and it runs them on your machines unattended. Each task gets its own git worktree and branch. A task is DONE only when its verifiers pass. A task whose verifier fails goes back to work with the failure in its prompt. A task with dependencies starts after they finish, and it's told what they handed off. With two or more machines paired over the [relay](relay.md), each task goes where there's room.
 
+![A laptop hands two tasks to a Mac mini: one fails its verifier there, is retried there with the failure output, and passes](assets/fleet-supervisor.gif){ .terminal-screenshot }
+
+Recorded on two real Macs with real `claude`, on 0.90.0. The laptop supervises. Both tasks went to the mini, which had more free memory. `fix-it` failed its verifier on the mini, went back to the same worktree with the failure in its prompt, and passed.
+
 ```
 tasks.toml ──► supervisor work ──► place ──► run (here, or on a peer) ──► verify ──► DONE
                      ▲                                                  │
