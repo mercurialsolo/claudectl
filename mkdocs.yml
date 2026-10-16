@@ -44,6 +44,7 @@ nav:
   - Quick Start: quickstart.md
   - Configuration: configuration.md
   - Reference: reference.md
+  - Fleet Supervisor: fleet-supervisor.md
   - Agent Bus: agent-bus.md
   - Relay & Hive Mind: relay.md
   - Capability Grants: access.md

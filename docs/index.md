@@ -89,7 +89,7 @@ A local model (ollama/gemma) watches sessions, auto-approves safe commands, deni
 
 ### Supervisor
 
-Submit a task and it outlives the session running it. A SQLite ledger where every state has a cause, declared verifiers (`run` / `brain` / `agent`) that gate DONE, and a resume path that hands the next attempt the autopsy of the last one. [Learn more](team-observability.md)
+Hand it a queue of tasks and it runs them on your machines unattended: each in its own git worktree, DONE only when its verifiers pass, retried with the failure in its prompt, after its dependencies, on whichever paired machine has room. [Learn more](fleet-supervisor.md)
 
 </div>
 <div class="feature-item" markdown>

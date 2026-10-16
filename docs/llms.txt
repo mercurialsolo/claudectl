@@ -75,6 +75,7 @@ Terminals: ghostty, kitty, tmux, wezterm, warp, iterm2, terminal_app, gnome_term
 - [Reference](https://mercurialsolo.github.io/claudectl/reference/)
 - [Terminal Support](https://mercurialsolo.github.io/claudectl/terminal-support/)
 - [Troubleshooting](https://mercurialsolo.github.io/claudectl/troubleshooting/)
+- [Fleet Supervisor](https://mercurialsolo.github.io/claudectl/fleet-supervisor/)
 - [Relay & Hive Mind](https://mercurialsolo.github.io/claudectl/relay/)
 - [Capability Grants](https://mercurialsolo.github.io/claudectl/access/)
 - [Open Cluster](https://mercurialsolo.github.io/claudectl/open-cluster/)
