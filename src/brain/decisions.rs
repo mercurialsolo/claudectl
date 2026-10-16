@@ -1447,6 +1447,7 @@ mod tests {
             total_error_count: 0,
             decay_score: 0,
             worker_origin: None,
+            agent_family: claudectl_core::agent::vocab::CLAUDE_CODE.to_string(),
             tmux_target: None,
             remote_user: None,
             remote_host: None,

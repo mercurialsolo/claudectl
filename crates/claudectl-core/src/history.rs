@@ -121,7 +121,12 @@ pub fn load_history(since_secs: Option<u64>) -> Vec<SessionRecord> {
 }
 
 /// Parse an ISO 8601 timestamp to epoch seconds (simplified).
-fn parse_timestamp_epoch(ts: &str) -> Option<u64> {
+///
+/// Public because Codex rollout events carry timestamps in exactly this
+/// shape (`2026-10-11T19:08:37.776Z`) and `agent::codex` needs them; see
+/// CLAUDE.md on not leaving `pub(crate)` on something downstream calls.
+/// Fractional seconds and offsets past position 19 are ignored.
+pub fn parse_timestamp_epoch(ts: &str) -> Option<u64> {
     // Format: 2026-04-11T14:30:00Z
     if ts.len() < 19 {
         return None;

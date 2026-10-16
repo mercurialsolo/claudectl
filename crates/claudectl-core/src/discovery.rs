@@ -20,12 +20,19 @@ pub fn projects_dir() -> PathBuf {
 pub fn scan_sessions() -> Vec<ClaudeSession> {
     let dir = sessions_dir();
     cleanup_stale_sessions(&dir);
-    let entries = match fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
 
     let mut sessions = Vec::new();
+
+    // A missing `~/.claude/sessions` is no longer the end of the sweep: on a
+    // machine with Codex and not Claude Code it is the *normal* state, and
+    // returning early here hid every Codex session (#524).
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => {
+            sessions.extend(scan_codex_sessions());
+            return sessions;
+        }
+    };
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -59,13 +66,46 @@ pub fn scan_sessions() -> Vec<ClaudeSession> {
         sessions.push(ClaudeSession::from_raw(raw));
     }
 
+    sessions.extend(scan_codex_sessions());
+
     sessions
+}
+
+/// Codex sessions, from their rollout transcripts (#524).
+///
+/// Appended to the Claude Code sweep rather than routed through
+/// `coord::adapter`'s registry: getting Codex sessions rendered does not need
+/// that refactor, and the refactor touches all three crates.
+///
+/// Returns nothing when `~/.codex` is absent, which is the common case.
+fn scan_codex_sessions() -> Vec<ClaudeSession> {
+    use crate::agent::codex;
+
+    if !crate::agent::is_family_present(crate::agent::vocab::CODEX) {
+        return Vec::new();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    codex::scan(now, codex::CODEX_SESSION_TTL_SECS)
+        .iter()
+        .map(ClaudeSession::from_codex_rollout)
+        .collect()
 }
 
 /// Resolve JSONL paths for sessions. Must be called AFTER command_args are populated
 /// (i.e., after fetch_ps_data), so we can use --resume UUIDs for correct mapping.
 pub fn resolve_jsonl_paths(sessions: &mut [ClaudeSession]) {
     for session in sessions.iter_mut() {
+        // A Codex session's transcript is its rollout file, already set by
+        // `from_codex_rollout`. Everything below looks under
+        // `~/.claude/projects` and would overwrite it with a wrong path or,
+        // worse, with another session's via the latest-mtime fallback (#524).
+        if !session.is_claude_code() {
+            continue;
+        }
         let slug = cwd_to_slug(&session.cwd);
         let project_dir = projects_dir().join(&slug);
 
@@ -189,6 +229,13 @@ pub fn scan_subagents(sessions: &mut [ClaudeSession]) {
     }
 
     for session in sessions.iter_mut() {
+        // `/tmp/claude-<uid>` is Claude Code's subagent layout; a Codex
+        // session has nothing there (#524).
+        if !session.is_claude_code() {
+            session.active_subagent_count = 0;
+            session.active_subagent_jsonl_paths.clear();
+            continue;
+        }
         let slug = cwd_to_slug(&session.cwd);
         let tasks_dir = tmp_base.join(&slug).join(&session.session_id).join("tasks");
 

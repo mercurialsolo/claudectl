@@ -3,6 +3,17 @@ use crate::session::{ClaudeSession, SessionStatus};
 /// Check which PIDs are alive and fetch TTY, CPU%, MEM, command args — all via `ps`.
 /// No sysinfo dependency needed.
 pub fn fetch_and_enrich(sessions: &mut [ClaudeSession]) {
+    // A session with no process of its own must never reach the pid paths
+    // below (#524). A Codex session carries `pid: 0`, and `kill(0, 0)` asks
+    // about the *caller's own process group* — so it would answer "alive"
+    // forever, and `ps -p 0` returns nothing, which the busybox fallback
+    // reads as "this pid is gone". Both answers are fiction. Filtering here
+    // rather than at every caller keeps the rule in one place.
+    //
+    // Their status comes from their transcript instead, which is the only
+    // signal they have; see `agent::codex`.
+    let mut sessions: Vec<&mut ClaudeSession> =
+        sessions.iter_mut().filter(|s| s.is_actionable()).collect();
     if sessions.is_empty() {
         return;
     }
@@ -210,4 +221,70 @@ fn looks_like_uuid(s: &str) -> bool {
     s.len() == 36
         && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
         && s.matches('-').count() == 4
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::RawSession;
+
+    fn codex_session() -> ClaudeSession {
+        ClaudeSession::from_codex_rollout(&crate::agent::codex::RolloutSummary {
+            session_id: "codex-1".into(),
+            cwd: "/tmp/project".into(),
+            lifecycle: crate::agent::codex::Lifecycle::Working,
+            ..Default::default()
+        })
+    }
+
+    /// A Codex session must not reach the pid paths at all (#524).
+    ///
+    /// `pid` is 0 there, and both branches would lie about it: `ps -p 0`
+    /// returns nothing, which the busybox fallback reads as "this pid is
+    /// gone" and would mark the session `Finished`; `kill(0, 0)` asks about
+    /// the caller's own process group and would answer "alive" forever.
+    /// Its status comes from its transcript, so `fetch_and_enrich` has to
+    /// leave it exactly as it found it.
+    #[test]
+    fn a_codex_session_status_is_not_touched() {
+        let mut sessions = vec![codex_session()];
+        let before = sessions[0].status;
+        assert_eq!(before, SessionStatus::Processing);
+
+        fetch_and_enrich(&mut sessions);
+
+        assert_eq!(
+            sessions[0].status, before,
+            "a session with no process of its own must come back unchanged"
+        );
+    }
+
+    /// The filter must not swallow the real work: a live Claude Code session
+    /// alongside a Codex one still gets enriched.
+    #[test]
+    fn a_real_session_alongside_a_codex_one_is_still_enriched() {
+        let mut sessions = vec![
+            codex_session(),
+            ClaudeSession::from_raw(RawSession {
+                // This process. It is certainly alive.
+                pid: std::process::id(),
+                session_id: "live".into(),
+                cwd: "/tmp/project".into(),
+                started_at: 0,
+            }),
+        ];
+
+        fetch_and_enrich(&mut sessions);
+
+        assert_ne!(
+            sessions[1].status,
+            SessionStatus::Finished,
+            "the test's own pid is alive, so it must not be reported dead"
+        );
+        assert_eq!(
+            sessions[0].status,
+            SessionStatus::Processing,
+            "the Codex session must still be untouched"
+        );
+    }
 }
