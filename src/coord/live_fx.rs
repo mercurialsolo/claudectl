@@ -257,6 +257,12 @@ impl crate::coord::actuator::SideEffects for LiveSideEffects {
     fn read_result(&self, attempt_id: &str) -> Option<crate::coord::spawn::RunResult> {
         crate::coord::spawn::read_result(attempt_id)
     }
+    fn delegate(&self, req: &crate::coord::remote::DelegateRequest) -> Result<(), String> {
+        crate::coord::remote::delegate(req)
+    }
+    fn remote_result(&self, attempt_id: &str) -> Option<crate::coord::remote::RemoteResult> {
+        crate::coord::remote::read_result(attempt_id)
+    }
 }
 
 /// Bus-less fallback so the supervisor can run in a `--no-default-
@@ -295,6 +301,12 @@ impl crate::coord::actuator::SideEffects for NoopSideEffects {
     }
     fn read_result(&self, attempt_id: &str) -> Option<crate::coord::spawn::RunResult> {
         crate::coord::spawn::read_result(attempt_id)
+    }
+    fn delegate(&self, req: &crate::coord::remote::DelegateRequest) -> Result<(), String> {
+        crate::coord::remote::delegate(req)
+    }
+    fn remote_result(&self, attempt_id: &str) -> Option<crate::coord::remote::RemoteResult> {
+        crate::coord::remote::read_result(attempt_id)
     }
 }
 

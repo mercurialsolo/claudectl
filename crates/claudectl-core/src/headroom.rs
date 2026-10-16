@@ -24,6 +24,10 @@ pub struct Headroom {
     pub disk_free_mb: Option<u64>,
     #[serde(default)]
     pub running_tasks: u32,
+    /// The machine's own task ceiling, when it has one (#571). Advertised so
+    /// a supervisor elsewhere doesn't send work this machine would refuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tasks: Option<u32>,
 }
 
 /// Probe this machine. `disk_path` is where task worktrees go; its
@@ -35,6 +39,7 @@ pub fn probe(disk_path: &Path, running_tasks: u32) -> Headroom {
         disk_free_mb: run("df", &["-Pk", &disk_path.to_string_lossy()])
             .and_then(|o| parse_df_free_mb(&o)),
         running_tasks,
+        max_tasks: None,
     }
 }
 

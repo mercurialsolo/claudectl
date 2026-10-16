@@ -469,10 +469,19 @@ fn peer_views(policy: &PlacementPolicy) -> Vec<PeerView> {
         .into_iter()
         .map(|r| PeerView {
             stale: now.saturating_sub(r.received_ms) > policy.stale_after_secs * 1000,
+            // The lower of what this machine allows it and what it allows
+            // itself: it refuses work past its own.
+            slots: {
+                let mut s = policy.for_peer(&r.peer);
+                s.max_tasks = match (s.max_tasks, r.advertised.headroom.max_tasks) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                s
+            },
             tools: crate::relay::capabilities::load_peer_capabilities(&r.peer)
                 .map(|c| tools_from(&c))
                 .unwrap_or_default(),
-            slots: policy.for_peer(&r.peer),
             headroom: r.advertised.headroom,
             tags: r.advertised.tags,
             peer: Some(r.peer),
@@ -557,6 +566,7 @@ mod tests {
                 load_per_core: Some(0.2),
                 disk_free_mb: Some(50_000),
                 running_tasks: running,
+                max_tasks: None,
             },
             tags: Vec::new(),
             tools: BTreeMap::new(),

@@ -252,6 +252,19 @@ impl Sensors for LiveSensors {
         let Ok(conn) = super::store::open() else {
             return Vec::new();
         };
+        // On a peer (#571): what this machine's relay has heard about it.
+        let remote = super::tasks::running_remote_attempts(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| ObservedSession {
+                status: super::remote::observe(
+                    super::remote::record(&a.attempt_id).as_ref(),
+                    super::tasks::age_secs(&a.started_at),
+                ),
+                session_id: a.attempt_id,
+                pid: 0,
+                health_alerts: Vec::new(),
+            });
         let attempts = super::tasks::running_spawned_attempts(&conn).unwrap_or_default();
         attempts
             .into_iter()
@@ -269,6 +282,7 @@ impl Sensors for LiveSensors {
                     health_alerts: Vec::new(),
                 }
             })
+            .chain(remote)
             .collect()
     }
 

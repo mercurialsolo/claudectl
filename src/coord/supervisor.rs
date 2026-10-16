@@ -37,6 +37,8 @@ pub enum Action {
     /// machine has room, or the only machine that could take it is a peer.
     /// Changes nothing; `supervisor work` prints it when the reason changes.
     Hold { task_id: String, reason: String },
+    /// Run the task on a relay peer that placement chose (#571).
+    Delegate { task_id: String, peer: String },
     /// Write a `task` message to the role's mailbox. Becomes `ASSIGNED`
     /// once the bus insert lands.
     AssignViaMailbox { task_id: String, role: String },
@@ -200,6 +202,9 @@ pub enum ObservedStatus {
     /// A spawned session ended and reported an error (#570): not logged in,
     /// out of budget, refused. Resumed like a death, up to the resume cap.
     Failed,
+    /// A peer declined to start the task (#571): it was full, or couldn't
+    /// run it. Nothing ran, so it's placed again without using an attempt.
+    Refused,
 }
 
 /// Reconciliation core. Reads desired state (`coord.tasks`), reads
@@ -242,11 +247,12 @@ impl Supervisor {
         //    DONE (#572). One that can never start, because a dependency
         //    ended without finishing, is escalated with the reason.
         //
-        //    Where each one runs is placement's call (#571): this machine's
+        //    Where each one runs is placement's call (#571): every machine's
         //    measured headroom against its slot policy, the task's `requires`,
-        //    its `peer`. Tasks can't run on a peer yet, so an unpinned task is
-        //    placed among this machine only; one that only a peer could take
-        //    is held with the reason, naming that peer.
+        //    its `peer`. A retry goes back to the machine its worktree is on.
+        //    A task addressed to a role, or with a brain or agent verifier,
+        //    stays here: the mailbox and those verifiers are on this machine.
+        //    One that fits nowhere is held, with the reason.
         let in_flight = (assigned.len() + running.len()) as u32;
         let mut views = sensors.placement();
         if !views.iter().any(|v| v.peer.is_none()) {
@@ -254,50 +260,96 @@ impl Supervisor {
                 self.policy.max_concurrent,
             ));
         }
-        for v in views.iter_mut().filter(|v| v.peer.is_none()) {
-            // What's in flight is known exactly here; the probe can lag.
-            v.headroom.running_tasks = in_flight;
+        // What this supervisor has in flight on each machine is known exactly;
+        // a measurement can lag, a peer's by a heartbeat. Without this, a peer
+        // that advertised itself idle a second ago gets sent a second task it
+        // then refuses.
+        let mut on_peer: std::collections::HashMap<String, u32> = Default::default();
+        for a in super::tasks::running_remote_attempts(conn)? {
+            *on_peer.entry(a.peer).or_default() += 1;
         }
-        let mut place = |task: &super::tasks::TaskRow, out: &mut Vec<Action>| -> bool {
-            use super::placement::{Decision, place};
-            // Why this machine won't take it, unless it's pinned elsewhere.
-            let mut here = None;
-            if task.peer.is_none() {
-                let local = views.iter().position(|v| v.peer.is_none()).expect("pushed");
-                match place(&mut views[local..=local], &task.requires, None) {
-                    Decision::Local => return true,
-                    Decision::Wait(why) => here = Some(why),
-                    Decision::Remote(_) => {}
+        let remote_total: u32 = on_peer.values().sum();
+        for v in views.iter_mut() {
+            match &v.peer {
+                None => v.headroom.running_tasks = in_flight.saturating_sub(remote_total),
+                Some(p) => {
+                    let ours = on_peer.get(p).copied().unwrap_or(0);
+                    v.headroom.running_tasks = v.headroom.running_tasks.max(ours);
                 }
             }
-            // Ask again over every machine, without counting it anywhere, to
-            // say whether a peer could. This machine's own reason leads: a
-            // peer with room is no help until tasks can run there.
-            let reason = match (
-                here,
-                place(&mut views.clone(), &task.requires, task.peer.as_deref()),
-            ) {
-                (Some(why), Decision::Remote(p)) => {
-                    format!("{why}; {p} has room, but running tasks on peers is not built yet")
-                }
-                (None, Decision::Remote(p)) => format!(
-                    "pinned to {p}, which has room, but running tasks on peers is not built yet"
-                ),
-                (_, Decision::Wait(why)) => why,
-                (here, Decision::Local) => here.unwrap_or_else(|| "this machine is full".into()),
+        }
+        // Where a task goes: `Some(None)` here, `Some(Some(peer))` there,
+        // `None` held (and a Hold pushed saying why).
+        let mut place = |task: &super::tasks::TaskRow,
+                         out: &mut Vec<Action>|
+         -> Result<Option<Option<String>>, String> {
+            use super::placement::{Decision, place};
+            let mut hold = |reason: String| {
+                out.push(Action::Hold {
+                    task_id: task.id.clone(),
+                    reason,
+                });
+                Ok(None)
             };
-            out.push(Action::Hold {
-                task_id: task.id.clone(),
-                reason,
-            });
-            false
+            let here_only = if task.role.is_some() {
+                Some("it's addressed to a role on this machine")
+            } else if task
+                .verifiers
+                .iter()
+                .any(|v| !matches!(v, super::verify::Verifier::Run { .. }))
+            {
+                Some("its brain or agent verifier runs on this machine")
+            } else {
+                None
+            };
+            // A retry fixes the work where it is.
+            let affinity = if task.state == TaskState::Retrying {
+                match super::tasks::latest_attempt_id(conn, &task.id)? {
+                    Some(a) => Some(super::tasks::attempt_peer(conn, &a)?),
+                    None => None,
+                }
+            } else {
+                None
+            };
+            // `None`: anywhere. `Some(None)`: here. `Some(Some(p))`: peer `p`.
+            let want: Option<Option<String>> = affinity
+                .or_else(|| task.peer.clone().map(Some))
+                .or_else(|| here_only.map(|_| None));
+            if let (Some(why), Some(Some(p))) = (here_only, &want) {
+                return hold(format!("pinned to {p}, but {why}"));
+            }
+            let idx: Vec<usize> = views
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| want.as_ref().is_none_or(|w| v.peer == *w))
+                .map(|(i, _)| i)
+                .collect();
+            if idx.is_empty() {
+                let p = want.flatten().unwrap_or_default();
+                return hold(format!("peer {p} is not connected"));
+            }
+            let mut sub: Vec<_> = idx.iter().map(|&i| views[i].clone()).collect();
+            let decision = place(&mut sub, &task.requires, None);
+            for (k, &i) in idx.iter().enumerate() {
+                views[i].planned = sub[k].planned;
+            }
+            match decision {
+                Decision::Local => Ok(Some(None)),
+                Decision::Remote(p) => Ok(Some(Some(p))),
+                Decision::Wait(why) => hold(why),
+            }
         };
         for task in &retrying {
-            if place(task, &mut out) {
-                out.push(Action::Spawn {
+            match place(task, &mut out)? {
+                Some(None) => out.push(Action::Spawn {
                     task_id: task.id.clone(),
                     cwd: PathBuf::from(&task.cwd),
-                });
+                }),
+                Some(Some(peer)) => out.push(Action::Delegate {
+                    task_id: task.id.clone(),
+                    peer,
+                }),
+                None => {}
             }
         }
         let mut ready = Vec::new();
@@ -312,8 +364,16 @@ impl Supervisor {
             }
         }
         for task in ready {
-            if !place(task, &mut out) {
-                continue;
+            match place(task, &mut out)? {
+                None => continue,
+                Some(Some(peer)) => {
+                    out.push(Action::Delegate {
+                        task_id: task.id.clone(),
+                        peer,
+                    });
+                    continue;
+                }
+                Some(None) => {}
             }
             match &task.role {
                 Some(role) => out.push(Action::AssignViaMailbox {
@@ -391,6 +451,13 @@ impl Supervisor {
                 out.push(Action::Resume {
                     task_id: task.id.clone(),
                     cause: "session_failed".to_string(),
+                });
+                continue;
+            }
+            if session.status == ObservedStatus::Refused {
+                out.push(Action::Resume {
+                    task_id: task.id.clone(),
+                    cause: super::tasks::PEER_REFUSED.to_string(),
                 });
                 continue;
             }
@@ -698,11 +765,32 @@ mod tests {
             .collect()
     }
 
-    /// #571: a task that needs something only a peer has waits, and says
-    /// which peer would take it, instead of running here without it.
+    fn delegated(actions: &[Action]) -> Vec<(String, String)> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Delegate { task_id, peer } => Some((task_id.clone(), peer.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn peer_view(name: &str, mem: u64) -> crate::coord::placement::PeerView {
+        let mut v = crate::coord::placement::PeerView::local_with_ceiling(4);
+        v.peer = Some(name.into());
+        v.headroom.mem_free_mb = Some(mem);
+        v
+    }
+
+    fn here(mem: u64) -> crate::coord::placement::PeerView {
+        let mut v = crate::coord::placement::PeerView::local_with_ceiling(4);
+        v.headroom.mem_free_mb = Some(mem);
+        v
+    }
+
+    /// #571: a task that needs something only a peer has goes to that peer.
     #[test]
-    fn a_task_only_a_peer_can_run_is_held_and_names_the_peer() {
-        use crate::coord::placement::PeerView;
+    fn a_task_only_a_peer_can_run_is_delegated_to_it() {
         let conn = store::open_memory();
         let id = insert_task(
             &conn,
@@ -712,34 +800,97 @@ mod tests {
             },
         )
         .unwrap();
-        let mut box_ = PeerView::local_with_ceiling(2);
-        box_.peer = Some("box".into());
+        let mut box_ = peer_view("box", 100);
         box_.tags = vec!["docker".into()];
-        let sensors = PlacedSensors(vec![PeerView::local_with_ceiling(4), box_]);
+        let sensors = PlacedSensors(vec![here(64_000), box_]);
         let actions = Supervisor::with_defaults().tick(&conn, &sensors).unwrap();
-        assert!(spawned(&actions).is_empty(), "{actions:?}");
-        assert_eq!(
-            held(&actions),
-            vec![
-                "this machine lacks `docker`; box has room, but running tasks on peers is not built yet"
-            ]
-        );
-        let _ = id;
+        assert_eq!(delegated(&actions), vec![(id, "box".to_string())]);
     }
 
-    /// #571: an unpinned task still runs here when this machine has room,
-    /// however much more a peer has: it can't run on the peer yet.
+    /// #571: an unpinned task goes where there's most room.
     #[test]
-    fn an_unpinned_task_runs_here_even_when_a_peer_has_more_room() {
-        use crate::coord::placement::PeerView;
+    fn an_unpinned_task_goes_to_the_machine_with_most_room() {
         let conn = store::open_memory();
-        let id = insert_task(&conn, &task("t", &[])).unwrap();
-        let mut big = PeerView::local_with_ceiling(10);
-        big.peer = Some("big".into());
-        big.headroom.mem_free_mb = Some(1_000_000);
-        let sensors = PlacedSensors(vec![PeerView::local_with_ceiling(4), big]);
+        let a = insert_task(&conn, &task("a", &[])).unwrap();
+        let sensors = PlacedSensors(vec![here(1_000), peer_view("big", 64_000)]);
         let actions = Supervisor::with_defaults().tick(&conn, &sensors).unwrap();
-        assert_eq!(spawned(&actions), vec![id]);
+        assert_eq!(delegated(&actions), vec![(a, "big".to_string())]);
+    }
+
+    /// #571: a role's mailbox, and brain and agent verifiers, are on this
+    /// machine, so those tasks stay here however much room a peer has.
+    #[test]
+    fn role_tasks_and_brain_or_agent_verifiers_stay_here() {
+        let conn = store::open_memory();
+        let role = insert_task(
+            &conn,
+            &NewTask {
+                role: Some("backend".into()),
+                ..task("r", &[])
+            },
+        )
+        .unwrap();
+        let brain = insert_task(
+            &conn,
+            &NewTask {
+                verifiers: vec![crate::coord::verify::Verifier::Brain {
+                    prompt: "ok?".into(),
+                }],
+                ..task("b", &[])
+            },
+        )
+        .unwrap();
+        let pinned = insert_task(
+            &conn,
+            &NewTask {
+                verifiers: vec![crate::coord::verify::Verifier::Brain {
+                    prompt: "ok?".into(),
+                }],
+                peer: Some("big".into()),
+                ..task("p", &[])
+            },
+        )
+        .unwrap();
+        let sensors = PlacedSensors(vec![here(1_000), peer_view("big", 64_000)]);
+        let actions = Supervisor::with_defaults().tick(&conn, &sensors).unwrap();
+        assert!(delegated(&actions).is_empty(), "{actions:?}");
+        assert_eq!(spawned(&actions), vec![brain]);
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::AssignViaMailbox { task_id, .. } if *task_id == role))
+        );
+        assert!(actions.iter().any(|a| matches!(a, Action::Hold { task_id, reason }
+            if *task_id == pinned
+                && reason == "pinned to big, but its brain or agent verifier runs on this machine")));
+    }
+
+    /// #571: a retry goes back to the peer its worktree is on, even when
+    /// this machine now has more room; and waits for it if it's gone.
+    #[test]
+    fn a_retry_goes_back_to_the_peer_it_ran_on() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        let attempt = crate::coord::tasks::insert_attempt(&conn, &id, 1, None, None, None).unwrap();
+        crate::coord::tasks::set_attempt_remote(&conn, &attempt, "mini").unwrap();
+        crate::coord::tasks::transition(
+            &mut conn,
+            &id,
+            TaskState::Pending,
+            TaskState::Retrying,
+            "t",
+        )
+        .unwrap();
+        let sup = Supervisor::with_defaults();
+        let actions = sup
+            .tick(
+                &conn,
+                &PlacedSensors(vec![here(64_000), peer_view("mini", 100)]),
+            )
+            .unwrap();
+        assert_eq!(delegated(&actions), vec![(id.clone(), "mini".to_string())]);
+        let actions = sup.tick(&conn, &PlacedSensors(vec![here(64_000)])).unwrap();
+        assert_eq!(held(&actions), vec!["peer mini is not connected"]);
     }
 
     /// #571: a drained machine starts nothing, and the queue says why. The
@@ -975,6 +1126,20 @@ mod tests {
             .unwrap();
         assert!(
             matches!(&actions[..], [Action::Resume { task_id: t, cause }] if *t == task_id && cause == "session_failed"),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_peer_refusal_is_resumed_as_one() {
+        let mut conn = store::open_memory();
+        let task_id = task_in_running(&mut conn, "sess_a");
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &observed(ObservedStatus::Refused))
+            .unwrap();
+        assert!(
+            matches!(&actions[..], [Action::Resume { task_id: t, cause }]
+                if *t == task_id && cause == crate::coord::tasks::PEER_REFUSED),
             "{actions:?}"
         );
     }

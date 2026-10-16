@@ -33,6 +33,37 @@ pub struct DelegationContext {
     /// What this task blocks / is blocked by.
     #[serde(default)]
     pub dependency_graph: DependencyGraph,
+    /// Set when the supervisor placed this task here (#571). Sent only to a
+    /// peer that agreed `features::SUPERVISED_TASK`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervised: Option<SupervisedSpec>,
+}
+
+/// How a supervisor task runs on the peer it was placed on (#571).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SupervisedSpec {
+    /// Names the worktree, so every attempt of one task reuses it: a retry
+    /// fixes the work where the last attempt left it.
+    pub worktree_key: String,
+    /// The worktree's branch, chosen by the supervisor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// `run =` verifiers, run in order in the worktree after a successful
+    /// session; the first failure stops the rest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verify_run: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// One verifier's verdict, as the worker runs it and the handoff carries it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemoteVerdict {
+    pub command: String,
+    pub passed: bool,
+    pub output: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +212,12 @@ pub struct TaskReport {
     pub usage: serde_json::Value,
     /// The branch the work is on, when the task ran in a worktree (#570).
     pub branch: Option<String>,
+    /// A supervised task's verifier verdicts, in the order they ran (#571).
+    pub verifications: Vec<RemoteVerdict>,
+    /// The worker never started it (full, no such directory, no claude):
+    /// nothing of the task ran, so the supervisor places it again without
+    /// counting an attempt (#571).
+    pub refused: bool,
 }
 
 /// Build the TaskHandoff for a finished task, either way it went.
@@ -199,6 +236,13 @@ pub fn build_report_message(task_id: &str, report: &TaskReport, identity: &str) 
     // delegated work is, so it can be fetched. Omitted when there's none.
     if let Some(b) = &report.branch {
         payload["git_ref"] = serde_json::json!(b);
+    }
+    // #571: a supervised task's verdicts. Omitted when none ran.
+    if !report.verifications.is_empty() {
+        payload["verifications"] = serde_json::json!(report.verifications);
+    }
+    if report.refused {
+        payload["refused"] = serde_json::json!(true);
     }
     RelayMessage {
         id: gen_msg_id(),
@@ -332,6 +376,8 @@ mod tests {
             model: Some("claude-opus-5".into()),
             usage: serde_json::json!({"input_tokens": 10, "output_tokens": 20}),
             branch: None,
+            verifications: Vec::new(),
+            refused: false,
         }
     }
 

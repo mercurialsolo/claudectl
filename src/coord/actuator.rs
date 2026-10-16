@@ -59,6 +59,10 @@ pub trait SideEffects: VerifierBackend {
 
     /// What a finished attempt's session reported, if it has.
     fn read_result(&self, attempt_id: &str) -> Option<super::spawn::RunResult>;
+    /// Send a placed task to a relay peer (#571).
+    fn delegate(&self, req: &super::remote::DelegateRequest) -> Result<(), String>;
+    /// What a remote attempt reported, verdicts included, once it has.
+    fn remote_result(&self, attempt_id: &str) -> Option<super::remote::RemoteResult>;
 }
 
 /// Carry out one action against the SQL store and the side-effect
@@ -151,7 +155,12 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                     Err(e) => {
                         // Close the attempt so it can't be mistaken for one
                         // in progress; the task stays where it was.
-                        super::tasks::finish_attempt(conn, &attempt_id, "spawn_failed", None)?;
+                        super::tasks::finish_attempt(
+                            conn,
+                            &attempt_id,
+                            super::tasks::SPAWN_FAILED,
+                            None,
+                        )?;
                         return Err(e);
                     }
                 }
@@ -169,6 +178,67 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             )?;
             Ok(())
         }
+        Action::Delegate { task_id, peer } => {
+            let task =
+                get_task(conn, task_id)?.ok_or_else(|| format!("task {task_id} not found"))?;
+            let from_state = task.state;
+            if !matches!(
+                from_state,
+                TaskState::Pending | TaskState::Ready | TaskState::Retrying
+            ) {
+                return Ok(());
+            }
+            let next_num = attempt_count(conn, task_id)? + 1;
+            let prompt = attempt_prompt(conn, fx, &task)?;
+            // Recorded before it's sent, as a spawn is: a crash in between
+            // leaves an attempt the sensor reports as never acknowledged.
+            let attempt_id = insert_attempt(conn, task_id, next_num, None, None, None)?;
+            super::tasks::set_attempt_remote(conn, &attempt_id, peer)?;
+            let req = super::remote::DelegateRequest {
+                attempt_id: attempt_id.clone(),
+                peer: peer.clone(),
+                prompt,
+                cwd: task.cwd.clone(),
+                git_ref: task.git_ref.clone(),
+                worktree_key: task.id.clone(),
+                branch: task.git_ref.as_ref().map(|_| {
+                    task.branch.clone().unwrap_or_else(|| {
+                        claudectl_core::worktree::default_branch(&task.name, &task.id)
+                    })
+                }),
+                verify_run: task
+                    .verifiers
+                    .iter()
+                    .filter_map(|v| match v {
+                        super::verify::Verifier::Run { command } => Some(command.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                permission_mode: task.permission_mode.clone(),
+                model: task.model.clone(),
+            };
+            if let Err(e) = fx.delegate(&req) {
+                super::tasks::finish_attempt(
+                    conn,
+                    &attempt_id,
+                    super::tasks::DELEGATE_FAILED,
+                    None,
+                )?;
+                return Err(e);
+            }
+            transition(
+                conn,
+                task_id,
+                from_state,
+                TaskState::Running,
+                if from_state == TaskState::Retrying {
+                    "retried-on-peer"
+                } else {
+                    "delegated"
+                },
+            )?;
+            Ok(())
+        }
         Action::RunVerifier {
             task_id,
             attempt_id,
@@ -179,6 +249,10 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             // emitting verify against a task that's already moved on.
             if task.state != TaskState::Running && task.state != TaskState::Verifying {
                 return Ok(());
+            }
+            // Its verifiers already ran where it did; record their verdicts.
+            if super::tasks::attempt_peer(conn, attempt_id)?.is_some() {
+                return verify_remote(conn, fx, &task, attempt_id);
             }
             // Close the attempt with what its session reported (#570).
             if task.state == TaskState::Running {
@@ -243,24 +317,7 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                     verdict.cost_usd,
                 )?;
                 if verdict.verdict == VerdictKind::Fail {
-                    // Attempts cap → NEEDS_HUMAN; otherwise retry.
-                    let used = attempt_count(conn, task_id)?;
-                    let next_state = if used > task.max_retries {
-                        TaskState::NeedsHuman
-                    } else {
-                        TaskState::Retrying
-                    };
-                    transition(
-                        conn,
-                        task_id,
-                        TaskState::Verifying,
-                        next_state,
-                        match next_state {
-                            TaskState::NeedsHuman => "retries-exhausted",
-                            _ => "verify-fail",
-                        },
-                    )?;
-                    return Ok(());
+                    return verification_failed(conn, &task);
                 }
                 // PASS path: fall through to the next verifier.
             }
@@ -288,11 +345,11 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             // Close the attempt that's being given up on, with why (#570), so
             // it's never adopted as a live session again.
             if let Some(attempt_id) = super::tasks::latest_attempt_id(conn, task_id)? {
-                let cost = fx.read_result(&attempt_id).and_then(|r| r.cost_usd);
+                let cost = attempt_outcome(fx, &attempt_id).and_then(|(_, c)| c);
                 super::tasks::finish_attempt(conn, &attempt_id, cause, cost)?;
             }
             // Attempts cap → NeedsHuman instead of resuming forever.
-            let used = attempt_count(conn, task_id)?;
+            let used = super::tasks::attempts_that_ran(conn, task_id)?;
             if used > task.max_retries {
                 transition(
                     conn,
@@ -373,6 +430,107 @@ pub fn attempt_prompt(
     Ok(prompt)
 }
 
+/// A finished attempt's closing summary and cost, wherever it ran.
+fn attempt_outcome(fx: &dyn SideEffects, attempt_id: &str) -> Option<(String, Option<f64>)> {
+    fx.read_result(attempt_id)
+        .map(|r| (r.summary, r.cost_usd))
+        .or_else(|| {
+            fx.remote_result(attempt_id)
+                .map(|r| (r.summary, r.cost_usd))
+        })
+}
+
+/// A verifier failed: retry, or past the cap, a human.
+fn verification_failed(conn: &mut Connection, task: &super::tasks::TaskRow) -> Result<(), String> {
+    let used = super::tasks::attempts_that_ran(conn, &task.id)?;
+    let next_state = if used > task.max_retries {
+        TaskState::NeedsHuman
+    } else {
+        TaskState::Retrying
+    };
+    transition(
+        conn,
+        &task.id,
+        TaskState::Verifying,
+        next_state,
+        match next_state {
+            TaskState::NeedsHuman => "retries-exhausted",
+            _ => "verify-fail",
+        },
+    )
+}
+
+/// A remote attempt finished (#571): its `run =` verifiers ran in the peer's
+/// worktree, and their verdicts came back in the handoff. Each declared
+/// verifier needs a verdict; one the peer didn't send is a FAIL, so a worker
+/// that skipped them can't pass a task.
+fn verify_remote(
+    conn: &mut Connection,
+    fx: &dyn SideEffects,
+    task: &super::tasks::TaskRow,
+    attempt_id: &str,
+) -> Result<(), String> {
+    let result = fx.remote_result(attempt_id);
+    if task.state == TaskState::Running {
+        super::tasks::finish_attempt(
+            conn,
+            attempt_id,
+            "completed",
+            result.as_ref().and_then(|r| r.cost_usd),
+        )?;
+        transition(
+            conn,
+            &task.id,
+            TaskState::Running,
+            TaskState::Verifying,
+            "running-complete",
+        )?;
+    }
+    let verdicts = result.map(|r| r.verdicts).unwrap_or_default();
+    for (i, verifier) in task.verifiers.iter().enumerate() {
+        let (passed, output) = match verdicts.get(i) {
+            Some(v) if v.command == verifier.command_text() => (v.passed, v.output.clone()),
+            Some(v) => (
+                false,
+                format!(
+                    "the peer ran `{}` where `{}` was expected",
+                    v.command,
+                    verifier.command_text()
+                ),
+            ),
+            None => (
+                false,
+                "the peer sent no verdict for this verifier".to_string(),
+            ),
+        };
+        record_verification(
+            conn,
+            attempt_id,
+            verifier.kind(),
+            verifier.command_text(),
+            if passed { "PASS" } else { "FAIL" },
+            &output,
+            0.0,
+        )?;
+        if !passed {
+            return verification_failed(conn, task);
+        }
+    }
+    transition(
+        conn,
+        &task.id,
+        TaskState::Verifying,
+        TaskState::Done,
+        if task.verifiers.is_empty() {
+            "no-verifiers"
+        } else {
+            "verify-pass"
+        },
+    )?;
+    maybe_auto_post_pr(&task.id);
+    Ok(())
+}
+
 /// One line per finished dependency: its name, the branch its work is on,
 /// and its session's closing summary.
 fn upstream_handoffs(
@@ -395,9 +553,15 @@ fn upstream_handoffs(
         } else {
             out.push_str(&format!(" (in {})", dep.cwd));
         }
-        let summary = super::tasks::latest_attempt_outcome(conn, &dep.id)?
-            .and_then(|(attempt_id, _)| fx.read_result(&attempt_id))
-            .map(|r| r.summary)
+        let latest = super::tasks::latest_attempt_outcome(conn, &dep.id)?;
+        if let Some((attempt_id, _)) = &latest {
+            if let Some(peer) = super::tasks::attempt_peer(conn, attempt_id)? {
+                out.push_str(&format!(" on peer {peer}"));
+            }
+        }
+        let summary = latest
+            .and_then(|(attempt_id, _)| attempt_outcome(fx, &attempt_id))
+            .map(|(s, _)| s)
             .filter(|s| !s.trim().is_empty());
         match summary {
             Some(s) => out.push_str(&format!(": {}\n", s.trim())),
@@ -491,6 +655,10 @@ mod tests {
         alive_pids: std::cell::RefCell<Vec<u32>>,
         cleaned: std::cell::RefCell<Vec<std::path::PathBuf>>,
         result: std::cell::RefCell<Option<crate::coord::spawn::RunResult>>,
+        // #571 remote path.
+        delegated: std::cell::RefCell<Vec<crate::coord::remote::DelegateRequest>>,
+        delegate_error: std::cell::RefCell<Option<String>>,
+        remote: std::cell::RefCell<Option<crate::coord::remote::RemoteResult>>,
         shell_cwds: std::cell::RefCell<Vec<std::path::PathBuf>>,
     }
 
@@ -510,6 +678,9 @@ mod tests {
                 alive_pids: Default::default(),
                 cleaned: Default::default(),
                 result: Default::default(),
+                delegated: Default::default(),
+                delegate_error: Default::default(),
+                remote: Default::default(),
                 shell_cwds: Default::default(),
             }
         }
@@ -607,6 +778,16 @@ mod tests {
         }
         fn read_result(&self, _attempt_id: &str) -> Option<crate::coord::spawn::RunResult> {
             self.result.borrow().clone()
+        }
+        fn delegate(&self, req: &crate::coord::remote::DelegateRequest) -> Result<(), String> {
+            if let Some(e) = self.delegate_error.borrow().clone() {
+                return Err(e);
+            }
+            self.delegated.borrow_mut().push(req.clone());
+            Ok(())
+        }
+        fn remote_result(&self, _attempt_id: &str) -> Option<crate::coord::remote::RemoteResult> {
+            self.remote.borrow().clone()
         }
     }
 
@@ -1320,6 +1501,202 @@ mod tests {
         assert!(
             p.contains("- schema (branch `feat/schema`): Added the users table."),
             "{p}"
+        );
+    }
+
+    // ── #571: a task run on a relay peer ───────────────────────────────
+
+    fn delegate(conn: &mut Connection, fx: &RecordingFx, id: &str) -> Result<(), String> {
+        apply(
+            conn,
+            fx,
+            &Action::Delegate {
+                task_id: id.to_string(),
+                peer: "mini".into(),
+            },
+        )
+    }
+
+    fn remote_task() -> NewTask {
+        NewTask {
+            name: "api".into(),
+            git_ref: Some("main".into()),
+            permission_mode: Some("acceptEdits".into()),
+            verifiers: vec![
+                crate::coord::verify::Verifier::Run {
+                    command: "test -f A".into(),
+                },
+                crate::coord::verify::Verifier::Run {
+                    command: "test -f B".into(),
+                },
+            ],
+            ..sample_with_role(None)
+        }
+    }
+
+    fn verdict(command: &str, passed: bool) -> crate::coord::remote::Verdict {
+        crate::coord::remote::Verdict {
+            command: command.into(),
+            passed,
+            output: if passed { String::new() } else { "no B".into() },
+        }
+    }
+
+    #[test]
+    fn a_delegated_attempt_names_its_peer_worktree_branch_and_verifiers() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &remote_task()).unwrap();
+        let fx = RecordingFx::default();
+        delegate(&mut conn, &fx, &id).unwrap();
+        let req = fx.delegated.borrow()[0].clone();
+        let attempt = crate::coord::tasks::latest_attempt_id(&conn, &id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            req.attempt_id, attempt,
+            "the attempt id is the relay task id"
+        );
+        assert_eq!(req.peer, "mini");
+        assert_eq!(req.worktree_key, id, "one worktree for every attempt");
+        assert_eq!(
+            req.branch,
+            Some(claudectl_core::worktree::default_branch("api", &id))
+        );
+        assert_eq!(req.verify_run, vec!["test -f A", "test -f B"]);
+        assert_eq!(req.permission_mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(
+            crate::coord::tasks::attempt_peer(&conn, &attempt)
+                .unwrap()
+                .as_deref(),
+            Some("mini")
+        );
+        assert_eq!(
+            crate::coord::tasks::latest_session_id(&conn, &id).unwrap(),
+            Some(attempt),
+            "the reconciler finds it by the same id the sensor reports"
+        );
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Running
+        );
+        assert!(fx.spawned.borrow().is_empty(), "nothing ran here");
+    }
+
+    #[test]
+    fn a_send_that_fails_closes_the_attempt_and_leaves_the_task_queued() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &remote_task()).unwrap();
+        let fx = RecordingFx::default();
+        *fx.delegate_error.borrow_mut() = Some("peer refused".into());
+        assert!(delegate(&mut conn, &fx, &id).is_err());
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Pending
+        );
+        let (_, _, _, outcome) = attempt_row(&conn, &id);
+        assert_eq!(outcome.as_deref(), Some("delegate_failed"));
+    }
+
+    #[test]
+    fn the_peers_verdicts_decide_the_task() {
+        let mut conn = store::open_memory();
+        let fx = RecordingFx::default();
+
+        let pass = insert_task(&conn, &remote_task()).unwrap();
+        delegate(&mut conn, &fx, &pass).unwrap();
+        *fx.remote.borrow_mut() = Some(crate::coord::remote::RemoteResult {
+            ok: true,
+            cost_usd: Some(0.3),
+            summary: "Done.".into(),
+            branch: None,
+            verdicts: vec![verdict("test -f A", true), verdict("test -f B", true)],
+        });
+        run_verifiers(&mut conn, &fx, &pass);
+        assert_eq!(
+            get_task(&conn, &pass).unwrap().unwrap().state,
+            TaskState::Done
+        );
+        assert!(fx.shell_cwds.borrow().is_empty(), "no verifier ran here");
+
+        let fail = insert_task(&conn, &remote_task()).unwrap();
+        delegate(&mut conn, &fx, &fail).unwrap();
+        fx.remote.borrow_mut().as_mut().unwrap().verdicts =
+            vec![verdict("test -f A", true), verdict("test -f B", false)];
+        run_verifiers(&mut conn, &fx, &fail);
+        assert_eq!(
+            get_task(&conn, &fail).unwrap().unwrap().state,
+            TaskState::Retrying
+        );
+        // Its retry goes back with the peer's verifier output in the prompt.
+        assert!(
+            crate::coord::actuator::attempt_prompt(
+                &conn,
+                &fx,
+                &get_task(&conn, &fail).unwrap().unwrap()
+            )
+            .unwrap()
+            .contains("no B")
+        );
+    }
+
+    /// A peer that declined a task (full, or couldn't run it) didn't run it:
+    /// the task is placed again and its retries aren't spent, and the next
+    /// attempt's prompt still carries the last real failure.
+    #[test]
+    fn a_peer_refusal_does_not_use_a_retry() {
+        let mut conn = store::open_memory();
+        let fx = RecordingFx::default();
+        let id = insert_task(
+            &conn,
+            &NewTask {
+                max_retries: Some(0),
+                ..remote_task()
+            },
+        )
+        .unwrap();
+        for _ in 0..3 {
+            delegate(&mut conn, &fx, &id).unwrap();
+            apply(
+                &mut conn,
+                &fx,
+                &Action::Resume {
+                    task_id: id.clone(),
+                    cause: crate::coord::tasks::PEER_REFUSED.into(),
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                get_task(&conn, &id).unwrap().unwrap().state,
+                TaskState::Pending
+            );
+        }
+        assert_eq!(
+            crate::coord::tasks::attempts_that_ran(&conn, &id).unwrap(),
+            0
+        );
+        assert_eq!(attempt_count(&conn, &id).unwrap(), 3);
+        // A first prompt still: nothing ran, so there's nothing to recover.
+        delegate(&mut conn, &fx, &id).unwrap();
+        assert_eq!(fx.delegated.borrow().last().unwrap().prompt, "do it");
+    }
+
+    /// An older worker runs the task and ignores the verifiers. A verdict
+    /// that never came is a FAIL, not a pass.
+    #[test]
+    fn a_verifier_the_peer_did_not_run_fails() {
+        let mut conn = store::open_memory();
+        let fx = RecordingFx::default();
+        let id = insert_task(&conn, &remote_task()).unwrap();
+        delegate(&mut conn, &fx, &id).unwrap();
+        *fx.remote.borrow_mut() = Some(crate::coord::remote::RemoteResult {
+            ok: true,
+            verdicts: vec![verdict("test -f A", true)],
+            ..Default::default()
+        });
+        run_verifiers(&mut conn, &fx, &id);
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Retrying
         );
     }
 }
