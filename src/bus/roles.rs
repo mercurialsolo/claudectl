@@ -28,6 +28,9 @@ pub struct Role {
     pub subscriptions: Vec<String>,
     /// PID this role is bound to, if any (#307).
     pub pid: Option<u32>,
+    /// Which agent holds the role (`claude`, `codex`), when it was bound with
+    /// `--self`. `None` for a role bound by directory only.
+    pub agent: Option<String>,
 }
 
 impl From<RoleRow> for Role {
@@ -39,6 +42,7 @@ impl From<RoleRow> for Role {
             last_seen: r.last_seen,
             subscriptions: r.subscriptions,
             pid: r.pid,
+            agent: r.agent,
         }
     }
 }
@@ -101,7 +105,10 @@ fn ancestor_pids() -> Vec<u32> {
             break;
         }
         out.push(pid);
-        pid = match parent_pid_of(pid) {
+        let parent = proc_info(pid)
+            .map(|i| i.ppid)
+            .or_else(|| parent_pid_of(pid));
+        pid = match parent {
             Some(p) if p > 1 => p,
             _ => break,
         };
@@ -109,14 +116,109 @@ fn ancestor_pids() -> Vec<u32> {
     out
 }
 
-/// Walk the caller's ancestor pid chain and return the first one whose
-/// `ps`-reported command line contains `claude` (case-insensitive). Used
-/// by `bus role bind --self` to attach a role to the right session
-/// without making the operator look up Claude's pid (#310).
-pub fn find_claude_ancestor_pid() -> Option<u32> {
+/// A process as the bus needs it: its parent, and the name the kernel
+/// records for it.
+struct ProcInfo {
+    ppid: u32,
+    name: String,
+}
+
+/// Read a process from the kernel rather than by running `ps`. A Codex
+/// sandbox forbids running `ps` at all ("Operation not permitted"), which
+/// left `bind --self` with no way to find the session it was run from
+/// (#527); the kernel call is allowed there. It also spares a `ps` process
+/// per ancestor on every lookup. `None` falls back to `ps`.
+#[cfg(target_os = "macos")]
+fn proc_info(pid: u32) -> Option<ProcInfo> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: `info` is a zeroed proc_bsdinfo of exactly `size` bytes, which
+    // is what PROC_PIDTBSDINFO writes into.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    if n != size {
+        return None;
+    }
+    // `pbi_name` is the full name (up to 32); `pbi_comm` is truncated to 16.
+    let field: &[libc::c_char] = if info.pbi_name[0] != 0 {
+        &info.pbi_name
+    } else {
+        &info.pbi_comm
+    };
+    let bytes: Vec<u8> = field
+        .iter()
+        .take_while(|c| **c != 0)
+        .map(|c| *c as u8)
+        .collect();
+    Some(ProcInfo {
+        ppid: info.pbi_ppid,
+        name: String::from_utf8_lossy(&bytes).into_owned(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn proc_info(pid: u32) -> Option<ProcInfo> {
+    // `pid (name) state ppid ...`; the name may itself contain spaces or
+    // parentheses, so it's everything between the first `(` and the last `)`.
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (open, close) = (stat.find('(')?, stat.rfind(')')?);
+    let ppid = stat[close + 1..].split_whitespace().nth(1)?.parse().ok()?;
+    Some(ProcInfo {
+        ppid,
+        name: stat[open + 1..close].to_string(),
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn proc_info(_pid: u32) -> Option<ProcInfo> {
+    None
+}
+
+/// Which agent a process is: by its kernel name, or, for a `node`/`bun`/
+/// `deno` launcher (or when the kernel won't say), by its `ps` command line.
+fn agent_of_process(pid: u32) -> Option<&'static str> {
+    match proc_info(pid) {
+        Some(info) if !matches!(info.name.as_str(), "node" | "bun" | "deno") => {
+            agent_program_of(&info.name)
+        }
+        _ => process_command_for(pid).and_then(|c| agent_program_of(&c)),
+    }
+}
+
+/// The coding agents a role can be bound to, by the program name `ps`
+/// shows for them.
+pub const AGENT_PROGRAMS: &[&str] = &["claude", "codex"];
+
+/// Which agent a `ps` command line is, if it's one: the program's own name,
+/// or the script a `node`/`bun`/`deno` launcher runs. Not "the command line
+/// contains claude": the shell that runs `claudectl bus role bind --self`
+/// matches that, so `--self` bound roles to a shell that exited a moment
+/// later, in Claude Code as much as anywhere (#527).
+pub fn agent_program_of(command: &str) -> Option<&'static str> {
+    let mut words = command.split_whitespace();
+    let base = |w: &str| w.rsplit('/').next().unwrap_or(w).to_ascii_lowercase();
+    let mut program = base(words.next()?);
+    if matches!(program.as_str(), "node" | "bun" | "deno") {
+        program = base(words.find(|w| !w.starts_with('-'))?);
+        program = program.trim_end_matches(".js").to_string();
+    }
+    AGENT_PROGRAMS.iter().copied().find(|a| *a == program)
+}
+
+/// The nearest coding-agent process above the caller, and which agent it is.
+/// Used by `bus role bind --self` to attach a role to the session it's run
+/// from without making the operator look up its pid (#310, #527).
+pub fn find_agent_ancestor() -> Option<(u32, &'static str)> {
     ancestor_pids()
         .into_iter()
-        .find(|pid| process_command_for(*pid).is_some_and(|c| c.to_lowercase().contains("claude")))
+        .find_map(|pid| agent_of_process(pid).map(|a| (pid, a)))
 }
 
 /// Fetch `ps -o command=` for a pid. Returns `None` when the pid is gone.
@@ -199,6 +301,52 @@ fn selector_matches(selector: &str, cwd: &str) -> bool {
 /// form. Falls back to the input verbatim when the path doesn't exist yet.
 fn canonicalize_for_match(p: &Path) -> std::path::PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+#[cfg(test)]
+mod agent_programs {
+    use super::agent_program_of;
+
+    #[test]
+    fn the_agent_is_the_program_not_any_mention_of_it() {
+        assert_eq!(agent_program_of("claude"), Some("claude"));
+        assert_eq!(
+            agent_program_of("/opt/homebrew/bin/claude --resume x"),
+            Some("claude")
+        );
+        assert_eq!(
+            agent_program_of("/opt/homebrew/bin/codex exec -C /w hi"),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_program_of("node /usr/local/lib/node_modules/@openai/codex/bin/codex.js"),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_program_of("node --no-warnings /usr/local/bin/claude"),
+            Some("claude")
+        );
+        // What --self used to bind: the shell running the command.
+        assert_eq!(
+            agent_program_of("/bin/zsh -c claudectl bus role bind x --self"),
+            None
+        );
+        assert_eq!(agent_program_of("claudectl bus stdio"), None);
+        assert_eq!(agent_program_of("/Users/me/codexbus/run.sh"), None);
+        assert_eq!(agent_program_of(""), None);
+    }
+
+    /// The kernel read agrees with the process itself about its parent, and
+    /// names it, so `ps` is only the fallback (#527).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_kernel_names_a_process_and_its_parent() {
+        let me = std::process::id();
+        let info = super::proc_info(me).expect("own process is readable");
+        assert_eq!(info.ppid, unsafe { libc::getppid() } as u32);
+        assert!(!info.name.is_empty());
+        assert!(super::proc_info(u32::MAX - 1).is_none(), "no such process");
+    }
 }
 
 #[cfg(test)]

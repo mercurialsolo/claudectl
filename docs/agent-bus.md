@@ -65,10 +65,41 @@ A role is a stable name other sessions address you by. Four ways to create the b
 | Outside any session, known pid | `claudectl bus role bind <name> <cwd> --pid <pid>` | cwd + pid pinned |
 | TUI dashboard, session selected | `Ctrl+R` → type role name → `Enter` | selected session's pid + cwd |
 | Inside a running Claude session | `/role <name>` slash command (e.g. `/role frontend`) | walks ancestor chain to find Claude's pid + uses current cwd |
+| Inside any agent session (Claude Code or Codex) | `claudectl bus role bind <name> --self` | the agent's pid + current cwd, and records which agent it is |
 
 PID-keyed bindings beat cwd-keyed ones during resolution — the disambiguator for "two sessions in the same worktree, different roles."
 
 If you can't pick a role name, run `claudectl bus role suggest --pid <pid>` (or omit `--pid` from inside a Claude session) and the suggester scans the transcript + cwd for hints — explicit "you are the X" mentions, tool fan-out shape (writes-heavy → `impl`, reads-heavy → `reviewer`), path patterns the session touches.
+
+### Codex sessions
+
+A Codex session uses the same bus. Add the MCP server to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.claudectl_bus]
+command = "claudectl"
+args = ["bus", "stdio"]
+default_tools_approval_mode = "approve"   # bus tools run without a prompt; `codex exec` rejects tool calls otherwise
+```
+
+From inside the Codex session, bind a role to it:
+
+```bash
+claudectl bus role bind codex-worker --self
+```
+
+Codex's sandbox can't write `~/.claudectl` by default, so `--self` fails there with "unable to open database file". Either add the bus directory as a writable root:
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ["/Users/you/.claudectl/bus"]
+```
+
+or bind from a terminal outside the session instead: `claudectl bus role bind codex-worker <cwd>`.
+
+Once bound, the session can `whoami`, `read_inbox` and `publish` like any other. Its replies are signed with its role without it having to say so, and `bus role list` shows `agent=codex`.
+
+Verified with Codex 0.162: a Codex session bound itself with `--self` and was resolved by its process even with a second role on the same directory. It read a message addressed to its role and replied, and the reply was signed `codex-worker`.
 
 ## Day-to-day usage
 
@@ -205,6 +236,7 @@ See [Quick Start § Uninstall](quickstart.md#uninstall) for the full lifecycle c
 | `Stop` hook continue-in-turn delivery | Shipped |
 | Content sanitization (`/` neutralized, body cap, subject grammar, type allowlist) | Shipped |
 | PID-keyed role bindings + ancestor-walk resolution | Shipped (0.55.0) |
+| Codex sessions: `--self`, the agent recorded on the role, replies signed with the caller's role | Shipped (#527, part 1) |
 | TUI Ctrl+R + `/role` slash command + `bus role suggest` | Shipped (0.55.0, renamed from `/bind` in 0.57.0) |
 | Subjects + `subscribe` + claim protocol | Not started |
 | Flow guards (rate/hop/loop/cost) + ACLs | Not started |

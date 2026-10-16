@@ -170,12 +170,16 @@ fn dispatch_role(cmd: &RoleCommand) -> Result<(), String> {
             // Resolve (cwd, pid) up front. --self auto-detects both from the
             // caller's process tree; the explicit form takes the positional
             // CWD and any --pid override.
+            let mut agent = None;
             let (cwd_resolved, pid_resolved) = if *self_bind {
-                let detected = roles::find_claude_ancestor_pid().ok_or_else(|| {
-                    "--self: could not find a Claude Code process in the ancestor chain. \
-                     Run this from inside a Claude session, or pass --pid explicitly."
-                        .to_string()
+                let (detected, which) = roles::find_agent_ancestor().ok_or_else(|| {
+                    format!(
+                        "--self: no coding agent ({}) above this command. Run it from inside \
+                         an agent session, or pass the cwd (and --pid) explicitly.",
+                        roles::AGENT_PROGRAMS.join(", ")
+                    )
                 })?;
+                agent = Some(which);
                 let cwd = std::env::current_dir()
                     .map_err(|e| format!("--self: read current dir: {e}"))?
                     .to_string_lossy()
@@ -194,9 +198,15 @@ fn dispatch_role(cmd: &RoleCommand) -> Result<(), String> {
                 session_id.as_deref(),
                 pid_resolved,
             )?;
-            match pid_resolved {
-                Some(p) => println!("bound role {name} -> {cwd_resolved} (pid={p})"),
-                None => println!("bound role {name} -> {cwd_resolved}"),
+            if let Some(a) = agent {
+                store::set_role_agent(&conn, name, a)?;
+            }
+            match (pid_resolved, agent) {
+                (Some(p), Some(a)) => {
+                    println!("bound role {name} -> {cwd_resolved} ({a}, pid={p})")
+                }
+                (Some(p), None) => println!("bound role {name} -> {cwd_resolved} (pid={p})"),
+                _ => println!("bound role {name} -> {cwd_resolved}"),
             }
             Ok(())
         }
@@ -208,9 +218,10 @@ fn dispatch_role(cmd: &RoleCommand) -> Result<(), String> {
             }
             for r in rows {
                 println!(
-                    "{name:<20} {sel:<40} pid={pid} last_seen={ts} session={sess}",
+                    "{name:<20} {sel:<40} agent={agent} pid={pid} last_seen={ts} session={sess}",
                     name = r.role,
                     sel = r.cwd_selector,
+                    agent = r.agent.as_deref().unwrap_or("-"),
                     pid = r.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
                     ts = r.last_seen,
                     sess = r.last_session_id.unwrap_or_else(|| "-".into()),
@@ -231,9 +242,13 @@ fn dispatch_suggest(pid: Option<u32>, top: usize, json: bool) -> Result<(), Stri
 
     let target_pid = match pid {
         Some(p) => p,
-        None => roles::find_claude_ancestor_pid().ok_or_else(|| {
-            "no --pid given and no Claude process found in ancestor chain".to_string()
-        })?,
+        // Suggestions read a Claude transcript, so only a Claude ancestor will do.
+        None => roles::find_agent_ancestor()
+            .filter(|(_, a)| *a == "claude")
+            .map(|(p, _)| p)
+            .ok_or_else(|| {
+                "no --pid given and no Claude process found in ancestor chain".to_string()
+            })?,
     };
 
     let mut sessions = discovery::scan_sessions();

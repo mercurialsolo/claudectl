@@ -13,7 +13,7 @@
 | 3b. Route everything through the adapter registry | #533 | **Not started** | `src/coord/adapter*.rs`, or `claudectl-core/src/runtime.rs` |
 | 4. Hive read surface for any agent (MCP) | #525 | **Not started** | `src/hive/mcp.rs` (new), mirroring `src/query/mcp.rs` |
 | 5. Codex write surface (AGENTS.md, rules) | #526 | **Not started** | `src/hive/project/` (new) |
-| 6. Bus: agent + machine dimension | #527 | **Not started** | `src/bus/{store,roles,policy}.rs` |
+| 6. Bus: agent + machine dimension | #527 | **Agent half shipped** (Codex `--self`, `roles.agent`); machine half not started | `src/bus/{store,roles,policy}.rs` |
 | 7. Bus: relay bridge (cross-machine) | #528 | **Not started** | `src/bus/bridge.rs` (new), `src/relay/mod.rs` message type |
 
 ---

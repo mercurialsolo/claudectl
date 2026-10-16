@@ -84,6 +84,9 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         ",
     )?;
     add_column_if_missing(conn, "roles", "pid", "INTEGER")?;
+    // Which agent holds a role (#527): `claude`, `codex`. Recorded by
+    // `bind --self`; NULL for directory-only bindings and older rows.
+    add_column_if_missing(conn, "roles", "agent", "TEXT")?;
     conn.execute_batch(
         "
         CREATE INDEX IF NOT EXISTS idx_roles_pid ON roles(pid) WHERE pid IS NOT NULL;
@@ -128,6 +131,8 @@ pub struct RoleRow {
     /// chain contains this pid, the resolver picks this role over any
     /// cwd-inferred match. `None` for cwd-only bindings.
     pub pid: Option<u32>,
+    /// Which agent holds the role (#527). `None` unless bound with `--self`.
+    pub agent: Option<String>,
 }
 
 /// Insert or update a role binding. `pid` is optional: when supplied, the
@@ -162,10 +167,21 @@ pub fn upsert_role(
     Ok(())
 }
 
+/// Record which agent holds a role (#527). Set by `bind --self`; a plain
+/// bind by directory leaves it as it was.
+pub fn set_role_agent(conn: &Connection, role: &str, agent: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE roles SET agent = ?1 WHERE role = ?2",
+        params![agent, role],
+    )
+    .map_err(|e| format!("set role agent: {e}"))?;
+    Ok(())
+}
+
 pub fn list_roles(conn: &Connection) -> Result<Vec<RoleRow>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions, pid
+            "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions, pid, agent
              FROM roles ORDER BY role",
         )
         .map_err(|e| format!("prepare: {e}"))?;
@@ -181,7 +197,7 @@ pub fn list_roles(conn: &Connection) -> Result<Vec<RoleRow>, String> {
 
 pub fn get_role(conn: &Connection, role: &str) -> Result<Option<RoleRow>, String> {
     conn.query_row(
-        "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions, pid
+        "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions, pid, agent
          FROM roles WHERE role = ?1",
         params![role],
         row_to_role,
@@ -194,7 +210,7 @@ pub fn get_role(conn: &Connection, role: &str) -> Result<Option<RoleRow>, String
 /// pid-match over a cwd-match (#307).
 pub fn get_role_by_pid(conn: &Connection, pid: u32) -> Result<Option<RoleRow>, String> {
     conn.query_row(
-        "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions, pid
+        "SELECT role, cwd_selector, last_session_id, last_seen, subscriptions, pid, agent
          FROM roles WHERE pid = ?1 LIMIT 1",
         params![pid],
         row_to_role,
@@ -212,6 +228,7 @@ fn row_to_role(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoleRow> {
         last_seen: row.get(3)?,
         subscriptions: serde_json::from_str(&subs).unwrap_or_default(),
         pid: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
+        agent: row.get(6)?,
     })
 }
 
@@ -449,6 +466,18 @@ mod tests {
     fn upserts_and_lists_roles() {
         let conn = open_memory();
         upsert_role(&conn, "planner", "/work/proj-plan", Some("sess_a"), None).unwrap();
+        // #527: which agent holds a role is recorded, and a later bind by
+        // directory doesn't erase it.
+        set_role_agent(&conn, "planner", "codex").unwrap();
+        upsert_role(&conn, "planner", "/work/proj-plan", None, None).unwrap();
+        assert_eq!(
+            get_role(&conn, "planner")
+                .unwrap()
+                .unwrap()
+                .agent
+                .as_deref(),
+            Some("codex")
+        );
         upsert_role(&conn, "impl", "/work/proj-impl", Some("sess_b"), None).unwrap();
         let rs = list_roles(&conn).unwrap();
         assert_eq!(rs.len(), 2);
