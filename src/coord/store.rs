@@ -702,6 +702,26 @@ fn resources_overlap(kind: &str, existing: &str, requested: &str) -> bool {
 /// The resource kind `coord claim --path` has always used.
 pub const PATH_GLOB: &str = "path_glob";
 
+/// Check a resource before it's stored or printed. One check for the CLI and
+/// for a fleet lease authority, whose input comes from a peer: the kind is
+/// 1–32 characters of `a-z 0-9 _ -`, the value 1–512 printable characters.
+pub fn validate_resource(kind: &str, value: &str) -> Result<(), String> {
+    let kind_ok = !kind.is_empty()
+        && kind.len() <= 32
+        && kind
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+    if !kind_ok {
+        return Err(format!(
+            "resource kind '{kind}' must be 1-32 characters of a-z, 0-9, _ or -"
+        ));
+    }
+    if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
+        return Err("resource value must be 1-512 printable characters".to_string());
+    }
+    Ok(())
+}
+
 /// Check if two path patterns overlap.
 /// A glob like `src/**` overlaps with `src/app.rs`.
 /// A specific path `src/app.rs` overlaps with `src/**` or `src/app.rs`.

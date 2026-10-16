@@ -194,6 +194,9 @@ Inspect multi-session coordination state. Enabled by default since the superviso
 | `coord leases` | Show active ownership leases, with expiry |
 | `coord claim --session S (--path P \| --resource KIND:VALUE) [--mode exclusive\|advisory] [--ttl SECS] [--wait [--timeout SECS]]` | Take a lease. Paths overlap by prefix; any other kind matches exactly. `--wait` queues FIFO instead of failing. A lease lives `--ttl` seconds (default 300) and is renewed automatically while its session is running |
 | `coord release LEASE` | Release a lease |
+| `coord claim --fleet …` | Claim from the lease authority (`[relay] lease_authority`), so no session on any machine in the fleet holds it at once. Same flags as `coord claim`. The lease is renewed while its session appears in that machine's heartbeat |
+| `coord release LEASE --fleet --session S` | Release a fleet lease. Only the session and machine holding it can |
+| `coord leases --fleet` | List the fleet's leases, as the authority holds them |
 | `coord renew LEASE [--ttl SECS]` | Extend a lease whose owner isn't a running session |
 | `coord blockers` | Show open blockers |
 | `coord handoffs` | Show handoffs |

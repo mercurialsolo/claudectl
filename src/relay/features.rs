@@ -21,8 +21,13 @@ pub const PROTO_VERSION: u64 = 1;
 /// closing the link. A sender may rely on it to probe; nothing else does yet.
 pub const UNKNOWN_OK: &str = "unknown-ok";
 
+/// This peer understands `lease_claim`, `lease_release`, `lease_list` and
+/// `lease_result` (#569), so it can ask a lease authority for a fleet-wide
+/// lease, or be one.
+pub const LEASE_FLEET: &str = "lease-fleet";
+
 /// Every feature this build supports.
-const LOCAL: &[&str] = &[UNKNOWN_OK];
+const LOCAL: &[&str] = &[UNKNOWN_OK, LEASE_FLEET];
 
 /// A peer controls this list, so it's bounded and filtered before it's kept.
 const MAX_FEATURES: usize = 64;

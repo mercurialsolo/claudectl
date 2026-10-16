@@ -354,6 +354,19 @@ fn cmd_serve(
 
     println!("Relay listening on {} as {}", listener.addr, identity);
 
+    // Fleet leases (#569): whether this relay answers lease requests.
+    #[cfg(feature = "coord")]
+    let lease_authority =
+        super::lease::Authority::new(relay_cfg.lease_authority.as_deref(), identity.as_str());
+    #[cfg(feature = "coord")]
+    match relay_cfg.lease_authority.as_deref() {
+        Some(a) if lease_authority.is_authority() => {
+            println!("Fleet leases: this machine is the lease authority ({a})");
+        }
+        Some(a) => println!("Fleet leases: the lease authority is {a}"),
+        None => {}
+    }
+
     // #464: listening is not enough. Two machines that both only serve would
     // each wait for the other forever, so dial the peers we already know.
     // Advertise our listening port so peers can dial us back (#484), but
@@ -596,6 +609,25 @@ fn cmd_serve(
                 {
                     for (target, out_msg) in out {
                         let _ = reg.send_to(target.as_str(), &out_msg);
+                    }
+                    continue;
+                }
+                // Fleet leases (#569). A request arrives on a one-shot
+                // connection, so the answer goes back on that connection,
+                // with the registry as the fallback for a lasting link.
+                #[cfg(feature = "coord")]
+                if super::lease::is_request(msg.msg_type) {
+                    let answer =
+                        lease_authority.answer(&from_peer, &msg, local_feed.sessions(), &reg);
+                    let reply = super::lease::result_message(identity.as_str(), answer);
+                    if let Err(e) = replies
+                        .reply(&from_peer, &reply)
+                        .or_else(|_| reg.send_to(from_peer.as_str(), &reply))
+                    {
+                        println!(
+                            "[{}] could not answer a lease request from {from_peer}: {e}",
+                            crate::logger::timestamp_now()
+                        );
                     }
                     continue;
                 }
@@ -999,6 +1031,10 @@ fn cmd_serve(
             // collection, so a peer's heartbeat shows up within one interval.
             if collected {
                 super::advertise::publish_snapshot(identity.as_str(), &reg);
+                // Renew fleet leases whose sessions are still reported, and
+                // expire the rest (#569). A no-op unless this is the authority.
+                #[cfg(feature = "coord")]
+                lease_authority.sweep(local_feed.sessions(), &reg);
             }
 
             // Counts for the LAN hive advertisement (#433). Stored here, where
@@ -1501,7 +1537,7 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
 /// This is deliberately the *only* place the question is asked, and it is asked
 /// on both directions: gating what we send without gating what we accept would
 /// let an unapproved peer still push units into the hive.
-fn try_connect_with(
+pub(super) fn try_connect_with(
     addr: SocketAddr,
     psk: &[u8; 32],
     identity: &super::PeerId,
@@ -2054,7 +2090,7 @@ pub fn send_message_to_peer(
 /// A peer appears on more than one address — a LAN address and a VPN address,
 /// say — and which of them works depends on where *we* are. Trying them in
 /// order is what lets a pair survive one of them going away.
-fn dial_candidates(peer_id: &str) -> Vec<SocketAddr> {
+pub(super) fn dial_candidates(peer_id: &str) -> Vec<SocketAddr> {
     parse_candidates(super::load_peer_meta(peer_id).as_ref())
 }
 

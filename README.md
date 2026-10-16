@@ -299,6 +299,8 @@ claudectl coord release lease_123
 claudectl coord claim --session sess_2 --resource res:dev-db --wait --timeout 300
 # Leases expire after --ttl (default 300s) unless the owning session is running
 claudectl coord renew lease_123 --ttl 900
+# Fleet-wide: one machine is [relay] lease_authority; every peer claims through it
+claudectl coord claim --fleet --session sess_3 --resource res:staging-deploy --wait
 
 # Handoffs — structured context transfer between sessions
 claudectl coord handoff --from sess_1 --to sess_2 --task task_1 --summary 'Fix path normalization'

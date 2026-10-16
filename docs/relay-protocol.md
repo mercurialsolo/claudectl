@@ -29,6 +29,7 @@
 | Feature | Since | Meaning |
 | --- | --- | --- |
 | `unknown-ok` | proto 1 (#559) | This peer skips unknown message types instead of dropping the link |
+| `lease-fleet` | proto 1 (#569) | This peer can ask a lease authority for fleet-wide leases, or be one (see Fleet leases) |
 
 ## Connection setup
 
@@ -201,3 +202,57 @@ A frame missing any key is dropped.
 | `path` | string | yes | Where the transcript was placed |
 | `cwd` | string | no | Not read |
 | `resume` | string | yes | Command to resume it on the receiver |
+
+## Fleet leases (#569)
+
+Sent only on a link that agreed `lease-fleet`; a requester that finds the authority without it refuses before sending.
+
+**The authority.**
+- One peer, named by `[relay] lease_authority` on every machine, keeps the fleet's leases in its own coord store.
+- A fleet lease's owner is `<session>@<peer>`. The peer is the id the relay authenticated, never one read from the payload.
+- The authority computes `expires_at` on its own clock.
+
+**Requests and answers.** A requester sends one of the three requests on a one-shot dial, and the authority answers each with a `lease_result` on the same connection.
+
+**Renewal sends no message.** On every session collection (about 5 s), the authority renews each fleet lease whose session is in that peer's latest heartbeat `sessions[].session_id`, from a heartbeat no older than 90 s. A session that ends, or a peer that stops heartbeating, stops renewing, and the lease expires at its TTL.
+
+### `lease_claim` (requester → authority)
+
+| Key | Type | Req | Meaning |
+| --- | --- | --- | --- |
+| `request_id` | string | yes | Echoed in the result. Printable, no `@`, ≤ 96 bytes |
+| `lease_id` | string | yes | Chosen by the requester and reused across retries, so a repeat of a granted claim is answered `granted` instead of creating a second lease |
+| `session` | string | yes | ≤ 128 bytes, no `@` |
+| `kind`, `value` | string | yes | `kind`: 1–32 of `a-z 0-9 _ -`. `value`: 1–512 printable. `path_glob` overlaps by prefix; other kinds match exactly |
+| `mode` | string | yes | `exclusive` or `advisory` |
+| `ttl_secs` | u64 | yes | 1 to 7 days |
+| `reason` | string | no | Control characters dropped, ≤ 256 |
+| `wait` | bool | no | Queue instead of failing when held |
+| `waiter_id` | string | no | Present on every poll after the first `queued` |
+
+### `lease_release` (requester → authority)
+
+| Key | Type | Req | Meaning |
+| --- | --- | --- | --- |
+| `request_id` | string | yes | |
+| `lease_id` | string | yes | |
+| `session` | string | yes | Must match the holder: only `<session>@<requesting peer>` may release |
+
+### `lease_list` (requester → authority)
+
+| Key | Type | Req | Meaning |
+| --- | --- | --- | --- |
+| `request_id` | string | yes | |
+
+### `lease_result` (authority → requester)
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `request_id` | string | From the request |
+| `outcome` | string | `granted`, `conflict`, `queued`, `waiter_gone`, `released`, `not_owner`, `not_found`, `not_active`, `list` or `error` |
+| `lease` | object | With `granted`: the lease, including the authority-computed `expires_at` |
+| `holder`, `holder_lease`, `expires_at` | string | With `conflict`/`queued` when a lease is in the way |
+| `ahead` | u64 | With `conflict`/`queued` when only the queue is in the way |
+| `waiter_id` | string | With `queued`: present it on the next poll |
+| `leases` | object[] | With `list`: the active fleet leases |
+| `message` | string | With `error` |

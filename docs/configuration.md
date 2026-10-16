@@ -248,6 +248,9 @@ lan_announce = true        # default; `relay serve` broadcasts on UDP 9848 so `r
 http_addr = "127.0.0.1"     # bind address for the coordinator HTTP API
 # http_port = 9876          # no default; unset means no HTTP API at all
 # auth_token = "…"          # no default; the API's bearer token
+# lease_authority = "<peer-id>"  # no default; the peer that grants fleet-wide leases
+                            # (`coord claim --fleet`). Set the same value on every
+                            # machine, including the authority itself.
 
 [hive]
 enabled = true              # OFF by default; sharing across machines also needs relay
