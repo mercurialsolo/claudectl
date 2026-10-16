@@ -582,9 +582,13 @@ fn parse_resource(raw: &str) -> Result<(String, String), String> {
 }
 
 /// Session ids running on this machine, whose leases a sweep renews.
+///
+/// Running, not merely discovered: discovery keeps a session whose process
+/// has exited, and renewing that session's leases would hold them forever.
 pub(crate) fn live_session_ids() -> std::collections::HashSet<String> {
     crate::discovery::scan_sessions()
         .into_iter()
+        .filter(crate::discovery::session_running)
         .map(|s| s.session_id)
         .collect()
 }

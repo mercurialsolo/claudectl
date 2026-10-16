@@ -391,9 +391,60 @@ fn pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
+/// Whether a discovered session is running right now.
+///
+/// `scan_sessions` keeps a session whose process has exited, because the
+/// dashboard shows it as Finished for a while. Anything that has to mean
+/// "alive", like renewing the session's leases (#569), must ask this instead.
+/// A Claude Code session is alive while its pid is. A Codex session has no
+/// pid of its own (one app-server serves them all), so discovery's recency
+/// window is the only signal, and it's alive unless already marked Finished.
+pub fn session_running(session: &ClaudeSession) -> bool {
+    if session.is_claude_code() {
+        session.pid != 0 && pid_alive(session.pid)
+    } else {
+        session.status != crate::session::SessionStatus::Finished
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn raw_session(pid: u32) -> ClaudeSession {
+        ClaudeSession::from_raw(RawSession {
+            pid,
+            session_id: "s".into(),
+            cwd: "/tmp".into(),
+            started_at: 0,
+        })
+    }
+
+    #[test]
+    fn a_session_whose_process_exists_is_running() {
+        assert!(session_running(&raw_session(std::process::id())));
+    }
+
+    /// Discovery keeps a session whose process exited; "discovered" must not
+    /// be read as "running" (#569).
+    #[test]
+    fn a_session_whose_process_is_gone_is_not_running() {
+        // Spawn and reap a process, so its pid is certainly not ours or live.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(!session_running(&raw_session(pid)));
+        assert!(!session_running(&raw_session(0)));
+    }
+
+    #[test]
+    fn a_session_without_a_pid_of_its_own_runs_until_finished() {
+        let mut s = raw_session(0);
+        s.agent_family = crate::agent::vocab::CODEX.to_string();
+        assert!(session_running(&s));
+        s.status = crate::session::SessionStatus::Finished;
+        assert!(!session_running(&s));
+    }
 
     #[test]
     fn slug_basic_path() {

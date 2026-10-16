@@ -769,10 +769,12 @@ impl App {
     pub fn coord_refresh(&mut self) {
         // Bookkeeping (expire stale leases + interrupts). Best-effort; the
         // orchestrator logs failures internally and never propagates them.
+        // Running sessions only: a Finished one is still listed for a while,
+        // and renewing its leases would hold them forever (#569).
         let live: Vec<String> = self
             .sessions
             .iter()
-            .filter(|s| !s.is_remote())
+            .filter(|s| !s.is_remote() && s.status != SessionStatus::Finished)
             .map(|s| s.session_id.clone())
             .collect();
         self.runtime.orchestrator.expire_stale(&live);
