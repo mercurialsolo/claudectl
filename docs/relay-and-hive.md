@@ -126,7 +126,7 @@ enum MessageType {
 
 ### Wire Protocol
 
-Newline-delimited JSON (NDJSON) over TCP. Each line is a complete `RelayMessage` serialized as JSON, terminated by `\n`. No framing headers, no length prefixes, no binary encoding.
+Newline-delimited JSON (NDJSON) over TCP. Each line is a complete `RelayMessage` serialized as JSON, terminated by `\n`. The handshake is always NDJSON. A link where both ends agreed `frame-bin` (#562) switches after the ack to length-prefixed binary frames, LZ4-compressed at 1 KiB and up; every other link stays on NDJSON.
 
 Rationale: NDJSON is trivially debuggable (`nc host port` shows readable messages), parseable with `serde_json::from_str`, and compatible with line-oriented buffered readers.
 
