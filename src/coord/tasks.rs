@@ -682,6 +682,53 @@ pub fn attempts_that_ran(conn: &Connection, task_id: &str) -> Result<u32, String
     Ok(n as u32)
 }
 
+/// An attempt that never ran the task: it failed to spawn, couldn't be sent,
+/// or the peer declined it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unstarted {
+    /// The machine it was for; `None` is this one.
+    pub peer: Option<String>,
+    pub outcome: String,
+    pub age_secs: u64,
+}
+
+/// The attempts at the end of a task's history that never ran, newest first.
+/// Empty once an attempt runs. What the reconciler backs off and escalates
+/// on (#591): these don't count against `max_retries`, so nothing else stops
+/// a refusal that will never clear from being retried every tick.
+pub fn unstarted_streak(conn: &Connection, task_id: &str) -> Result<Vec<Unstarted>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT peer, outcome, started_at FROM task_attempts
+             WHERE task_id = ?1 ORDER BY attempt_num DESC",
+        )
+        .map_err(|e| format!("prepare unstarted streak: {e}"))?;
+    let rows = stmt
+        .query_map(params![task_id], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| format!("unstarted streak: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (peer, outcome, started_at) = row.map_err(|e| format!("unstarted streak: {e}"))?;
+        match outcome {
+            Some(o) if [SPAWN_FAILED, DELEGATE_FAILED, PEER_REFUSED].contains(&o.as_str()) => {
+                out.push(Unstarted {
+                    peer,
+                    outcome: o,
+                    age_secs: age_secs(&started_at).unwrap_or(0),
+                });
+            }
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
 pub fn attempt_count(conn: &Connection, task_id: &str) -> Result<u32, String> {
     let n: i64 = conn
         .query_row(

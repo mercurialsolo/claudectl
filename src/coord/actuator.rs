@@ -395,7 +395,20 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             if task.state.is_terminal() {
                 return Ok(());
             }
-            transition(conn, task_id, task.state, TaskState::NeedsHuman, cause)?;
+            // The reconciler can't read the relay ledger, so the peer's own
+            // reason for refusing is added here (#591), or the person sent
+            // the task has to go and find it in the peer's log.
+            let mut cause = cause.clone();
+            if cause.starts_with(super::supervisor::NEVER_STARTED) {
+                if let Some(why) = super::tasks::latest_attempt_id(conn, task_id)?
+                    .and_then(|a| fx.remote_result(&a))
+                    .map(|r| r.summary)
+                    .filter(|s| !s.is_empty())
+                {
+                    cause = format!("{cause}: {why}");
+                }
+            }
+            transition(conn, task_id, task.state, TaskState::NeedsHuman, &cause)?;
             Ok(())
         }
         // The remaining variants belong to PR6 — stubbed out so the
@@ -1698,6 +1711,51 @@ mod tests {
         // A first prompt still: nothing ran, so there's nothing to recover.
         delegate(&mut conn, &fx, &id).unwrap();
         assert_eq!(fx.delegated.borrow().last().unwrap().prompt, "do it");
+    }
+
+    /// #591: a task escalated because it never started says why, in the
+    /// peer's words, not only that the peer refused.
+    #[test]
+    fn a_task_that_never_started_is_escalated_with_the_peers_reason() {
+        let mut conn = store::open_memory();
+        let fx = RecordingFx::default();
+        let id = insert_task(&conn, &remote_task()).unwrap();
+        delegate(&mut conn, &fx, &id).unwrap();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Resume {
+                task_id: id.clone(),
+                cause: crate::coord::tasks::PEER_REFUSED.into(),
+            },
+        )
+        .unwrap();
+        *fx.remote.borrow_mut() = Some(crate::coord::remote::RemoteResult {
+            summary: "Could not start the task: spawn claude: No such file or directory".into(),
+            ..Default::default()
+        });
+        apply(
+            &mut conn,
+            &fx,
+            &Action::EscalateHuman {
+                task_id: id.clone(),
+                cause: "never_started: 10 attempts in a row didn't start".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::NeedsHuman
+        );
+        let (_, _, cause, _) = crate::coord::tasks::list_transitions(&conn, &id)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(
+            cause,
+            "never_started: 10 attempts in a row didn't start: \
+             Could not start the task: spawn claude: No such file or directory"
+        );
     }
 
     /// #584: an attempt on a peer that's given up on as dead is asked to
