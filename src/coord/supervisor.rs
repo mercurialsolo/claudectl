@@ -207,6 +207,28 @@ pub enum ObservedStatus {
     Refused,
 }
 
+/// After this many attempts in a row that never started, the task goes to a
+/// person (#591). With the backoff below that's about 20 minutes of trying.
+pub const MAX_UNSTARTED: usize = 10;
+
+/// The escalation cause for a task that never started.
+pub const NEVER_STARTED: &str = "never_started";
+
+/// How long a machine is left alone after it didn't start the task's last
+/// `n` attempts: 5 s, doubling, at most 5 minutes. A refusal that clears (a
+/// peer that was full, a worktree still busy, #584) is tried again soon; one
+/// that won't stops costing an attempt every tick (#591).
+pub fn unstarted_backoff_secs(n: usize) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    (5u64 << (n - 1).min(6)).min(300)
+}
+
+fn machine_name(peer: &Option<String>) -> String {
+    peer.clone().unwrap_or_else(|| "this machine".to_string())
+}
+
 /// Reconciliation core. Reads desired state (`coord.tasks`), reads
 /// observed state from `sensors`, returns the action list. Pure — no
 /// I/O, no side effects, no writes to the DB.
@@ -284,6 +306,32 @@ impl Supervisor {
                          out: &mut Vec<Action>|
          -> Result<Option<Option<String>>, String> {
             use super::placement::{Decision, place};
+            // Attempts that never started don't use up a retry, so a refusal
+            // that won't clear needs its own limit (#591).
+            let streak = super::tasks::unstarted_streak(conn, &task.id)?;
+            if streak.len() >= MAX_UNSTARTED {
+                let last = &streak[0];
+                out.push(Action::EscalateHuman {
+                    task_id: task.id.clone(),
+                    cause: format!(
+                        "{NEVER_STARTED}: {} attempts in a row didn't start; the last was {} on {}",
+                        streak.len(),
+                        last.outcome,
+                        machine_name(&last.peer)
+                    ),
+                });
+                return Ok(None);
+            }
+            // A machine that didn't start this task's recent attempts, while
+            // it's backed off: seconds left, the whole wait, how many in a
+            // row, and how the last ended. `None` when it can be tried now.
+            let backing_off = |peer: &Option<String>| -> Option<(u64, u64, usize, String)> {
+                let mine: Vec<_> = streak.iter().filter(|u| u.peer == *peer).collect();
+                let newest = mine.first()?;
+                let wait = unstarted_backoff_secs(mine.len());
+                let left = wait.saturating_sub(newest.age_secs);
+                (left > 0).then(|| (left, wait, mine.len(), newest.outcome.clone()))
+            };
             let mut hold = |reason: String| {
                 out.push(Action::Hold {
                     task_id: task.id.clone(),
@@ -328,6 +376,28 @@ impl Supervisor {
                 let p = want.flatten().unwrap_or_default();
                 return hold(format!("peer {p} is not connected"));
             }
+            let open: Vec<usize> = idx
+                .iter()
+                .copied()
+                .filter(|&i| backing_off(&views[i].peer).is_none())
+                .collect();
+            let soonest = idx
+                .iter()
+                .filter_map(|&i| backing_off(&views[i].peer).map(|b| (views[i].peer.clone(), b)))
+                .min_by_key(|(_, (left, _, _, _))| *left);
+            // The whole wait, not what's left of it: `supervisor work` prints
+            // a hold when its reason changes, and a countdown changes every
+            // pass.
+            let backoff_note = soonest.map(|(peer, (_, wait, n, outcome))| {
+                format!(
+                    "{} didn't start the last {n} attempt(s) ({outcome}); backing off {wait}s",
+                    machine_name(&peer)
+                )
+            });
+            if let (true, Some(note)) = (open.is_empty(), &backoff_note) {
+                return hold(note.clone());
+            }
+            let idx = open;
             let mut sub: Vec<_> = idx.iter().map(|&i| views[i].clone()).collect();
             let decision = place(&mut sub, &task.requires, None);
             for (k, &i) in idx.iter().enumerate() {
@@ -336,7 +406,12 @@ impl Supervisor {
             match decision {
                 Decision::Local => Ok(Some(None)),
                 Decision::Remote(p) => Ok(Some(Some(p))),
-                Decision::Wait(why) => hold(why),
+                // The machines left can't take it, but the one backing off
+                // is what the task is really waiting for: say both.
+                Decision::Wait(why) => match backoff_note {
+                    Some(note) => hold(format!("{why}; {note}")),
+                    None => hold(why),
+                },
             }
         };
         for task in &retrying {
@@ -891,6 +966,140 @@ mod tests {
         assert_eq!(delegated(&actions), vec![(id.clone(), "mini".to_string())]);
         let actions = sup.tick(&conn, &PlacedSensors(vec![here(64_000)])).unwrap();
         assert_eq!(held(&actions), vec!["peer mini is not connected"]);
+    }
+
+    /// `n` attempts of `task` on `peer` that the peer refused, the newest
+    /// started `secs_ago` seconds ago.
+    fn refused(conn: &Connection, task: &str, peer: &str, n: u32, secs_ago: u64) {
+        use crate::coord::tasks::{
+            PEER_REFUSED, attempt_count, finish_attempt, insert_attempt, set_attempt_remote,
+        };
+        for _ in 0..n {
+            let num = attempt_count(conn, task).unwrap() + 1;
+            let a = insert_attempt(conn, task, num, None, None, None).unwrap();
+            set_attempt_remote(conn, &a, peer).unwrap();
+            finish_attempt(conn, &a, PEER_REFUSED, None).unwrap();
+            conn.execute(
+                "UPDATE task_attempts SET started_at =
+                   strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?2) WHERE id = ?1",
+                rusqlite::params![a, format!("-{secs_ago} seconds")],
+            )
+            .unwrap();
+        }
+    }
+
+    /// #591: the backoff doubles from 5 s and stops at 5 minutes.
+    #[test]
+    fn the_backoff_after_unstarted_attempts_doubles_to_a_cap() {
+        let secs: Vec<u64> = (0..=9).map(unstarted_backoff_secs).collect();
+        assert_eq!(secs, vec![0, 5, 10, 20, 40, 80, 160, 300, 300, 300]);
+    }
+
+    /// #591: a peer that just refused the task isn't sent it again on the
+    /// next tick; another machine that can run it takes it now.
+    #[test]
+    fn a_peer_that_just_refused_is_skipped_for_another_machine() {
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        refused(&conn, &id, "big", 1, 0);
+        let actions = Supervisor::with_defaults()
+            .tick(
+                &conn,
+                &PlacedSensors(vec![here(1_000), peer_view("big", 64_000)]),
+            )
+            .unwrap();
+        assert!(delegated(&actions).is_empty(), "{actions:?}");
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    /// #591: a task only the refusing peer can run waits, and says for how
+    /// long and why; once the wait is over it's sent again.
+    #[test]
+    fn a_task_pinned_to_a_refusing_peer_waits_out_the_backoff() {
+        let conn = store::open_memory();
+        let id = insert_task(
+            &conn,
+            &NewTask {
+                peer: Some("mini".into()),
+                ..task("t", &[])
+            },
+        )
+        .unwrap();
+        refused(&conn, &id, "mini", 3, 2);
+        let sup = Supervisor::with_defaults();
+        let sensors = PlacedSensors(vec![here(64_000), peer_view("mini", 100)]);
+        let actions = sup.tick(&conn, &sensors).unwrap();
+        assert_eq!(
+            held(&actions),
+            vec!["mini didn't start the last 3 attempt(s) (peer_refused); backing off 20s"]
+        );
+        conn.execute(
+            "UPDATE task_attempts SET started_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-21 seconds')",
+            [],
+        )
+        .unwrap();
+        let actions = sup.tick(&conn, &sensors).unwrap();
+        assert_eq!(delegated(&actions), vec![(id, "mini".to_string())]);
+    }
+
+    /// #591: when the other machines can't take it either, the hold names the
+    /// backed-off peer too. "this machine is draining" alone hid it.
+    #[test]
+    fn a_hold_names_the_peer_it_is_waiting_out() {
+        use crate::coord::placement::PeerView;
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        refused(&conn, &id, "mini", 1, 0);
+        let mut local = PeerView::local_with_ceiling(4);
+        local.slots.drain = true;
+        let actions = Supervisor::with_defaults()
+            .tick(
+                &conn,
+                &PlacedSensors(vec![local, peer_view("mini", 64_000)]),
+            )
+            .unwrap();
+        assert_eq!(
+            held(&actions),
+            vec![
+                "this machine is draining; mini didn't start the last 1 attempt(s) (peer_refused); backing off 5s"
+            ]
+        );
+    }
+
+    /// #591: a refusal that never clears goes to a person, not round again
+    /// every few seconds forever.
+    #[test]
+    fn ten_attempts_in_a_row_that_never_started_go_to_a_person() {
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        refused(&conn, &id, "mini", MAX_UNSTARTED as u32, 600);
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &PlacedSensors(vec![peer_view("mini", 64_000)]))
+            .unwrap();
+        assert!(
+            matches!(&actions[..], [Action::EscalateHuman { task_id, cause }]
+                if *task_id == id
+                    && cause == "never_started: 10 attempts in a row didn't start; the last was peer_refused on mini"),
+            "{actions:?}"
+        );
+    }
+
+    /// #591: only an unbroken run counts. An attempt that ran in between
+    /// starts the count again.
+    #[test]
+    fn an_attempt_that_ran_resets_the_count() {
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        refused(&conn, &id, "mini", 6, 600);
+        let ran = crate::coord::tasks::insert_attempt(&conn, &id, 7, None, None, None).unwrap();
+        crate::coord::tasks::finish_attempt(&conn, &ran, "session_died", None).unwrap();
+        refused(&conn, &id, "mini", 6, 600);
+        let streak = crate::coord::tasks::unstarted_streak(&conn, &id).unwrap();
+        assert_eq!(streak.len(), 6);
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &PlacedSensors(vec![peer_view("mini", 64_000)]))
+            .unwrap();
+        assert_eq!(delegated(&actions), vec![(id, "mini".to_string())]);
     }
 
     /// #571: a drained machine starts nothing, and the queue says why. The

@@ -4,6 +4,14 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A refused task was sent again every few seconds, forever (#591).**
+  - An attempt that never started (the peer refused it, it couldn't be sent, or it failed to spawn) rightly doesn't use up a retry, but nothing else limited it. A peer that couldn't run the task got it every ~4 s indefinitely. The task never escalated, and the only reason was in the peer's log.
+  - Now a machine that didn't start a task's last attempts backs off: 5 s, doubling, at most 5 minutes. Another machine can take the task meanwhile. When none can, the waiting line names the peer and the backoff.
+  - After 10 attempts in a row that never started, the task goes to NEEDS_HUMAN with the peer's own reason. An attempt that ran starts the count again.
+  - Verified with a worker whose `claude` doesn't exist. In 2 minutes it made 5 attempts, where 0.90.1 made about 30. After 10 attempts (20 minutes), the task escalated with `never_started: 10 attempts in a row didn't start; the last was peer_refused on <peer>: Could not start the task: spawn claude …: No such file or directory`.
+
 ## [0.90.1] - 2026-10-16
 
 ### Added

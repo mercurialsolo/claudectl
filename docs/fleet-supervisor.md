@@ -124,6 +124,12 @@ A floor that's set and a measurement that's missing is not room: an unknown is n
 
 Each machine also advertises its own `[local] max_tasks`, and a peer refuses work past it. A refusal doesn't use up a retry; the task is simply placed again.
 
+A machine that refused a task, or couldn't be sent it, isn't tried for that task again straight away:
+- **It backs off:** 5 s after one refusal in a row, then 10, 20, 40, 80, 160, and at most 5 minutes.
+- **Another machine can take it meanwhile.** If none can, the task waits and says why.
+- **After 10 attempts in a row that never started** (about 20 minutes), the task goes to NEEDS_HUMAN with the peer's own reason, for example `never_started: 10 attempts in a row didn't start; the last was peer_refused on baradas-mac-mini-508f9c0e: Could not start the task: spawn claude …: No such file or directory`.
+- **An attempt that actually ran starts the count again.**
+
 ### Choosing where a task runs
 
 ```toml
@@ -146,6 +152,7 @@ These tasks stay on the machine that submitted them:
 ```
 waiting: task_…_3: this machine is running 4 of 4 tasks; baradas-mac-mini-508f9c0e lacks `docker`
 waiting: task_…_5: this machine is draining; baradas-mac-mini-508f9c0e has not been heard from recently
+waiting: task_…_7: this machine is draining; baradas-mac-mini-508f9c0e didn't start the last 3 attempt(s) (peer_refused); backing off 20s
 ```
 
 ### Rules for running on a peer
