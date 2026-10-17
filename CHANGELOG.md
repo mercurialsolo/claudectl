@@ -4,6 +4,8 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.90.2] - 2026-10-17
+
 ### Fixed
 
 - **A refused task was sent again every few seconds, forever (#591).**
