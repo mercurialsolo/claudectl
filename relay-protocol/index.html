@@ -1,0 +1,2668 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere">
+      
+      
+      
+        <link rel="canonical" href="https://mercurialsolo.github.io/claudectl/relay-protocol/">
+      
+      
+        <link rel="prev" href="../relay-and-hive/">
+      
+      
+        <link rel="next" href="../relay-discovery/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Relay Wire Protocol - claudectl</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#relay-wire-protocol-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="claudectl" class="md-header__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            claudectl
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Relay Wire Protocol
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="claudectl" class="md-nav__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    claudectl
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fleet-supervisor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fleet Supervisor
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent-bus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Bus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive Mind
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Capability Grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy-as-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy as Code
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../team-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Team Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terminal-support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terminal Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design specs
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design specs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../open-cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Open Cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cross-agent-hive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Agent Hive
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AGENT_BUS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Bus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay-and-hive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay Wire Protocol
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay Wire Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#framing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Framing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compatibility-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compatibility rules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Compatibility rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#connection-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection setup
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Connection setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#challenge-listener-dialler-first-frame" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        challenge (listener → dialler, first frame)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#handshake-dialler-listener" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        handshake (dialler → listener)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#handshake_ack-listener-dialler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        handshake_ack (listener → dialler)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#link-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Link messages
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Link messages">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#heartbeat-both-directions-every-30-s-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        heartbeat (both directions, every 30 s by default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ack
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delegation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Delegation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#delegate_task-delegator-worker-one-shot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delegate_task (delegator → worker, one-shot)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task_status-worker-delegator-over-the-link" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        task_status (worker → delegator, over the link)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task_handoff-worker-delegator-final" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        task_handoff (worker → delegator, final)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task_interrupt-delegator-worker-one-shot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        task_interrupt (delegator → worker, one-shot)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hive">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#knowledge_sync-peer-peer-periodic-and-on-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        knowledge_sync (peer → peer, periodic and on propagation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowledge_request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        knowledge_request
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowledge_snapshot-reply-to-knowledge_request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        knowledge_snapshot (reply to knowledge_request)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hive_join_request-joiner-host-434" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hive_join_request (joiner → host, #434)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hive_join_result-host-joiner-on-the-link-or-later-as-a-one-shot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hive_join_result (host → joiner, on the link or later as a one-shot)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowledge_rejected-host-sender-of-refused-knowledge-435" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        knowledge_rejected (host → sender of refused knowledge, #435)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conversation-transfer-478" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversation transfer (#478)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Conversation transfer (#478)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#session_transfer-sender-receiver-one-shot-one-chunk-per-frame" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session_transfer (sender → receiver, one-shot, one chunk per frame)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session_received-receiver-sender-reply-on-the-same-connection-511" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session_received (receiver → sender, reply on the same connection, #511)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fleet-leases-569" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fleet leases (#569)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fleet leases (#569)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#lease_claim-requester-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lease_claim (requester → authority)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lease_release-requester-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lease_release (requester → authority)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lease_list-requester-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lease_list (requester → authority)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lease_result-authority-requester" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lease_result (authority → requester)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay-discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hive-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hive Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent-protocol/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#framing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Framing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compatibility-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compatibility rules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Compatibility rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#connection-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection setup
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Connection setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#challenge-listener-dialler-first-frame" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        challenge (listener → dialler, first frame)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#handshake-dialler-listener" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        handshake (dialler → listener)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#handshake_ack-listener-dialler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        handshake_ack (listener → dialler)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#link-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Link messages
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Link messages">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#heartbeat-both-directions-every-30-s-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        heartbeat (both directions, every 30 s by default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ack
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delegation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Delegation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#delegate_task-delegator-worker-one-shot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delegate_task (delegator → worker, one-shot)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task_status-worker-delegator-over-the-link" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        task_status (worker → delegator, over the link)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task_handoff-worker-delegator-final" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        task_handoff (worker → delegator, final)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task_interrupt-delegator-worker-one-shot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        task_interrupt (delegator → worker, one-shot)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hive
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hive">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#knowledge_sync-peer-peer-periodic-and-on-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        knowledge_sync (peer → peer, periodic and on propagation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowledge_request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        knowledge_request
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowledge_snapshot-reply-to-knowledge_request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        knowledge_snapshot (reply to knowledge_request)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hive_join_request-joiner-host-434" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hive_join_request (joiner → host, #434)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hive_join_result-host-joiner-on-the-link-or-later-as-a-one-shot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hive_join_result (host → joiner, on the link or later as a one-shot)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowledge_rejected-host-sender-of-refused-knowledge-435" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        knowledge_rejected (host → sender of refused knowledge, #435)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conversation-transfer-478" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversation transfer (#478)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Conversation transfer (#478)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#session_transfer-sender-receiver-one-shot-one-chunk-per-frame" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session_transfer (sender → receiver, one-shot, one chunk per frame)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session_received-receiver-sender-reply-on-the-same-connection-511" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session_received (receiver → sender, reply on the same connection, #511)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fleet-leases-569" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fleet leases (#569)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fleet leases (#569)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#lease_claim-requester-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lease_claim (requester → authority)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lease_release-requester-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lease_release (requester → authority)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lease_list-requester-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lease_list (requester → authority)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lease_result-authority-requester" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lease_result (authority → requester)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="relay-wire-protocol-reference">Relay Wire Protocol — Reference</h1>
+<p><strong>Protocol version 1</strong> (#559). This is what two claudectl relays say to each other, message by message. The design reasoning lives in <a href="../relay-and-hive/">Relay &amp; Hive</a> and the agent protocol epic (#558); this page is the reference. A test round-trips every message type (<code>protocol::tests::every_message_type_round_trips</code>), so a type added to the code without being added here fails to compile there first.</p>
+<h2 id="framing">Framing</h2>
+<p>The challenge, handshake and ack are always NDJSON. After the ack, a link stays on NDJSON unless both ends agreed <code>frame-bin</code>, in which case every frame after the ack is binary.</p>
+<p><strong>NDJSON</strong></p>
+<ul>
+<li>TCP, one JSON object per line, <code>\n</code>-terminated, at most 1 MiB per line.</li>
+<li>A blank line reads as end of stream.</li>
+</ul>
+<p><strong>Binary frames (<code>frame-bin</code>, #562)</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌──────────────┬───────────┬──────────────────────────┐
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│ len: u32 BE  │ flags: u8 │ body: len - 1 bytes      │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>└──────────────┴───────────┴──────────────────────────┘
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>flags bit 0: body is raw_len (u32 LE) followed by an LZ4 block of the JSON
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>flags bits 1-7: reserved, must be 0
+</code></pre></div>
+<ul>
+<li><code>len</code> is 1 to 1 MiB.</li>
+<li>A sender compresses only when the JSON is at least <strong>1024 bytes</strong>, and only when that makes it smaller.</li>
+<li>A receiver rejects any of these as a protocol error, and the link closes:</li>
+<li>a compressed frame whose <code>raw_len</code> is below 1024 or above <strong>4 MiB</strong></li>
+<li>a block that doesn't decompress to exactly <code>raw_len</code></li>
+<li>any reserved bit set</li>
+<li>The 1024-byte threshold and the 4 MiB cap are part of what <code>frame-bin</code> means. Changing either needs a new feature string.</li>
+<li>No base64: it would cost back a third of what LZ4 saves.</li>
+<li>A read timeout before a frame's first byte is an idle link. After the first byte, the reader keeps reading until the frame is whole, because stopping mid-frame would leave every later read misaligned.</li>
+</ul>
+<p>Every frame, in either framing, is a <code>RelayMessage</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>string</td>
+<td>Unique per sender (<code>gen_msg_id</code>)</td>
+</tr>
+<tr>
+<td><code>msg_type</code></td>
+<td>string</td>
+<td>One of the types below, <code>snake_case</code></td>
+</tr>
+<tr>
+<td><code>from_peer</code></td>
+<td>string</td>
+<td>Sender's relay identity (empty in <code>challenge</code>)</td>
+</tr>
+<tr>
+<td><code>timestamp</code></td>
+<td>u64</td>
+<td>Epoch ms at send</td>
+</tr>
+<tr>
+<td><code>payload</code></td>
+<td>object</td>
+<td>Per type, below</td>
+</tr>
+</tbody>
+</table>
+<h2 id="compatibility-rules">Compatibility rules</h2>
+<ol>
+<li><strong><code>proto</code> changes only for a break.</strong> Everything else is a feature string, negotiated per link in the handshake.</li>
+<li><strong>A feature is on only when both ends advertised it.</strong> A new message type, or a new key whose absence an older peer would misread, is sent only on a link that agreed to the feature that introduced it.</li>
+<li><strong>Unknown <code>msg_type</code>: skip, don't fail.</strong> A reader that sees one logs it once per peer and type and reads the next frame. Peers from before #559 instead close the reader, which is why rule 2 exists.</li>
+<li><strong>Optional keys are omitted, not sent empty,</strong> where "didn't say" and "has none" mean different things (<code>capabilities</code>, <code>listen_addrs</code>).</li>
+<li><strong>Peer-supplied strings are bounded and filtered</strong> before they're kept, logged or used: feature names, versions, addresses.</li>
+</ol>
+<h3 id="features">Features</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Since</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>unknown-ok</code></td>
+<td>proto 1 (#559)</td>
+<td>This peer skips unknown message types instead of dropping the link</td>
+</tr>
+<tr>
+<td><code>frame-bin</code></td>
+<td>proto 1 (#562)</td>
+<td>After the ack, length-prefixed binary frames, LZ4 at or above 1024 bytes (see Framing)</td>
+</tr>
+<tr>
+<td><code>lease-fleet</code></td>
+<td>proto 1 (#569)</td>
+<td>This peer can ask a lease authority for fleet-wide leases, or be one (see Fleet leases)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="connection-setup">Connection setup</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>dialler                                  listener
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>   │ ───────────── TCP connect ───────────▶ │
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>   │ ◀──────────── challenge ────────────── │
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>   │ ───────────── handshake ─────────────▶ │  verify HMAC, intersect features
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>   │ ◀──────────── handshake_ack ────────── │
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>   │ ═════════ link (or one-shot) ═════════ │
+</code></pre></div>
+<h3 id="challenge-listener-dialler-first-frame"><code>challenge</code> (listener → dialler, first frame)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nonce</code></td>
+<td>string, 64 hex</td>
+<td>yes</td>
+<td>Fresh per connection</td>
+</tr>
+</tbody>
+</table>
+<h3 id="handshake-dialler-listener"><code>handshake</code> (dialler → listener)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>proof</code></td>
+<td>string, hex</td>
+<td>yes</td>
+<td><code>HMAC-SHA256(PSK, nonce)</code>; compared in constant time</td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td>string</td>
+<td>no</td>
+<td>Crate version. Logged, never compared</td>
+</tr>
+<tr>
+<td><code>proto</code></td>
+<td>u64</td>
+<td>no (#559)</td>
+<td>Absent: a peer from before #559, treated as proto 0 with no features</td>
+</tr>
+<tr>
+<td><code>features</code></td>
+<td>string[]</td>
+<td>no (#559)</td>
+<td>Names match <code>[a-z0-9-]{1,32}</code>; at most 64 kept</td>
+</tr>
+<tr>
+<td><code>listen_port</code></td>
+<td>u16</td>
+<td>no (#484)</td>
+<td>Where the dialler accepts connections. Absent for one-shots; 0 is ignored</td>
+</tr>
+<tr>
+<td><code>transient</code></td>
+<td>bool</td>
+<td>no (#487)</td>
+<td>Only <code>true</code> counts: a one-shot delivery, never registered as the link</td>
+</tr>
+</tbody>
+</table>
+<h3 id="handshake_ack-listener-dialler"><code>handshake_ack</code> (listener → dialler)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>status</code></td>
+<td>string</td>
+<td>yes</td>
+<td><code>ok</code> or <code>denied</code>; anything else is treated as denied</td>
+</tr>
+<tr>
+<td><code>proto</code></td>
+<td>u64</td>
+<td>no (#559)</td>
+<td><code>min(theirs, ours)</code>. Sent only if the handshake had <code>proto</code></td>
+</tr>
+<tr>
+<td><code>features</code></td>
+<td>string[]</td>
+<td>no (#559)</td>
+<td>The agreed set. The dialler keeps only names it also has</td>
+</tr>
+</tbody>
+</table>
+<p>A dialler from before #559 gets exactly <code>{"status": "ok"}</code>.</p>
+<h2 id="link-messages">Link messages</h2>
+<h3 id="heartbeat-both-directions-every-30-s-by-default"><code>heartbeat</code> (both directions, every 30 s by default)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>worker_id</code></td>
+<td>string</td>
+<td>no</td>
+<td>Defaults to <code>from_peer</code></td>
+</tr>
+<tr>
+<td><code>timestamp</code></td>
+<td>u64</td>
+<td>no</td>
+<td>Not read</td>
+</tr>
+<tr>
+<td><code>sessions</code></td>
+<td>object[]</td>
+<td>no</td>
+<td><code>ClaudeSession::to_json_value</code> per local session. Worker state is stored only when present</td>
+</tr>
+<tr>
+<td><code>capabilities</code></td>
+<td>object</td>
+<td>no (#536)</td>
+<td><code>{claudectl_version, os, arch, tools: {name: {state: "present", version?, credential?} \| {state: "missing"}}}</code>. Omitted, never empty</td>
+</tr>
+<tr>
+<td><code>listen_addrs</code></td>
+<td>string[]</td>
+<td>no (#541)</td>
+<td><code>ip:port</code> literals the peer can be reached at; unparseable entries dropped. Omitted when empty</td>
+</tr>
+</tbody>
+</table>
+<p>A liveness-only heartbeat has payload <code>{}</code>.</p>
+<h3 id="ack"><code>ack</code></h3>
+<p>Defined, never sent or handled. Reserved.</p>
+<h2 id="delegation">Delegation</h2>
+<h3 id="delegate_task-delegator-worker-one-shot"><code>delegate_task</code> (delegator → worker, one-shot)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>task_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td><code>task_&lt;epoch&gt;_&lt;seq&gt;</code></td>
+</tr>
+<tr>
+<td><code>prompt</code></td>
+<td>string</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>cwd</code></td>
+<td>string | null</td>
+<td>no</td>
+<td>Always sent; <code>null</code> when unset</td>
+</tr>
+<tr>
+<td><code>context</code></td>
+<td>object</td>
+<td>no</td>
+<td><code>DelegationContext</code>: <code>git_remote</code>, <code>git_ref</code>, <code>git_commit</code> (each optional), <code>relevant_files</code> (<code>{path: content}</code>, ≤ 50 KB), <code>brain_context</code>, <code>dependency_graph {blocks[], blocked_by[]}</code>. Defaulted if absent or unparseable</td>
+</tr>
+</tbody>
+</table>
+<h3 id="task_status-worker-delegator-over-the-link"><code>task_status</code> (worker → delegator, over the link)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>task_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Dropped without it</td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td>string</td>
+<td>no</td>
+<td>Defaults to <code>running</code></td>
+</tr>
+<tr>
+<td><code>stats</code></td>
+<td>object</td>
+<td>no</td>
+<td><code>{tokens_used, cost_usd, context_pct, files_modified[], elapsed_secs?, last_activity?}</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="task_handoff-worker-delegator-final"><code>task_handoff</code> (worker → delegator, final)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>task_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td>string</td>
+<td>no</td>
+<td><code>completed</code> (default when absent) or <code>failed</code>; any other value reads as failed</td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td>string</td>
+<td>no</td>
+<td></td>
+</tr>
+<tr>
+<td><code>artifacts</code></td>
+<td>string[]</td>
+<td>no</td>
+<td>Always <code>[]</code> today</td>
+</tr>
+<tr>
+<td><code>total_cost_usd</code></td>
+<td>f64</td>
+<td>no (#493)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>total_tokens</code></td>
+<td>u64</td>
+<td>no (#493)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td>string | null</td>
+<td>no (#493)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>usage</code></td>
+<td>object</td>
+<td>no (#493)</td>
+<td>The agent's usage object, passed through</td>
+</tr>
+<tr>
+<td><code>git_ref</code></td>
+<td>string</td>
+<td>no</td>
+<td>Read by the delegator; no sender sets it yet</td>
+</tr>
+</tbody>
+</table>
+<h3 id="task_interrupt-delegator-worker-one-shot"><code>task_interrupt</code> (delegator → worker, one-shot)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>task_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>interrupt_type</code></td>
+<td>string</td>
+<td>yes</td>
+<td><code>stop</code> (kill, then a failed handoff) or <code>nudge</code> (reply with status); others ignored</td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>string</td>
+<td>no</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="hive">Hive</h2>
+<h3 id="knowledge_sync-peer-peer-periodic-and-on-propagation"><code>knowledge_sync</code> (peer → peer, periodic and on propagation)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>units</code></td>
+<td>KnowledgeUnit[]</td>
+<td>in effect</td>
+<td><code>hive/mod.rs</code> <code>KnowledgeUnit</code>. Missing or unparseable reads as none</td>
+</tr>
+<tr>
+<td><code>sync_epoch</code></td>
+<td>u64</td>
+<td>no</td>
+<td>Not read</td>
+</tr>
+</tbody>
+</table>
+<h3 id="knowledge_request"><code>knowledge_request</code></h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>since_epoch</code></td>
+<td>u64</td>
+<td>no</td>
+<td>0 or absent: full snapshot</td>
+</tr>
+</tbody>
+</table>
+<p>Handled on receipt; nothing in production sends it yet.</p>
+<h3 id="knowledge_snapshot-reply-to-knowledge_request"><code>knowledge_snapshot</code> (reply to <code>knowledge_request</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>units</code></td>
+<td>KnowledgeUnit[]</td>
+<td>in effect</td>
+<td></td>
+</tr>
+<tr>
+<td><code>page</code>, <code>total_pages</code></td>
+<td>usize</td>
+<td>no</td>
+<td>1-based paging. Read only in tests</td>
+</tr>
+</tbody>
+</table>
+<h3 id="hive_join_request-joiner-host-434"><code>hive_join_request</code> (joiner → host, #434)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hive_id</code></td>
+<td>string | null</td>
+<td>no</td>
+<td>Refused if present and wrong</td>
+</tr>
+<tr>
+<td><code>label</code></td>
+<td>string | null</td>
+<td>no</td>
+<td>Advisory name for the owner's queue</td>
+</tr>
+<tr>
+<td><code>grant</code></td>
+<td>string | null</td>
+<td>no (#435)</td>
+<td><code>hive.read:&lt;hive&gt;</code> token; admits as a reader</td>
+</tr>
+</tbody>
+</table>
+<p>Sent as explicit <code>null</code>s rather than omitted.</p>
+<h3 id="hive_join_result-host-joiner-on-the-link-or-later-as-a-one-shot"><code>hive_join_result</code> (host → joiner, on the link or later as a one-shot)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>state</code></td>
+<td>string</td>
+<td>yes</td>
+<td><code>member</code>, <code>pending</code> or <code>refused</code>; anything else is an error</td>
+</tr>
+<tr>
+<td><code>hive_id</code></td>
+<td>string | null</td>
+<td>for member and pending</td>
+<td></td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>string | null</td>
+<td>no</td>
+<td></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>string | null</td>
+<td>no</td>
+<td></td>
+</tr>
+<tr>
+<td><code>role</code></td>
+<td>string | null</td>
+<td>no (#435)</td>
+<td>Absent: contributor. Unrecognised: reader</td>
+</tr>
+</tbody>
+</table>
+<h3 id="knowledge_rejected-host-sender-of-refused-knowledge-435"><code>knowledge_rejected</code> (host → sender of refused knowledge, #435)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>reason</code></td>
+<td>string</td>
+<td>no</td>
+<td></td>
+</tr>
+<tr>
+<td><code>units</code></td>
+<td>usize</td>
+<td>no</td>
+<td>How many were dropped</td>
+</tr>
+</tbody>
+</table>
+<h2 id="conversation-transfer-478">Conversation transfer (#478)</h2>
+<h3 id="session_transfer-sender-receiver-one-shot-one-chunk-per-frame"><code>session_transfer</code> (sender → receiver, one-shot, one chunk per frame)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>session_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Validated</td>
+</tr>
+<tr>
+<td><code>cwd</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Sender's cwd; the placement directory</td>
+</tr>
+<tr>
+<td><code>seq</code></td>
+<td>u32</td>
+<td>yes</td>
+<td>0-based, <code>&lt; total</code></td>
+</tr>
+<tr>
+<td><code>total</code></td>
+<td>u32</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>digest</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Hex SHA-256 of the whole transcript</td>
+</tr>
+<tr>
+<td><code>data</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Base64 of up to 512 KiB</td>
+</tr>
+</tbody>
+</table>
+<p>A frame missing any key is dropped.</p>
+<h3 id="session_received-receiver-sender-reply-on-the-same-connection-511"><code>session_received</code> (receiver → sender, reply on the same connection, #511)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>session_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>path</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Where the transcript was placed</td>
+</tr>
+<tr>
+<td><code>cwd</code></td>
+<td>string</td>
+<td>no</td>
+<td>Not read</td>
+</tr>
+<tr>
+<td><code>resume</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Command to resume it on the receiver</td>
+</tr>
+</tbody>
+</table>
+<h2 id="fleet-leases-569">Fleet leases (#569)</h2>
+<p>Sent only on a link that agreed <code>lease-fleet</code>; a requester that finds the authority without it refuses before sending.</p>
+<p><strong>The authority.</strong>
+- One peer, named by <code>[relay] lease_authority</code> on every machine, keeps the fleet's leases in its own coord store.
+- A fleet lease's owner is <code>&lt;session&gt;@&lt;peer&gt;</code>. The peer is the id the relay authenticated, never one read from the payload.
+- The authority computes <code>expires_at</code> on its own clock.</p>
+<p><strong>Requests and answers.</strong> A requester sends one of the three requests on a one-shot dial, and the authority answers each with a <code>lease_result</code> on the same connection.</p>
+<p><strong>Renewal sends no message.</strong> On every session collection (about 5 s), the authority renews each fleet lease whose session is in that peer's latest heartbeat <code>sessions[].session_id</code>, from a heartbeat no older than 90 s. A session that ends, or a peer that stops heartbeating, stops renewing, and the lease expires at its TTL.</p>
+<h3 id="lease_claim-requester-authority"><code>lease_claim</code> (requester → authority)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>request_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Echoed in the result. Printable, no <code>@</code>, ≤ 96 bytes</td>
+</tr>
+<tr>
+<td><code>lease_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Chosen by the requester and reused across retries, so a repeat of a granted claim is answered <code>granted</code> instead of creating a second lease</td>
+</tr>
+<tr>
+<td><code>session</code></td>
+<td>string</td>
+<td>yes</td>
+<td>≤ 128 bytes, no <code>@</code></td>
+</tr>
+<tr>
+<td><code>kind</code>, <code>value</code></td>
+<td>string</td>
+<td>yes</td>
+<td><code>kind</code>: 1–32 of <code>a-z 0-9 _ -</code>. <code>value</code>: 1–512 printable. <code>path_glob</code> overlaps by prefix; other kinds match exactly</td>
+</tr>
+<tr>
+<td><code>mode</code></td>
+<td>string</td>
+<td>yes</td>
+<td><code>exclusive</code> or <code>advisory</code></td>
+</tr>
+<tr>
+<td><code>ttl_secs</code></td>
+<td>u64</td>
+<td>yes</td>
+<td>1 to 7 days</td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>string</td>
+<td>no</td>
+<td>Control characters dropped, ≤ 256</td>
+</tr>
+<tr>
+<td><code>wait</code></td>
+<td>bool</td>
+<td>no</td>
+<td>Queue instead of failing when held</td>
+</tr>
+<tr>
+<td><code>waiter_id</code></td>
+<td>string</td>
+<td>no</td>
+<td>Present on every poll after the first <code>queued</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="lease_release-requester-authority"><code>lease_release</code> (requester → authority)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>request_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>lease_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>session</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Must match the holder: only <code>&lt;session&gt;@&lt;requesting peer&gt;</code> may release</td>
+</tr>
+</tbody>
+</table>
+<h3 id="lease_list-requester-authority"><code>lease_list</code> (requester → authority)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Req</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>request_id</code></td>
+<td>string</td>
+<td>yes</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="lease_result-authority-requester"><code>lease_result</code> (authority → requester)</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>request_id</code></td>
+<td>string</td>
+<td>From the request</td>
+</tr>
+<tr>
+<td><code>outcome</code></td>
+<td>string</td>
+<td><code>granted</code>, <code>conflict</code>, <code>queued</code>, <code>waiter_gone</code>, <code>released</code>, <code>not_owner</code>, <code>not_found</code>, <code>not_active</code>, <code>list</code> or <code>error</code></td>
+</tr>
+<tr>
+<td><code>lease</code></td>
+<td>object</td>
+<td>With <code>granted</code>: the lease, including the authority-computed <code>expires_at</code></td>
+</tr>
+<tr>
+<td><code>holder</code>, <code>holder_lease</code>, <code>expires_at</code></td>
+<td>string</td>
+<td>With <code>conflict</code>/<code>queued</code> when a lease is in the way</td>
+</tr>
+<tr>
+<td><code>ahead</code></td>
+<td>u64</td>
+<td>With <code>conflict</code>/<code>queued</code> when only the queue is in the way</td>
+</tr>
+<tr>
+<td><code>waiter_id</code></td>
+<td>string</td>
+<td>With <code>queued</code>: present it on the next poll</td>
+</tr>
+<tr>
+<td><code>leases</code></td>
+<td>object[]</td>
+<td>With <code>list</code>: the active fleet leases</td>
+</tr>
+<tr>
+<td><code>message</code></td>
+<td>string</td>
+<td>With <code>error</code></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/mercurialsolo/claudectl" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

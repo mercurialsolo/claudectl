@@ -1,0 +1,81 @@
+/* claudectl custom theme overrides */
+
+:root {
+  --md-primary-fg-color: #1a1a2e;
+  --md-primary-fg-color--light: #2d2d4a;
+  --md-primary-fg-color--dark: #0f0f1e;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #0d1117;
+  --md-primary-fg-color--light: #161b22;
+  --md-primary-fg-color--dark: #010409;
+  --md-default-bg-color: #0d1117;
+  --md-default-bg-color--light: #161b22;
+  --md-typeset-a-color: #7cc4f2;
+  --md-accent-fg-color: #90caf9;
+}
+
+/* Hero section on index page */
+.md-typeset .hero-tagline {
+  font-size: 1.2rem;
+  color: var(--md-default-fg-color--light);
+  max-width: 48ch;
+}
+
+/* Feature grid */
+.md-typeset .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.md-typeset .feature-grid .feature-item {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  background: var(--md-default-bg-color--light);
+}
+
+.md-typeset .feature-grid .feature-item h3 {
+  margin-top: 0;
+  font-size: 0.95rem;
+}
+
+.md-typeset .feature-grid .feature-item p {
+  margin-bottom: 0;
+  font-size: 0.85rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Proof strip badges */
+.md-typeset .proof-strip {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+
+.md-typeset .proof-strip span {
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  font-size: 0.8rem;
+  font-family: var(--md-code-font-family);
+}
+
+/* Terminal screenshot styling */
+.md-typeset img.terminal-screenshot {
+  border-radius: 8px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  display: block;
+  width: 100%;
+}
+
+/* Comparison tables - tighter */
+.md-typeset table.comparison th,
+.md-typeset table.comparison td {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+}
