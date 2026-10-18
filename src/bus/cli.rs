@@ -367,7 +367,9 @@ fn dispatch_send(
     // Same resolution as the MCP `publish` tool (#596): a path goes to its
     // owner or is refused; a name nobody has bound is queued with a warning.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    let recipient = mcp::recipient_for(&conn, to, owner_of, &cwd).map_err(|e| e.to_string())?;
+    let recipient = mcp::recipient_for(&conn, to, owner_of, &cwd)
+        .map_err(|e| e.to_string())?
+        .check_presence(&mcp::LivePresence);
     let Some(role) = recipient.role else {
         return Err("a recipient is required: `bus send <ROLE>` or `bus route <PATH>`".into());
     };
@@ -406,7 +408,7 @@ struct OwnerJson {
 
 /// `claudectl bus owner <path>` (#596): the role bound to the most specific
 /// directory enclosing the path. Human form prints `role (selector)`,
-/// `ambiguous: a, b`, or `unbound`; exit status is 0 in all three, since
+/// `shared: a, b`, or `unowned`; exit status is 0 in all three, since
 /// "nobody owns this" is an answer, not a failure.
 fn dispatch_owner(path: &str, json: bool) -> Result<(), String> {
     let conn = store::open()?;

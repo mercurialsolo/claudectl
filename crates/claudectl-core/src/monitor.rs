@@ -642,3 +642,55 @@ fn estimate_cost_components(
         resolved.source == models::ModelProfileSource::Fallback,
     )
 }
+
+#[cfg(test)]
+mod edit_tool_tests {
+    use super::record_tool_usage;
+    use crate::session::{ClaudeSession, RawSession};
+    use serde_json::json;
+
+    fn session() -> ClaudeSession {
+        ClaudeSession::from_raw(RawSession {
+            pid: 100,
+            session_id: "test".into(),
+            cwd: "/repo".into(),
+            started_at: 0,
+        })
+    }
+
+    /// `files_modified` follows `transcript::EDIT_TOOLS` (#596): every edit
+    /// tool counts, by `file_path` or by `notebook_path`.
+    #[test]
+    fn every_edit_tool_counts_toward_files_modified() {
+        let mut s = session();
+        record_tool_usage("Edit", &json!({"file_path": "/repo/a.rs"}), &mut s);
+        record_tool_usage("Write", &json!({"file_path": "/repo/a.rs"}), &mut s);
+        record_tool_usage("MultiEdit", &json!({"file_path": "/repo/b.rs"}), &mut s);
+        record_tool_usage(
+            "NotebookEdit",
+            &json!({"notebook_path": "/repo/n.ipynb"}),
+            &mut s,
+        );
+        record_tool_usage("Read", &json!({"file_path": "/repo/c.rs"}), &mut s);
+        assert_eq!(s.files_modified.get("/repo/a.rs"), Some(&2));
+        assert_eq!(s.files_modified.get("/repo/b.rs"), Some(&1));
+        assert_eq!(s.files_modified.get("/repo/n.ipynb"), Some(&1));
+        assert_eq!(
+            s.files_modified.get("/repo/c.rs"),
+            None,
+            "reads are not edits"
+        );
+        assert_eq!(
+            s.tool_usage["Read"].calls, 1,
+            "but every tool is still counted"
+        );
+    }
+
+    #[test]
+    fn an_edit_resets_the_reads_since_edit_for_that_path() {
+        let mut s = session();
+        s.file_reads_since_edit.insert("/repo/b.rs".into(), 3);
+        record_tool_usage("MultiEdit", &json!({"file_path": "/repo/b.rs"}), &mut s);
+        assert_eq!(s.file_reads_since_edit.get("/repo/b.rs"), None);
+    }
+}

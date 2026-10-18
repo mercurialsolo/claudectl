@@ -18,8 +18,21 @@ pub fn projects_dir() -> PathBuf {
 }
 
 pub fn scan_sessions() -> Vec<ClaudeSession> {
+    scan_sessions_with(true)
+}
+
+/// `scan_sessions` without the stale-file sweep: for callers that only want
+/// to know who is running and must not delete anything, such as a `bus
+/// send` checking whether a bound role still has a session (#596).
+pub fn scan_sessions_readonly() -> Vec<ClaudeSession> {
+    scan_sessions_with(false)
+}
+
+fn scan_sessions_with(cleanup: bool) -> Vec<ClaudeSession> {
     let dir = sessions_dir();
-    cleanup_stale_sessions(&dir);
+    if cleanup {
+        cleanup_stale_sessions(&dir);
+    }
 
     let mut sessions = Vec::new();
 

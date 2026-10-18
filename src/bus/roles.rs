@@ -343,14 +343,39 @@ fn resolve_by_cwd(conn: &Connection, cwd: &Path) -> Result<RoleResolution, Strin
 /// that leaves the bound tree (`/repo/config/prod.toml → /etc/app/…`) is
 /// still owned by the role bound to `/repo/config`.
 pub fn owner_of_path(conn: &Connection, path: &Path) -> Result<Ownership, String> {
+    use claudectl_core::paths::{canonical_spellings, normalize_lexically};
     let all = store::list_roles(conn)?;
-    let spellings = claudectl_core::paths::spellings(path);
-    let canon = canonicalize_for_match(path).to_string_lossy().into_owned();
+    let stems: Vec<(String, bool, RoleRow)> = all
+        .into_iter()
+        .map(|r| {
+            let (stem, bare) = selector_stem(&r.cwd_selector);
+            (stem, bare, r)
+        })
+        .collect();
+    // The literal spelling first (`.` and `..` folded so a path cannot
+    // escape its root through a string prefix); the on-disk forms only when
+    // it matched no selector, since they cost a canonicalize walk each.
+    let normalized = normalize_lexically(path);
+    let literal = normalized.to_string_lossy().into_owned();
+    let mut best = best_owners(&stems, std::slice::from_ref(&literal));
+    if best.is_empty() {
+        best = best_owners(&stems, &canonical_spellings(&normalized));
+    }
+    match best.len() {
+        0 => Ok(Ownership::Unowned { path: literal }),
+        1 => Ok(Ownership::Owned(best.remove(0))),
+        _ => Ok(Ownership::Shared {
+            candidates: best.into_iter().map(|r| r.name).collect(),
+        }),
+    }
+}
+
+/// The roles on the longest selector stem that covers any of `spellings`.
+fn best_owners(stems: &[(String, bool, RoleRow)], spellings: &[String]) -> Vec<Role> {
     let mut best_len = 0usize;
     let mut best: Vec<Role> = Vec::new();
-    for r in all {
-        let (stem, bare) = selector_stem(&r.cwd_selector);
-        if !spellings.iter().any(|p| stem_matches(&stem, bare, p)) {
+    for (stem, bare, r) in stems {
+        if !spellings.iter().any(|p| stem_matches(stem, *bare, p)) {
             continue;
         }
         let len = stem.len();
@@ -359,16 +384,10 @@ pub fn owner_of_path(conn: &Connection, path: &Path) -> Result<Ownership, String
             best.clear();
         }
         if len == best_len {
-            best.push(Role::from(r));
+            best.push(Role::from(r.clone()));
         }
     }
-    match best.len() {
-        0 => Ok(Ownership::Unowned { path: canon }),
-        1 => Ok(Ownership::Owned(best.remove(0))),
-        _ => Ok(Ownership::Shared {
-            candidates: best.into_iter().map(|r| r.name).collect(),
-        }),
-    }
+    best
 }
 
 /// Whether `selector` covers `path`, by the same rule the resolvers use.
@@ -707,6 +726,20 @@ mod tests {
         assert!(matches!(
             resolve(&conn, None, &PathBuf::from("/repo/src/relay")).unwrap(),
             RoleResolution::Ambiguous { .. }
+        ));
+    }
+
+    #[test]
+    fn a_path_that_escapes_the_tree_through_dotdot_is_not_owned() {
+        let conn = open_memory();
+        upsert_role(&conn, "impl", "/repo", None, None).unwrap();
+        assert!(matches!(
+            owner(&conn, "/repo/../other/x.rs"),
+            Ownership::Unowned { path } if path == "/other/x.rs"
+        ));
+        assert!(matches!(
+            owner(&conn, "/repo/./src/../src/x.rs"),
+            Ownership::Owned(r) if r.name == "impl"
         ));
     }
 

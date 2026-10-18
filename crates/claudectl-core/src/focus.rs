@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::paths::{canonicalize_deep, spellings};
+use crate::paths::{canonical_spellings, canonicalize_deep, normalize_lexically};
 use crate::transcript::{
     TranscriptBlock, TranscriptEvent, TranscriptRole, edited_path, is_edit_tool, parse_line,
     read_tail,
@@ -93,6 +93,12 @@ pub fn edits_from_transcript(jsonl_path: &Path, cap: u64) -> HashMap<String, u32
     let text = read_tail(jsonl_path, cap).unwrap_or_default();
     let mut edits = HashMap::new();
     for line in text.lines() {
+        // A line without a tool call cannot carry an edit; skip the JSON
+        // parse for the tool results and text turns that make up most of a
+        // transcript by bytes.
+        if !line.contains("tool_use") {
+            continue;
+        }
         let Some(TranscriptEvent::Message(msg)) = parse_line(line) else {
             continue;
         };
@@ -141,8 +147,12 @@ pub fn session_focus_within(jsonl_path: &Path, root: &Path, cap: u64, max: u64) 
     let mut cap = cap.max(1);
     loop {
         let edits = edits_from_transcript(jsonl_path, cap);
-        if !edits.is_empty() || cap >= len || cap >= max {
-            return focus_from_edits(edits.iter().map(|(p, n)| (p.as_str(), *n)), root);
+        // Stop on an *in-tree* edit, which is what a focus is made of: an
+        // out-of-tree edit in the window (a note in `~/.claude`) is not a
+        // reason to stop looking for the project's own.
+        let focus = focus_from_edits(edits.iter().map(|(p, n)| (p.as_str(), *n)), root);
+        if focus.is_some() || cap >= len || cap >= max {
+            return focus;
         }
         cap = cap.saturating_mul(4).min(max);
     }
@@ -173,14 +183,17 @@ fn trim_slash(s: &str) -> String {
 /// canonical form, because `git rev-parse` reports a canonical root while a
 /// tool input follows the session's cwd, which may run through a symlink.
 fn relative_to_any(file: &str, roots: &[String]) -> Option<String> {
-    // As spelled first: that is the common case and costs no syscall. The
-    // canonical form is computed only when no root matched.
-    if let Some(rel) = roots.iter().find_map(|root| strip_root(file, root)) {
+    // Lexically normalized first (`.` and `..` folded, so a path that
+    // escapes the root cannot pass a string prefix test): that is the common
+    // case and costs no syscall. The on-disk forms are computed only when no
+    // root matched.
+    let normalized = normalize_lexically(Path::new(file));
+    let literal = normalized.to_string_lossy();
+    if let Some(rel) = roots.iter().find_map(|root| strip_root(&literal, root)) {
         return Some(rel.to_string());
     }
-    spellings(Path::new(file))
+    canonical_spellings(&normalized)
         .iter()
-        .skip(1)
         .find_map(|f| roots.iter().find_map(|root| strip_root(f, root)))
         .map(str::to_string)
 }
@@ -373,6 +386,43 @@ mod tests {
             None,
             "the head fell outside the cap"
         );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn a_path_that_escapes_the_root_is_outside_and_dots_do_not_double_count() {
+        assert_eq!(
+            focus(&[("/repo/../sibling/x.rs", 3)], "/repo"),
+            None,
+            "`..` out of the root is not in the tree"
+        );
+        let f = focus(
+            &[("/repo/./src/./x.rs", 1), ("/repo/src/../src/y.rs", 1)],
+            "/repo",
+        )
+        .unwrap();
+        assert_eq!(f.dir, "src");
+        assert_eq!((f.edits, f.total), (2, 2));
+    }
+
+    #[test]
+    fn an_out_of_tree_edit_in_the_window_does_not_stop_the_search() {
+        let tmp = std::env::temp_dir().join(format!("focus-grow2-{}", std::process::id()));
+        let in_tree = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/repo/src/relay/peer.rs"}}]}}"#;
+        let log = "x".repeat(4096);
+        let result = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","content":"{log}"}}]}}}}"#
+        );
+        let out_of_tree = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/home/me/.claude/CLAUDE.md"}}]}}"#;
+        std::fs::write(&tmp, format!("{in_tree}\n{result}\n{out_of_tree}\n")).unwrap();
+        let small = (result.len() + out_of_tree.len() + 2) as u64;
+        assert_eq!(
+            edits_from_transcript(&tmp, small).len(),
+            1,
+            "only the out-of-tree edit fits"
+        );
+        let f = session_focus_within(&tmp, Path::new("/repo"), small, small * 16).unwrap();
+        assert_eq!(f.dir, "src/relay");
         let _ = std::fs::remove_file(&tmp);
     }
 

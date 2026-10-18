@@ -40,23 +40,63 @@ pub fn canonicalize_deep(p: &Path) -> PathBuf {
 /// `/repo/config/prod.toml` whether or not that file links out to
 /// `/etc/app/prod.toml`, and whether `/repo` is reached through a symlink.
 pub fn spellings(p: &Path) -> Vec<String> {
-    let mut out = vec![p.to_string_lossy().into_owned()];
+    let normalized = normalize_lexically(p);
+    let mut out = vec![normalized.to_string_lossy().into_owned()];
+    for s in canonical_spellings(&normalized) {
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// The on-disk spellings of an already normalized path: its parent resolved
+/// with the final name re-appended, then the whole path resolved. The
+/// costly half of [`spellings`], for callers that try the literal spelling
+/// first and only pay for these when it matched nothing.
+pub fn canonical_spellings(normalized: &Path) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(2);
     let mut push = |candidate: PathBuf| {
         let s = candidate.to_string_lossy().into_owned();
         if !out.contains(&s) {
             out.push(s);
         }
     };
-    if let (Some(parent), Some(name)) = (p.parent(), p.file_name()) {
+    if let (Some(parent), Some(name)) = (normalized.parent(), normalized.file_name()) {
         push(canonicalize_deep(parent).join(name));
     }
-    push(canonicalize_deep(p));
+    push(canonicalize_deep(normalized));
+    out
+}
+
+/// `p` with `.` segments dropped and `..` segments folded into the segment
+/// before them, without touching the disk. A prefix test on the raw string
+/// would otherwise let `/repo/../sibling/x.rs` pass as being under `/repo`,
+/// and count `/repo/./src` twice at the root. A leading `..` with nothing
+/// to fold into is kept.
+pub fn normalize_lexically(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let popped =
+                    matches!(out.components().next_back(), Some(Component::Normal(_))) && out.pop();
+                if !popped {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::{canonicalize_deep, spellings};
+    use std::path::Path;
 
     #[test]
     fn a_symlinked_file_keeps_its_place_in_the_tree_as_one_spelling() {
@@ -84,11 +124,29 @@ mod tests {
     }
 
     #[test]
+    fn dot_and_dotdot_segments_are_folded_without_touching_the_disk() {
+        use super::normalize_lexically;
+        let n = |s: &str| {
+            normalize_lexically(Path::new(s))
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(n("/repo/../sibling/x.rs"), "/sibling/x.rs");
+        assert_eq!(n("/repo/./src/./x.rs"), "/repo/src/x.rs");
+        assert_eq!(n("/repo/src/../src/x.rs"), "/repo/src/x.rs");
+        assert_eq!(n("/../x"), "/../x", "nothing to fold into is kept");
+        assert_eq!(n("../x"), "../x");
+        assert_eq!(
+            spellings(Path::new("/repo/../sibling/x.rs"))[0],
+            "/sibling/x.rs"
+        );
+    }
+
+    #[test]
     fn a_plain_path_has_no_duplicate_spellings() {
         let got = spellings(Path::new("/definitely-not-a-real-root-xyz/a/b"));
         assert_eq!(got, vec!["/definitely-not-a-real-root-xyz/a/b".to_string()]);
     }
-    use std::path::Path;
 
     #[test]
     fn an_existing_path_is_canonicalized_as_usual() {
