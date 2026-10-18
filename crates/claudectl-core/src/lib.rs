@@ -17,6 +17,7 @@ pub mod agent;
 pub mod config;
 pub mod discovery;
 pub mod fleet;
+pub mod focus;
 pub mod forecast;
 pub mod headroom;
 pub mod health;

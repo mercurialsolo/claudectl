@@ -10,7 +10,15 @@
 //!    prefix of (or equal to) the caller's cwd.
 //! 3. **Ambiguous** — multiple roles match; surface an `Ambiguous` resolution
 //!    so the caller is asked to pass `--role` explicitly.
-//! 4. **Unbound** — no match. Callers may auto-register from the cwd basename.
+//! 4. **Unbound** — no match. The caller is told so; nothing is registered
+//!    on its behalf.
+//!
+//! The same selectors double as an *ownership map* (#596): a role bound to
+//! a subtree owns the work under it. `owner_of_path` picks the role with the
+//! most specific selector enclosing a path, so `bus role bind relay
+//! <repo>/src/relay` routes relay work to `relay` while a role bound at the
+//! repo root takes everything else. Unlike cwd inference, nesting is not
+//! ambiguity here; only two roles on the *same* selector are.
 
 use std::path::Path;
 
@@ -284,6 +292,44 @@ fn resolve_by_cwd(conn: &Connection, cwd: &Path) -> Result<RoleResolution, Strin
     }
 }
 
+/// The role that owns `path`: the one whose selector is the longest prefix
+/// of it (#596). Several roles on that same longest selector are
+/// `Ambiguous`; no enclosing selector is `Unbound`. A role bound by pid
+/// still has a selector (the cwd it was bound from), so it takes part.
+///
+/// `path` may be a file or a directory, and need not exist.
+pub fn owner_of_path(conn: &Connection, path: &Path) -> Result<RoleResolution, String> {
+    let all = store::list_roles(conn)?;
+    let path_canon = canonicalize_for_match(path);
+    let path_str = path_canon.to_string_lossy();
+    let mut best_len = 0usize;
+    let mut best: Vec<Role> = Vec::new();
+    for r in all {
+        let sel_canon = canonicalize_for_match(Path::new(r.cwd_selector.trim_end_matches('*')));
+        let sel = sel_canon.to_string_lossy();
+        if !selector_matches(&sel, &path_str) {
+            continue;
+        }
+        let len = sel.trim_end_matches('/').len();
+        if len > best_len {
+            best_len = len;
+            best.clear();
+        }
+        if len == best_len {
+            best.push(Role::from(r));
+        }
+    }
+    match best.len() {
+        0 => Ok(RoleResolution::Unbound {
+            cwd: path_str.into_owned(),
+        }),
+        1 => Ok(RoleResolution::Resolved(best.remove(0))),
+        _ => Ok(RoleResolution::Ambiguous {
+            candidates: best.into_iter().map(|r| r.name).collect(),
+        }),
+    }
+}
+
 /// Phase-1 selectors are simple: literal path prefixes. A trailing wildcard
 /// (`/work/proj-*`) is treated as a prefix match against the stem before `*`.
 /// Glob support proper is a phase-3 setup-wizard concern.
@@ -412,6 +458,69 @@ mod tests {
         let conn = open_memory();
         let r = resolve(&conn, None, &PathBuf::from("/nowhere")).unwrap();
         assert!(matches!(r, RoleResolution::Unbound { .. }));
+    }
+
+    // ── ownership (#596) ──────────────────────────────────────────────────
+
+    fn owner(conn: &Connection, path: &str) -> RoleResolution {
+        owner_of_path(conn, &PathBuf::from(path)).unwrap()
+    }
+
+    #[test]
+    fn the_most_specific_selector_owns_the_path() {
+        let conn = open_memory();
+        upsert_role(&conn, "impl", "/repo", None, None).unwrap();
+        upsert_role(&conn, "relay", "/repo/src/relay", None, None).unwrap();
+        assert!(matches!(
+            owner(&conn, "/repo/src/relay/peer.rs"),
+            RoleResolution::Resolved(r) if r.name == "relay"
+        ));
+        assert!(matches!(
+            owner(&conn, "/repo/src/bus/mcp.rs"),
+            RoleResolution::Resolved(r) if r.name == "impl"
+        ));
+        assert!(
+            matches!(owner(&conn, "/repo/src/relay"), RoleResolution::Resolved(r) if r.name == "relay"),
+            "the subtree directory itself belongs to its owner"
+        );
+    }
+
+    #[test]
+    fn nesting_is_not_ambiguity_but_a_shared_selector_is() {
+        let conn = open_memory();
+        upsert_role(&conn, "a", "/repo", None, None).unwrap();
+        upsert_role(&conn, "b", "/repo", None, None).unwrap();
+        upsert_role(&conn, "relay", "/repo/src/relay", None, None).unwrap();
+        match owner(&conn, "/repo/README.md") {
+            RoleResolution::Ambiguous { candidates } => {
+                assert_eq!(candidates.len(), 2);
+                assert!(!candidates.contains(&"relay".to_string()));
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        assert!(matches!(
+            owner(&conn, "/repo/src/relay/peer.rs"),
+            RoleResolution::Resolved(r) if r.name == "relay"
+        ));
+        // cwd inference keeps its own rule: nested selectors are ambiguous there.
+        assert!(matches!(
+            resolve(&conn, None, &PathBuf::from("/repo/src/relay")).unwrap(),
+            RoleResolution::Ambiguous { .. }
+        ));
+    }
+
+    #[test]
+    fn a_path_under_no_selector_has_no_owner() {
+        let conn = open_memory();
+        upsert_role(&conn, "relay", "/repo/src/relay", None, None).unwrap();
+        assert!(matches!(
+            owner(&conn, "/repo/src/relayx/peer.rs"),
+            RoleResolution::Unbound { .. }
+        ));
+        assert!(matches!(
+            owner(&conn, "/elsewhere"),
+            RoleResolution::Unbound { .. }
+        ));
     }
 
     #[test]

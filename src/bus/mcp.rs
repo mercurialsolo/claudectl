@@ -9,9 +9,12 @@
 //!   role (if any), cwd, status, and last-seen timestamp.
 //! * `publish` — append a message to the recipient role's mailbox. Directed
 //!   send only in phase 4; subject pub/sub + claim protocol come in phase 7.
+//!   `addressed_to_path` routes to whichever role owns a path (#596).
 //! * `read_inbox` — drain pending directed messages for the caller's role.
+//! * `owner_of` — which role owns a path: the one bound to the most specific
+//!   enclosing directory (#596).
 //!
-//! All four tools share one in-process bus state struct so the SQLite
+//! The tools share one in-process bus state struct so the SQLite
 //! connection is opened exactly once per server lifetime.
 
 use std::path::PathBuf;
@@ -70,6 +73,10 @@ pub struct AgentSnapshot {
     pub project: String,
     pub status: String,
     pub role: Option<String>,
+    /// Where in its worktree the session's recent edits concentrate (#596):
+    /// a directory relative to the root, `.` for the root itself, absent
+    /// when the transcript shows no in-tree edits.
+    pub focus: Option<String>,
     pub last_seen_ts: u64,
 }
 
@@ -81,6 +88,12 @@ pub struct PublishArgs {
     pub msg_type: String,
     #[serde(default)]
     pub addressed_to: Option<String>,
+    /// Address the message to whichever role owns this path (#596): the
+    /// role bound to the most specific selector enclosing it. Refused when
+    /// no role owns the path or two roles share its selector. Exclusive
+    /// with `addressed_to`.
+    #[serde(default)]
+    pub addressed_to_path: Option<String>,
     #[serde(default)]
     pub thread_id: Option<String>,
     /// "high" | "normal" | "low". Defaults to "normal".
@@ -103,6 +116,24 @@ pub struct PublishResult {
     pub sanitized: bool,
     /// The hop count stored on the new row (`parent_hop + 1`).
     pub hop_count: u32,
+    /// The role the message was queued for, once `addressed_to_path` has
+    /// been resolved (#596).
+    pub addressed_to: Option<String>,
+    /// Set when the recipient is a name no role has ever bound (#596). The
+    /// message is queued all the same and waits until one does; reserved
+    /// roles (`supervisor`, `operator`) can never be bound and never warn.
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OwnerOfArgs {
+    /// A file or directory, absolute or relative to the caller's cwd.
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OwnerOfResult {
+    pub resolution: serde_json::Value,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -311,6 +342,7 @@ impl BusServer {
     ) -> Result<Json<ListAgentsResult>, McpError> {
         let mut sessions = crate::discovery::scan_sessions();
         crate::discovery::resolve_jsonl_paths(&mut sessions);
+        crate::discovery::resolve_worktree_ids(&mut sessions);
         let conn = self.conn.lock().expect("bus db mutex poisoned");
         let mut out = Vec::with_capacity(sessions.len());
         for s in sessions {
@@ -319,6 +351,12 @@ impl BusServer {
                 Ok(RoleResolution::Resolved(r)) => Some(r.name),
                 _ => None,
             };
+            let root = s.worktree_id.as_deref().unwrap_or(&s.cwd);
+            let focus = claudectl_core::focus::session_focus(
+                s.jsonl_path.as_deref(),
+                std::path::Path::new(root),
+            )
+            .map(|f| f.dir);
             out.push(AgentSnapshot {
                 session_id: s.session_id.clone(),
                 pid: s.pid,
@@ -326,6 +364,7 @@ impl BusServer {
                 project: s.project_name.clone(),
                 status: s.status.to_string(),
                 role,
+                focus,
                 last_seen_ts: s.last_message_ts,
             });
         }
@@ -385,12 +424,19 @@ impl BusServer {
         let priority = args.priority.as_deref().unwrap_or("normal");
 
         let conn = self.conn.lock().expect("bus db mutex poisoned");
+        let recipient = recipient_for(
+            &conn,
+            args.addressed_to.as_deref(),
+            args.addressed_to_path.as_deref(),
+            &Self::caller_cwd(None),
+        )
+        .map_err(|e| McpError::invalid_params(e, None))?;
         let id = store::insert_message(
             &conn,
             &args.subject,
             &args.msg_type,
             sender_role.as_deref(),
-            args.addressed_to.as_deref(),
+            recipient.role.as_deref(),
             args.thread_id.as_deref(),
             &sanitized_body,
             priority,
@@ -401,6 +447,24 @@ impl BusServer {
             message_id: id,
             sanitized,
             hop_count: outgoing_hop,
+            addressed_to: recipient.role,
+            warning: recipient.warning,
+        }))
+    }
+
+    #[tool(
+        description = "Which role owns a path (#596): the role bound to the most specific directory enclosing it. Use it to pick a recipient for work on that part of the tree; publish's addressed_to_path does the same in one step."
+    )]
+    async fn owner_of(
+        &self,
+        Parameters(args): Parameters<OwnerOfArgs>,
+    ) -> Result<Json<OwnerOfResult>, McpError> {
+        let conn = self.conn.lock().expect("bus db mutex poisoned");
+        let path = absolute_path(&args.path, &Self::caller_cwd(None));
+        let res =
+            roles::owner_of_path(&conn, &path).map_err(|e| McpError::internal_error(e, None))?;
+        Ok(Json(OwnerOfResult {
+            resolution: Self::resolution_to_json(res),
         }))
     }
 
@@ -541,14 +605,91 @@ impl ServerHandler for BusServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "claudectl agent bus. Use list_agents to discover peers, whoami for the \
-                 caller's role, publish to send a directed message, read_inbox to drain \
-                 your mailbox. See docs/AGENT_BUS.md."
+                "claudectl agent bus. Use list_agents to discover peers (each with the \
+                 directory its edits concentrate in, `focus`), whoami for the caller's \
+                 role, publish to send a directed message (addressed_to a role, or \
+                 addressed_to_path to whoever owns that part of the tree), owner_of to \
+                 ask who owns a path, read_inbox to drain your mailbox. See \
+                 docs/AGENT_BUS.md."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
+    }
+}
+
+/// Who a message is for, and whether anyone is there to read it (#596).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Recipient {
+    pub role: Option<String>,
+    pub warning: Option<String>,
+}
+
+/// Resolve a message's recipient from `addressed_to` or `addressed_to_path`.
+///
+/// A path is routed to its owner and *refused* when it has none or two
+/// roles share its selector: the sender asked to be routed, so a message
+/// nobody would read is an error, not a queued row. A name is accepted as
+/// it always was, with a warning when no role has ever bound it; reserved
+/// roles are addressable without being bindable and never warn. Naming
+/// both is an error.
+pub fn recipient_for(
+    conn: &rusqlite::Connection,
+    addressed_to: Option<&str>,
+    addressed_to_path: Option<&str>,
+    cwd: &std::path::Path,
+) -> Result<Recipient, String> {
+    match (addressed_to, addressed_to_path) {
+        (Some(_), Some(_)) => Err("pass addressed_to or addressed_to_path, not both".into()),
+        (None, Some(path)) => {
+            let abs = absolute_path(path, cwd);
+            match roles::owner_of_path(conn, &abs)? {
+                RoleResolution::Resolved(r) => Ok(Recipient {
+                    role: Some(r.name),
+                    warning: None,
+                }),
+                RoleResolution::Ambiguous { candidates } => Err(format!(
+                    "no single owner for {}: {} are bound to the same selector; address one of them",
+                    abs.display(),
+                    candidates.join(", ")
+                )),
+                RoleResolution::Unbound { .. } => Err(format!(
+                    "no role owns {}: bind one to an enclosing directory with `claudectl bus role bind <name> <dir>`",
+                    abs.display()
+                )),
+            }
+        }
+        (Some(name), None) => {
+            let lower = name.to_ascii_lowercase();
+            let reserved = policy::RESERVED_ROLES.iter().any(|r| *r == lower);
+            let warning = if reserved || store::get_role(conn, name)?.is_some() {
+                None
+            } else {
+                Some(format!(
+                    "no role '{name}' is bound; the message waits until one binds"
+                ))
+            };
+            Ok(Recipient {
+                role: Some(name.to_string()),
+                warning,
+            })
+        }
+        (None, None) => Ok(Recipient {
+            role: None,
+            warning: None,
+        }),
+    }
+}
+
+/// A caller's path as an absolute path: relative ones are taken against
+/// its cwd, since the server's own cwd is where it was launched.
+pub fn absolute_path(path: &str, cwd: &std::path::Path) -> PathBuf {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
     }
 }
 
@@ -617,5 +758,98 @@ mod sender_tests {
         store::upsert_role(&conn, "a", "/shared", None, None).unwrap();
         store::upsert_role(&conn, "b", "/shared", None, None).unwrap();
         assert_eq!(sender_for(&conn, None, Path::new("/shared")), None);
+    }
+}
+
+#[cfg(test)]
+mod recipient_tests {
+    use super::{Recipient, recipient_for};
+    use crate::bus::store;
+    use std::path::Path;
+
+    fn db() -> rusqlite::Connection {
+        let conn = store::open_memory();
+        store::upsert_role(&conn, "impl", "/repo", None, None).unwrap();
+        store::upsert_role(&conn, "relay", "/repo/src/relay", None, None).unwrap();
+        conn
+    }
+
+    #[test]
+    fn a_path_is_routed_to_its_owner() {
+        let conn = db();
+        let r =
+            recipient_for(&conn, None, Some("/repo/src/relay/peer.rs"), Path::new("/")).unwrap();
+        assert_eq!(
+            r,
+            Recipient {
+                role: Some("relay".into()),
+                warning: None
+            }
+        );
+        let r = recipient_for(&conn, None, Some("src/bus/mcp.rs"), Path::new("/repo")).unwrap();
+        assert_eq!(
+            r.role.as_deref(),
+            Some("impl"),
+            "a relative path is taken against the caller's cwd"
+        );
+    }
+
+    #[test]
+    fn a_path_nobody_owns_is_refused_not_queued() {
+        let conn = db();
+        let err = recipient_for(&conn, None, Some("/elsewhere/x.rs"), Path::new("/")).unwrap_err();
+        assert!(err.contains("no role owns /elsewhere/x.rs"), "{err}");
+        assert!(
+            err.contains("bus role bind"),
+            "the refusal says how to fix it: {err}"
+        );
+    }
+
+    #[test]
+    fn a_path_with_two_equal_owners_names_them() {
+        let conn = db();
+        store::upsert_role(&conn, "impl2", "/repo", None, None).unwrap();
+        let err = recipient_for(&conn, None, Some("/repo/README.md"), Path::new("/")).unwrap_err();
+        assert!(err.contains("impl") && err.contains("impl2"), "{err}");
+        // The more specific owner is still unambiguous.
+        let r = recipient_for(&conn, None, Some("/repo/src/relay/a.rs"), Path::new("/")).unwrap();
+        assert_eq!(r.role.as_deref(), Some("relay"));
+    }
+
+    #[test]
+    fn a_never_bound_name_is_queued_with_a_warning() {
+        let conn = db();
+        let r = recipient_for(&conn, Some("ghost"), None, Path::new("/")).unwrap();
+        assert_eq!(r.role.as_deref(), Some("ghost"), "still queued");
+        assert!(
+            r.warning
+                .as_deref()
+                .unwrap()
+                .contains("no role 'ghost' is bound")
+        );
+    }
+
+    #[test]
+    fn a_bound_or_reserved_name_does_not_warn() {
+        let conn = db();
+        for name in ["relay", "supervisor", "Operator"] {
+            let r = recipient_for(&conn, Some(name), None, Path::new("/")).unwrap();
+            assert_eq!(r.role.as_deref(), Some(name));
+            assert_eq!(r.warning, None, "{name} should not warn");
+        }
+    }
+
+    #[test]
+    fn naming_both_is_an_error_and_neither_is_a_broadcast() {
+        let conn = db();
+        assert!(recipient_for(&conn, Some("impl"), Some("/repo"), Path::new("/")).is_err());
+        let r = recipient_for(&conn, None, None, Path::new("/")).unwrap();
+        assert_eq!(
+            r,
+            Recipient {
+                role: None,
+                warning: None
+            }
+        );
     }
 }

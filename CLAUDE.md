@@ -51,6 +51,7 @@ src/                   # the binary crate `claudectl`
 - `process.rs` — Process introspection via native `ps` (not sysinfo crate)
 - `history.rs` — Session history persistence and cost analytics
 - `fleet.rs` — Cluster session view: the `~/.claudectl/relay/fleet.json` snapshot `relay serve` publishes (atomic write, staleness gates) plus a side-effect-free local session collector for advertising to peers
+- `focus.rs` — Where in its worktree a session is working (#596): the deepest directory holding a strict majority of its recent `Edit`/`Write`/`NotebookEdit` targets, from a capped tail of the transcript. Deterministic, no LLM. The bus routes by it (`roles::owner_of_path`, `publish(addressed_to_path)`, `bus route`)
 - `health.rs` — Session health monitoring (cache ratio, cost spikes, loop detection, stalls, context saturation). Owns `HealthThresholds`.
 - `rules.rs` — Auto-rule engine: match sessions by status/tool/command/project/cost, then approve/deny/send/terminate/route/spawn/delegate
 - `models.rs` — Model pricing profiles (built-in + user overrides) for cost tracking

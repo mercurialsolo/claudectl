@@ -125,6 +125,24 @@ claudectl bus send <to-role> "<body>" \
 
 From inside a Claude session, just use natural language with the recipient role — the Claude side calls the bus's `publish` MCP tool and the message lands on disk before the turn ends. A leading `/` in any body is neutralized at the boundary so a queued message cannot smuggle a slash command into the recipient.
 
+Sending to a role name nobody has bound still queues the message (roles are durable and may bind later), but prints a warning so a typo does not sit in a mailbox forever. `supervisor` and `operator` are addressable without being bound and never warn.
+
+### Route by the path the work touches
+
+A role bound to a subtree owns it. Bind one per area and address work by path instead of by name:
+
+```bash
+claudectl bus role bind relay   ~/work/proj/src/relay
+claudectl bus role bind impl    ~/work/proj                  # everything else
+claudectl bus owner ~/work/proj/src/relay/peer.rs            # → relay (~/work/proj/src/relay)
+claudectl bus owner ~/work/proj/README.md                    # → impl (~/work/proj)
+claudectl bus route src/relay/peer.rs "reconnect loops on a dropped link" --from planner
+```
+
+The most specific selector wins. Two roles on the *same* selector are ambiguous and the send is refused with both names; a path nobody owns is refused with the bind that would fix it. From a Claude session the same thing is `publish(addressed_to_path=…)`, or `owner_of(path)` to ask first.
+
+`list_agents` reports each session's `focus`: the directory holding a strict majority of its recent edits (`.` for the repo root, `null` when it has not edited anything in the tree). So "who is working on `src/relay` right now" and "who should get work on `src/relay`" are both one call, with nobody declaring either.
+
 ### Drain the inbox
 
 The recipient picks up mail in two ways:
@@ -238,6 +256,7 @@ See [Quick Start § Uninstall](quickstart.md#uninstall) for the full lifecycle c
 | PID-keyed role bindings + ancestor-walk resolution | Shipped (0.55.0) |
 | Codex sessions: `--self`, the agent recorded on the role, replies signed with the caller's role | Shipped (#527, part 1) |
 | TUI Ctrl+R + `/role` slash command + `bus role suggest` | Shipped (0.55.0, renamed from `/bind` in 0.57.0) |
+| Route by path: `focus` on `list_agents`, `bus owner`, `bus route`, `publish(addressed_to_path)`, warning on unbound recipients | Shipped (#596) |
 | Subjects + `subscribe` + claim protocol | Not started |
 | Flow guards (rate/hop/loop/cost) + ACLs | Not started |
 | Long-horizon supervisor | Not started |
