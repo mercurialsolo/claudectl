@@ -343,7 +343,7 @@ claudectl bus send impl "review the auth diff" --from planner --priority high
 # A role bound to a subtree owns it: route work by the path it touches
 claudectl bus role bind relay ~/work/proj-impl/src/relay
 claudectl bus owner ~/work/proj-impl/src/relay/peer.rs        # → relay
-claudectl bus route src/relay/peer.rs "peer reconnect loops" --from planner
+claudectl bus route ~/work/proj-impl/src/relay/peer.rs "peer reconnect loops" --from planner
 
 # Resolve which role this cwd is
 claudectl bus whoami

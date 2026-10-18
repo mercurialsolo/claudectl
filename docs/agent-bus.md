@@ -141,7 +141,7 @@ claudectl bus route src/relay/peer.rs "reconnect loops on a dropped link" --from
 
 The most specific selector wins. Two roles on the *same* selector are ambiguous and the send is refused with both names; a path nobody owns is refused with the bind that would fix it. From a Claude session the same thing is `publish(addressed_to_path=…)`, or `owner_of(path)` to ask first.
 
-`list_agents` reports each session's `focus`: the directory holding a strict majority of its recent edits (`.` for the repo root, `null` when it has not edited anything in the tree). So "who is working on `src/relay` right now" and "who should get work on `src/relay`" are both one call, with nobody declaring either.
+`list_agents` reports each session's `focus`: the directory holding a strict majority of its recent edits (`.` for the repo root, `null` when the recent transcript shows no edit in the tree). So "who is working on `src/relay` right now" and "who should get work on `src/relay`" are both one call, with nobody declaring either.
 
 ### Drain the inbox
 

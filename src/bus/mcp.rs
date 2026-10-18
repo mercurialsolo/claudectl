@@ -33,7 +33,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::policy::{self, DEFAULT_MAX_BODY_BYTES, DEFAULT_MAX_HOPS};
-use super::roles::{self, RoleResolution};
+use super::roles::{self, Ownership, RoleResolution};
 use super::store::{self, MessageRow};
 use crate::rate_limit::RateLimiter;
 
@@ -326,6 +326,10 @@ impl BusServer {
     fn resolution_to_json(r: RoleResolution) -> serde_json::Value {
         serde_json::to_value(r).unwrap_or_else(|_| json!({ "kind": "unbound" }))
     }
+
+    fn ownership_to_json(o: Ownership) -> serde_json::Value {
+        serde_json::to_value(o).unwrap_or_else(|_| json!({ "kind": "unowned" }))
+    }
 }
 
 #[tool_router]
@@ -411,15 +415,17 @@ impl BusServer {
         // The recipient is resolved here, with the other argument checks
         // and before the rate limiter, so a refused `addressed_to_path`
         // does not spend a token on a message that was never queued (#596).
+        // `args.cwd` is only for the relative `addressed_to_path`; the
+        // sender is still inferred from where the server runs, so passing a
+        // cwd to route by cannot change who a message is signed as.
         let (sender_role, recipient) = {
             let conn = self.conn.lock().expect("bus db mutex poisoned");
-            let cwd = Self::caller_cwd(args.cwd.as_deref());
-            let sender = sender_for(&conn, args.sender_role.clone(), &cwd);
+            let sender = sender_for(&conn, args.sender_role.clone(), &Self::caller_cwd(None));
             let recipient = recipient_for(
                 &conn,
                 args.addressed_to.as_deref(),
                 args.addressed_to_path.as_deref(),
-                &cwd,
+                &Self::caller_cwd(args.cwd.as_deref()),
             )
             .map_err(|e| match e {
                 RecipientError::Invalid(msg) => McpError::invalid_params(msg, None),
@@ -483,7 +489,7 @@ impl BusServer {
         let res =
             roles::owner_of_path(&conn, &path).map_err(|e| McpError::internal_error(e, None))?;
         Ok(Json(OwnerOfResult {
-            resolution: Self::resolution_to_json(res),
+            resolution: Self::ownership_to_json(res),
         }))
     }
 
@@ -671,33 +677,53 @@ impl std::fmt::Display for RecipientError {
 /// roles are addressable without being bindable and never warn. Naming
 /// both is an error.
 ///
-/// Either way, a recipient whose binding names a pid that is no longer
-/// running gets a warning too: roles are durable and the message waits for
-/// the re-bind, but a `/role` session that exited still owns its selector,
-/// and silence there is the failure this exists to remove.
+/// Either way, a recipient with nobody there to read it gets a warning too:
+/// its binding names a pid that is no longer running *and* no running
+/// session sits under its selector. Roles are durable and the message waits
+/// for the re-bind, but a `/role` session that exited still owns its
+/// selector, and silence there is the failure this exists to remove. A
+/// role re-bound by directory keeps its old pid (`upsert_role` coalesces),
+/// which is why a dead pid alone is not enough: a live session in the
+/// bound directory drains that inbox by cwd inference.
 pub fn recipient_for(
     conn: &rusqlite::Connection,
     addressed_to: Option<&str>,
     addressed_to_path: Option<&str>,
     cwd: &std::path::Path,
 ) -> Result<Recipient, RecipientError> {
-    recipient_for_with(
-        conn,
-        addressed_to,
-        addressed_to_path,
-        cwd,
-        &claudectl_core::process::pid_alive,
-    )
+    recipient_for_with(conn, addressed_to, addressed_to_path, cwd, &LivePresence)
 }
 
-/// `recipient_for` with the liveness probe injected, so tests can bind a
-/// role to a pid and decide whether it is running.
+/// What `recipient_for` asks about the machine, injected so tests decide
+/// what is running.
+pub trait Presence {
+    fn pid_alive(&self, pid: u32) -> bool;
+    /// The cwd of every running agent session.
+    fn session_cwds(&self) -> Vec<String>;
+}
+
+/// The real machine: `kill(pid, 0)` and the session directory scan.
+pub struct LivePresence;
+
+impl Presence for LivePresence {
+    fn pid_alive(&self, pid: u32) -> bool {
+        claudectl_core::process::pid_alive(pid)
+    }
+    fn session_cwds(&self) -> Vec<String> {
+        crate::discovery::scan_sessions()
+            .into_iter()
+            .map(|s| s.cwd)
+            .collect()
+    }
+}
+
+/// `recipient_for` with the presence probe injected.
 pub fn recipient_for_with(
     conn: &rusqlite::Connection,
     addressed_to: Option<&str>,
     addressed_to_path: Option<&str>,
     cwd: &std::path::Path,
-    alive: &dyn Fn(u32) -> bool,
+    presence: &dyn Presence,
 ) -> Result<Recipient, RecipientError> {
     let store_err = RecipientError::Store;
     match (addressed_to, addressed_to_path) {
@@ -707,16 +733,16 @@ pub fn recipient_for_with(
         (None, Some(path)) => {
             let abs = absolute_path(path, cwd);
             match roles::owner_of_path(conn, &abs).map_err(store_err)? {
-                RoleResolution::Resolved(r) => Ok(Recipient {
-                    warning: dead_binding_warning(&r.name, r.pid, alive),
+                Ownership::Owned(r) => Ok(Recipient {
+                    warning: nobody_home_warning(&r.name, r.pid, &r.cwd_selector, presence),
                     role: Some(r.name),
                 }),
-                RoleResolution::Ambiguous { candidates } => Err(RecipientError::Invalid(format!(
+                Ownership::Shared { candidates } => Err(RecipientError::Invalid(format!(
                     "no single owner for {}: {} are bound to the same selector; address one of them",
                     abs.display(),
                     candidates.join(", ")
                 ))),
-                RoleResolution::Unbound { .. } => Err(RecipientError::Invalid(format!(
+                Ownership::Unowned { .. } => Err(RecipientError::Invalid(format!(
                     "no role owns {}: bind one to an enclosing directory with `claudectl bus role bind <name> <dir>`",
                     abs.display()
                 ))),
@@ -729,7 +755,9 @@ pub fn recipient_for_with(
                 None
             } else {
                 match store::get_role(conn, name).map_err(store_err)? {
-                    Some(row) => dead_binding_warning(&row.role, row.pid, alive),
+                    Some(row) => {
+                        nobody_home_warning(&row.role, row.pid, &row.cwd_selector, presence)
+                    }
                     None => Some(format!(
                         "no role '{name}' is bound; the message waits until one binds"
                     )),
@@ -747,17 +775,29 @@ pub fn recipient_for_with(
     }
 }
 
-fn dead_binding_warning(
+/// A warning when a bound role has no one to read for it: its pid is dead
+/// and no running session's cwd falls under its selector. A cwd-only
+/// binding has no pid to be dead and never warns.
+fn nobody_home_warning(
     role: &str,
     pid: Option<u32>,
-    alive: &dyn Fn(u32) -> bool,
+    selector: &str,
+    presence: &dyn Presence,
 ) -> Option<String> {
-    match pid {
-        Some(pid) if !alive(pid) => Some(format!(
-            "role '{role}' is bound to pid {pid}, which is not running; the message waits until it re-binds"
-        )),
-        _ => None,
+    let pid = pid?;
+    if presence.pid_alive(pid) {
+        return None;
     }
+    let someone_there = presence
+        .session_cwds()
+        .iter()
+        .any(|c| roles::selector_covers(selector, std::path::Path::new(c)));
+    if someone_there {
+        return None;
+    }
+    Some(format!(
+        "role '{role}' is bound to pid {pid}, which is not running, and no session is in {selector}; the message waits until one binds"
+    ))
 }
 
 /// A caller's path as an absolute path: relative ones are taken against
@@ -911,14 +951,31 @@ mod recipient_tests {
         );
     }
 
+    struct Fake {
+        alive: bool,
+        cwds: Vec<&'static str>,
+    }
+
+    impl super::Presence for Fake {
+        fn pid_alive(&self, _pid: u32) -> bool {
+            self.alive
+        }
+        fn session_cwds(&self) -> Vec<String> {
+            self.cwds.iter().map(|c| c.to_string()).collect()
+        }
+    }
+
     #[test]
-    fn a_role_whose_session_has_exited_warns_by_name_and_by_path() {
+    fn a_role_with_nobody_home_warns_by_name_and_by_path() {
         use super::recipient_for_with;
         let conn = db();
         store::upsert_role(&conn, "gone", "/repo/src/gone", None, Some(4_000_001)).unwrap();
-        let dead = |_pid: u32| false;
-        let live = |_pid: u32| true;
-        let by_name = recipient_for_with(&conn, Some("gone"), None, Path::new("/"), &dead).unwrap();
+        let empty = Fake {
+            alive: false,
+            cwds: vec!["/other/project"],
+        };
+        let by_name =
+            recipient_for_with(&conn, Some("gone"), None, Path::new("/"), &empty).unwrap();
         assert_eq!(by_name.role.as_deref(), Some("gone"), "still queued");
         assert!(
             by_name
@@ -934,7 +991,7 @@ mod recipient_tests {
             None,
             Some("/repo/src/gone/a.rs"),
             Path::new("/"),
-            &dead,
+            &empty,
         )
         .unwrap();
         assert_eq!(by_path.role.as_deref(), Some("gone"));
@@ -943,12 +1000,42 @@ mod recipient_tests {
             "a dead owner warns on the routed path too"
         );
         // The same binding with its process alive is silent.
+        let live = Fake {
+            alive: true,
+            cwds: vec![],
+        };
         let ok = recipient_for_with(&conn, Some("gone"), None, Path::new("/"), &live).unwrap();
         assert_eq!(ok.warning, None);
         // A cwd-only binding has no pid to be dead.
         let cwd_only =
-            recipient_for_with(&conn, Some("relay"), None, Path::new("/"), &dead).unwrap();
+            recipient_for_with(&conn, Some("relay"), None, Path::new("/"), &empty).unwrap();
         assert_eq!(cwd_only.warning, None);
+    }
+
+    #[test]
+    fn a_stale_pid_does_not_warn_while_a_session_sits_in_the_bound_directory() {
+        // `/role impl` bound pid 4321 and exited; the operator then re-bound
+        // `impl` by directory, which keeps the old pid. A session working
+        // in that directory drains the inbox by cwd inference, so there is
+        // someone home and no warning.
+        use super::recipient_for_with;
+        let conn = db();
+        store::upsert_role(&conn, "impl2", "/repo/src/bus", None, Some(4321)).unwrap();
+        let someone = Fake {
+            alive: false,
+            cwds: vec!["/repo/src/bus/deep"],
+        };
+        let r = recipient_for_with(&conn, Some("impl2"), None, Path::new("/"), &someone).unwrap();
+        assert_eq!(r.warning, None);
+        let nobody = Fake {
+            alive: false,
+            cwds: vec!["/repo/src/busy"],
+        };
+        let r = recipient_for_with(&conn, Some("impl2"), None, Path::new("/"), &nobody).unwrap();
+        assert!(
+            r.warning.is_some(),
+            "a sibling directory is not the bound one"
+        );
     }
 
     #[test]

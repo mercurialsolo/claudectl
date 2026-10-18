@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use super::mcp;
 use super::policy::{self, DEFAULT_MAX_BODY_BYTES};
-use super::roles::{self, RoleResolution};
+use super::roles::{self, Ownership, RoleResolution};
 use super::stop_hook;
 use super::store::{self, MessageRow};
 use super::suggest;
@@ -395,13 +395,13 @@ fn dispatch_send(
 
 // ---------------- Owner -----------------------------------------------------
 
-/// The `--json` form is the path asked about plus the `RoleResolution` in
-/// its own serde shape (`kind` = `resolved` / `ambiguous` / `unbound`), the
-/// same JSON the MCP `owner_of` tool returns.
+/// The `--json` form is the path asked about plus the `Ownership` in its
+/// own serde shape (`kind` = `owned` / `shared` / `unowned`), the same JSON
+/// the MCP `owner_of` tool returns.
 #[derive(Serialize)]
 struct OwnerJson {
     path: String,
-    resolution: RoleResolution,
+    resolution: Ownership,
 }
 
 /// `claudectl bus owner <path>` (#596): the role bound to the most specific
@@ -425,11 +425,11 @@ fn dispatch_owner(path: &str, json: bool) -> Result<(), String> {
         return Ok(());
     }
     match res {
-        RoleResolution::Resolved(r) => println!("{} ({})", r.name, r.cwd_selector),
-        RoleResolution::Ambiguous { candidates } => {
-            println!("ambiguous: {}", candidates.join(", "))
+        Ownership::Owned(r) => println!("{} ({})", r.name, r.cwd_selector),
+        Ownership::Shared { candidates } => {
+            println!("shared: {}", candidates.join(", "))
         }
-        RoleResolution::Unbound { .. } => println!("unbound"),
+        Ownership::Unowned { .. } => println!("unowned"),
     }
     Ok(())
 }

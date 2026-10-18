@@ -32,9 +32,62 @@ pub fn canonicalize_deep(p: &Path) -> PathBuf {
     p.to_path_buf()
 }
 
+/// The ways a path may be spelled when compared against a canonical
+/// directory, most literal first and deduplicated: as given; with its
+/// *parent* resolved and the final name re-appended, which is the file as it
+/// sits in its directory even when the file itself is a symlink elsewhere;
+/// and fully resolved. A role bound to `/repo/config` should own
+/// `/repo/config/prod.toml` whether or not that file links out to
+/// `/etc/app/prod.toml`, and whether `/repo` is reached through a symlink.
+pub fn spellings(p: &Path) -> Vec<String> {
+    let mut out = vec![p.to_string_lossy().into_owned()];
+    let mut push = |candidate: PathBuf| {
+        let s = candidate.to_string_lossy().into_owned();
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    };
+    if let (Some(parent), Some(name)) = (p.parent(), p.file_name()) {
+        push(canonicalize_deep(parent).join(name));
+    }
+    push(canonicalize_deep(p));
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::canonicalize_deep;
+    use super::{canonicalize_deep, spellings};
+
+    #[test]
+    fn a_symlinked_file_keeps_its_place_in_the_tree_as_one_spelling() {
+        let tmp = std::env::temp_dir().join(format!("spell-{}", std::process::id()));
+        let dir = tmp.join("config");
+        let real = tmp.join("elsewhere").join("prod.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "x\n").unwrap();
+        let link = dir.join("prod.toml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let got = spellings(&link);
+        let in_place = std::fs::canonicalize(&dir).unwrap().join("prod.toml");
+        let resolved = std::fs::canonicalize(&real).unwrap();
+        assert_eq!(got[0], link.to_string_lossy());
+        assert!(
+            got.contains(&in_place.to_string_lossy().into_owned()),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&resolved.to_string_lossy().into_owned()),
+            "{got:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_plain_path_has_no_duplicate_spellings() {
+        let got = spellings(Path::new("/definitely-not-a-real-root-xyz/a/b"));
+        assert_eq!(got, vec!["/definitely-not-a-real-root-xyz/a/b".to_string()]);
+    }
     use std::path::Path;
 
     #[test]

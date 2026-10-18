@@ -1,9 +1,10 @@
 //! Where in its project a session is working (#596).
 //!
 //! A session's *focus* is the deepest directory under its worktree root
-//! that holds a strict majority of its recent edits. It is derived from
-//! `Edit` / `Write` / `NotebookEdit` tool inputs alone: no LLM, no
-//! heuristics about names, integers end to end. A strict majority makes the
+//! that holds a strict majority of its recent edits. It is derived from the
+//! edit tools' inputs alone (`transcript::EDIT_TOOLS`: `Edit`, `Write`,
+//! `MultiEdit`, `NotebookEdit`): no LLM, no heuristics about names,
+//! integers end to end. A strict majority makes the
 //! answer unique by construction (two sibling directories cannot both hold
 //! more than half), and the root always qualifies, so a session with any
 //! in-tree edit has a focus and one with none has `None`.
@@ -18,9 +19,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::paths::canonicalize_deep;
+use crate::paths::{canonicalize_deep, spellings};
 use crate::transcript::{
     TranscriptBlock, TranscriptEvent, TranscriptRole, edited_path, is_edit_tool, parse_line,
+    read_tail,
 };
 
 /// Bytes of transcript tail scanned for edits. Recent edits say what a
@@ -113,21 +115,37 @@ pub fn edits_from_transcript(jsonl_path: &Path, cap: u64) -> HashMap<String, u32
 }
 
 /// The focus of a session: its transcript tail against its worktree root.
+///
+/// The window starts at [`TRANSCRIPT_SCAN_BYTES`] and grows four-fold, up
+/// to [`TRANSCRIPT_SCAN_MAX_BYTES`], while it holds no edit at all and the
+/// file has more to give. A single multi-MB tool result (a build log) can
+/// otherwise fill the whole window and report `None` for a session that
+/// edited ten files just before it.
 pub fn session_focus(jsonl_path: Option<&Path>, root: &Path) -> Option<Focus> {
-    let edits = edits_from_transcript(jsonl_path?, TRANSCRIPT_SCAN_BYTES);
-    focus_from_edits(edits.iter().map(|(p, n)| (p.as_str(), *n)), root)
+    session_focus_within(
+        jsonl_path?,
+        root,
+        TRANSCRIPT_SCAN_BYTES,
+        TRANSCRIPT_SCAN_MAX_BYTES,
+    )
 }
 
-fn read_tail(path: &Path, cap: u64) -> std::io::Result<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path)?;
-    let len = f.metadata()?.len();
-    if len > cap {
-        f.seek(SeekFrom::Start(len - cap))?;
+/// Largest transcript tail `session_focus` will read when smaller windows
+/// hold no edit.
+pub const TRANSCRIPT_SCAN_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+/// `session_focus` with the window bounds given, so a test can make the
+/// first window miss.
+pub fn session_focus_within(jsonl_path: &Path, root: &Path, cap: u64, max: u64) -> Option<Focus> {
+    let len = std::fs::metadata(jsonl_path).map(|m| m.len()).unwrap_or(0);
+    let mut cap = cap.max(1);
+    loop {
+        let edits = edits_from_transcript(jsonl_path, cap);
+        if !edits.is_empty() || cap >= len || cap >= max {
+            return focus_from_edits(edits.iter().map(|(p, n)| (p.as_str(), *n)), root);
+        }
+        cap = cap.saturating_mul(4).min(max);
     }
-    let mut buf = Vec::new();
-    f.take(cap).read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// The root as given and as it resolves on disk, deduplicated, with no
@@ -155,12 +173,14 @@ fn trim_slash(s: &str) -> String {
 /// canonical form, because `git rev-parse` reports a canonical root while a
 /// tool input follows the session's cwd, which may run through a symlink.
 fn relative_to_any(file: &str, roots: &[String]) -> Option<String> {
-    let canon = canonicalize_deep(Path::new(file))
-        .to_string_lossy()
-        .into_owned();
-    let spellings = [file, canon.as_str()];
-    spellings
+    // As spelled first: that is the common case and costs no syscall. The
+    // canonical form is computed only when no root matched.
+    if let Some(rel) = roots.iter().find_map(|root| strip_root(file, root)) {
+        return Some(rel.to_string());
+    }
+    spellings(Path::new(file))
         .iter()
+        .skip(1)
         .find_map(|f| roots.iter().find_map(|root| strip_root(f, root)))
         .map(str::to_string)
 }
@@ -352,6 +372,29 @@ mod tests {
             edits.get("/repo/old/a.rs"),
             None,
             "the head fell outside the cap"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn a_window_full_of_one_huge_tool_result_grows_until_it_finds_the_edits() {
+        let tmp = std::env::temp_dir().join(format!("focus-grow-{}", std::process::id()));
+        let edit = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/repo/src/relay/peer.rs"}}]}}"#;
+        let log = "x".repeat(4096);
+        let result = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","content":"{log}"}}]}}}}"#
+        );
+        std::fs::write(&tmp, format!("{edit}\n{result}\n")).unwrap();
+        // A window the size of the result alone sees no edit...
+        let small = (result.len() + 1) as u64;
+        assert_eq!(edits_from_transcript(&tmp, small).len(), 0);
+        // ...so the focus read grows and finds it, within the bound.
+        let f = session_focus_within(&tmp, Path::new("/repo"), small, small * 16).unwrap();
+        assert_eq!(f.dir, "src/relay");
+        // With the bound at the small window it honestly reports None.
+        assert_eq!(
+            session_focus_within(&tmp, Path::new("/repo"), small, small),
+            None
         );
         let _ = std::fs::remove_file(&tmp);
     }

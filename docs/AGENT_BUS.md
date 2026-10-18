@@ -111,7 +111,7 @@ Exposed by a `claudectl mcp` subcommand (see §7). All tools are namespaced unde
 
 ### Discovery
 
-- **`list_agents()`** → live roster: `role`, `cwd`, `status` (`Waiting`/`Processing`/`NeedsInput`/`Idle`/`Finished`), `last_seen`, subscribed subjects. The discovery half — "who's up, what are they doing, what do they listen for."
+- **`list_agents()`** → live roster: `role`, `cwd`, `project`, `focus` (the directory the session's recent edits concentrate in, §5), `status` (`Waiting`/`Processing`/`NeedsInput`/`Idle`/`Finished`), `last_seen`, subscribed subjects. The discovery half — "who's up, what are they doing, what do they listen for."
 - **`whoami()`** → caller's own `role` / address. Used for self-registration (§5).
 
 ### Messaging
@@ -171,7 +171,7 @@ Four ways to create a binding:
 
 **Routing by what a session touches (#596).** The same selectors double as an ownership map. A role bound to a subtree owns the work under it: `claudectl bus role bind relay <repo>/src/relay` makes `relay` the owner of that directory, while a role bound at the repo root takes everything else. `claudectl bus owner <path>` (MCP `owner_of`) names the role with the most specific enclosing selector; `publish(addressed_to_path=…)` and `claudectl bus route <path> <body>` route to it in one step. Unlike cwd inference, nesting is not ambiguity here. Two roles on the *same* selector are, which is what two `/role` sessions started at one repo root look like, so root-level work between them needs an explicit recipient. No owner at all is a refusal that says which bind would fix it, not a message that waits forever.
 
-Each `list_agents` row carries the session's `focus`: the deepest directory under its worktree root holding a strict majority of its recent `Edit`/`Write`/`NotebookEdit` targets, read from a capped tail of the transcript (`claudectl-core::focus`). It is deterministic and needs no LLM: `.` means the root, `null` means no in-tree edits yet. Together the two answer "who is working on `src/relay`" and "who should get work on `src/relay`" without anyone declaring either.
+Each `list_agents` row carries the session's `focus`: the deepest directory under its worktree root holding a strict majority of its recent edit-tool targets (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`), read from a capped tail of the transcript (`claudectl-core::focus`; the window grows, bounded, when a huge tool result crowds the edits out). It is deterministic and needs no LLM: `.` means the root, `null` means no in-tree edit in the scanned tail. Together the two answer "who is working on `src/relay`" and "who should get work on `src/relay`" without anyone declaring either.
 
 A `publish` or `bus send` addressed by *name* to a role nobody has bound still queues the message, since roles are durable and may bind later, but returns a `warning` (the CLI prints it to stderr). The same warning comes back, by name or by path, when the recipient's binding names a pid that is no longer running: a `/role` session that exited still owns its selector until it re-binds, and the message waits for that. Reserved roles (`supervisor`, `operator`) are addressable without being bindable and never warn. Relative paths in `addressed_to_path` and `owner_of` are taken against the optional `cwd` argument, defaulting to the server's own cwd, which is where the hosting session started.
 
