@@ -143,8 +143,10 @@ claudectl hive requests                  # then: requests approve <peer>
 claudectl hive status                    # units received and contributed
 ```
 
-`discover` takes six seconds and reports what each hive will tell you before
-you ask to join it:
+`discover` answers at once when a relay is running on this machine (it reads
+what that relay has heard) and otherwise listens for six seconds. Either way it
+reports what each hive will tell you before you ask to join it. The TUI's Hive
+tab (`K`, then `Tab`) shows the same listing live, for as long as it is open:
 
 ```
 Found 1 hive(s):

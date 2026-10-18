@@ -71,14 +71,18 @@ A full-screen mode for discovering Claude Code skills and managing the local hiv
 | `Tab` | Switch to Hive tab |
 | `Esc`/`K`/`q` | Return to session table |
 
-**Hive tab** shows your peer identity, listener status, and known peers (read from `~/.claudectl/relay/peers/`). Hotkeys:
+**Hive tab** shows your peer identity, listener status, known peers (read from `~/.claudectl/relay/peers/`), and what is nearby. Opening the tab starts listening for LAN announcements on UDP 9848, and the **Nearby** section fills in as relays are heard: each named hive with its join policy, peer and unit counts, and the machines announcing it, then machines relaying without a hive name. Leaving the tab stops listening. When a relay is already running on this machine the tab reads that relay's view instead of binding beside it, and the header says which source is active.
+
+An announcement is unauthenticated and carries no key, so the listing is informational: pairing still takes an invite minted on the other machine (`i` there, `J` here).
+
+Hotkeys:
 
 | Key | Action |
 |-----|--------|
 | `h` | Start hive listener (spawns `claudectl relay serve` detached) |
 | `i` | Generate invite — relay code, word phrase, and invite link shown inline |
 | `J` | Join via a pasted relay code, invite link, or word phrase |
-| `r` | Refresh peer list |
+| `r` | Refresh peer list and the nearby listing |
 | `Tab` | Switch to Skills tab |
 | `Esc`/`K`/`q` | Return to session table |
 

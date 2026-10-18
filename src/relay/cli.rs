@@ -3304,26 +3304,17 @@ fn cmd_discover(json_mode: bool) -> io::Result<()> {
     // and a six-second window next to a long-lived listener can see nothing at
     // all. Reading its published view is also immediate and covers longer than
     // one window. Falls back to scanning when no relay is running.
-    let peers = match super::lan::read_seen() {
-        Some(snapshot) => {
-            println!("Peers seen by the relay running on this machine:");
-            println!();
-            snapshot
-                .peers
-                .into_iter()
-                .filter(|p| p.identity != identity.0)
-                .map(|p| super::lan::DiscoveredPeer::from_seen(&p))
-                .collect()
-        }
-        None => {
-            println!(
-                "Scanning LAN for claudectl instances ({} seconds)...",
-                super::lan::SCAN_DURATION.as_secs()
-            );
-            println!();
-            super::lan::scan_lan(super::lan::SCAN_DURATION, identity.as_str())
-        }
-    };
+    let via_relay = super::lan::read_seen().is_some();
+    if via_relay {
+        println!("Peers seen by the relay running on this machine:");
+    } else {
+        println!(
+            "Scanning LAN for claudectl instances ({} seconds)...",
+            super::lan::SCAN_DURATION.as_secs()
+        );
+    }
+    println!();
+    let (peers, _) = super::lan::seen_or_scan(identity.as_str());
 
     if json_mode {
         let json_peers: Vec<serde_json::Value> = peers

@@ -543,6 +543,70 @@ pub struct HiveViewSnapshot {
     pub peers: Vec<(String, Option<String>)>,
 }
 
+/// The hive a nearby machine advertises in its LAN announcement.
+///
+/// Mirrors the binary's `relay::lan::HiveAd` with locally redefined fields,
+/// the way `HiveViewSnapshot` mirrors its binary-side twin, so the TUI can
+/// render a discovery listing without depending on the relay module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredHive {
+    pub id: String,
+    pub name: String,
+    /// `invite`, `ask` or `open` — the effective policy the machine advertises.
+    pub join_policy: String,
+    /// Connected peers and knowledge units, as the machine last announced them.
+    pub peers: u32,
+    pub units: u32,
+}
+
+/// One machine heard announcing on the LAN.
+///
+/// An announcement is unauthenticated and carries no key, so a listing is
+/// informational: it tells the operator a relay is there and which hive it
+/// names, and pairing still goes through an invite from that machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredMachine {
+    /// The announcing machine's relay identity.
+    pub identity: String,
+    /// `ip:port` of its relay listener.
+    pub addr: String,
+    pub version: String,
+    /// `None` when the machine has not named its hive.
+    pub hive: Option<DiscoveredHive>,
+    /// Whether this machine is already paired with us (a PSK is on disk).
+    pub paired: bool,
+}
+
+/// Where a discovery snapshot came from, shown so an empty list is diagnosable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiscoverySource {
+    /// A relay running on this machine holds the discovery port and publishes
+    /// what it hears; the listing is read from that.
+    LocalRelay,
+    /// No local relay, so the handle binds the discovery port itself.
+    Listener,
+    /// Nothing can listen — the `relay` feature is compiled out, or the mock.
+    #[default]
+    Unavailable,
+}
+
+/// What the Hive tab shows as "nearby": the machines currently announcing.
+#[derive(Debug, Clone, Default)]
+pub struct DiscoverySnapshot {
+    pub source: DiscoverySource,
+    pub machines: Vec<DiscoveredMachine>,
+}
+
+/// A running LAN discovery, alive for as long as the Hive tab is showing.
+///
+/// Handed out by [`HiveActions::start_discovery`] and owned by the TUI like
+/// `BrainDriver`, so the listener's lifetime is tied to the tab: dropping the
+/// handle stops listening. `snapshot` is cheap and non-blocking — the TUI
+/// calls it on every tick while the tab is open.
+pub trait DiscoveryListener: Send {
+    fn snapshot(&mut self) -> DiscoverySnapshot;
+}
+
 /// Hive + relay surface the TUI needs to render the Skills and Hive panels.
 ///
 /// Separate trait from `Actions` because the underlying subsystems are
@@ -561,6 +625,14 @@ pub trait HiveActions: Send + Sync {
     /// Current view of the local relay identity + known peers for the Hive
     /// tab.
     fn hive_view_snapshot(&self) -> HiveViewSnapshot;
+
+    /// Begin listening for nearby relays and the hives they name.
+    ///
+    /// Called when the Hive tab comes into view; the TUI drops the handle when
+    /// the tab goes away. `None` when nothing on this build can listen (the
+    /// `relay` feature is off), so the tab can say so instead of showing an
+    /// empty list forever.
+    fn start_discovery(&self) -> Option<Box<dyn DiscoveryListener>>;
 }
 
 // ============================================================================
@@ -760,6 +832,9 @@ pub struct MockRuntime {
     /// Paired peers `hive_view_snapshot` reports, so a test can exercise the
     /// peer picker without a relay on the machine running the suite.
     pub peers: Vec<(String, Option<String>)>,
+    /// Machines `start_discovery` reports, so a test can drive the Hive tab's
+    /// nearby listing without a network.
+    pub discovered: Vec<DiscoveredMachine>,
     pub actions_log: std::sync::Mutex<Vec<MockAction>>,
 }
 
@@ -953,6 +1028,26 @@ impl HiveActions for MockRuntime {
         HiveViewSnapshot {
             identity: Some("mock-local".into()),
             peers: self.peers.clone(),
+        }
+    }
+    fn start_discovery(&self) -> Option<Box<dyn DiscoveryListener>> {
+        Some(Box::new(MockDiscovery {
+            machines: self.discovered.clone(),
+        }))
+    }
+}
+
+/// The handle `MockRuntime::start_discovery` returns: a fixed listing, with
+/// `Listener` as its source so the tab renders the real-listener wording.
+pub struct MockDiscovery {
+    pub machines: Vec<DiscoveredMachine>,
+}
+
+impl DiscoveryListener for MockDiscovery {
+    fn snapshot(&mut self) -> DiscoverySnapshot {
+        DiscoverySnapshot {
+            source: DiscoverySource::Listener,
+            machines: self.machines.clone(),
         }
     }
 }

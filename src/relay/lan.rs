@@ -536,6 +536,27 @@ pub fn read_seen() -> Option<SeenSnapshot> {
     Some(snap)
 }
 
+/// What a one-shot command should list: the local relay's published view when
+/// one is running, else a [`SCAN_DURATION`] scan. The flag says which, so the
+/// caller can tell the operator whether it waited.
+///
+/// Both `relay discover` and `hive discover` go through here, so neither binds
+/// beside a running relay and sees half the LAN.
+pub fn seen_or_scan(own_identity: &str) -> (Vec<DiscoveredPeer>, bool) {
+    match read_seen() {
+        Some(snapshot) => (
+            snapshot
+                .peers
+                .iter()
+                .filter(|p| p.identity != own_identity)
+                .map(DiscoveredPeer::from_seen)
+                .collect(),
+            true,
+        ),
+        None => (scan_lan(SCAN_DURATION, own_identity), false),
+    }
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────────────────────────

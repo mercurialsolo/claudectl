@@ -39,6 +39,8 @@ impl App {
                     self.skills_status_msg = None;
                 }
             }
+            // The tab was flipped directly above, bypassing the key handler.
+            self.sync_hive_discovery();
         }
 
         // Track NeedsInput wait times (same as real mode)

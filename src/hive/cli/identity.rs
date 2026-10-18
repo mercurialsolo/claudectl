@@ -377,15 +377,22 @@ pub fn cmd_hive_discover(json_mode: bool) -> io::Result<()> {
     use std::collections::BTreeMap;
 
     let own = crate::relay::load_or_create_identity();
+    // Read-then-scan, the same path as `relay discover`: a relay running here
+    // holds the discovery port, and a scan bound beside it sees half the LAN.
+    let via_relay = crate::relay::lan::read_seen().is_some();
     if !json_mode {
-        println!(
-            "Scanning LAN for named hives ({} seconds)...",
-            crate::relay::lan::SCAN_DURATION.as_secs()
-        );
+        if via_relay {
+            println!("Hives seen by the relay running on this machine:");
+        } else {
+            println!(
+                "Scanning LAN for named hives ({} seconds)...",
+                crate::relay::lan::SCAN_DURATION.as_secs()
+            );
+        }
         println!();
     }
 
-    let peers = crate::relay::lan::scan_lan(crate::relay::lan::SCAN_DURATION, own.as_str());
+    let (peers, _) = crate::relay::lan::seen_or_scan(own.as_str());
 
     struct Found {
         name: String,
