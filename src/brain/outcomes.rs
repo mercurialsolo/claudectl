@@ -44,7 +44,8 @@ const TEST_FAILURE_FANOUT_WINDOW_SECS: u64 = 300;
 const TEST_FAILURE_FANOUT_MAX_EDITS: usize = 5;
 
 /// Edit-like tools whose decisions get tagged when a subsequent test run fails.
-const EDIT_LIKE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
+/// The one list lives in core (#596).
+const EDIT_LIKE_TOOLS: &[&str] = claudectl_core::transcript::EDIT_TOOLS;
 
 // ────────────────────────────────────────────────────────────────────────────
 // Types

@@ -4,6 +4,32 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.91.0] - 2026-10-18
+
+The bus can route work by what a session touches. Roles were always declared; now a role bound to a subtree *owns* it, every session reports where its edits concentrate, and a message can be addressed to a path instead of a name. No LLM in any of it.
+
+### Added
+
+- **Session focus (#596).**
+  - `list_agents` rows carry `focus`: the deepest directory under the session's worktree root holding a strict majority of its recent edit-tool targets, `.` for the root, `null` when the recent transcript shows no in-tree edit. A strict majority makes it unique; edits outside the root do not count; `.` and `..` are folded so a path cannot escape its root.
+  - Read from a capped tail of the transcript (2 MB, growing four-fold to 32 MB while the window holds no in-tree edit, so one huge tool result does not hide the edits before it). Transcript reads happen before the bus takes its database lock.
+- **A role bound to a subtree owns it (#596).**
+  - `claudectl bus owner <path>` and MCP `owner_of(path)` name the role bound to the most specific directory enclosing the path. Nesting is not ambiguity; two roles on the *same* selector are, and a path under no selector is unowned. The JSON shape is `owned` / `shared` / `unowned`.
+  - `claudectl bus route <path> <body>` and `publish(addressed_to_path=…)` send to that owner in one step, or refuse with the bind that would fix it. Relative paths take an optional `cwd`, which never changes who the message is signed as.
+  - Wildcard selectors work as documented: `/work/proj-*` covers `/work/proj-impl`; `/work/*` is the directory and its children, not `/workspace`.
+  - A file reached through a symlink, a root reached through a symlink, and a file that does not exist yet all resolve to the same owner as their on-disk neighbours.
+- **A message to nobody now says so (#596).**
+  - `publish` and `bus send` to a name no role has bound still queue the message, since roles are durable, but return a `warning` (the CLI prints it to stderr). A role whose bound session has exited, with no running session under its selector, warns the same way. Reserved roles never warn; `Operator` is not reserved, since the mailbox is keyed on the exact spelling and that one can never be drained.
+  - The presence check runs after the rate limiter and uses a read-only session scan, so a refused route spends no token and a `bus send` deletes nothing.
+
+### Fixed
+
+- **`list_agents` labelled every session with the host's role.** The resolver read the server's own environment and ancestor pids. Each row now resolves from that session's own pid chain, then its cwd.
+- **`bus role suggest` and the monitor disagreed on which tools edit.** One list, `transcript::EDIT_TOOLS` (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`), feeds the monitor's `files_modified`, the focus, the brain's edit-outcome attribution and role suggestion. `files_modified` now also counts `MultiEdit` and `notebook_path`.
+- Two stale comments: the roles module claimed unbound callers may auto-register from the cwd basename (nothing does), and `worktree_id` was described as "toplevel + git-dir" (discovery stores the toplevel only).
+
+Verified on this machine with a scratch bus: bind two roles, resolve nested, root and unowned paths, route to the owner, refuse an unowned and a shared path, warn on an unbound name and not on `supervisor`, drain the routed message. The focus parser was run against real transcripts. `list_agents` returning `focus` through the live MCP server was not exercised.
+
 ## [0.90.2] - 2026-10-17
 
 ### Fixed

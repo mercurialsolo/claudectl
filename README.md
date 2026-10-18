@@ -340,6 +340,11 @@ claudectl bus role list
 claudectl bus send impl "review the auth diff" --from planner --priority high
 ( cd ~/work/proj-impl && claudectl bus inbox )
 
+# A role bound to a subtree owns it: route work by the path it touches
+claudectl bus role bind relay ~/work/proj-impl/src/relay
+claudectl bus owner ~/work/proj-impl/src/relay/peer.rs        # → relay
+claudectl bus route ~/work/proj-impl/src/relay/peer.rs "peer reconnect loops" --from planner
+
 # Resolve which role this cwd is
 claudectl bus whoami
 
@@ -347,7 +352,7 @@ claudectl bus whoami
 claudectl bus stdio
 ```
 
-The Claude Code plugin registers the bus as an MCP server (`claude-plugin/.mcp.json`) and ships two slash commands: `/inbox` (drain mailbox) and `/role <name>` (e.g. `/role frontend`, `/role tester` — set this session's role). Bindings are PID-keyed when made through the TUI's `Ctrl+R` or `/role`; cwd-keyed for the legacy `claudectl bus role bind <name> <cwd>` flow. The resolver prefers a PID match over cwd-inference, which disambiguates "two sessions in one worktree".
+The Claude Code plugin registers the bus as an MCP server (`claude-plugin/.mcp.json`) and ships two slash commands: `/inbox` (drain mailbox) and `/role <name>` (e.g. `/role frontend`, `/role tester` — set this session's role). Bindings are PID-keyed when made through the TUI's `Ctrl+R` or `/role`; cwd-keyed for the legacy `claudectl bus role bind <name> <cwd>` flow. The resolver prefers a PID match over cwd-inference, which disambiguates "two sessions in one worktree". `list_agents` also reports each session's `focus`, the directory its recent edits concentrate in, so an agent can see who is working where and address work to whoever owns that part of the tree ([#596](https://github.com/mercurialsolo/claudectl/issues/596)).
 
 Mailboxes live in `~/.claudectl/bus/bus.db` (SQLite WAL). Message bodies are sanitized at the boundary — a leading `/` is neutralized so a queued message cannot smuggle a slash command into the recipient.
 
