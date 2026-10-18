@@ -478,6 +478,52 @@ pub enum EventKind {
     HiveInfluence,
 }
 
+/// What the Hive tab's Nearby section shows in a demo: one named hive with
+/// two machines, one of them paired, and a third machine relaying without a
+/// hive name. The third appears a few ticks in, so a recording shows the
+/// listing fill as announcements arrive.
+pub fn demo_discovered(tick: u32) -> claudectl_core::runtime::DiscoverySnapshot {
+    use claudectl_core::runtime::{
+        DiscoveredHive, DiscoveredMachine, DiscoverySnapshot, DiscoverySource,
+    };
+    let hive = DiscoveredHive {
+        id: "hv_5229f5".into(),
+        name: "my-hive".into(),
+        join_policy: "ask".into(),
+        peers: 2,
+        units: 212,
+    };
+    let mut machines = vec![
+        DiscoveredMachine {
+            identity: "ci-runner-9d1e".into(),
+            addr: "192.168.1.20:9847".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            hive: Some(hive.clone()),
+            paired: true,
+        },
+        DiscoveredMachine {
+            identity: "alice-mbp-f3a1".into(),
+            addr: "192.168.1.31:9847".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            hive: Some(hive),
+            paired: false,
+        },
+    ];
+    if tick % 14 >= 8 {
+        machines.push(DiscoveredMachine {
+            identity: "studio-7c02".into(),
+            addr: "192.168.1.44:9847".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            hive: None,
+            paired: false,
+        });
+    }
+    DiscoverySnapshot {
+        source: DiscoverySource::Listener,
+        machines,
+    }
+}
+
 /// Generate demo peer display info for the TUI peers panel.
 #[cfg(feature = "relay")]
 pub fn demo_peers(tick: u32) -> Vec<crate::ui::peers::PeerDisplayInfo> {

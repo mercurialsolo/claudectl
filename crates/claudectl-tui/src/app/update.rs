@@ -482,6 +482,9 @@ impl App {
         self.refresh();
         self.run_auto_actions();
 
+        // Pull what the Hive tab's listener has heard since the last tick.
+        self.sync_hive_discovery();
+
         // Check idle mode transition
         self.check_idle_mode();
 

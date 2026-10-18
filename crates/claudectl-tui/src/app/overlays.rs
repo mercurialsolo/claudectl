@@ -12,6 +12,36 @@ impl App {
         self.hive_join_input_mode = false;
         self.hive_join_buffer.clear();
         self.show_skills = true;
+        // `skills_tab` persists across opens, so `K` can land straight on Hive.
+        self.sync_hive_discovery();
+    }
+
+    /// Discovery runs exactly while the Hive tab is showing. One place
+    /// decides, and every path that changes the overlay or the tab — open,
+    /// close, `Tab`, the demo's scripted flips, and the tick — calls it, so the
+    /// listener can neither outlive the tab nor miss its opening.
+    pub fn sync_hive_discovery(&mut self) {
+        let showing = self.show_skills && self.skills_tab == SkillsTab::Hive;
+        if !showing {
+            self.hive_discovery = None;
+            self.hive_discovery_unavailable = false;
+            self.hive_discovered = claudectl_core::runtime::DiscoverySnapshot::default();
+            return;
+        }
+        if self.demo_mode {
+            self.hive_discovered = crate::demo::demo_discovered(self.demo_tick);
+            return;
+        }
+        if self.hive_discovery.is_none() && !self.hive_discovery_unavailable {
+            self.hive_discovery = self.runtime.hive.start_discovery();
+            // Nothing on this build can listen. Remember that for as long as
+            // the tab shows rather than asking again on every tick.
+            self.hive_discovery_unavailable = self.hive_discovery.is_none();
+        }
+        self.hive_discovered = match self.hive_discovery.as_mut() {
+            Some(listener) => listener.snapshot(),
+            None => claudectl_core::runtime::DiscoverySnapshot::default(),
+        };
     }
 
     pub fn refresh_skills(&mut self) {

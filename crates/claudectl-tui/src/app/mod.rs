@@ -431,6 +431,17 @@ pub struct App {
     pub hive_join_input_mode: bool,
     /// Buffer for the join input.
     pub hive_join_buffer: String,
+    /// LAN discovery, alive exactly while the Hive tab is showing. Started
+    /// by `sync_hive_discovery` when the tab comes into view and dropped when
+    /// it goes away, so listening never outlives the tab.
+    pub hive_discovery: Option<Box<dyn claudectl_core::runtime::DiscoveryListener>>,
+    /// Set when `start_discovery` answered `None` for this showing of the
+    /// tab, so it is asked once rather than on every tick. Cleared when the
+    /// tab goes away.
+    pub hive_discovery_unavailable: bool,
+    /// The machines and hives heard announcing, refreshed every tick while
+    /// the Hive tab is showing.
+    pub hive_discovered: claudectl_core::runtime::DiscoverySnapshot,
 
     // ── Brain review overlay state ─────────────────────────────────────────
     /// Whether the brain review/scorecard overlay is open.
@@ -718,6 +729,9 @@ impl App {
             hive_last_invite: None,
             hive_join_input_mode: false,
             hive_join_buffer: String::new(),
+            hive_discovery: None,
+            hive_discovery_unavailable: false,
+            hive_discovered: claudectl_core::runtime::DiscoverySnapshot::default(),
             show_brain: false,
             brain_tab: BrainTab::Scorecard,
             brain_review_selected: 0,
@@ -1213,6 +1227,101 @@ mod tests {
         };
         session.usage_metrics_available = telemetry_available;
         session
+    }
+
+    /// An app whose mock runtime reports one nearby machine, so the Hive
+    /// tab's listener lifecycle can be driven with keys and no network.
+    fn app_with_nearby() -> App {
+        use claudectl_core::runtime::{DiscoveredMachine, MockRuntime};
+        let runtime = MockRuntime {
+            discovered: vec![DiscoveredMachine {
+                identity: "mini-9f2a".into(),
+                addr: "10.0.0.2:9847".into(),
+                version: "0.90.2".into(),
+                hive: None,
+                paired: false,
+            }],
+            ..Default::default()
+        }
+        .into_runtime();
+        let mut app = App::new();
+        app.runtime = runtime;
+        app
+    }
+
+    #[test]
+    fn hive_tab_starts_listening_when_shown_and_stops_when_left() {
+        let mut app = app_with_nearby();
+        assert!(app.hive_discovery.is_none());
+
+        // `K` with the tab still on Skills: nothing listens yet.
+        app.open_skills_overlay();
+        assert!(app.hive_discovery.is_none());
+        assert!(app.hive_discovered.machines.is_empty());
+
+        // Tab over to Hive: listening starts and the listing is filled.
+        app.handle_skills_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.skills_tab, SkillsTab::Hive);
+        assert!(app.hive_discovery.is_some());
+        assert_eq!(app.hive_discovered.machines.len(), 1);
+        assert_eq!(app.hive_discovered.machines[0].identity, "mini-9f2a");
+
+        // Tab back to Skills: the listener is dropped and the listing cleared.
+        app.handle_skills_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.hive_discovery.is_none());
+        assert!(app.hive_discovered.machines.is_empty());
+    }
+
+    #[test]
+    fn closing_the_overlay_on_the_hive_tab_stops_listening() {
+        let mut app = app_with_nearby();
+        app.skills_tab = SkillsTab::Hive;
+        // `skills_tab` persists across opens, so `K` lands straight on Hive.
+        app.open_skills_overlay();
+        assert!(app.hive_discovery.is_some());
+
+        app.handle_skills_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.show_skills);
+        assert!(app.hive_discovery.is_none());
+    }
+
+    #[test]
+    fn a_build_that_cannot_listen_is_asked_once_and_the_tab_says_so() {
+        use claudectl_core::runtime::{DiscoverySource, MockRuntime};
+        let (mock, runtime) = MockRuntime {
+            discovery_unavailable: true,
+            ..Default::default()
+        }
+        .into_runtime_shared();
+        let mut app = App::new();
+        app.runtime = runtime;
+        app.skills_tab = SkillsTab::Hive;
+        app.open_skills_overlay();
+
+        assert!(app.hive_discovery.is_none());
+        assert!(app.hive_discovery_unavailable);
+        assert_eq!(app.hive_discovered.source, DiscoverySource::Unavailable);
+
+        // Ticks keep the answer rather than asking again.
+        app.tick();
+        assert!(app.hive_discovery_unavailable);
+        assert_eq!(app.hive_discovered.source, DiscoverySource::Unavailable);
+
+        // Leaving the tab clears it, so a rebuilt runtime gets asked afresh.
+        app.handle_skills_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.hive_discovery_unavailable);
+        drop(mock);
+    }
+
+    #[test]
+    fn tick_refreshes_the_nearby_listing_while_the_hive_tab_shows() {
+        let mut app = app_with_nearby();
+        app.skills_tab = SkillsTab::Hive;
+        app.open_skills_overlay();
+        app.hive_discovered.machines.clear();
+
+        app.tick();
+        assert_eq!(app.hive_discovered.machines.len(), 1);
     }
 
     fn make_test_app() -> App {
