@@ -51,9 +51,11 @@ src/                   # the binary crate `claudectl`
 - `process.rs` — Process introspection via native `ps` (not sysinfo crate)
 - `history.rs` — Session history persistence and cost analytics
 - `fleet.rs` — Cluster session view: the `~/.claudectl/relay/fleet.json` snapshot `relay serve` publishes (atomic write, staleness gates) plus a side-effect-free local session collector for advertising to peers
+- `focus.rs` — Where in its worktree a session is working (#596): the deepest directory holding a strict majority of its recent edit-tool targets (`transcript::EDIT_TOOLS`), from a capped, bounded-growth tail of the transcript. Deterministic, no LLM. The bus routes by it (`roles::owner_of_path`, `publish(addressed_to_path)`, `bus route`)
 - `health.rs` — Session health monitoring (cache ratio, cost spikes, loop detection, stalls, context saturation). Owns `HealthThresholds`.
 - `rules.rs` — Auto-rule engine: match sessions by status/tool/command/project/cost, then approve/deny/send/terminate/route/spawn/delegate
 - `models.rs` — Model pricing profiles (built-in + user overrides) for cost tracking
+- `paths.rs` — `canonicalize_deep` (a path's longest existing ancestor resolved on disk with the rest re-appended, so a file that does not exist yet under a symlinked root still compares equal to a canonical selector or worktree root) and `spellings` (as given, canonical parent + name, fully resolved) for comparing a tool-given path against a canonical directory (#596)
 - `transcript.rs` — JSONL transcript parser (messages, tool use, tool results, usage data)
 - `theme.rs` — Color theming (dark/light/monochrome, respects NO_COLOR)
 - `logger.rs` — Structured diagnostic logging

@@ -10,7 +10,15 @@
 //!    prefix of (or equal to) the caller's cwd.
 //! 3. **Ambiguous** — multiple roles match; surface an `Ambiguous` resolution
 //!    so the caller is asked to pass `--role` explicitly.
-//! 4. **Unbound** — no match. Callers may auto-register from the cwd basename.
+//! 4. **Unbound** — no match. The caller is told so; nothing is registered
+//!    on its behalf.
+//!
+//! The same selectors double as an *ownership map* (#596): a role bound to
+//! a subtree owns the work under it. `owner_of_path` picks the role with the
+//! most specific selector enclosing a path, so `bus role bind relay
+//! <repo>/src/relay` routes relay work to `relay` while a role bound at the
+//! repo root takes everything else. Unlike cwd inference, nesting is not
+//! ambiguity here; only two roles on the *same* selector are.
 
 use std::path::Path;
 
@@ -53,6 +61,20 @@ pub enum RoleResolution {
     Resolved(Role),
     Ambiguous { candidates: Vec<String> },
     Unbound { cwd: String },
+}
+
+/// Who owns a path (#596). Its own type rather than a `RoleResolution`,
+/// whose `Unbound { cwd }` names a caller's directory: here the thing asked
+/// about is a path, often a file, and the wire shape should say so.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Ownership {
+    /// Exactly one role is bound to the most specific enclosing selector.
+    Owned(Role),
+    /// Several roles are bound to that same selector; name one.
+    Shared { candidates: Vec<String> },
+    /// No selector encloses the path.
+    Unowned { path: String },
 }
 
 pub const ROLE_ENV: &str = "CLAUDECTL_BUS_ROLE";
@@ -98,8 +120,15 @@ fn resolve_by_pid_chain(conn: &Connection, chain: &[u32]) -> Result<Option<Role>
 /// Depth 8 comfortably covers `claude → bash → mcp-stdio-server` plus
 /// nested shells, tmux, etc.
 fn ancestor_pids() -> Vec<u32> {
+    ancestor_chain_of(unsafe { libc::getppid() } as u32)
+}
+
+/// `start` and its parents, capped at depth 8 like `ancestor_pids`. For a
+/// session this is the chain a `--pid` binding on its shell or tmux pane
+/// is found in (#596).
+fn ancestor_chain_of(start: u32) -> Vec<u32> {
     let mut out = Vec::new();
-    let mut pid = unsafe { libc::getppid() } as u32;
+    let mut pid = start;
     for _ in 0..8 {
         if pid <= 1 {
             break;
@@ -252,6 +281,26 @@ fn parent_pid_of(pid: u32) -> Option<u32> {
         .ok()
 }
 
+/// The role of *another* session, given its pid and cwd (#596). `resolve`
+/// answers for the calling process: it reads `CLAUDECTL_BUS_ROLE` and walks
+/// the caller's own ancestor chain, which for the bus server is the session
+/// hosting it, so applying it to every session in `list_agents` labels them
+/// all with the host's role. This looks for a binding on the session's own
+/// pid or any of its ancestors (a `--pid` bind on its shell or pane counts,
+/// as it does for `whoami` inside that session), then at its cwd. Another
+/// session's `CLAUDECTL_BUS_ROLE` is not readable from here and is not
+/// guessed.
+pub fn resolve_for_session(
+    conn: &Connection,
+    pid: u32,
+    cwd: &Path,
+) -> Result<RoleResolution, String> {
+    if let Some(role) = resolve_by_pid_chain(conn, &ancestor_chain_of(pid))? {
+        return Ok(RoleResolution::Resolved(role));
+    }
+    resolve_by_cwd(conn, cwd)
+}
+
 fn resolve_by_name(conn: &Connection, name: &str, _cwd: &Path) -> Result<RoleResolution, String> {
     match store::get_role(conn, name)? {
         Some(r) => Ok(RoleResolution::Resolved(r.into())),
@@ -268,8 +317,8 @@ fn resolve_by_cwd(conn: &Connection, cwd: &Path) -> Result<RoleResolution, Strin
     let mut matches: Vec<Role> = all
         .into_iter()
         .filter(|r| {
-            let sel_canon = canonicalize_for_match(Path::new(r.cwd_selector.trim_end_matches('*')));
-            selector_matches(&sel_canon.to_string_lossy(), &cwd_str)
+            let (stem, wildcard) = selector_stem(&r.cwd_selector);
+            stem_matches(&stem, wildcard, &cwd_str)
         })
         .map(Role::from)
         .collect();
@@ -284,23 +333,103 @@ fn resolve_by_cwd(conn: &Connection, cwd: &Path) -> Result<RoleResolution, Strin
     }
 }
 
-/// Phase-1 selectors are simple: literal path prefixes. A trailing wildcard
-/// (`/work/proj-*`) is treated as a prefix match against the stem before `*`.
-/// Glob support proper is a phase-3 setup-wizard concern.
-fn selector_matches(selector: &str, cwd: &str) -> bool {
-    let stem = selector.trim_end_matches('*').trim_end_matches('/');
+/// The role that owns `path`: the one whose selector is the longest prefix
+/// of it (#596). Several roles on that same longest selector are `Shared`;
+/// no enclosing selector is `Unowned`. A role bound by pid still has a
+/// selector (the cwd it was bound from), so it takes part.
+///
+/// `path` may be a file or a directory, and need not exist. It is compared
+/// as spelled and in canonical form, so a file reached through a symlink
+/// that leaves the bound tree (`/repo/config/prod.toml → /etc/app/…`) is
+/// still owned by the role bound to `/repo/config`.
+pub fn owner_of_path(conn: &Connection, path: &Path) -> Result<Ownership, String> {
+    use claudectl_core::paths::{canonical_spellings, normalize_lexically};
+    let all = store::list_roles(conn)?;
+    let stems: Vec<(String, bool, RoleRow)> = all
+        .into_iter()
+        .map(|r| {
+            let (stem, bare) = selector_stem(&r.cwd_selector);
+            (stem, bare, r)
+        })
+        .collect();
+    // The literal spelling first (`.` and `..` folded so a path cannot
+    // escape its root through a string prefix); the on-disk forms only when
+    // it matched no selector, since they cost a canonicalize walk each.
+    let normalized = normalize_lexically(path);
+    let literal = normalized.to_string_lossy().into_owned();
+    let mut best = best_owners(&stems, std::slice::from_ref(&literal));
+    if best.is_empty() {
+        best = best_owners(&stems, &canonical_spellings(&normalized));
+    }
+    match best.len() {
+        0 => Ok(Ownership::Unowned { path: literal }),
+        1 => Ok(Ownership::Owned(best.remove(0))),
+        _ => Ok(Ownership::Shared {
+            candidates: best.into_iter().map(|r| r.name).collect(),
+        }),
+    }
+}
+
+/// The roles on the longest selector stem that covers any of `spellings`.
+fn best_owners(stems: &[(String, bool, RoleRow)], spellings: &[String]) -> Vec<Role> {
+    let mut best_len = 0usize;
+    let mut best: Vec<Role> = Vec::new();
+    for (stem, bare, r) in stems {
+        if !spellings.iter().any(|p| stem_matches(stem, *bare, p)) {
+            continue;
+        }
+        let len = stem.len();
+        if len > best_len {
+            best_len = len;
+            best.clear();
+        }
+        if len == best_len {
+            best.push(Role::from(r.clone()));
+        }
+    }
+    best
+}
+
+/// Whether `selector` covers `path`, by the same rule the resolvers use.
+pub fn selector_covers(selector: &str, path: &Path) -> bool {
+    let (stem, bare) = selector_stem(selector);
+    let p = canonicalize_for_match(path);
+    stem_matches(&stem, bare, &p.to_string_lossy())
+}
+
+/// A selector's comparable stem and whether it is a *bare* prefix. Phase-1
+/// selectors are literal path prefixes: `/work/proj` covers itself and
+/// everything under it, on a `/` boundary, so `/work/project` is not
+/// covered. A trailing `*` after a partial name (`/work/proj-*`) is a bare
+/// prefix match, so `/work/proj-impl` is covered too; `/work/*` means the
+/// directory and its children, exactly like `/work`. Glob support proper is
+/// a phase-3 setup-wizard concern.
+fn selector_stem(selector: &str) -> (String, bool) {
+    let raw = selector.trim_end_matches('*');
+    let bare = selector.ends_with('*') && !raw.ends_with('/') && !raw.is_empty();
+    let canon = canonicalize_for_match(Path::new(raw));
+    let stem = canon.to_string_lossy();
+    (stem.trim_end_matches('/').to_string(), bare)
+}
+
+fn stem_matches(stem: &str, bare: bool, path: &str) -> bool {
     if stem.is_empty() {
         return false;
     }
-    cwd == stem || cwd.starts_with(&format!("{stem}/"))
+    if bare {
+        return path.starts_with(stem);
+    }
+    path == stem || path.starts_with(&format!("{stem}/"))
 }
 
-/// Resolve a path to its real on-disk form when possible. macOS in particular
+/// Resolve a path to its real on-disk form. macOS in particular
 /// canonicalizes symlinked roots like `/tmp` → `/private/tmp`, which would
 /// otherwise make cwd inference miss roles bound with the un-canonicalized
-/// form. Falls back to the input verbatim when the path doesn't exist yet.
+/// form. A path that does not exist yet takes the canonical form of its
+/// longest existing ancestor (#596), so a file about to be created under a
+/// bound directory still has an owner.
 fn canonicalize_for_match(p: &Path) -> std::path::PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    claudectl_core::paths::canonicalize_deep(p)
 }
 
 #[cfg(test)]
@@ -412,6 +541,220 @@ mod tests {
         let conn = open_memory();
         let r = resolve(&conn, None, &PathBuf::from("/nowhere")).unwrap();
         assert!(matches!(r, RoleResolution::Unbound { .. }));
+    }
+
+    // ── ownership (#596) ──────────────────────────────────────────────────
+
+    #[test]
+    fn a_wildcard_selector_covers_siblings_sharing_its_stem() {
+        let conn = open_memory();
+        upsert_role(&conn, "worker", "/work/proj-*", None, None).unwrap();
+        assert!(matches!(
+            owner(&conn, "/work/proj-7/src/x.rs"),
+            Ownership::Owned(r) if r.name == "worker"
+        ));
+        assert!(matches!(
+            resolve(&conn, None, &PathBuf::from("/work/proj-impl")).unwrap(),
+            RoleResolution::Resolved(r) if r.name == "worker"
+        ));
+        assert!(matches!(
+            owner(&conn, "/work/other"),
+            Ownership::Unowned { .. }
+        ));
+    }
+
+    #[test]
+    fn a_wildcard_after_a_directory_keeps_the_slash_boundary() {
+        // `/work/*` is the directory and its children, not every path that
+        // happens to start with `/work`.
+        let conn = open_memory();
+        upsert_role(&conn, "worker", "/work/*", None, None).unwrap();
+        assert!(matches!(
+            owner(&conn, "/work/app/x.rs"),
+            Ownership::Owned(r) if r.name == "worker"
+        ));
+        assert!(matches!(owner(&conn, "/work"), Ownership::Owned(_)));
+        assert!(matches!(
+            owner(&conn, "/workspace/app/x.rs"),
+            Ownership::Unowned { .. }
+        ));
+        assert!(matches!(
+            resolve(&conn, None, &PathBuf::from("/workspace/app")).unwrap(),
+            RoleResolution::Unbound { .. }
+        ));
+    }
+
+    #[test]
+    fn a_file_reached_through_a_symlink_that_leaves_the_tree_is_still_owned() {
+        let tmp = std::env::temp_dir().join(format!("owner-link-{}", std::process::id()));
+        let config = tmp.join("config");
+        let real = tmp.join("elsewhere").join("prod.toml");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "x = 1\n").unwrap();
+        let link = config.join("prod.toml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let conn = open_memory();
+        upsert_role(&conn, "ops", &config.to_string_lossy(), None, None).unwrap();
+        assert!(matches!(
+            owner_of_path(&conn, &link).unwrap(),
+            Ownership::Owned(r) if r.name == "ops"
+        ));
+        assert!(matches!(
+            owner_of_path(&conn, &real).unwrap(),
+            Ownership::Unowned { .. }
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn selector_covers_agrees_with_the_resolvers() {
+        assert!(selector_covers("/repo", Path::new("/repo/src/a.rs")));
+        assert!(selector_covers("/repo", Path::new("/repo")));
+        assert!(!selector_covers("/repo", Path::new("/repository")));
+        assert!(selector_covers("/work/proj-*", Path::new("/work/proj-7")));
+    }
+
+    #[test]
+    fn a_file_that_does_not_exist_yet_under_a_symlinked_selector_has_an_owner() {
+        // The selector canonicalizes (macOS `/var/folders` → `/private/var/…`);
+        // a not-yet-created file spelled through the symlink must still
+        // match. Where temp_dir is not a symlink both spellings agree and
+        // the test holds trivially.
+        let tmp = std::env::temp_dir().join(format!("owner-sym-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        let conn = open_memory();
+        upsert_role(
+            &conn,
+            "impl",
+            &tmp.join("src").to_string_lossy(),
+            None,
+            None,
+        )
+        .unwrap();
+        let new_file = tmp.join("src").join("new.rs");
+        assert!(!new_file.exists());
+        assert!(matches!(
+            owner_of_path(&conn, &new_file).unwrap(),
+            Ownership::Owned(r) if r.name == "impl"
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_sessions_role_is_its_own_pid_binding_then_its_cwd() {
+        let conn = open_memory();
+        upsert_role(&conn, "host", "/repo", None, Some(std::process::id())).unwrap();
+        upsert_role(&conn, "worker", "/repo", None, Some(4_000_001)).unwrap();
+        upsert_role(&conn, "docs", "/docs", None, None).unwrap();
+        // The session bound by pid gets its own role, not the host's.
+        assert!(matches!(
+            resolve_for_session(&conn, 4_000_001, &PathBuf::from("/repo")).unwrap(),
+            RoleResolution::Resolved(r) if r.name == "worker"
+        ));
+        // A binding on an ancestor of the session (its shell, its pane) is
+        // found the way `whoami` inside the session would find it. The
+        // test process's parent is such an ancestor of the test itself.
+        let parent = unsafe { libc::getppid() } as u32;
+        upsert_role(&conn, "pane", "/repo", None, Some(parent)).unwrap();
+        assert!(
+            matches!(
+                resolve_for_session(&conn, std::process::id(), &PathBuf::from("/repo")).unwrap(),
+                RoleResolution::Resolved(r) if r.name == "host"
+            ),
+            "the session's own pid wins over an ancestor's"
+        );
+        // Remove the own-pid row so the ancestor binding is what resolves.
+        conn.execute("DELETE FROM roles WHERE role = 'host'", [])
+            .unwrap();
+        assert!(matches!(
+            resolve_for_session(&conn, std::process::id(), &PathBuf::from("/elsewhere")).unwrap(),
+            RoleResolution::Resolved(r) if r.name == "pane"
+        ));
+        // An unbound pid falls back to that session's cwd.
+        assert!(matches!(
+            resolve_for_session(&conn, 4_000_002, &PathBuf::from("/docs/guide")).unwrap(),
+            RoleResolution::Resolved(r) if r.name == "docs"
+        ));
+        assert!(matches!(
+            resolve_for_session(&conn, 4_000_002, &PathBuf::from("/nowhere")).unwrap(),
+            RoleResolution::Unbound { .. }
+        ));
+    }
+
+    fn owner(conn: &Connection, path: &str) -> Ownership {
+        owner_of_path(conn, &PathBuf::from(path)).unwrap()
+    }
+
+    #[test]
+    fn the_most_specific_selector_owns_the_path() {
+        let conn = open_memory();
+        upsert_role(&conn, "impl", "/repo", None, None).unwrap();
+        upsert_role(&conn, "relay", "/repo/src/relay", None, None).unwrap();
+        assert!(matches!(
+            owner(&conn, "/repo/src/relay/peer.rs"),
+            Ownership::Owned(r) if r.name == "relay"
+        ));
+        assert!(matches!(
+            owner(&conn, "/repo/src/bus/mcp.rs"),
+            Ownership::Owned(r) if r.name == "impl"
+        ));
+        assert!(
+            matches!(owner(&conn, "/repo/src/relay"), Ownership::Owned(r) if r.name == "relay"),
+            "the subtree directory itself belongs to its owner"
+        );
+    }
+
+    #[test]
+    fn nesting_is_not_ambiguity_but_a_shared_selector_is() {
+        let conn = open_memory();
+        upsert_role(&conn, "a", "/repo", None, None).unwrap();
+        upsert_role(&conn, "b", "/repo", None, None).unwrap();
+        upsert_role(&conn, "relay", "/repo/src/relay", None, None).unwrap();
+        match owner(&conn, "/repo/README.md") {
+            Ownership::Shared { candidates } => {
+                assert_eq!(candidates.len(), 2);
+                assert!(!candidates.contains(&"relay".to_string()));
+            }
+            other => panic!("expected Shared, got {other:?}"),
+        }
+        assert!(matches!(
+            owner(&conn, "/repo/src/relay/peer.rs"),
+            Ownership::Owned(r) if r.name == "relay"
+        ));
+        // cwd inference keeps its own rule: nested selectors are ambiguous there.
+        assert!(matches!(
+            resolve(&conn, None, &PathBuf::from("/repo/src/relay")).unwrap(),
+            RoleResolution::Ambiguous { .. }
+        ));
+    }
+
+    #[test]
+    fn a_path_that_escapes_the_tree_through_dotdot_is_not_owned() {
+        let conn = open_memory();
+        upsert_role(&conn, "impl", "/repo", None, None).unwrap();
+        assert!(matches!(
+            owner(&conn, "/repo/../other/x.rs"),
+            Ownership::Unowned { path } if path == "/other/x.rs"
+        ));
+        assert!(matches!(
+            owner(&conn, "/repo/./src/../src/x.rs"),
+            Ownership::Owned(r) if r.name == "impl"
+        ));
+    }
+
+    #[test]
+    fn a_path_under_no_selector_has_no_owner() {
+        let conn = open_memory();
+        upsert_role(&conn, "relay", "/repo/src/relay", None, None).unwrap();
+        assert!(matches!(
+            owner(&conn, "/repo/src/relayx/peer.rs"),
+            Ownership::Unowned { path } if path == "/repo/src/relayx/peer.rs"
+        ));
+        assert!(matches!(
+            owner(&conn, "/elsewhere"),
+            Ownership::Unowned { .. }
+        ));
     }
 
     #[test]

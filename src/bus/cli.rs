@@ -7,6 +7,9 @@
 //! * `claudectl bus role bind <NAME> <CWD>` — register or update a role.
 //! * `claudectl bus role list` — list registered roles.
 //! * `claudectl bus send <ROLE> <BODY>` — quick directed send for ops debug.
+//! * `claudectl bus route <PATH> <BODY>` — send to whoever owns that part
+//!   of the tree (#596).
+//! * `claudectl bus owner <PATH>` — which role owns a path.
 //! * `claudectl bus inbox <ROLE>` — drain a role's mailbox (CLI form of the
 //!   `read_inbox` MCP tool).
 
@@ -17,7 +20,7 @@ use serde::Serialize;
 
 use super::mcp;
 use super::policy::{self, DEFAULT_MAX_BODY_BYTES};
-use super::roles::{self, RoleResolution};
+use super::roles::{self, Ownership, RoleResolution};
 use super::stop_hook;
 use super::store::{self, MessageRow};
 use super::suggest;
@@ -33,8 +36,31 @@ pub enum BusCommand {
     },
     /// Send a directed message from the CLI (debug helper).
     Send {
-        /// Recipient role.
+        /// Recipient role. A name no role has bound is queued with a
+        /// warning; `bus route <path>` sends to whoever owns a path instead.
         to: String,
+        /// Message body. A leading "/" is neutralized at the boundary.
+        body: String,
+        /// Subject (defaults to "task.created").
+        #[arg(long, default_value = "task.created")]
+        subject: String,
+        /// Message type: task | result | question | status | handoff.
+        #[arg(long, default_value = "task")]
+        msg_type: String,
+        /// Sender role label.
+        #[arg(long)]
+        from: Option<String>,
+        /// Priority: high | normal | low.
+        #[arg(long, default_value = "normal")]
+        priority: String,
+    },
+    /// Send a message to whichever role owns a path (#596): the one bound
+    /// to the most specific directory enclosing it. Refuses when no role
+    /// owns the path or two roles share its selector. `bus owner <path>`
+    /// is the dry run.
+    Route {
+        /// File or directory the work is about, absolute or relative to cwd.
+        path: String,
         /// Message body. A leading "/" is neutralized at the boundary.
         body: String,
         /// Subject (defaults to "task.created").
@@ -66,6 +92,15 @@ pub enum BusCommand {
         /// drains them. Supervisor uses this for exactly-once assignment.
         #[arg(long)]
         peek: bool,
+    },
+    /// Report which role owns a path: the one bound to the most specific
+    /// directory enclosing it (#596).
+    Owner {
+        /// File or directory, absolute or relative to the current cwd.
+        path: String,
+        /// Emit a machine-readable JSON payload instead of human text.
+        #[arg(long)]
+        json: bool,
     },
     /// Report which role the current cwd resolves to.
     Whoami {
@@ -149,7 +184,32 @@ pub fn dispatch(cmd: &BusCommand) -> Result<(), String> {
             msg_type,
             from,
             priority,
-        } => dispatch_send(to, body, subject, msg_type, from.as_deref(), priority),
+        } => dispatch_send(
+            Some(to),
+            None,
+            body,
+            subject,
+            msg_type,
+            from.as_deref(),
+            priority,
+        ),
+        BusCommand::Route {
+            path,
+            body,
+            subject,
+            msg_type,
+            from,
+            priority,
+        } => dispatch_send(
+            None,
+            Some(path),
+            body,
+            subject,
+            msg_type,
+            from.as_deref(),
+            priority,
+        ),
+        BusCommand::Owner { path, json } => dispatch_owner(path, *json),
         BusCommand::Inbox { role, json, peek } => dispatch_inbox(role.as_deref(), *json, *peek),
         BusCommand::Whoami { role, json } => dispatch_whoami(role.as_deref(), *json),
         BusCommand::StopHook => dispatch_stop_hook(),
@@ -291,7 +351,8 @@ fn dispatch_suggest(pid: Option<u32>, top: usize, json: bool) -> Result<(), Stri
 }
 
 fn dispatch_send(
-    to: &str,
+    to: Option<&str>,
+    owner_of: Option<&str>,
     body: &str,
     subject: &str,
     msg_type: &str,
@@ -303,6 +364,18 @@ fn dispatch_send(
     policy::validate_body(body, DEFAULT_MAX_BODY_BYTES).map_err(|e| e.to_string())?;
     let sanitized = policy::sanitize_body(body);
     let conn = store::open()?;
+    // Same resolution as the MCP `publish` tool (#596): a path goes to its
+    // owner or is refused; a name nobody has bound is queued with a warning.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let recipient = mcp::recipient_for(&conn, to, owner_of, &cwd)
+        .map_err(|e| e.to_string())?
+        .check_presence(&mcp::LivePresence);
+    let Some(role) = recipient.role else {
+        return Err("a recipient is required: `bus send <ROLE>` or `bus route <PATH>`".into());
+    };
+    if let Some(w) = &recipient.warning {
+        eprintln!("warning: {w}");
+    }
     // CLI sends are originating messages — hop count starts at 1, the same
     // value `publish` would write for `parent_hop = 0`. Forwards initiated
     // by the supervisor use the MCP `publish` path which inherits the
@@ -312,13 +385,54 @@ fn dispatch_send(
         subject,
         msg_type,
         from,
-        Some(to),
+        Some(&role),
         None,
         &sanitized,
         priority,
         1,
     )?;
-    println!("queued {id} -> {to}");
+    println!("queued {id} -> {role}");
+    Ok(())
+}
+
+// ---------------- Owner -----------------------------------------------------
+
+/// The `--json` form is the path asked about plus the `Ownership` in its
+/// own serde shape (`kind` = `owned` / `shared` / `unowned`), the same JSON
+/// the MCP `owner_of` tool returns.
+#[derive(Serialize)]
+struct OwnerJson {
+    path: String,
+    resolution: Ownership,
+}
+
+/// `claudectl bus owner <path>` (#596): the role bound to the most specific
+/// directory enclosing the path. Human form prints `role (selector)`,
+/// `shared: a, b`, or `unowned`; exit status is 0 in all three, since
+/// "nobody owns this" is an answer, not a failure.
+fn dispatch_owner(path: &str, json: bool) -> Result<(), String> {
+    let conn = store::open()?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let abs = mcp::absolute_path(path, &cwd);
+    let res = roles::owner_of_path(&conn, &abs)?;
+    if json {
+        let out = OwnerJson {
+            path: abs.to_string_lossy().into_owned(),
+            resolution: res,
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&out).map_err(|e| format!("encode json: {e}"))?
+        );
+        return Ok(());
+    }
+    match res {
+        Ownership::Owned(r) => println!("{} ({})", r.name, r.cwd_selector),
+        Ownership::Shared { candidates } => {
+            println!("shared: {}", candidates.join(", "))
+        }
+        Ownership::Unowned { .. } => println!("unowned"),
+    }
     Ok(())
 }
 

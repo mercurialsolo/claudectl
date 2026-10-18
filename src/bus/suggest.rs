@@ -90,18 +90,9 @@ fn push(acc: &mut HashMap<String, (u32, Vec<String>)>, name: String, score: u32,
     }
 }
 
+/// The transcript's tail; one reader shared with `focus` (#596).
 fn read_capped(path: &Path, cap: u64) -> std::io::Result<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path)?;
-    let len = f.metadata()?.len();
-    if len > cap {
-        // Skip to (len - cap) so we get the tail. Recent messages carry
-        // the strongest "what is this session doing now" signal.
-        f.seek(SeekFrom::Start(len - cap))?;
-    }
-    let mut buf = String::new();
-    f.take(cap).read_to_string(&mut buf)?;
-    Ok(buf)
+    claudectl_core::transcript::read_tail(path, cap)
 }
 
 // ─── Heuristic: cwd basename ────────────────────────────────────────────────
@@ -202,7 +193,7 @@ fn from_tool_shape(
                 continue;
             };
             match name.as_str() {
-                "Write" | "Edit" | "MultiEdit" => writes += 1,
+                n if claudectl_core::transcript::is_edit_tool(n) => writes += 1,
                 "Read" | "Glob" | "Grep" => reads += 1,
                 "Bash" => {
                     bash += 1;

@@ -152,7 +152,7 @@ pub struct ClaudeSession {
     pub activity_history: Vec<u8>, // Ring buffer of status levels (0-7) for sparkline, one per tick
     pub files_modified: HashMap<String, u32>, // file path -> edit count
     pub tool_usage: HashMap<String, ToolStats>, // tool name -> call count & tokens
-    pub worktree_id: Option<String>, // Resolved git toplevel + git-dir, for conflict detection
+    pub worktree_id: Option<String>, // `git rev-parse --show-toplevel` (cwd when not a repo): conflict detection and focus
     pub telemetry_status: TelemetryStatus,
     pub usage_metrics_available: bool,
     pub cost_estimate_unverified: bool,
