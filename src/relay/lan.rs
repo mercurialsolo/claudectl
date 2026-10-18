@@ -369,23 +369,47 @@ pub fn scan_lan(duration: Duration, own_identity: &str) -> Vec<DiscoveredPeer> {
 ///
 /// The socket is bound here, on the caller's thread, so a port that cannot
 /// be bound is an error the caller sees rather than a thread that exits in
-/// silence and a map that stays empty forever. Whoever holds this port
-/// should also call [`publish_seen`], so a second process reads instead of
-/// binding beside it (see the note above `SEEN_FRESH_SECS`).
-pub fn start_listener(
-    own_identity: String,
-    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> std::io::Result<std::sync::Arc<std::sync::Mutex<HashMap<String, DiscoveredPeer>>>> {
+/// silence and a map that stays empty forever.
+///
+/// With `publish`, the thread also keeps `discovered.json` current on its own
+/// clock — every [`PUBLISH_INTERVAL`], not on whatever schedule the caller
+/// reads the map — and retracts the file when it exits, so a second process
+/// reads instead of binding beside this one while it listens, and scans the
+/// moment it stops (see the note above `SEEN_FRESH_SECS`). Both callers pass
+/// `true`; the flag exists so a test can hold a listener without touching
+/// the real relay directory.
+///
+/// The returned [`Listener`] joins the thread when dropped. That is what
+/// makes the retraction reliable: a flag alone leaves a window in which the
+/// process exits (the TUI's `q`) before the thread has noticed, and the file
+/// then outlives its writer for the rest of its freshness — measured, on a
+/// TUI quit, before the join was added.
+pub fn start_listener(own_identity: String, publish: bool) -> std::io::Result<Listener> {
     let socket = bind_shared(LAN_PORT)?;
-    let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = socket.set_read_timeout(Some(LISTENER_POLL));
 
     let peers = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
     let peers_clone = std::sync::Arc::clone(&peers);
+    let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let shutdown_clone = std::sync::Arc::clone(&shutdown);
 
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
+        let shutdown = shutdown_clone;
         let mut buf = [0u8; 1024];
+        let listening_since_ms = super::epoch_ms();
+        let mut last_publish: Option<Instant> = None;
 
         while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            // Published first thing, while the map is still empty: a reader
+            // that finds a young listener waits out its scan window rather
+            // than binding beside it, which is what `listening_since_ms` is
+            // for. Readers of a file older than the freshness gate scan.
+            if publish && last_publish.is_none_or(|t| t.elapsed() >= PUBLISH_INTERVAL) {
+                if let Ok(map) = peers_clone.lock() {
+                    publish_seen(&map, listening_since_ms);
+                }
+                last_publish = Some(Instant::now());
+            }
             match socket.recv_from(&mut buf) {
                 Ok((n, from_addr)) => {
                     if let Some(ann) = parse_announcement(&buf[..n]) {
@@ -416,13 +440,52 @@ pub fn start_listener(
                     continue;
                 }
                 Err(_) => {
-                    std::thread::sleep(Duration::from_millis(500));
+                    std::thread::sleep(LISTENER_POLL);
                 }
             }
         }
+        if publish {
+            // Nobody is listening here now. Leaving the file would have every
+            // reader trust a frozen listing for the rest of its freshness.
+            retract_seen();
+        }
     });
 
-    Ok(peers)
+    Ok(Listener {
+        peers,
+        shutdown,
+        handle: Some(handle),
+    })
+}
+
+/// How long the listener thread blocks in one `recv_from` before checking
+/// its shutdown flag. This bounds how long [`Listener::drop`] waits.
+const LISTENER_POLL: Duration = Duration::from_millis(250);
+
+/// A running [`start_listener`] thread and the map it fills.
+///
+/// Dropping it stops the thread and waits for it, at most [`LISTENER_POLL`],
+/// so by the time the drop returns the port is free and, if the thread was
+/// publishing, `discovered.json` has been retracted.
+pub struct Listener {
+    pub peers: std::sync::Arc<std::sync::Mutex<HashMap<String, DiscoveredPeer>>>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Listener {
+    /// Stop the thread and wait for it. The same as dropping, by a name.
+    pub fn stop(self) {}
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -440,11 +503,15 @@ pub fn start_listener(
 // claudectl instances found" while the serving process was logging the very
 // announcements it needed; stopping the relay made `discover` work instantly.
 //
-// So the serving process publishes what it hears, and `discover` reads that
-// when a relay is running. This mirrors `fleet.json` (`core/fleet.rs`): one
-// writer, atomic rename, a staleness gate on the reader. It is also strictly
-// better than the old behaviour — the answer is continuous rather than
-// whatever happened to arrive inside one window, and it returns immediately.
+// So whoever holds the port publishes what it hears — `relay serve`, or the
+// TUI's Hive tab when no relay is running — and `discover` reads that. This
+// mirrors `fleet.json` (`core/fleet.rs`): one writer at a time, atomic rename
+// (per-pid temp names, because for a moment after `h` starts a relay beside a
+// listening TUI there are two), a staleness gate on the reader, and the
+// writer retracts its file on exit so nobody trusts a frozen listing. It is
+// also strictly better than the old behaviour — the answer is continuous
+// rather than whatever happened to arrive inside one window, and it returns
+// immediately once the writer has listened for a full scan window.
 
 /// How long a published file is trusted before the reader falls back to its own
 /// scan. Three announce intervals: long enough to survive a missed broadcast,
@@ -471,7 +538,31 @@ pub struct SeenSnapshot {
     /// Absent in files written before this field existed, which is `0`.
     #[serde(default)]
     pub writer_pid: u32,
+    /// When the writer bound the port. A one-shot reader that finds a
+    /// listener younger than [`SCAN_DURATION`] waits out the difference, so
+    /// it does not report "nobody" from a file the writer had no time to
+    /// fill. `0` in older files, which reads as "long ago".
+    #[serde(default)]
+    pub listening_since_ms: u64,
 }
+
+impl SeenSnapshot {
+    /// How much longer a one-shot reader should wait before trusting this
+    /// writer's listing: the part of [`SCAN_DURATION`] the writer has not yet
+    /// listened for, `None` when it has listened at least that long.
+    pub fn settle_time(&self, now_ms: u64) -> Option<Duration> {
+        let listened_ms = now_ms.saturating_sub(self.listening_since_ms);
+        let remaining = SCAN_DURATION
+            .as_millis()
+            .saturating_sub(listened_ms as u128);
+        (remaining > 0).then(|| Duration::from_millis(remaining as u64))
+    }
+}
+
+/// How often a holder of the port rewrites `discovered.json`. Well inside
+/// [`SEEN_FRESH_SECS`], so a reader never sees a live listener's file go
+/// stale between writes.
+pub const PUBLISH_INTERVAL: Duration = Duration::from_secs(2);
 
 fn seen_path() -> std::path::PathBuf {
     super::relay_dir().join("discovered.json")
@@ -501,7 +592,17 @@ impl DiscoveredPeer {
 
 /// Publish what this process has heard. Best-effort: discovery is a
 /// convenience, and a failed write must never disturb the serve loop.
-pub fn publish_seen(map: &HashMap<String, DiscoveredPeer>) {
+pub fn publish_seen(map: &HashMap<String, DiscoveredPeer>, listening_since_ms: u64) {
+    publish_seen_to(&super::relay_dir(), map, listening_since_ms);
+}
+
+/// [`publish_seen`] into a given directory, so a test can round-trip a file
+/// without touching the real relay directory.
+pub fn publish_seen_to(
+    dir: &std::path::Path,
+    map: &HashMap<String, DiscoveredPeer>,
+    listening_since_ms: u64,
+) {
     let peers: Vec<SeenPeer> = map
         .values()
         .filter(|p| !p.is_stale())
@@ -517,24 +618,53 @@ pub fn publish_seen(map: &HashMap<String, DiscoveredPeer>) {
         written_ms: super::epoch_ms(),
         peers,
         writer_pid: std::process::id(),
+        listening_since_ms,
     };
-    let dir = super::relay_dir();
-    if std::fs::create_dir_all(&dir).is_err() {
+    if std::fs::create_dir_all(dir).is_err() {
         return;
     }
     let Ok(body) = serde_json::to_string(&snapshot) else {
         return;
     };
-    let tmp = dir.join(".discovered.json.tmp");
+    // Per-pid temp name: for a moment after `h` starts a relay beside a
+    // listening TUI, two processes publish, and a shared temp name would let
+    // one rename the other's half-written bytes into place.
+    let tmp = dir.join(format!(".discovered.json.{}.tmp", std::process::id()));
     if std::fs::write(&tmp, body).is_ok() {
-        let _ = std::fs::rename(&tmp, seen_path());
+        let _ = std::fs::rename(&tmp, dir.join("discovered.json"));
     }
 }
 
-/// What a running relay has heard, or `None` when there is no relay, the file
-/// is unreadable, or it is old enough that whoever wrote it has clearly stopped.
+/// Remove this process's own publication, if the file is still ours. Called
+/// by the listener thread on exit: a file left behind reads as fresh for
+/// [`SEEN_FRESH_SECS`] with nobody listening, and every reader would trust a
+/// frozen listing instead of scanning.
+pub fn retract_seen() {
+    retract_seen_in(&super::relay_dir());
+}
+
+/// [`retract_seen`] against a given directory, for the same reason as
+/// [`publish_seen_to`].
+pub fn retract_seen_in(dir: &std::path::Path) {
+    let path = dir.join("discovered.json");
+    let Some(snap) = read_seen_from(&path) else {
+        return;
+    };
+    if snap.writer_pid == std::process::id() {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// What a listener on this machine has heard, or `None` when nobody is
+/// listening, the file is unreadable, or it is old enough that whoever wrote
+/// it has clearly stopped.
 pub fn read_seen() -> Option<SeenSnapshot> {
-    let body = std::fs::read_to_string(seen_path()).ok()?;
+    read_seen_from(&seen_path())
+}
+
+/// [`read_seen`] from a given path.
+pub fn read_seen_from(path: &std::path::Path) -> Option<SeenSnapshot> {
+    let body = std::fs::read_to_string(path).ok()?;
     let snap: SeenSnapshot = serde_json::from_str(&body).ok()?;
     let age_ms = super::epoch_ms().saturating_sub(snap.written_ms);
     if age_ms > SEEN_FRESH_SECS * 1000 {
@@ -543,12 +673,19 @@ pub fn read_seen() -> Option<SeenSnapshot> {
     Some(snap)
 }
 
+/// A snapshot some *other* process published, or `None`.
+///
+/// A holder of the port that publishes reads the file back on its next tick
+/// and must not mistake its own writing for another process having taken
+/// over. A file with no `writer_pid` (written by a build before the field)
+/// counts as another process: the safe mistake is to defer, never to bind
+/// beside a relay.
+pub fn published_by_other(snapshot: Option<SeenSnapshot>, own_pid: u32) -> Option<SeenSnapshot> {
+    snapshot.filter(|s| s.writer_pid != own_pid)
+}
+
 /// The peers in a published snapshot, minus this machine, in the form a live
-/// scan would have produced. `relay discover`, `hive discover` and the TUI
-/// all read one snapshot with [`read_seen`], decide what to tell the operator,
-/// and then render through here — one read per command, so what the header
-/// says and what the listing came from cannot disagree across the freshness
-/// edge.
+/// scan would have produced.
 pub fn peers_from_seen(snapshot: &SeenSnapshot, own_identity: &str) -> Vec<DiscoveredPeer> {
     snapshot
         .peers
@@ -558,6 +695,36 @@ pub fn peers_from_seen(snapshot: &SeenSnapshot, own_identity: &str) -> Vec<Disco
         .collect()
 }
 
+/// What a one-shot command lists. `relay discover` and `hive discover` both
+/// come through here, so the arbitration lives in one place:
+///
+/// - a process on this machine is listening and publishing → read its file,
+///   after waiting out any part of [`SCAN_DURATION`] it has not yet listened
+///   for, so a listener that just started is not reported as "nobody";
+/// - nobody is listening here → a [`SCAN_DURATION`] scan.
+///
+/// `header` is told which of the two is about to happen, before any wait, so
+/// the operator sees why the command is taking its time. If the publisher
+/// goes away during the wait the command scans after all.
+pub fn discover_once(own_identity: &str, header: impl FnOnce(bool)) -> Vec<DiscoveredPeer> {
+    let Some(snapshot) = read_seen() else {
+        header(false);
+        return scan_lan(SCAN_DURATION, own_identity);
+    };
+    header(true);
+    let snapshot = match snapshot.settle_time(super::epoch_ms()) {
+        None => snapshot,
+        Some(wait) => {
+            std::thread::sleep(wait);
+            match read_seen() {
+                Some(settled) => settled,
+                None => return scan_lan(SCAN_DURATION, own_identity),
+            }
+        }
+    };
+    peers_from_seen(&snapshot, own_identity)
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────────────────────────
@@ -565,6 +732,119 @@ pub fn peers_from_seen(snapshot: &SeenSnapshot, own_identity: &str) -> Vec<Disco
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "claudectl-lan-{tag}-{}-{}",
+            std::process::id(),
+            super::super::epoch_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn peer(identity: &str) -> DiscoveredPeer {
+        DiscoveredPeer {
+            identity: identity.into(),
+            addr: "192.168.1.20:40000".parse().unwrap(),
+            relay_port: 9847,
+            version: "0.90.2".into(),
+            last_seen: Instant::now(),
+            hive: None,
+        }
+    }
+
+    #[test]
+    fn publish_then_retract_leaves_no_file_behind() {
+        let dir = scratch_dir("retract");
+        let mut map = HashMap::new();
+        map.insert("mini".to_string(), peer("mini"));
+        publish_seen_to(&dir, &map, 1);
+
+        let path = dir.join("discovered.json");
+        let snap = read_seen_from(&path).expect("published file is fresh");
+        assert_eq!(snap.writer_pid, std::process::id());
+        assert_eq!(snap.peers.len(), 1);
+
+        retract_seen_in(&dir);
+        assert!(!path.exists(), "our own publication is removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retract_leaves_another_processes_file_alone() {
+        let dir = scratch_dir("retract-other");
+        let path = dir.join("discovered.json");
+        let theirs = SeenSnapshot {
+            written_ms: super::super::epoch_ms(),
+            peers: Vec::new(),
+            writer_pid: std::process::id() + 1,
+            listening_since_ms: 0,
+        };
+        std::fs::write(&path, serde_json::to_string(&theirs).unwrap()).unwrap();
+
+        retract_seen_in(&dir);
+        assert!(path.exists(), "a file another process owns stays");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn own_publication_is_not_another_process() {
+        let ours = std::process::id();
+        let mine = SeenSnapshot {
+            written_ms: 1,
+            peers: Vec::new(),
+            writer_pid: ours,
+            listening_since_ms: 0,
+        };
+        assert!(published_by_other(Some(mine), ours).is_none());
+
+        let theirs = SeenSnapshot {
+            written_ms: 1,
+            peers: Vec::new(),
+            writer_pid: ours + 1,
+            listening_since_ms: 0,
+        };
+        assert!(published_by_other(Some(theirs), ours).is_some());
+
+        // A file from before the field: defer, never bind beside it.
+        let legacy = SeenSnapshot {
+            written_ms: 1,
+            peers: Vec::new(),
+            writer_pid: 0,
+            listening_since_ms: 0,
+        };
+        assert!(published_by_other(Some(legacy), ours).is_some());
+        assert!(published_by_other(None, ours).is_none());
+    }
+
+    #[test]
+    fn a_young_listener_is_waited_out_and_an_old_one_is_not() {
+        let now = 100_000;
+        let young = SeenSnapshot {
+            written_ms: now,
+            peers: Vec::new(),
+            writer_pid: 1,
+            listening_since_ms: now - 1_000,
+        };
+        assert_eq!(
+            young.settle_time(now),
+            Some(SCAN_DURATION - Duration::from_secs(1))
+        );
+
+        let old = SeenSnapshot {
+            listening_since_ms: now - 60_000,
+            ..young.clone()
+        };
+        assert_eq!(old.settle_time(now), None);
+
+        // Written by a build before the field: treated as long-lived.
+        let legacy = SeenSnapshot {
+            listening_since_ms: 0,
+            ..young
+        };
+        assert_eq!(legacy.settle_time(now), None);
+    }
 
     /// The whole reason `bind_shared` exists: `relay serve` holds the discovery
     /// port for its lifetime once #506 wires the listener, and `relay discover`

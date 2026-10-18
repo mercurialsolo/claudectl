@@ -312,7 +312,14 @@ fn render_nearby<'a>(lines: &mut Vec<Line<'a>>, app: &'a App) {
     if snap.machines.is_empty() {
         let hint = match snap.source {
             DiscoverySource::Unavailable => "  Rebuild with --features relay to discover hives.",
-            _ => "  No relays announcing yet. On the other machine: claudectl relay serve",
+            // The problem is local, so the hint must not send the user to
+            // the other machine.
+            DiscoverySource::BindFailed => {
+                "  Free UDP 9848 here (lsof -i UDP:9848), or press h to run a relay that owns it."
+            }
+            DiscoverySource::Published | DiscoverySource::Listener => {
+                "  No relays announcing yet. On the other machine: claudectl relay serve"
+            }
         };
         lines.push(Line::from(Span::styled(
             hint,
@@ -334,10 +341,16 @@ fn render_nearby<'a>(lines: &mut Vec<Line<'a>>, app: &'a App) {
                     .fg(t.text_primary)
                     .add_modifier(Modifier::BOLD),
             ),
+            // Every string here came off an unauthenticated datagram, so each
+            // is cut to its column: one oversized field must not wrap a row
+            // over the whole panel.
             Span::styled(
                 format!(
                     " policy {:<7} peers {:<4} units {:<5} {}",
-                    hive.join_policy, hive.peers, hive.units, hive.id
+                    claudectl_core::helpers::truncate_cell(&hive.join_policy, 7),
+                    hive.peers,
+                    hive.units,
+                    claudectl_core::helpers::truncate_cell(&hive.id, 16)
                 ),
                 Style::default().fg(t.text_muted),
             ),
@@ -368,14 +381,24 @@ fn render_nearby<'a>(lines: &mut Vec<Line<'a>>, app: &'a App) {
 
 fn machine_line<'a>(t: &Theme, m: &DiscoveredMachine) -> Line<'a> {
     let paired = if m.paired { "  (paired)" } else { "" };
+    // Identity and version are cut to their columns for the same reason as
+    // the hive fields above; `addr` is a parsed socket address, so bounded.
     Line::from(vec![
         Span::styled("      ", Style::default()),
         Span::styled(
-            format!("{:<26} ", m.identity),
+            format!(
+                "{:<26} ",
+                claudectl_core::helpers::truncate_cell(&m.identity, 26)
+            ),
             Style::default().fg(t.text_primary),
         ),
         Span::styled(
-            format!("{:<22} {}{}", m.addr, m.version, paired),
+            format!(
+                "{:<22} {}{}",
+                m.addr,
+                claudectl_core::helpers::truncate_cell(&m.version, 12),
+                paired
+            ),
             Style::default().fg(t.text_muted),
         ),
     ])

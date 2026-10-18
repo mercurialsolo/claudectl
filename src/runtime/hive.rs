@@ -91,19 +91,20 @@ impl HiveActions for LiveHiveActions {
 ///
 /// - reads the file and holds no socket while another process publishes it
 ///   (a relay, or another TUI on this machine);
-/// - otherwise binds the port itself **and publishes in turn**, so a
-///   `relay discover` or a second TUI reads instead of binding beside it;
+/// - otherwise binds the port itself; the listener thread then publishes in
+///   turn on its own clock and retracts the file when it exits, so a
+///   `relay discover` or a second TUI reads instead of binding beside it and
+///   scans the moment the tab is gone;
 /// - re-checks on every snapshot, because the tab's `h` key starts a relay
 ///   mid-session: the moment someone else's write shows up the socket is
 ///   dropped, and when their file goes stale it is bound again.
 ///
-/// Its own writes are told apart by `writer_pid`, otherwise it would read
-/// its own publication, conclude a relay had started, and drop the socket.
+/// Its own writes are told apart by `writer_pid` (`lan::published_by_other`),
+/// otherwise it would read its own publication, conclude a relay had started,
+/// and drop the socket.
 #[cfg(feature = "relay")]
 mod discovery {
-    use std::collections::HashMap;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     use claudectl_core::runtime::{
         DiscoveredHive, DiscoveredMachine, DiscoveryListener, DiscoverySnapshot, DiscoverySource,
@@ -111,24 +112,21 @@ mod discovery {
 
     use crate::relay::lan::{self, DiscoveredPeer, HiveAd};
 
-    /// Our own socket on the discovery port, held only while nobody else on
-    /// this machine publishes. Dropping it tells the listener thread to exit;
-    /// the thread's receive timeout is 500ms, so the port is free again
-    /// within that.
-    struct OwnListener {
-        shutdown: Arc<AtomicBool>,
-        map: Arc<Mutex<HashMap<String, DiscoveredPeer>>>,
-    }
-
-    impl Drop for OwnListener {
-        fn drop(&mut self) {
-            self.shutdown.store(true, Ordering::Relaxed);
-        }
-    }
+    /// How long to leave a port that refused to bind before trying again.
+    /// Trying on every tick would be a syscall and a log line every two
+    /// seconds for as long as the tab is open.
+    const BIND_RETRY: Duration = Duration::from_secs(15);
 
     pub struct LiveDiscovery {
         own_identity: String,
-        listener: Option<OwnListener>,
+        /// Our own socket on the discovery port, held only while nobody else
+        /// on this machine publishes. Dropping it stops the thread and waits
+        /// for it, so the port is free and the file retracted by the time the
+        /// tab has gone.
+        listener: Option<lan::Listener>,
+        /// When the last bind failed, for the retry backoff; the log line is
+        /// written once per failure streak, not once per tick.
+        bind_failed_at: Option<Instant>,
     }
 
     impl LiveDiscovery {
@@ -136,14 +134,21 @@ mod discovery {
             Self {
                 own_identity,
                 listener: None,
+                bind_failed_at: None,
+            }
+        }
+
+        fn cannot_listen() -> DiscoverySnapshot {
+            DiscoverySnapshot {
+                source: DiscoverySource::BindFailed,
+                machines: Vec::new(),
             }
         }
     }
 
     impl DiscoveryListener for LiveDiscovery {
         fn snapshot(&mut self) -> DiscoverySnapshot {
-            let ours = std::process::id();
-            if let Some(seen) = lan::read_seen().filter(|s| s.writer_pid != ours) {
+            if let Some(seen) = lan::published_by_other(lan::read_seen(), std::process::id()) {
                 // Another process holds the port. Never bind beside it.
                 self.listener = None;
                 let peers = lan::peers_from_seen(&seen, &self.own_identity);
@@ -154,27 +159,44 @@ mod discovery {
             }
 
             if self.listener.is_none() {
-                let shutdown = Arc::new(AtomicBool::new(false));
-                match lan::start_listener(self.own_identity.clone(), Arc::clone(&shutdown)) {
-                    Ok(map) => self.listener = Some(OwnListener { shutdown, map }),
+                if let Some(failed_at) = self.bind_failed_at {
+                    if failed_at.elapsed() < BIND_RETRY {
+                        return Self::cannot_listen();
+                    }
+                }
+                match lan::start_listener(self.own_identity.clone(), true) {
+                    Ok(listener) => {
+                        self.listener = Some(listener);
+                        self.bind_failed_at = None;
+                    }
                     Err(e) => {
-                        crate::logger::log("LAN", &format!("Hive tab cannot listen: {e}"));
-                        return DiscoverySnapshot {
-                            source: DiscoverySource::BindFailed,
-                            machines: Vec::new(),
-                        };
+                        if self.bind_failed_at.is_none() {
+                            crate::logger::log("LAN", &format!("Hive tab cannot listen: {e}"));
+                        }
+                        self.bind_failed_at = Some(Instant::now());
+                        return Self::cannot_listen();
                     }
                 }
             }
-            let Some(own) = self.listener.as_ref() else {
-                unreachable!("listener was just bound")
+            // Clone out from under the lock: the UDP thread takes the same
+            // lock for every announcement. A poisoned lock means that thread
+            // panicked, so nothing is listening or publishing any more: drop
+            // the handle and say so, rather than render an empty map as if it
+            // were the LAN.
+            let peers: Result<Vec<DiscoveredPeer>, ()> = {
+                let Some(own) = self.listener.as_ref() else {
+                    unreachable!("listener was just bound")
+                };
+                own.peers
+                    .lock()
+                    .map(|m| m.values().filter(|p| !p.is_stale()).cloned().collect())
+                    .map_err(|_| ())
             };
-            // Clone out from under the lock first: the UDP thread takes the
-            // same lock for every announcement, and what follows is file I/O.
-            let mut map = own.map.lock().map(|m| m.clone()).unwrap_or_default();
-            map.retain(|_, p| !p.is_stale());
-            lan::publish_seen(&map);
-            let peers: Vec<DiscoveredPeer> = map.into_values().collect();
+            let Ok(peers) = peers else {
+                crate::logger::log("LAN", "Hive tab listener thread died; will rebind");
+                self.listener = None;
+                return Self::cannot_listen();
+            };
             DiscoverySnapshot {
                 source: DiscoverySource::Listener,
                 machines: machines_from(&peers),
