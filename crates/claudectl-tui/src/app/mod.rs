@@ -435,6 +435,10 @@ pub struct App {
     /// by `sync_hive_discovery` when the tab comes into view and dropped when
     /// it goes away, so listening never outlives the tab.
     pub hive_discovery: Option<Box<dyn claudectl_core::runtime::DiscoveryListener>>,
+    /// Set when `start_discovery` answered `None` for this showing of the
+    /// tab, so it is asked once rather than on every tick. Cleared when the
+    /// tab goes away.
+    pub hive_discovery_unavailable: bool,
     /// The machines and hives heard announcing, refreshed every tick while
     /// the Hive tab is showing.
     pub hive_discovered: claudectl_core::runtime::DiscoverySnapshot,
@@ -726,6 +730,7 @@ impl App {
             hive_join_input_mode: false,
             hive_join_buffer: String::new(),
             hive_discovery: None,
+            hive_discovery_unavailable: false,
             hive_discovered: claudectl_core::runtime::DiscoverySnapshot::default(),
             show_brain: false,
             brain_tab: BrainTab::Scorecard,
@@ -1278,6 +1283,34 @@ mod tests {
         app.handle_skills_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.show_skills);
         assert!(app.hive_discovery.is_none());
+    }
+
+    #[test]
+    fn a_build_that_cannot_listen_is_asked_once_and_the_tab_says_so() {
+        use claudectl_core::runtime::{DiscoverySource, MockRuntime};
+        let (mock, runtime) = MockRuntime {
+            discovery_unavailable: true,
+            ..Default::default()
+        }
+        .into_runtime_shared();
+        let mut app = App::new();
+        app.runtime = runtime;
+        app.skills_tab = SkillsTab::Hive;
+        app.open_skills_overlay();
+
+        assert!(app.hive_discovery.is_none());
+        assert!(app.hive_discovery_unavailable);
+        assert_eq!(app.hive_discovered.source, DiscoverySource::Unavailable);
+
+        // Ticks keep the answer rather than asking again.
+        app.tick();
+        assert!(app.hive_discovery_unavailable);
+        assert_eq!(app.hive_discovered.source, DiscoverySource::Unavailable);
+
+        // Leaving the tab clears it, so a rebuilt runtime gets asked afresh.
+        app.handle_skills_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.hive_discovery_unavailable);
+        drop(mock);
     }
 
     #[test]

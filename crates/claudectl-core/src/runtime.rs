@@ -580,11 +580,16 @@ pub struct DiscoveredMachine {
 /// Where a discovery snapshot came from, shown so an empty list is diagnosable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DiscoverySource {
-    /// A relay running on this machine holds the discovery port and publishes
-    /// what it hears; the listing is read from that.
-    LocalRelay,
-    /// No local relay, so the handle binds the discovery port itself.
+    /// Another claudectl process on this machine — a relay, or another TUI —
+    /// holds the discovery port and publishes what it hears; the listing is
+    /// read from that rather than from a second socket beside it.
+    Published,
+    /// Nobody else is listening here, so the handle holds the port itself
+    /// (and publishes in turn, for the next process that asks).
     Listener,
+    /// The port could not be bound: something that is not claudectl holds
+    /// UDP 9848. Retried on the next snapshot.
+    BindFailed,
     /// Nothing can listen — the `relay` feature is compiled out, or the mock.
     #[default]
     Unavailable,
@@ -835,6 +840,9 @@ pub struct MockRuntime {
     /// Machines `start_discovery` reports, so a test can drive the Hive tab's
     /// nearby listing without a network.
     pub discovered: Vec<DiscoveredMachine>,
+    /// When set, `start_discovery` answers `None`, the way a build without
+    /// the `relay` feature does, so the tab's "cannot listen" path has a test.
+    pub discovery_unavailable: bool,
     pub actions_log: std::sync::Mutex<Vec<MockAction>>,
 }
 
@@ -1031,6 +1039,9 @@ impl HiveActions for MockRuntime {
         }
     }
     fn start_discovery(&self) -> Option<Box<dyn DiscoveryListener>> {
+        if self.discovery_unavailable {
+            return None;
+        }
         Some(Box::new(MockDiscovery {
             machines: self.discovered.clone(),
         }))

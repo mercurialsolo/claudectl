@@ -24,6 +24,7 @@ impl App {
         let showing = self.show_skills && self.skills_tab == SkillsTab::Hive;
         if !showing {
             self.hive_discovery = None;
+            self.hive_discovery_unavailable = false;
             self.hive_discovered = claudectl_core::runtime::DiscoverySnapshot::default();
             return;
         }
@@ -31,12 +32,14 @@ impl App {
             self.hive_discovered = crate::demo::demo_discovered(self.demo_tick);
             return;
         }
-        if self.hive_discovery.is_none() {
+        if self.hive_discovery.is_none() && !self.hive_discovery_unavailable {
             self.hive_discovery = self.runtime.hive.start_discovery();
+            // Nothing on this build can listen. Remember that for as long as
+            // the tab shows rather than asking again on every tick.
+            self.hive_discovery_unavailable = self.hive_discovery.is_none();
         }
         self.hive_discovered = match self.hive_discovery.as_mut() {
             Some(listener) => listener.snapshot(),
-            // Nothing on this build can listen; the tab says so.
             None => claudectl_core::runtime::DiscoverySnapshot::default(),
         };
     }

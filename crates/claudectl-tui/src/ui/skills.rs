@@ -244,11 +244,6 @@ fn render_hive_body(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    // Nearby: what is announcing on the LAN right now. Listening started when
-    // this tab came into view (`App::sync_hive_discovery`).
-    lines.push(Line::from(""));
-    render_nearby(&mut lines, app);
-
     // Last invite
     if let Some(inv) = &app.hive_last_invite {
         lines.push(Line::from(""));
@@ -282,6 +277,13 @@ fn render_hive_body(frame: &mut Frame, area: Rect, app: &App) {
         ]));
     }
 
+    // Nearby: what is announcing on the LAN right now. Listening started when
+    // this tab came into view (`App::sync_hive_discovery`). Last, because the
+    // paragraph does not scroll and this is the one block that grows: the
+    // invite to copy and the join field being typed into stay above it.
+    lines.push(Line::from(""));
+    render_nearby(&mut lines, app);
+
     let para = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
@@ -294,8 +296,9 @@ fn render_nearby<'a>(lines: &mut Vec<Line<'a>>, app: &'a App) {
     let t = &app.theme;
     let snap = &app.hive_discovered;
     let source = match snap.source {
-        DiscoverySource::LocalRelay => "via the relay running on this machine",
+        DiscoverySource::Published => "via the claudectl process listening on this machine",
         DiscoverySource::Listener => "listening on UDP 9848",
+        DiscoverySource::BindFailed => "cannot listen: UDP 9848 is held by another program",
         DiscoverySource::Unavailable => "relay not built",
     };
     lines.push(Line::from(vec![
@@ -323,7 +326,10 @@ fn render_nearby<'a>(lines: &mut Vec<Line<'a>>, app: &'a App) {
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
-                format!("{:<20}", truncate_cell(&hive.name, 20)),
+                format!(
+                    "{:<20}",
+                    claudectl_core::helpers::truncate_cell(&hive.name, 20)
+                ),
                 Style::default()
                     .fg(t.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -403,10 +409,6 @@ pub fn group_nearby(
         }
     }
     (hives, unnamed)
-}
-
-fn truncate_cell(s: &str, width: usize) -> String {
-    claudectl_core::helpers::truncate_cell(s, width)
 }
 
 fn kv_line<'a>(t: &'a Theme, key: &'a str, value: &'a str) -> Line<'a> {
@@ -585,7 +587,7 @@ mod tests {
     fn nearby_section_names_its_source_and_lists_every_machine() {
         let mut app = App::new();
         app.hive_discovered = claudectl_core::runtime::DiscoverySnapshot {
-            source: DiscoverySource::LocalRelay,
+            source: DiscoverySource::Published,
             machines: vec![machine("mini", Some(("ops", 1))), machine("lap", None)],
         };
         let mut lines = Vec::new();
@@ -595,7 +597,7 @@ mod tests {
             .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
             .collect();
         assert!(text[0].contains("Nearby (2)"));
-        assert!(text[0].contains("via the relay running on this machine"));
+        assert!(text[0].contains("via the claudectl process listening on this machine"));
         assert!(
             text.iter()
                 .any(|l| l.contains("ops") && l.contains("policy ask"))

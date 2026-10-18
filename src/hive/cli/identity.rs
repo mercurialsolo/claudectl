@@ -377,22 +377,29 @@ pub fn cmd_hive_discover(json_mode: bool) -> io::Result<()> {
     use std::collections::BTreeMap;
 
     let own = crate::relay::load_or_create_identity();
-    // Read-then-scan, the same path as `relay discover`: a relay running here
-    // holds the discovery port, and a scan bound beside it sees half the LAN.
-    let via_relay = crate::relay::lan::read_seen().is_some();
-    if !json_mode {
-        if via_relay {
-            println!("Hives seen by the relay running on this machine:");
-        } else {
-            println!(
-                "Scanning LAN for named hives ({} seconds)...",
-                crate::relay::lan::SCAN_DURATION.as_secs()
-            );
+    // Read-then-scan, the same path as `relay discover`: a process that holds
+    // the discovery port here publishes what it hears, and a scan bound beside
+    // it would see half the LAN. One read decides both the header and the
+    // listing.
+    let peers = match crate::relay::lan::read_seen() {
+        Some(snapshot) => {
+            if !json_mode {
+                println!("Hives seen by the claudectl process listening on this machine:");
+                println!();
+            }
+            crate::relay::lan::peers_from_seen(&snapshot, own.as_str())
         }
-        println!();
-    }
-
-    let (peers, _) = crate::relay::lan::seen_or_scan(own.as_str());
+        None => {
+            if !json_mode {
+                println!(
+                    "Scanning LAN for named hives ({} seconds)...",
+                    crate::relay::lan::SCAN_DURATION.as_secs()
+                );
+                println!();
+            }
+            crate::relay::lan::scan_lan(crate::relay::lan::SCAN_DURATION, own.as_str())
+        }
+    };
 
     struct Found {
         name: String,

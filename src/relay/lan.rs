@@ -359,30 +359,30 @@ pub fn scan_lan(duration: Duration, own_identity: &str) -> Vec<DiscoveredPeer> {
 }
 
 /// Start a background listener that accumulates discovered peers.
-/// Returns a shared peer map that the main loop can read.
+/// Returns a shared peer map that the caller reads on its own schedule.
 ///
-/// **No caller.** This is continuous discovery: unlike `scan_lan`, which
-/// listens for one window and is what `relay discover` uses, this keeps a map
-/// up to date for as long as it runs. That is what would let a peer whose
-/// address changed be found again without a re-invite — the gap #478 item 1
-/// describes, where a laptop changing network silently partitions the mesh.
+/// This is continuous discovery: unlike `scan_lan`, which listens for one
+/// window, this keeps a map up to date for as long as it runs. Two callers:
+/// `relay serve` (#506, which is what lets a paired peer that changed network
+/// be found again without a re-invite) and the TUI's Hive tab through
+/// `LiveDiscovery` in `src/runtime/hive.rs`.
 ///
-/// Kept rather than deleted because it is most of the answer to that, and
-/// flagged here rather than left under a module-wide allow, which is how the
-/// same shape of bug reached users three times (#433, #434, #455).
+/// The socket is bound here, on the caller's thread, so a port that cannot
+/// be bound is an error the caller sees rather than a thread that exits in
+/// silence and a map that stays empty forever. Whoever holds this port
+/// should also call [`publish_seen`], so a second process reads instead of
+/// binding beside it (see the note above `SEEN_FRESH_SECS`).
 pub fn start_listener(
     own_identity: String,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> std::sync::Arc<std::sync::Mutex<HashMap<String, DiscoveredPeer>>> {
+) -> std::io::Result<std::sync::Arc<std::sync::Mutex<HashMap<String, DiscoveredPeer>>>> {
+    let socket = bind_shared(LAN_PORT)?;
+    let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
+
     let peers = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
     let peers_clone = std::sync::Arc::clone(&peers);
 
     std::thread::spawn(move || {
-        let socket = match bind_shared(LAN_PORT) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
         let mut buf = [0u8; 1024];
 
         while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
@@ -422,7 +422,7 @@ pub fn start_listener(
         }
     });
 
-    peers
+    Ok(peers)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -465,6 +465,12 @@ pub struct SeenPeer {
 pub struct SeenSnapshot {
     pub written_ms: u64,
     pub peers: Vec<SeenPeer>,
+    /// The process that wrote this. A holder of the port that also publishes
+    /// (the TUI's Hive tab) reads the file back on its next tick, and must
+    /// not mistake its own writing for another process having taken over.
+    /// Absent in files written before this field existed, which is `0`.
+    #[serde(default)]
+    pub writer_pid: u32,
 }
 
 fn seen_path() -> std::path::PathBuf {
@@ -493,8 +499,8 @@ impl DiscoveredPeer {
     }
 }
 
-/// Publish what this relay has heard. Best-effort: discovery is a convenience,
-/// and a failed write must never disturb the serve loop.
+/// Publish what this process has heard. Best-effort: discovery is a
+/// convenience, and a failed write must never disturb the serve loop.
 pub fn publish_seen(map: &HashMap<String, DiscoveredPeer>) {
     let peers: Vec<SeenPeer> = map
         .values()
@@ -510,6 +516,7 @@ pub fn publish_seen(map: &HashMap<String, DiscoveredPeer>) {
     let snapshot = SeenSnapshot {
         written_ms: super::epoch_ms(),
         peers,
+        writer_pid: std::process::id(),
     };
     let dir = super::relay_dir();
     if std::fs::create_dir_all(&dir).is_err() {
@@ -536,25 +543,19 @@ pub fn read_seen() -> Option<SeenSnapshot> {
     Some(snap)
 }
 
-/// What a one-shot command should list: the local relay's published view when
-/// one is running, else a [`SCAN_DURATION`] scan. The flag says which, so the
-/// caller can tell the operator whether it waited.
-///
-/// Both `relay discover` and `hive discover` go through here, so neither binds
-/// beside a running relay and sees half the LAN.
-pub fn seen_or_scan(own_identity: &str) -> (Vec<DiscoveredPeer>, bool) {
-    match read_seen() {
-        Some(snapshot) => (
-            snapshot
-                .peers
-                .iter()
-                .filter(|p| p.identity != own_identity)
-                .map(DiscoveredPeer::from_seen)
-                .collect(),
-            true,
-        ),
-        None => (scan_lan(SCAN_DURATION, own_identity), false),
-    }
+/// The peers in a published snapshot, minus this machine, in the form a live
+/// scan would have produced. `relay discover`, `hive discover` and the TUI
+/// all read one snapshot with [`read_seen`], decide what to tell the operator,
+/// and then render through here — one read per command, so what the header
+/// says and what the listing came from cannot disagree across the freshness
+/// edge.
+pub fn peers_from_seen(snapshot: &SeenSnapshot, own_identity: &str) -> Vec<DiscoveredPeer> {
+    snapshot
+        .peers
+        .iter()
+        .filter(|p| p.identity != own_identity)
+        .map(DiscoveredPeer::from_seen)
+        .collect()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
