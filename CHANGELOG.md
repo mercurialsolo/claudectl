@@ -4,6 +4,20 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.91.1] - 2026-10-18
+
+### Added
+
+- **The TUI's Hive tab discovers nearby hives (#599).**
+  - Opening the Hive tab (`K`, then `Tab`) starts listening for LAN announcements. A **Nearby** section lists each named hive with its join policy, peer and unit counts and the machines announcing it, then machines relaying with no hive name. Paired machines are marked. Leaving the tab stops listening. Discovery used to exist only as `hive discover` and `relay discover`.
+  - The tab never binds the discovery port beside a running `relay serve` (the #506 port-sharing rule). While a local relay publishes what it hears, the tab reads that and holds no socket; it binds its own only when no relay is running, re-checked every tick so `h` can start one mid-session. The header says which source is active.
+  - The listing is informational: an announcement carries no key, so pairing still takes an invite from the other machine (`i` there, `J` here), and the tab says so.
+  - `claudectl-core` 0.75.0 adds `HiveActions::start_discovery`, the `DiscoveryListener` handle and the `DiscoveredMachine` / `DiscoveredHive` / `DiscoverySnapshot` DTOs; `claudectl-tui` 0.76.0 owns the handle for as long as the tab is showing.
+
+### Fixed
+
+- **`hive discover` saw nothing on a machine running its own relay.** It scanned directly, beside a relay that already held the port. It now takes the same read-then-scan path as `relay discover`, so it answers at once from the relay's view and only scans when no relay is running.
+
 ## [0.91.0] - 2026-10-18
 
 The bus can route work by what a session touches. Roles were always declared; now a role bound to a subtree *owns* it, every session reports where its edits concentrate, and a message can be addressed to a path instead of a name. No LLM in any of it.
