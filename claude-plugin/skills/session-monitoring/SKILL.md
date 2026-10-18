@@ -1,7 +1,7 @@
 ---
 name: Session Monitoring
 description: Provides awareness of claudectl session state, health checks, and cost tracking. Activated when the user asks about session health, spending, brain decisions, or multi-session coordination.
-version: 0.90.2
+version: 0.91.0
 ---
 
 # claudectl Session Monitoring
