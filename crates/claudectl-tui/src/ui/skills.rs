@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::app::{App, SkillsTab};
-use claudectl_core::runtime::{DiscoveredHive, DiscoveredMachine, DiscoverySource};
+use claudectl_core::runtime::{DiscoveredMachine, DiscoverySource, group_by_hive};
 use claudectl_core::skills::DiscoveredSkill;
 use claudectl_core::theme::Theme;
 
@@ -328,7 +328,7 @@ fn render_nearby<'a>(lines: &mut Vec<Line<'a>>, app: &'a App) {
         return;
     }
 
-    let (hives, unnamed) = group_nearby(&snap.machines);
+    let (hives, unnamed) = group_by_hive(&snap.machines);
     for (hive, machines) in &hives {
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
@@ -402,36 +402,6 @@ fn machine_line<'a>(t: &Theme, m: &DiscoveredMachine) -> Line<'a> {
             Style::default().fg(t.text_muted),
         ),
     ])
-}
-
-/// Group a listing by hive, keeping first-seen order for hives and machines so
-/// the section holds still between ticks. Returns the named hives with their
-/// machines, then the machines that named none.
-pub fn group_nearby(
-    machines: &[DiscoveredMachine],
-) -> (
-    Vec<(DiscoveredHive, Vec<&DiscoveredMachine>)>,
-    Vec<&DiscoveredMachine>,
-) {
-    let mut hives: Vec<(DiscoveredHive, Vec<&DiscoveredMachine>)> = Vec::new();
-    let mut unnamed = Vec::new();
-    for m in machines {
-        let Some(h) = &m.hive else {
-            unnamed.push(m);
-            continue;
-        };
-        match hives.iter_mut().find(|(known, _)| known.id == h.id) {
-            Some((known, members)) => {
-                // Counts are snapshots taken at different instants on each
-                // machine; the larger is the more recently true.
-                known.peers = known.peers.max(h.peers);
-                known.units = known.units.max(h.units);
-                members.push(m);
-            }
-            None => hives.push((h.clone(), vec![m])),
-        }
-    }
-    (hives, unnamed)
 }
 
 fn kv_line<'a>(t: &'a Theme, key: &'a str, value: &'a str) -> Line<'a> {
@@ -577,7 +547,7 @@ mod tests {
             identity: identity.into(),
             addr: "10.0.0.2:9847".into(),
             version: "0.90.2".into(),
-            hive: hive.map(|(name, units)| DiscoveredHive {
+            hive: hive.map(|(name, units)| claudectl_core::runtime::DiscoveredHive {
                 id: format!("hv_{name}"),
                 name: name.into(),
                 join_policy: "ask".into(),
@@ -586,24 +556,6 @@ mod tests {
             }),
             paired: false,
         }
-    }
-
-    #[test]
-    fn group_nearby_merges_a_hive_across_machines_and_keeps_highest_counts() {
-        let machines = vec![
-            machine("a", Some(("ops", 10))),
-            machine("b", None),
-            machine("c", Some(("ops", 40))),
-            machine("d", Some(("dev", 5))),
-        ];
-        let (hives, unnamed) = group_nearby(&machines);
-        assert_eq!(hives.len(), 2);
-        assert_eq!(hives[0].0.name, "ops");
-        assert_eq!(hives[0].0.units, 40);
-        assert_eq!(hives[0].1.len(), 2);
-        assert_eq!(hives[1].0.name, "dev");
-        assert_eq!(unnamed.len(), 1);
-        assert_eq!(unnamed[0].identity, "b");
     }
 
     #[test]

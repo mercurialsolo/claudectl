@@ -104,13 +104,14 @@ impl HiveActions for LiveHiveActions {
 /// and drop the socket.
 #[cfg(feature = "relay")]
 mod discovery {
+    use std::collections::HashSet;
     use std::time::{Duration, Instant};
 
     use claudectl_core::runtime::{
-        DiscoveredHive, DiscoveredMachine, DiscoveryListener, DiscoverySnapshot, DiscoverySource,
+        DiscoveredMachine, DiscoveryListener, DiscoverySnapshot, DiscoverySource,
     };
 
-    use crate::relay::lan::{self, DiscoveredPeer, HiveAd};
+    use crate::relay::lan::{self, DiscoveredPeer};
 
     /// How long to leave a port that refused to bind before trying again.
     /// Trying on every tick would be a syscall and a log line every two
@@ -149,8 +150,11 @@ mod discovery {
     impl DiscoveryListener for LiveDiscovery {
         fn snapshot(&mut self) -> DiscoverySnapshot {
             if let Some(seen) = lan::published_by_other(lan::read_seen(), std::process::id()) {
-                // Another process holds the port. Never bind beside it.
-                self.listener = None;
+                // Another process holds the port. Never bind beside it, and
+                // leave the file to it: retracting now would race its writes.
+                if let Some(ours) = self.listener.take() {
+                    ours.release();
+                }
                 let peers = lan::peers_from_seen(&seen, &self.own_identity);
                 return DiscoverySnapshot {
                     source: DiscoverySource::Published,
@@ -204,36 +208,16 @@ mod discovery {
         }
     }
 
+    /// One directory listing for the paired set, not one key file per
+    /// machine: this runs on the UI thread every tick while the tab shows.
     fn machines_from(peers: &[DiscoveredPeer]) -> Vec<DiscoveredMachine> {
-        let mut machines: Vec<DiscoveredMachine> = peers.iter().map(machine_from_peer).collect();
+        let paired: HashSet<String> = crate::relay::list_known_peers().into_iter().collect();
+        let mut machines: Vec<DiscoveredMachine> = peers
+            .iter()
+            .map(|p| lan::machine_from_peer(p, paired.contains(&p.identity)))
+            .collect();
         sort_machines(&mut machines);
         machines
-    }
-
-    fn machine_from_peer(p: &DiscoveredPeer) -> DiscoveredMachine {
-        machine_from_parts(p, crate::relay::load_peer_psk(&p.identity).is_some())
-    }
-
-    /// The conversion without the PSK lookup, so a test can cover it with no
-    /// relay directory on the machine running the suite.
-    fn machine_from_parts(p: &DiscoveredPeer, paired: bool) -> DiscoveredMachine {
-        DiscoveredMachine {
-            identity: p.identity.clone(),
-            addr: p.relay_addr().to_string(),
-            version: p.version.clone(),
-            hive: p.hive.as_ref().map(hive_from_ad),
-            paired,
-        }
-    }
-
-    fn hive_from_ad(h: &HiveAd) -> DiscoveredHive {
-        DiscoveredHive {
-            id: h.id.clone(),
-            name: h.name.clone(),
-            join_policy: h.join_policy.clone(),
-            peers: h.peers,
-            units: h.units,
-        }
     }
 
     /// Named hives first, grouped by name, then by identity, so the listing
@@ -249,46 +233,32 @@ mod discovery {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use std::net::SocketAddr;
-        use std::time::Instant;
+        use claudectl_core::runtime::DiscoveredHive;
 
-        fn peer(identity: &str, hive: Option<&str>) -> DiscoveredPeer {
-            DiscoveredPeer {
+        fn machine(identity: &str, hive: Option<&str>) -> DiscoveredMachine {
+            DiscoveredMachine {
                 identity: identity.into(),
-                addr: "192.168.1.20:40000".parse::<SocketAddr>().unwrap(),
-                relay_port: 9847,
+                addr: "192.168.1.20:9847".into(),
                 version: "0.90.2".into(),
-                last_seen: Instant::now(),
-                hive: hive.map(|name| HiveAd {
+                hive: hive.map(|name| DiscoveredHive {
                     id: format!("hv_{name}"),
                     name: name.into(),
                     join_policy: "ask".into(),
                     peers: 2,
                     units: 212,
                 }),
+                paired: false,
             }
-        }
-
-        #[test]
-        fn machine_carries_relay_addr_and_hive() {
-            let m = machine_from_parts(&peer("mini-9f2a", Some("my-hive")), true);
-            assert_eq!(m.identity, "mini-9f2a");
-            assert_eq!(m.addr, "192.168.1.20:9847");
-            assert!(m.paired);
-            let h = m.hive.expect("hive block");
-            assert_eq!(h.name, "my-hive");
-            assert_eq!(h.join_policy, "ask");
-            assert_eq!((h.peers, h.units), (2, 212));
         }
 
         #[test]
         fn named_hives_sort_first_then_by_identity() {
             let mut machines = vec![
-                machine_from_parts(&peer("zed", None), false),
-                machine_from_parts(&peer("bob", Some("ops")), false),
-                machine_from_parts(&peer("amy", None), false),
-                machine_from_parts(&peer("cat", Some("dev")), false),
-                machine_from_parts(&peer("ann", Some("ops")), false),
+                machine("zed", None),
+                machine("bob", Some("ops")),
+                machine("amy", None),
+                machine("cat", Some("dev")),
+                machine("ann", Some("ops")),
             ];
             sort_machines(&mut machines);
             let ids: Vec<&str> = machines.iter().map(|m| m.identity.as_str()).collect();

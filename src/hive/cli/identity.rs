@@ -374,7 +374,7 @@ fn confirm_open(yes: bool) -> io::Result<bool> {
 /// visible to `relay discover`, which lists machines.
 #[cfg(feature = "relay")]
 pub fn cmd_hive_discover(json_mode: bool) -> io::Result<()> {
-    use std::collections::BTreeMap;
+    use claudectl_core::runtime::{DiscoveredMachine, group_by_hive};
 
     let own = crate::relay::load_or_create_identity();
     // The same arbitration as `relay discover` (`lan::discover_once`): read
@@ -394,45 +394,33 @@ pub fn cmd_hive_discover(json_mode: bool) -> io::Result<()> {
         println!();
     });
 
-    struct Found {
-        name: String,
-        join_policy: String,
-        peers: u32,
-        units: u32,
-        machines: Vec<String>,
-    }
-    // BTreeMap so repeated runs list in a stable order.
-    let mut hives: BTreeMap<String, Found> = BTreeMap::new();
-    for p in &peers {
-        let Some(h) = &p.hive else { continue };
-        let entry = hives.entry(h.id.clone()).or_insert_with(|| Found {
-            name: h.name.clone(),
-            join_policy: h.join_policy.clone(),
-            peers: 0,
-            units: 0,
-            machines: Vec::new(),
-        });
-        // Highest wins when two machines in one hive disagree: the counts are
-        // snapshots taken at different instants, so the larger is the more
-        // recently true.
-        entry.peers = entry.peers.max(h.peers);
-        entry.units = entry.units.max(h.units);
-        entry
-            .machines
-            .push(format!("{}@{}", p.identity, p.relay_addr()));
-    }
+    // The same grouping the TUI's Hive tab renders, so the two cannot disagree
+    // about a hive's counts. Sorted by id so repeated runs list in a stable
+    // order (the TUI keeps first-seen order instead, so its rows hold still).
+    let machines: Vec<DiscoveredMachine> = peers
+        .iter()
+        .map(|p| crate::relay::lan::machine_from_peer(p, false))
+        .collect();
+    let (mut hives, _unnamed) = group_by_hive(&machines);
+    hives.sort_by(|a, b| a.0.id.cmp(&b.0.id));
+    let machine_names = |members: &[&DiscoveredMachine]| -> Vec<String> {
+        members
+            .iter()
+            .map(|m| format!("{}@{}", m.identity, m.addr))
+            .collect()
+    };
 
     if json_mode {
         let out: Vec<serde_json::Value> = hives
             .iter()
-            .map(|(id, f)| {
+            .map(|(h, members)| {
                 serde_json::json!({
-                    "hive_id": id,
-                    "name": f.name,
-                    "join_policy": f.join_policy,
-                    "peers": f.peers,
-                    "units": f.units,
-                    "machines": f.machines,
+                    "hive_id": h.id,
+                    "name": h.name,
+                    "join_policy": h.join_policy,
+                    "peers": h.peers,
+                    "units": h.units,
+                    "machines": machine_names(members),
                 })
             })
             .collect();
@@ -465,17 +453,17 @@ pub fn cmd_hive_discover(json_mode: bool) -> io::Result<()> {
         "HIVE", "POLICY", "PEERS", "UNITS"
     );
     println!("  {}", "─".repeat(66));
-    for (id, f) in &hives {
+    for (h, members) in &hives {
         println!(
             "  {:<20} {:<10} {:<7} {:<7} {}",
-            claudectl_core::helpers::truncate_cell(&f.name, 20),
-            f.join_policy,
-            f.peers,
-            f.units,
-            f.machines.len()
+            claudectl_core::helpers::truncate_cell(&h.name, 20),
+            h.join_policy,
+            h.peers,
+            h.units,
+            members.len()
         );
-        println!("  {:<20} {}", "", id);
-        for m in &f.machines {
+        println!("  {:<20} {}", "", h.id);
+        for m in machine_names(members) {
             println!("  {:<20}   {m}", "");
         }
     }

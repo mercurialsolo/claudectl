@@ -3313,6 +3313,9 @@ fn cmd_discover(json_mode: bool) -> io::Result<()> {
     // (`SO_REUSEPORT` splits datagrams rather than copying them). The
     // arbitration lives in `lan::discover_once`, shared with `hive discover`.
     let peers = super::lan::discover_once(identity.as_str(), |published| {
+        if json_mode {
+            return;
+        }
         if published {
             println!("Peers seen by the claudectl process listening on this machine:");
         } else {

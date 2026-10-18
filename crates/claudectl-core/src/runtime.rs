@@ -602,6 +602,78 @@ pub struct DiscoverySnapshot {
     pub machines: Vec<DiscoveredMachine>,
 }
 
+/// Group a listing by hive: the named hives in first-seen order, each with
+/// the machines announcing it, then the machines that named none. Shared by
+/// the TUI's Hive tab and `hive discover`, so the two cannot disagree about a
+/// hive's counts.
+///
+/// When two machines in one hive disagree on peers or units, the higher
+/// value is kept: the counts are snapshots taken at different instants, and
+/// the larger is the more recently true.
+pub fn group_by_hive(
+    machines: &[DiscoveredMachine],
+) -> (
+    Vec<(DiscoveredHive, Vec<&DiscoveredMachine>)>,
+    Vec<&DiscoveredMachine>,
+) {
+    let mut hives: Vec<(DiscoveredHive, Vec<&DiscoveredMachine>)> = Vec::new();
+    let mut unnamed = Vec::new();
+    for m in machines {
+        let Some(h) = &m.hive else {
+            unnamed.push(m);
+            continue;
+        };
+        match hives.iter_mut().find(|(known, _)| known.id == h.id) {
+            Some((known, members)) => {
+                known.peers = known.peers.max(h.peers);
+                known.units = known.units.max(h.units);
+                members.push(m);
+            }
+            None => hives.push((h.clone(), vec![m])),
+        }
+    }
+    (hives, unnamed)
+}
+
+#[cfg(test)]
+mod group_by_hive_tests {
+    use super::*;
+
+    fn machine(identity: &str, hive: Option<(&str, u32)>) -> DiscoveredMachine {
+        DiscoveredMachine {
+            identity: identity.into(),
+            addr: "10.0.0.2:9847".into(),
+            version: "0.90.2".into(),
+            hive: hive.map(|(name, units)| DiscoveredHive {
+                id: format!("hv_{name}"),
+                name: name.into(),
+                join_policy: "ask".into(),
+                peers: 1,
+                units,
+            }),
+            paired: false,
+        }
+    }
+
+    #[test]
+    fn merges_a_hive_across_machines_and_keeps_highest_counts() {
+        let machines = vec![
+            machine("a", Some(("ops", 10))),
+            machine("b", None),
+            machine("c", Some(("ops", 40))),
+            machine("d", Some(("dev", 5))),
+        ];
+        let (hives, unnamed) = group_by_hive(&machines);
+        assert_eq!(hives.len(), 2);
+        assert_eq!(hives[0].0.name, "ops");
+        assert_eq!(hives[0].0.units, 40);
+        assert_eq!(hives[0].1.len(), 2);
+        assert_eq!(hives[1].0.name, "dev");
+        assert_eq!(unnamed.len(), 1);
+        assert_eq!(unnamed[0].identity, "b");
+    }
+}
+
 /// A running LAN discovery, alive for as long as the Hive tab is showing.
 ///
 /// Handed out by [`HiveActions::start_discovery`] and owned by the TUI like

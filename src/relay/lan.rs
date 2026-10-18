@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
+use claudectl_core::runtime::{DiscoveredHive, DiscoveredMachine};
+
 use super::PeerId;
 
 pub const LAN_PORT: u16 = 9848;
@@ -284,6 +286,17 @@ fn bind_shared(port: u16) -> std::io::Result<UdpSocket> {
         }
         let socket = UdpSocket::from_raw_fd(fd);
 
+        // Close-on-exec, which std sets on the sockets it creates and a raw
+        // `socket()` does not (macOS has no SOCK_CLOEXEC). Without it every
+        // child this process spawns — the `relay serve` the Hive tab's `h`
+        // starts, a worker's `claude`, each `ps` — inherits a bound copy of
+        // this socket, and an inherited copy nobody reads from stays in the
+        // SO_REUSEPORT group taking its share of datagrams after we close
+        // ours. That is the #506 split with no process to blame for it.
+        if libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
         let on: libc::c_int = 1;
         for opt in [libc::SO_REUSEADDR, libc::SO_REUSEPORT] {
             let rc = libc::setsockopt(
@@ -386,12 +399,18 @@ pub fn scan_lan(duration: Duration, own_identity: &str) -> Vec<DiscoveredPeer> {
 /// TUI quit, before the join was added.
 pub fn start_listener(own_identity: String, publish: bool) -> std::io::Result<Listener> {
     let socket = bind_shared(LAN_PORT)?;
-    let _ = socket.set_read_timeout(Some(LISTENER_POLL));
+    // Not optional: without the timeout `recv_from` blocks until a datagram
+    // arrives, the shutdown flag is never checked, and the join in
+    // `Listener::drop` hangs whoever is leaving the Hive tab or stopping the
+    // relay.
+    socket.set_read_timeout(Some(LISTENER_POLL))?;
 
     let peers = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
     let peers_clone = std::sync::Arc::clone(&peers);
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let shutdown_clone = std::sync::Arc::clone(&shutdown);
+    let retract_on_exit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(publish));
+    let retract_clone = std::sync::Arc::clone(&retract_on_exit);
 
     let handle = std::thread::spawn(move || {
         let shutdown = shutdown_clone;
@@ -444,7 +463,7 @@ pub fn start_listener(own_identity: String, publish: bool) -> std::io::Result<Li
                 }
             }
         }
-        if publish {
+        if retract_clone.load(std::sync::atomic::Ordering::Relaxed) {
             // Nobody is listening here now. Leaving the file would have every
             // reader trust a frozen listing for the rest of its freshness.
             retract_seen();
@@ -454,6 +473,7 @@ pub fn start_listener(own_identity: String, publish: bool) -> std::io::Result<Li
     Ok(Listener {
         peers,
         shutdown,
+        retract_on_exit,
         handle: Some(handle),
     })
 }
@@ -470,12 +490,26 @@ const LISTENER_POLL: Duration = Duration::from_millis(250);
 pub struct Listener {
     pub peers: std::sync::Arc<std::sync::Mutex<HashMap<String, DiscoveredPeer>>>,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the thread removes `discovered.json` on its way out. Set for a
+    /// publishing listener; cleared by [`Listener::release`].
+    retract_on_exit: std::sync::Arc<std::sync::atomic::AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Listener {
     /// Stop the thread and wait for it. The same as dropping, by a name.
     pub fn stop(self) {}
+
+    /// Stop *because another process has taken over the port*, so leave the
+    /// file to it. Retracting here would race the new holder's own writes:
+    /// this thread may have republished between the caller's read and now, or
+    /// the other process's rename may land between the retraction's read and
+    /// its unlink — either way the fresh file disappears, the next tick finds
+    /// nothing, and the caller rebinds beside the relay it just yielded to.
+    pub fn release(self) {
+        self.retract_on_exit
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl Drop for Listener {
@@ -705,8 +739,10 @@ pub fn peers_from_seen(snapshot: &SeenSnapshot, own_identity: &str) -> Vec<Disco
 ///
 /// `header` is told which of the two is about to happen, before any wait, so
 /// the operator sees why the command is taking its time. If the publisher
-/// goes away during the wait the command scans after all.
-pub fn discover_once(own_identity: &str, header: impl FnOnce(bool)) -> Vec<DiscoveredPeer> {
+/// goes away during the wait the command scans after all, and `header` is
+/// told that too, so a "reading" line is never followed by six silent
+/// seconds of scanning.
+pub fn discover_once(own_identity: &str, mut header: impl FnMut(bool)) -> Vec<DiscoveredPeer> {
     let Some(snapshot) = read_seen() else {
         header(false);
         return scan_lan(SCAN_DURATION, own_identity);
@@ -718,11 +754,33 @@ pub fn discover_once(own_identity: &str, header: impl FnOnce(bool)) -> Vec<Disco
             std::thread::sleep(wait);
             match read_seen() {
                 Some(settled) => settled,
-                None => return scan_lan(SCAN_DURATION, own_identity),
+                None => {
+                    header(false);
+                    return scan_lan(SCAN_DURATION, own_identity);
+                }
             }
         }
     };
     peers_from_seen(&snapshot, own_identity)
+}
+
+/// A discovered peer as the UI contract carries it. `paired` is the caller's
+/// to decide, so a listing can be built from one directory read rather than
+/// one per machine, and a test needs no relay directory at all.
+pub fn machine_from_peer(p: &DiscoveredPeer, paired: bool) -> DiscoveredMachine {
+    DiscoveredMachine {
+        identity: p.identity.clone(),
+        addr: p.relay_addr().to_string(),
+        version: p.version.clone(),
+        hive: p.hive.as_ref().map(|h| DiscoveredHive {
+            id: h.id.clone(),
+            name: h.name.clone(),
+            join_policy: h.join_policy.clone(),
+            peers: h.peers,
+            units: h.units,
+        }),
+        paired,
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -752,6 +810,28 @@ mod tests {
             last_seen: Instant::now(),
             hive: None,
         }
+    }
+
+    #[test]
+    fn machine_carries_relay_addr_and_hive() {
+        let mut p = peer("mini-9f2a");
+        p.hive = Some(HiveAd {
+            id: "hv_1".into(),
+            name: "my-hive".into(),
+            join_policy: "ask".into(),
+            peers: 2,
+            units: 212,
+        });
+        let m = machine_from_peer(&p, true);
+        assert_eq!(m.identity, "mini-9f2a");
+        assert_eq!(m.addr, "192.168.1.20:9847");
+        assert!(m.paired);
+        let h = m.hive.expect("hive block");
+        assert_eq!(
+            (h.name.as_str(), h.join_policy.as_str()),
+            ("my-hive", "ask")
+        );
+        assert_eq!((h.peers, h.units), (2, 212));
     }
 
     #[test]
