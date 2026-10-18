@@ -202,7 +202,7 @@ fn from_tool_shape(
                 continue;
             };
             match name.as_str() {
-                "Write" | "Edit" | "MultiEdit" => writes += 1,
+                n if claudectl_core::transcript::is_edit_tool(n) => writes += 1,
                 "Read" | "Glob" | "Grep" => reads += 1,
                 "Bash" => {
                     bash += 1;

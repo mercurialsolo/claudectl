@@ -1,5 +1,25 @@
 use serde_json::Value;
 
+/// The tools that change a file, in Claude Code's vocabulary. One list for
+/// the monitor's `files_modified`, the session focus (#596), the brain's
+/// edit-outcome attribution and role suggestion, so a renamed tool is found
+/// in one place.
+pub const EDIT_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
+
+/// Whether `name` is one of [`EDIT_TOOLS`].
+pub fn is_edit_tool(name: &str) -> bool {
+    EDIT_TOOLS.contains(&name)
+}
+
+/// The file an edit tool's `input` targets: `file_path`, or `notebook_path`
+/// for `NotebookEdit`.
+pub fn edited_path(input: &Value) -> Option<&str> {
+    input
+        .get("file_path")
+        .or_else(|| input.get("notebook_path"))
+        .and_then(|v| v.as_str())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranscriptRole {
     Assistant,

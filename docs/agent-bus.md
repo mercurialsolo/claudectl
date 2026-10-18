@@ -125,7 +125,7 @@ claudectl bus send <to-role> "<body>" \
 
 From inside a Claude session, just use natural language with the recipient role — the Claude side calls the bus's `publish` MCP tool and the message lands on disk before the turn ends. A leading `/` in any body is neutralized at the boundary so a queued message cannot smuggle a slash command into the recipient.
 
-Sending to a role name nobody has bound still queues the message (roles are durable and may bind later), but prints a warning so a typo does not sit in a mailbox forever. `supervisor` and `operator` are addressable without being bound and never warn.
+Sending to a role name nobody has bound still queues the message (roles are durable and may bind later), but prints a warning so a typo does not sit in a mailbox forever. You also get a warning when the role is bound to a session that is no longer running, since the message waits until it re-binds. `supervisor` and `operator` are addressable without being bound and never warn.
 
 ### Route by the path the work touches
 

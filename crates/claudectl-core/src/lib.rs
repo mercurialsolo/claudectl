@@ -29,6 +29,7 @@ pub mod launch;
 pub mod logger;
 pub mod models;
 pub mod monitor;
+pub mod paths;
 pub mod process;
 pub mod rules;
 pub mod runtime;

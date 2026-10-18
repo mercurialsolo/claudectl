@@ -467,8 +467,8 @@ fn record_tool_usage(tool_name: &str, input: &Value, session: &mut ClaudeSession
         .or_default()
         .calls += 1;
 
-    if matches!(tool_name, "Edit" | "Write" | "NotebookEdit") {
-        if let Some(path) = input.get("file_path").and_then(|p| p.as_str()) {
+    if crate::transcript::is_edit_tool(tool_name) {
+        if let Some(path) = crate::transcript::edited_path(input) {
             *session.files_modified.entry(path.to_string()).or_insert(0) += 1;
             // Reset file-read tracker for this path (it was just edited)
             session.file_reads_since_edit.remove(path);

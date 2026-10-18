@@ -94,6 +94,11 @@ pub struct PublishArgs {
     /// with `addressed_to`.
     #[serde(default)]
     pub addressed_to_path: Option<String>,
+    /// The directory a relative `addressed_to_path` is taken against.
+    /// Defaults to the server's cwd, which is where the hosting session
+    /// started; a session that has moved should pass its own.
+    #[serde(default)]
+    pub cwd: Option<String>,
     #[serde(default)]
     pub thread_id: Option<String>,
     /// "high" | "normal" | "low". Defaults to "normal".
@@ -127,8 +132,12 @@ pub struct PublishResult {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OwnerOfArgs {
-    /// A file or directory, absolute or relative to the caller's cwd.
+    /// A file or directory, absolute or relative to `cwd`.
     pub path: String,
+    /// The directory a relative `path` is taken against. Defaults to the
+    /// server's cwd, which is where the hosting session started.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -347,7 +356,9 @@ impl BusServer {
         let mut out = Vec::with_capacity(sessions.len());
         for s in sessions {
             let cwd_path = PathBuf::from(&s.cwd);
-            let role = match roles::resolve(&conn, None, &cwd_path) {
+            // That session's own binding, not the host session's (#596):
+            // `resolve` reads the env and the *server's* ancestor pids.
+            let role = match roles::resolve_for_session(&conn, s.pid, &cwd_path) {
                 Ok(RoleResolution::Resolved(r)) => Some(r.name),
                 _ => None,
             };
@@ -397,9 +408,24 @@ impl BusServer {
         // The field always said "otherwise inferred from caller cwd", and
         // nothing inferred it, so a reply from any agent that didn't pass
         // it arrived with no sender to answer.
-        let sender_role = {
+        // The recipient is resolved here, with the other argument checks
+        // and before the rate limiter, so a refused `addressed_to_path`
+        // does not spend a token on a message that was never queued (#596).
+        let (sender_role, recipient) = {
             let conn = self.conn.lock().expect("bus db mutex poisoned");
-            sender_for(&conn, args.sender_role.clone(), &Self::caller_cwd(None))
+            let cwd = Self::caller_cwd(args.cwd.as_deref());
+            let sender = sender_for(&conn, args.sender_role.clone(), &cwd);
+            let recipient = recipient_for(
+                &conn,
+                args.addressed_to.as_deref(),
+                args.addressed_to_path.as_deref(),
+                &cwd,
+            )
+            .map_err(|e| match e {
+                RecipientError::Invalid(msg) => McpError::invalid_params(msg, None),
+                RecipientError::Store(msg) => McpError::internal_error(msg, None),
+            })?;
+            (sender, recipient)
         };
 
         // Rate limit per sender role. Anonymous sends (no role) skip the
@@ -424,13 +450,6 @@ impl BusServer {
         let priority = args.priority.as_deref().unwrap_or("normal");
 
         let conn = self.conn.lock().expect("bus db mutex poisoned");
-        let recipient = recipient_for(
-            &conn,
-            args.addressed_to.as_deref(),
-            args.addressed_to_path.as_deref(),
-            &Self::caller_cwd(None),
-        )
-        .map_err(|e| McpError::invalid_params(e, None))?;
         let id = store::insert_message(
             &conn,
             &args.subject,
@@ -460,7 +479,7 @@ impl BusServer {
         Parameters(args): Parameters<OwnerOfArgs>,
     ) -> Result<Json<OwnerOfResult>, McpError> {
         let conn = self.conn.lock().expect("bus db mutex poisoned");
-        let path = absolute_path(&args.path, &Self::caller_cwd(None));
+        let path = absolute_path(&args.path, &Self::caller_cwd(args.cwd.as_deref()));
         let res =
             roles::owner_of_path(&conn, &path).map_err(|e| McpError::internal_error(e, None))?;
         Ok(Json(OwnerOfResult {
@@ -626,6 +645,23 @@ pub struct Recipient {
     pub warning: Option<String>,
 }
 
+/// Why a recipient could not be resolved. `Invalid` is the caller's
+/// arguments (an MCP `invalid_params`); `Store` is the bus database (an
+/// `internal_error`), so a locked DB is never reported as a bad request.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RecipientError {
+    Invalid(String),
+    Store(String),
+}
+
+impl std::fmt::Display for RecipientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(m) | Self::Store(m) => f.write_str(m),
+        }
+    }
+}
+
 /// Resolve a message's recipient from `addressed_to` or `addressed_to_path`.
 ///
 /// A path is routed to its owner and *refused* when it has none or two
@@ -634,41 +670,70 @@ pub struct Recipient {
 /// it always was, with a warning when no role has ever bound it; reserved
 /// roles are addressable without being bindable and never warn. Naming
 /// both is an error.
+///
+/// Either way, a recipient whose binding names a pid that is no longer
+/// running gets a warning too: roles are durable and the message waits for
+/// the re-bind, but a `/role` session that exited still owns its selector,
+/// and silence there is the failure this exists to remove.
 pub fn recipient_for(
     conn: &rusqlite::Connection,
     addressed_to: Option<&str>,
     addressed_to_path: Option<&str>,
     cwd: &std::path::Path,
-) -> Result<Recipient, String> {
+) -> Result<Recipient, RecipientError> {
+    recipient_for_with(
+        conn,
+        addressed_to,
+        addressed_to_path,
+        cwd,
+        &claudectl_core::process::pid_alive,
+    )
+}
+
+/// `recipient_for` with the liveness probe injected, so tests can bind a
+/// role to a pid and decide whether it is running.
+pub fn recipient_for_with(
+    conn: &rusqlite::Connection,
+    addressed_to: Option<&str>,
+    addressed_to_path: Option<&str>,
+    cwd: &std::path::Path,
+    alive: &dyn Fn(u32) -> bool,
+) -> Result<Recipient, RecipientError> {
+    let store_err = RecipientError::Store;
     match (addressed_to, addressed_to_path) {
-        (Some(_), Some(_)) => Err("pass addressed_to or addressed_to_path, not both".into()),
+        (Some(_), Some(_)) => Err(RecipientError::Invalid(
+            "pass addressed_to or addressed_to_path, not both".into(),
+        )),
         (None, Some(path)) => {
             let abs = absolute_path(path, cwd);
-            match roles::owner_of_path(conn, &abs)? {
+            match roles::owner_of_path(conn, &abs).map_err(store_err)? {
                 RoleResolution::Resolved(r) => Ok(Recipient {
+                    warning: dead_binding_warning(&r.name, r.pid, alive),
                     role: Some(r.name),
-                    warning: None,
                 }),
-                RoleResolution::Ambiguous { candidates } => Err(format!(
+                RoleResolution::Ambiguous { candidates } => Err(RecipientError::Invalid(format!(
                     "no single owner for {}: {} are bound to the same selector; address one of them",
                     abs.display(),
                     candidates.join(", ")
-                )),
-                RoleResolution::Unbound { .. } => Err(format!(
+                ))),
+                RoleResolution::Unbound { .. } => Err(RecipientError::Invalid(format!(
                     "no role owns {}: bind one to an enclosing directory with `claudectl bus role bind <name> <dir>`",
                     abs.display()
-                )),
+                ))),
             }
         }
         (Some(name), None) => {
             let lower = name.to_ascii_lowercase();
             let reserved = policy::RESERVED_ROLES.iter().any(|r| *r == lower);
-            let warning = if reserved || store::get_role(conn, name)?.is_some() {
+            let warning = if reserved {
                 None
             } else {
-                Some(format!(
-                    "no role '{name}' is bound; the message waits until one binds"
-                ))
+                match store::get_role(conn, name).map_err(store_err)? {
+                    Some(row) => dead_binding_warning(&row.role, row.pid, alive),
+                    None => Some(format!(
+                        "no role '{name}' is bound; the message waits until one binds"
+                    )),
+                }
             };
             Ok(Recipient {
                 role: Some(name.to_string()),
@@ -679,6 +744,19 @@ pub fn recipient_for(
             role: None,
             warning: None,
         }),
+    }
+}
+
+fn dead_binding_warning(
+    role: &str,
+    pid: Option<u32>,
+    alive: &dyn Fn(u32) -> bool,
+) -> Option<String> {
+    match pid {
+        Some(pid) if !alive(pid) => Some(format!(
+            "role '{role}' is bound to pid {pid}, which is not running; the message waits until it re-binds"
+        )),
+        _ => None,
     }
 }
 
@@ -797,7 +875,9 @@ mod recipient_tests {
     #[test]
     fn a_path_nobody_owns_is_refused_not_queued() {
         let conn = db();
-        let err = recipient_for(&conn, None, Some("/elsewhere/x.rs"), Path::new("/")).unwrap_err();
+        let err = recipient_for(&conn, None, Some("/elsewhere/x.rs"), Path::new("/"))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("no role owns /elsewhere/x.rs"), "{err}");
         assert!(
             err.contains("bus role bind"),
@@ -809,7 +889,9 @@ mod recipient_tests {
     fn a_path_with_two_equal_owners_names_them() {
         let conn = db();
         store::upsert_role(&conn, "impl2", "/repo", None, None).unwrap();
-        let err = recipient_for(&conn, None, Some("/repo/README.md"), Path::new("/")).unwrap_err();
+        let err = recipient_for(&conn, None, Some("/repo/README.md"), Path::new("/"))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("impl") && err.contains("impl2"), "{err}");
         // The more specific owner is still unambiguous.
         let r = recipient_for(&conn, None, Some("/repo/src/relay/a.rs"), Path::new("/")).unwrap();
@@ -827,6 +909,46 @@ mod recipient_tests {
                 .unwrap()
                 .contains("no role 'ghost' is bound")
         );
+    }
+
+    #[test]
+    fn a_role_whose_session_has_exited_warns_by_name_and_by_path() {
+        use super::recipient_for_with;
+        let conn = db();
+        store::upsert_role(&conn, "gone", "/repo/src/gone", None, Some(4_000_001)).unwrap();
+        let dead = |_pid: u32| false;
+        let live = |_pid: u32| true;
+        let by_name = recipient_for_with(&conn, Some("gone"), None, Path::new("/"), &dead).unwrap();
+        assert_eq!(by_name.role.as_deref(), Some("gone"), "still queued");
+        assert!(
+            by_name
+                .warning
+                .as_deref()
+                .unwrap()
+                .contains("pid 4000001, which is not running"),
+            "{:?}",
+            by_name.warning
+        );
+        let by_path = recipient_for_with(
+            &conn,
+            None,
+            Some("/repo/src/gone/a.rs"),
+            Path::new("/"),
+            &dead,
+        )
+        .unwrap();
+        assert_eq!(by_path.role.as_deref(), Some("gone"));
+        assert!(
+            by_path.warning.is_some(),
+            "a dead owner warns on the routed path too"
+        );
+        // The same binding with its process alive is silent.
+        let ok = recipient_for_with(&conn, Some("gone"), None, Path::new("/"), &live).unwrap();
+        assert_eq!(ok.warning, None);
+        // A cwd-only binding has no pid to be dead.
+        let cwd_only =
+            recipient_for_with(&conn, Some("relay"), None, Path::new("/"), &dead).unwrap();
+        assert_eq!(cwd_only.warning, None);
     }
 
     #[test]

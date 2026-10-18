@@ -18,7 +18,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::transcript::{TranscriptBlock, TranscriptEvent, TranscriptRole, parse_line};
+use crate::paths::canonicalize_deep;
+use crate::transcript::{
+    TranscriptBlock, TranscriptEvent, TranscriptRole, edited_path, is_edit_tool, parse_line,
+};
 
 /// Bytes of transcript tail scanned for edits. Recent edits say what a
 /// session is doing *now*; the bus process never runs the monitor, so this
@@ -63,7 +66,7 @@ pub fn focus_from_edits<'a>(
         let Some(rel) = relative_to_any(file, &roots) else {
             continue;
         };
-        let Some(dir) = parent_dir(rel) else {
+        let Some(dir) = parent_dir(&rel) else {
             continue;
         };
         total = total.saturating_add(count);
@@ -98,14 +101,10 @@ pub fn edits_from_transcript(jsonl_path: &Path, cap: u64) -> HashMap<String, u32
             let TranscriptBlock::ToolUse { name, input } = block else {
                 continue;
             };
-            if !matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit") {
+            if !is_edit_tool(name) {
                 continue;
             }
-            let path = input
-                .get("file_path")
-                .or_else(|| input.get("notebook_path"))
-                .and_then(|v| v.as_str());
-            if let Some(p) = path {
+            if let Some(p) = edited_path(input) {
                 *edits.entry(p.to_string()).or_insert(0) += 1;
             }
         }
@@ -135,11 +134,9 @@ fn read_tail(path: &Path, cap: u64) -> std::io::Result<String> {
 /// trailing slash so the prefix test below is one shape.
 fn root_forms(root: &Path) -> Vec<String> {
     let mut forms = vec![trim_slash(&root.to_string_lossy())];
-    if let Ok(canon) = std::fs::canonicalize(root) {
-        let c = trim_slash(&canon.to_string_lossy());
-        if !forms.contains(&c) {
-            forms.push(c);
-        }
+    let c = trim_slash(&canonicalize_deep(root).to_string_lossy());
+    if !forms.contains(&c) {
+        forms.push(c);
     }
     forms
 }
@@ -154,15 +151,26 @@ fn trim_slash(s: &str) -> String {
 }
 
 /// `file` relative to the first root it sits under, or `None` when it is
-/// outside every form of the root.
-fn relative_to_any<'a>(file: &'a str, roots: &[String]) -> Option<&'a str> {
-    roots.iter().find_map(|root| {
-        if root == "/" {
-            return file.strip_prefix('/');
-        }
-        file.strip_prefix(root.as_str())
-            .and_then(|rest| rest.strip_prefix('/'))
-    })
+/// outside every form of the root. The file is tried as spelled and in its
+/// canonical form, because `git rev-parse` reports a canonical root while a
+/// tool input follows the session's cwd, which may run through a symlink.
+fn relative_to_any(file: &str, roots: &[String]) -> Option<String> {
+    let canon = canonicalize_deep(Path::new(file))
+        .to_string_lossy()
+        .into_owned();
+    let spellings = [file, canon.as_str()];
+    spellings
+        .iter()
+        .find_map(|f| roots.iter().find_map(|root| strip_root(f, root)))
+        .map(str::to_string)
+}
+
+fn strip_root<'a>(file: &'a str, root: &str) -> Option<&'a str> {
+    if root == "/" {
+        return file.strip_prefix('/');
+    }
+    file.strip_prefix(root)
+        .and_then(|rest| rest.strip_prefix('/'))
 }
 
 /// The directory part of a relative file path, `.` for a top-level file.
@@ -287,6 +295,22 @@ mod tests {
         let canon = std::fs::canonicalize(&tmp).unwrap();
         let file = format!("{}/src/lib.rs", canon.display());
         let f = focus(&[(file.as_str(), 2)], &tmp.to_string_lossy()).unwrap();
+        assert_eq!(f.dir, "src");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_canonical_root_matches_a_file_spelled_through_the_symlink() {
+        // The shape `list_agents` meets: `git rev-parse` gives the canonical
+        // root, the transcript's tool inputs follow the session cwd (macOS
+        // `/var/folders/…` → `/private/var/folders/…`), and the file may not
+        // exist yet. On a platform with no symlink here both spellings are
+        // equal and the test still holds.
+        let tmp = std::env::temp_dir().join(format!("focus-rev-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        let canon_root = std::fs::canonicalize(&tmp).unwrap();
+        let file = format!("{}/src/new.rs", tmp.display());
+        let f = focus(&[(file.as_str(), 1)], &canon_root.to_string_lossy()).unwrap();
         assert_eq!(f.dir, "src");
         let _ = std::fs::remove_dir_all(&tmp);
     }

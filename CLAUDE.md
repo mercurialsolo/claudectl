@@ -55,6 +55,7 @@ src/                   # the binary crate `claudectl`
 - `health.rs` — Session health monitoring (cache ratio, cost spikes, loop detection, stalls, context saturation). Owns `HealthThresholds`.
 - `rules.rs` — Auto-rule engine: match sessions by status/tool/command/project/cost, then approve/deny/send/terminate/route/spawn/delegate
 - `models.rs` — Model pricing profiles (built-in + user overrides) for cost tracking
+- `paths.rs` — `canonicalize_deep`: a path's longest existing ancestor resolved on disk with the rest re-appended, so a file that does not exist yet under a symlinked root still compares equal to a canonical selector or worktree root (#596)
 - `transcript.rs` — JSONL transcript parser (messages, tool use, tool results, usage data)
 - `theme.rs` — Color theming (dark/light/monochrome, respects NO_COLOR)
 - `logger.rs` — Structured diagnostic logging

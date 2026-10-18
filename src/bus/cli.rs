@@ -367,7 +367,7 @@ fn dispatch_send(
     // Same resolution as the MCP `publish` tool (#596): a path goes to its
     // owner or is refused; a name nobody has bound is queued with a warning.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    let recipient = mcp::recipient_for(&conn, to, owner_of, &cwd)?;
+    let recipient = mcp::recipient_for(&conn, to, owner_of, &cwd).map_err(|e| e.to_string())?;
     let Some(role) = recipient.role else {
         return Err("a recipient is required: `bus send <ROLE>` or `bus route <PATH>`".into());
     };
@@ -395,12 +395,13 @@ fn dispatch_send(
 
 // ---------------- Owner -----------------------------------------------------
 
+/// The `--json` form is the path asked about plus the `RoleResolution` in
+/// its own serde shape (`kind` = `resolved` / `ambiguous` / `unbound`), the
+/// same JSON the MCP `owner_of` tool returns.
 #[derive(Serialize)]
 struct OwnerJson {
     path: String,
-    role: Option<String>,
-    cwd_selector: Option<String>,
-    note: Option<String>,
+    resolution: RoleResolution,
 }
 
 /// `claudectl bus owner <path>` (#596): the role bound to the most specific
@@ -412,27 +413,10 @@ fn dispatch_owner(path: &str, json: bool) -> Result<(), String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let abs = mcp::absolute_path(path, &cwd);
     let res = roles::owner_of_path(&conn, &abs)?;
-    let abs_str = abs.to_string_lossy().into_owned();
     if json {
-        let out = match res {
-            RoleResolution::Resolved(r) => OwnerJson {
-                path: abs_str,
-                role: Some(r.name),
-                cwd_selector: Some(r.cwd_selector),
-                note: None,
-            },
-            RoleResolution::Ambiguous { candidates } => OwnerJson {
-                path: abs_str,
-                role: None,
-                cwd_selector: None,
-                note: Some(format!("ambiguous: {}", candidates.join(", "))),
-            },
-            RoleResolution::Unbound { .. } => OwnerJson {
-                path: abs_str,
-                role: None,
-                cwd_selector: None,
-                note: Some("unbound".into()),
-            },
+        let out = OwnerJson {
+            path: abs.to_string_lossy().into_owned(),
+            resolution: res,
         };
         println!(
             "{}",

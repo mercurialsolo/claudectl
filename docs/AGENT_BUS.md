@@ -173,7 +173,7 @@ Four ways to create a binding:
 
 Each `list_agents` row carries the session's `focus`: the deepest directory under its worktree root holding a strict majority of its recent `Edit`/`Write`/`NotebookEdit` targets, read from a capped tail of the transcript (`claudectl-core::focus`). It is deterministic and needs no LLM: `.` means the root, `null` means no in-tree edits yet. Together the two answer "who is working on `src/relay`" and "who should get work on `src/relay`" without anyone declaring either.
 
-A `publish` or `bus send` addressed by *name* to a role nobody has bound still queues the message, since roles are durable and may bind later, but returns a `warning` (the CLI prints it to stderr). Reserved roles (`supervisor`, `operator`) are addressable without being bindable and never warn.
+A `publish` or `bus send` addressed by *name* to a role nobody has bound still queues the message, since roles are durable and may bind later, but returns a `warning` (the CLI prints it to stderr). The same warning comes back, by name or by path, when the recipient's binding names a pid that is no longer running: a `/role` session that exited still owns its selector until it re-binds, and the message waits for that. Reserved roles (`supervisor`, `operator`) are addressable without being bindable and never warn. Relative paths in `addressed_to_path` and `owner_of` are taken against the optional `cwd` argument, defaulting to the server's own cwd, which is where the hosting session started.
 
 Roles are the stable names everything else references. Session IDs are ephemeral and never used as durable addresses.
 

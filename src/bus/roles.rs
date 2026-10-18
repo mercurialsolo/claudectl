@@ -260,6 +260,23 @@ fn parent_pid_of(pid: u32) -> Option<u32> {
         .ok()
 }
 
+/// The role of *another* session, given its pid and cwd (#596). `resolve`
+/// answers for the calling process: it reads `CLAUDECTL_BUS_ROLE` and walks
+/// the caller's own ancestor chain, which for the bus server is the session
+/// hosting it, so applying it to every session in `list_agents` labels them
+/// all with the host's role. This looks at the session's own pid binding,
+/// then at its cwd.
+pub fn resolve_for_session(
+    conn: &Connection,
+    pid: u32,
+    cwd: &Path,
+) -> Result<RoleResolution, String> {
+    if let Some(row) = store::get_role_by_pid(conn, pid)? {
+        return Ok(RoleResolution::Resolved(row.into()));
+    }
+    resolve_by_cwd(conn, cwd)
+}
+
 fn resolve_by_name(conn: &Connection, name: &str, _cwd: &Path) -> Result<RoleResolution, String> {
     match store::get_role(conn, name)? {
         Some(r) => Ok(RoleResolution::Resolved(r.into())),
@@ -276,8 +293,8 @@ fn resolve_by_cwd(conn: &Connection, cwd: &Path) -> Result<RoleResolution, Strin
     let mut matches: Vec<Role> = all
         .into_iter()
         .filter(|r| {
-            let sel_canon = canonicalize_for_match(Path::new(r.cwd_selector.trim_end_matches('*')));
-            selector_matches(&sel_canon.to_string_lossy(), &cwd_str)
+            let (stem, wildcard) = selector_stem(&r.cwd_selector);
+            stem_matches(&stem, wildcard, &cwd_str)
         })
         .map(Role::from)
         .collect();
@@ -305,12 +322,11 @@ pub fn owner_of_path(conn: &Connection, path: &Path) -> Result<RoleResolution, S
     let mut best_len = 0usize;
     let mut best: Vec<Role> = Vec::new();
     for r in all {
-        let sel_canon = canonicalize_for_match(Path::new(r.cwd_selector.trim_end_matches('*')));
-        let sel = sel_canon.to_string_lossy();
-        if !selector_matches(&sel, &path_str) {
+        let (stem, wildcard) = selector_stem(&r.cwd_selector);
+        if !stem_matches(&stem, wildcard, &path_str) {
             continue;
         }
-        let len = sel.trim_end_matches('/').len();
+        let len = stem.len();
         if len > best_len {
             best_len = len;
             best.clear();
@@ -330,23 +346,41 @@ pub fn owner_of_path(conn: &Connection, path: &Path) -> Result<RoleResolution, S
     }
 }
 
-/// Phase-1 selectors are simple: literal path prefixes. A trailing wildcard
-/// (`/work/proj-*`) is treated as a prefix match against the stem before `*`.
-/// Glob support proper is a phase-3 setup-wizard concern.
-fn selector_matches(selector: &str, cwd: &str) -> bool {
-    let stem = selector.trim_end_matches('*').trim_end_matches('/');
+/// A selector's comparable stem and whether it is a wildcard. Phase-1
+/// selectors are literal path prefixes: `/work/proj` covers itself and
+/// everything under it. A trailing `*` (`/work/proj-*`) is a bare prefix
+/// match on the stem before it, so `/work/proj-impl` is covered too. Glob
+/// support proper is a phase-3 setup-wizard concern.
+fn selector_stem(selector: &str) -> (String, bool) {
+    let wildcard = selector.ends_with('*');
+    let raw = selector.trim_end_matches('*');
+    let canon = canonicalize_for_match(Path::new(raw));
+    let stem = canon.to_string_lossy();
+    if wildcard {
+        (stem.into_owned(), true)
+    } else {
+        (stem.trim_end_matches('/').to_string(), false)
+    }
+}
+
+fn stem_matches(stem: &str, wildcard: bool, path: &str) -> bool {
     if stem.is_empty() {
         return false;
     }
-    cwd == stem || cwd.starts_with(&format!("{stem}/"))
+    if wildcard {
+        return path.starts_with(stem);
+    }
+    path == stem || path.starts_with(&format!("{stem}/"))
 }
 
-/// Resolve a path to its real on-disk form when possible. macOS in particular
+/// Resolve a path to its real on-disk form. macOS in particular
 /// canonicalizes symlinked roots like `/tmp` → `/private/tmp`, which would
 /// otherwise make cwd inference miss roles bound with the un-canonicalized
-/// form. Falls back to the input verbatim when the path doesn't exist yet.
+/// form. A path that does not exist yet takes the canonical form of its
+/// longest existing ancestor (#596), so a file about to be created under a
+/// bound directory still has an owner.
 fn canonicalize_for_match(p: &Path) -> std::path::PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    claudectl_core::paths::canonicalize_deep(p)
 }
 
 #[cfg(test)]
@@ -461,6 +495,72 @@ mod tests {
     }
 
     // ── ownership (#596) ──────────────────────────────────────────────────
+
+    #[test]
+    fn a_wildcard_selector_covers_siblings_sharing_its_stem() {
+        let conn = open_memory();
+        upsert_role(&conn, "worker", "/work/proj-*", None, None).unwrap();
+        assert!(matches!(
+            owner(&conn, "/work/proj-7/src/x.rs"),
+            RoleResolution::Resolved(r) if r.name == "worker"
+        ));
+        assert!(matches!(
+            resolve(&conn, None, &PathBuf::from("/work/proj-impl")).unwrap(),
+            RoleResolution::Resolved(r) if r.name == "worker"
+        ));
+        assert!(matches!(
+            owner(&conn, "/work/other"),
+            RoleResolution::Unbound { .. }
+        ));
+    }
+
+    #[test]
+    fn a_file_that_does_not_exist_yet_under_a_symlinked_selector_has_an_owner() {
+        // The selector canonicalizes (macOS `/var/folders` → `/private/var/…`);
+        // a not-yet-created file spelled through the symlink must still
+        // match. Where temp_dir is not a symlink both spellings agree and
+        // the test holds trivially.
+        let tmp = std::env::temp_dir().join(format!("owner-sym-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        let conn = open_memory();
+        upsert_role(
+            &conn,
+            "impl",
+            &tmp.join("src").to_string_lossy(),
+            None,
+            None,
+        )
+        .unwrap();
+        let new_file = tmp.join("src").join("new.rs");
+        assert!(!new_file.exists());
+        assert!(matches!(
+            owner_of_path(&conn, &new_file).unwrap(),
+            RoleResolution::Resolved(r) if r.name == "impl"
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_sessions_role_is_its_own_pid_binding_then_its_cwd() {
+        let conn = open_memory();
+        upsert_role(&conn, "host", "/repo", None, Some(std::process::id())).unwrap();
+        upsert_role(&conn, "worker", "/repo", None, Some(4_000_001)).unwrap();
+        upsert_role(&conn, "docs", "/docs", None, None).unwrap();
+        // The session bound by pid gets its own role, not the host's.
+        assert!(matches!(
+            resolve_for_session(&conn, 4_000_001, &PathBuf::from("/repo")).unwrap(),
+            RoleResolution::Resolved(r) if r.name == "worker"
+        ));
+        // An unbound pid falls back to that session's cwd.
+        assert!(matches!(
+            resolve_for_session(&conn, 4_000_002, &PathBuf::from("/docs/guide")).unwrap(),
+            RoleResolution::Resolved(r) if r.name == "docs"
+        ));
+        assert!(matches!(
+            resolve_for_session(&conn, 4_000_002, &PathBuf::from("/nowhere")).unwrap(),
+            RoleResolution::Unbound { .. }
+        ));
+    }
 
     fn owner(conn: &Connection, path: &str) -> RoleResolution {
         owner_of_path(conn, &PathBuf::from(path)).unwrap()
