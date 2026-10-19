@@ -194,6 +194,13 @@ pub trait Sensors {
     fn roles(&self) -> Vec<RoleView> {
         Vec::new()
     }
+    /// Whether the recipient of a mailbox assignment has drained it
+    /// (#605): `Some(true)` claimed, `Some(false)` still waiting, `None`
+    /// can't tell, which is the no-actuation backstop. The default is
+    /// `None`, so a sensor that doesn't know never causes a spawn.
+    fn assignment_delivered(&self, _message_id: &str) -> Option<bool> {
+        None
+    }
 }
 
 /// A bound bus role as the reconciler sees it (#596 follow-up). Paths are
@@ -513,10 +520,9 @@ impl Supervisor {
             // placement and never moves a task between machines, so `peer`
             // and `requires` keep their meaning. The task row keeps `role`
             // NULL: what the operator declared stays as written. Step 2
-            // spawns the task if the mailbox looks unclaimed past
-            // `claim_timeout`, as for an addressed one (#605 is what
-            // "looks unclaimed" means today). A Retrying task is always
-            // spawned (above).
+            // spawns the task if its message is still undrained past
+            // `claim_timeout`, as for an addressed one. A Retrying task is
+            // always spawned (above).
             #[cfg(feature = "bus")]
             let routed = if self.policy.auto_route && task.role.is_none() {
                 let roles = roster.get_or_insert_with(|| sensors.roles());
@@ -551,12 +557,15 @@ impl Supervisor {
         }
 
         // 2) Assigned tasks → spawn fallback after `claim_timeout`. The
-        //    actuator records `task_attempts.started_at`; here we walk
-        //    each assigned task, look at its most recent attempt's start
-        //    time, and emit `Spawn` if the role's mailbox went unclaimed.
-        //    No observable session for the role in `observed_sessions`
-        //    is the trigger — RFC §4's "role mailbox unclaimed > T".
-        let observed = sensors.observed_sessions();
+        //    actuator records `task_attempts.started_at` and the bus
+        //    message id; here we walk each assigned task past the timeout
+        //    and emit `Spawn` if the role's mailbox went unclaimed, RFC
+        //    §4's "role mailbox unclaimed > T". Claimed means the recipient
+        //    drained the message (#605): a session that read its inbox has
+        //    the task, whether or not it has moved the task row yet, and
+        //    spawning beside it would put two sessions on the same files.
+        //    Not knowing (no message id, no such message, no bus) spawns
+        //    nothing: the no-actuation backstop.
         for task in &assigned {
             let elapsed_min = match super::tasks::latest_attempt_age_minutes(conn, &task.id)? {
                 Some(m) => m,
@@ -565,21 +574,18 @@ impl Supervisor {
             if elapsed_min < self.policy.claim_timeout_min as u64 {
                 continue;
             }
-            // Has anything observably claimed this role? If a session at
-            // the task's `cwd` is Running, treat the mailbox as claimed
-            // (the recipient picked it up, just hasn't transitioned the
-            // task row yet). Unknown status is the no-actuation backstop.
-            let claimed = observed.iter().any(|s| {
-                matches!(s.status, ObservedStatus::Running | ObservedStatus::Idle)
-                    && session_cwd_matches(&s.session_id, &task.cwd)
-            });
-            if !claimed {
+            let Some(message_id) = super::tasks::latest_attempt_bus_message_id(conn, &task.id)?
+            else {
+                continue;
+            };
+            if sensors.assignment_delivered(&message_id) == Some(false) {
                 out.push(Action::Spawn {
                     task_id: task.id.clone(),
                     cwd: PathBuf::from(&task.cwd),
                 });
             }
         }
+        let observed = sensors.observed_sessions();
 
         // 3) Running tasks → resume on session death + health-check
         //    transitions (RFC §6 / §7). For each Running task, look up
@@ -686,16 +692,6 @@ impl HealthActionMap {
             _ => HealthAction::Ignore,
         }
     }
-}
-
-/// Placeholder for the cwd-aware session matcher. The real implementation
-/// will query `discovery::scan_sessions()` and compare per-session cwd.
-/// For now we treat any session as a possible match — this preserves the
-/// invariant "no spawn when something *might* be claiming the mailbox"
-/// and errs on the side of doing nothing, which is the safe direction
-/// while the sensor layer is still stubbed.
-fn session_cwd_matches(_session_id: &str, _task_cwd: &str) -> bool {
-    true
 }
 
 /// Whether a Pending task may start, given its `depends_on` (#572).
@@ -1033,6 +1029,89 @@ mod tests {
         assert!(actions.iter().any(|a| matches!(a, Action::Hold { task_id, reason }
             if *task_id == pinned
                 && reason == "pinned to big, but its brain or agent verifier runs on this machine")));
+    }
+
+    /// #605: the claim-timeout fallback asks whether the assignment was
+    /// drained, and only an undrained one is spawned.
+    struct DeliverySensors(Option<bool>);
+
+    impl Sensors for DeliverySensors {
+        fn last_hook_event_id(&self) -> i64 {
+            0
+        }
+        fn observed_sessions(&self) -> Vec<ObservedSession> {
+            vec![]
+        }
+        fn assignment_delivered(&self, message_id: &str) -> Option<bool> {
+            assert_eq!(message_id, "msg_1");
+            self.0
+        }
+    }
+
+    fn assigned_past_timeout(conn: &Connection, bus_message_id: Option<&str>) -> String {
+        let id = insert_task(
+            conn,
+            &NewTask {
+                role: Some("backend".into()),
+                ..task("a", &[])
+            },
+        )
+        .unwrap();
+        crate::coord::tasks::insert_attempt(conn, &id, 1, None, bus_message_id, None).unwrap();
+        set_state(conn, &id, TaskState::Assigned);
+        id
+    }
+
+    fn no_claim_wait() -> Supervisor {
+        Supervisor::new(Policy {
+            claim_timeout_min: 0,
+            ..Policy::default()
+        })
+    }
+
+    #[test]
+    fn an_undrained_assignment_past_the_timeout_is_spawned() {
+        let conn = store::open_memory();
+        let id = assigned_past_timeout(&conn, Some("msg_1"));
+        let actions = no_claim_wait()
+            .tick(&conn, &DeliverySensors(Some(false)))
+            .unwrap();
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    #[test]
+    fn a_drained_assignment_is_left_with_its_recipient() {
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, Some("msg_1"));
+        let actions = no_claim_wait()
+            .tick(&conn, &DeliverySensors(Some(true)))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    #[test]
+    fn not_knowing_whether_it_was_drained_spawns_nothing() {
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, Some("msg_1"));
+        let actions = no_claim_wait().tick(&conn, &DeliverySensors(None)).unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+        // No message id on the attempt is the same "can't tell".
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, None);
+        let actions = no_claim_wait()
+            .tick(&conn, &DeliverySensors(Some(false)))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    #[test]
+    fn an_assignment_inside_the_timeout_is_not_asked_about() {
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, Some("msg_1"));
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &DeliverySensors(Some(false)))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
     }
 
     /// #596 follow-up: with `auto_route`, a task that names no role goes

@@ -754,6 +754,26 @@ pub fn attempt_count(conn: &Connection, task_id: &str) -> Result<u32, String> {
     Ok(n as u32)
 }
 
+/// The bus message id the most recent attempt was assigned through, if it
+/// was assigned by mailbox and the id was stamped (#605). `None` for a
+/// spawned attempt, a task with no attempt, or an attempt whose stamp
+/// never landed; the reconciler treats all three as "can't tell".
+pub fn latest_attempt_bus_message_id(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT bus_message_id FROM task_attempts
+         WHERE task_id = ?1
+         ORDER BY attempt_num DESC LIMIT 1",
+        params![task_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(Option::flatten)
+    .map_err(|e| format!("query latest attempt message: {e}"))
+}
+
 /// Minutes elapsed since the most recent attempt's `started_at`. The
 /// reconciler reads this to decide whether a mailbox-assigned task has
 /// blown the claim timeout. Returns `None` when the task has no attempts

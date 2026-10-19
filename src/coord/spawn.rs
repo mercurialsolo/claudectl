@@ -294,13 +294,26 @@ impl Sensors for LiveSensors {
     fn roles(&self) -> Vec<super::supervisor::RoleView> {
         live_roster()
     }
+
+    /// Whether the mailbox message was drained (#605). No bus database, a
+    /// store error or a missing message is `None`: not a reason to spawn.
+    #[cfg(feature = "bus")]
+    fn assignment_delivered(&self, message_id: &str) -> Option<bool> {
+        if !crate::bus::store::db_exists() {
+            return None;
+        }
+        let conn = crate::bus::store::open().ok()?;
+        crate::bus::store::message_delivered(&conn, message_id).ok()?
+    }
 }
 
 /// Every bound bus role with whether anyone is home and where its sessions
 /// are working (#596 follow-up). A role is live when its bound pid runs or
-/// a running session answers to it (`roles::resolve_for_session`); a
-/// session under a root selector that answers to a more specific role
-/// does not keep the root role alive. A session's focus is read from its
+/// a running session answers to it: by pid binding, else as the most
+/// specific owner of the session's cwd (`roles::owner_of_path`). A session
+/// under a root selector that a nested role owns does not keep the root
+/// role alive, and a session file whose process has exited counts for
+/// nothing. A session's focus is read from its
 /// transcript, as `list_agents` does, and credited to the role it answers
 /// to, but only for roles that share a selector with another live role:
 /// that is the one case focus decides. Read-only: the session scan sweeps
@@ -325,19 +338,38 @@ fn live_roster() -> Vec<super::supervisor::RoleView> {
             return Vec::new();
         }
     };
-    let mut sessions = crate::discovery::scan_sessions_readonly();
+    // Session files outlive their process for a while; only a running
+    // session keeps a role alive or lends it a focus.
+    let mut sessions: Vec<_> = crate::discovery::scan_sessions_readonly()
+        .into_iter()
+        .filter(claudectl_core::discovery::session_running)
+        .collect();
     crate::discovery::resolve_jsonl_paths(&mut sessions);
     crate::discovery::resolve_worktree_ids(&mut sessions);
-    // Which role each running session answers to, as `whoami` inside it
-    // would say. Unbound, or ambiguous between cwd-only roles on one
-    // selector, credits nobody: focus needs a pid binding to tell those
-    // apart (`/role`, `--self`, `--pid`).
+    // Which role each running session answers to: its pid binding, else
+    // the role that owns its cwd, the most specific selector covering it
+    // (`owner_of_path`), since nesting is ownership, not ambiguity. Two
+    // roles on one selector that the session is not pid-bound to credit
+    // nobody: focus needs a pid binding to tell those apart (`/role`,
+    // `--self`, `--pid`).
     let mut answers_to: Vec<(usize, String)> = Vec::new();
     let mut first_error: Option<String> = None;
     for (i, s) in sessions.iter().enumerate() {
-        match roles::resolve_for_session(&conn, s.pid, Path::new(&s.cwd)) {
-            Ok(RoleResolution::Resolved(r)) => answers_to.push((i, r.name)),
-            Ok(_) => {}
+        let cwd = Path::new(&s.cwd);
+        let credited = match roles::resolve_for_session(&conn, s.pid, cwd) {
+            Ok(RoleResolution::Resolved(r)) => Ok(Some(r.name)),
+            Ok(RoleResolution::Ambiguous { .. }) => {
+                roles::owner_of_path(&conn, cwd).map(|o| match o {
+                    roles::Ownership::Owned(r) => Some(r.name),
+                    _ => None,
+                })
+            }
+            Ok(RoleResolution::Unbound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        };
+        match credited {
+            Ok(Some(name)) => answers_to.push((i, name)),
+            Ok(None) => {}
             Err(e) => {
                 first_error.get_or_insert(format!("bus roles: resolving session {}: {e}", s.pid));
             }

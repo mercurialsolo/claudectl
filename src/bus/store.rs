@@ -49,6 +49,20 @@ pub fn db_exists() -> bool {
     db_path().exists()
 }
 
+/// Whether the recipient has drained message `id` (#605): `Some(true)`
+/// once `read_inbox` / `bus inbox` delivered it, `Some(false)` while it
+/// waits, `None` when no such message exists (pruned, or never inserted),
+/// which a caller must not read as either.
+pub fn message_delivered(conn: &Connection, id: &str) -> Result<Option<bool>, String> {
+    conn.query_row(
+        "SELECT delivered_at IS NOT NULL FROM messages WHERE id = ?1",
+        params![id],
+        |row| row.get::<_, bool>(0),
+    )
+    .optional()
+    .map_err(|e| format!("query message {id}: {e}"))
+}
+
 pub fn open_at(path: &std::path::Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
