@@ -240,8 +240,13 @@ pub fn observe(
     }
 }
 
-/// The supervisor's live sensor: every RUNNING task's spawned attempt.
-pub struct LiveSensors;
+/// The supervisor's live sensor: every RUNNING task's spawned attempt, and
+/// the bus roster, built once per pass the first time anything asks.
+#[derive(Default)]
+pub struct LiveSensors {
+    #[cfg_attr(not(feature = "bus"), allow(dead_code))]
+    roster: std::cell::OnceCell<Vec<super::supervisor::RoleView>>,
+}
 
 impl Sensors for LiveSensors {
     fn last_hook_event_id(&self) -> i64 {
@@ -292,18 +297,33 @@ impl Sensors for LiveSensors {
 
     #[cfg(feature = "bus")]
     fn roles(&self) -> Vec<super::supervisor::RoleView> {
-        live_roster()
+        self.roster.get_or_init(live_roster).clone()
     }
 
-    /// Whether the mailbox message was drained (#605). No bus database, a
-    /// store error or a missing message is `None`: not a reason to spawn.
+    /// How the mailbox message stands (#605): drained, or waiting with
+    /// whether a running session answers to its recipient role (the
+    /// roster's liveness). No bus database, a store error or a missing
+    /// message is `Unknown`: not a reason to spawn.
     #[cfg(feature = "bus")]
-    fn assignment_delivered(&self, message_id: &str) -> Option<bool> {
+    fn assignment_claim(&self, message_id: &str) -> super::supervisor::Claim {
+        use super::supervisor::Claim;
         if !crate::bus::store::db_exists() {
-            return None;
+            return Claim::Unknown;
         }
-        let conn = crate::bus::store::open().ok()?;
-        crate::bus::store::message_delivered(&conn, message_id).ok()?
+        let Ok(conn) = crate::bus::store::open() else {
+            return Claim::Unknown;
+        };
+        match crate::bus::store::message_claim(&conn, message_id) {
+            Ok(Some((status, _))) if status == "delivered" => Claim::Drained,
+            Ok(Some((_, recipient))) => {
+                let roster = self.roster.get_or_init(live_roster);
+                Claim::Waiting {
+                    recipient_live: recipient
+                        .is_some_and(|r| roster.iter().any(|v| v.name == r && v.live)),
+                }
+            }
+            _ => Claim::Unknown,
+        }
     }
 }
 

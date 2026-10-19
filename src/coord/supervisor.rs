@@ -194,13 +194,26 @@ pub trait Sensors {
     fn roles(&self) -> Vec<RoleView> {
         Vec::new()
     }
-    /// Whether the recipient of a mailbox assignment has drained it
-    /// (#605): `Some(true)` claimed, `Some(false)` still waiting, `None`
-    /// can't tell, which is the no-actuation backstop. The default is
-    /// `None`, so a sensor that doesn't know never causes a spawn.
-    fn assignment_delivered(&self, _message_id: &str) -> Option<bool> {
-        None
+    /// How a mailbox assignment stands (#605): drained by its recipient,
+    /// still waiting (and whether anyone who could drain it is home), or
+    /// unknown, which is the no-actuation backstop and the default, so a
+    /// sensor that doesn't know never causes a spawn.
+    fn assignment_claim(&self, _message_id: &str) -> Claim {
+        Claim::Unknown
     }
+}
+
+/// Where a mailbox assignment stands (#605).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claim {
+    /// The recipient drained the message: it has the task.
+    Drained,
+    /// Nobody has drained it. `recipient_live` says whether a running
+    /// session answers to the recipient role, so a drain can still come
+    /// at the end of that session's turn.
+    Waiting { recipient_live: bool },
+    /// Can't tell: no such message, no bus, a store error.
+    Unknown,
 }
 
 /// A bound bus role as the reconciler sees it (#596 follow-up). Paths are
@@ -576,14 +589,15 @@ impl Supervisor {
         //    actuator records `task_attempts.started_at` and the bus
         //    message id; here we walk each assigned task past the timeout
         //    and emit `Spawn` if the role's mailbox went unclaimed, RFC
-        //    §4's "role mailbox unclaimed > T". Claimed means the recipient
-        //    drained the message (#605): a session that read its inbox has
-        //    the task, whether or not it has moved the task row yet, and
-        //    spawning beside it would put two sessions on the same files;
-        //    since nothing lets that session report completion (#606), a
-        //    claimed task past the timeout is escalated instead. Not
-        //    knowing (no message id, no such message, no bus) does nothing:
-        //    the no-actuation backstop.
+        //    §4's "role mailbox unclaimed > T". Unclaimed means nobody
+        //    drained the message *and* nobody is home to: a session that
+        //    answers to the role drains its inbox at the end of its turn,
+        //    and spawning beside it would put two sessions on the same
+        //    files (#605). A drained message means the role has the task;
+        //    nothing lets it report completion (#606), so once the task's
+        //    own `timeout_min` has passed a person decides. Not knowing
+        //    (no message id, no such message, no bus) does nothing: the
+        //    no-actuation backstop.
         for task in &assigned {
             let elapsed_min = match super::tasks::latest_attempt_age_minutes(conn, &task.id)? {
                 Some(m) => m,
@@ -596,25 +610,37 @@ impl Supervisor {
             else {
                 continue;
             };
-            match sensors.assignment_delivered(&message_id) {
-                // Nobody read it: start the task here (the actuator takes
-                // the message back first, so nobody reads it later either).
-                Some(false) => out.push(Action::Spawn {
+            match sensors.assignment_claim(&message_id) {
+                // Nobody read it and nobody is home to: start the task here
+                // (the actuator takes the message back first, so nobody
+                // reads it later either).
+                Claim::Waiting {
+                    recipient_live: false,
+                } => out.push(Action::Spawn {
                     task_id: task.id.clone(),
                     cwd: PathBuf::from(&task.cwd),
                 }),
-                // The role read it, and nothing can report it done (#606):
-                // a person decides, rather than the task sitting in
-                // ASSIGNED for good or a second session starting beside
-                // the one that has it.
-                Some(true) => out.push(Action::EscalateHuman {
-                    task_id: task.id.clone(),
-                    cause: format!(
-                        "{MAILBOX_CLAIMED}: the role read the task {elapsed_min} min ago; \
-                         a mailbox task cannot report completion yet (#606)"
-                    ),
-                }),
-                None => {}
+                // Someone is home and will read it when their turn ends.
+                Claim::Waiting {
+                    recipient_live: true,
+                } => {}
+                // The role has it. Give it the task's own timeout; then a
+                // person decides, rather than the task sitting in ASSIGNED
+                // for good (#606).
+                Claim::Drained => {
+                    if elapsed_min >= u64::from(task.timeout_min) {
+                        out.push(Action::EscalateHuman {
+                            task_id: task.id.clone(),
+                            cause: format!(
+                                "{MAILBOX_CLAIMED}: assigned {elapsed_min} min ago and read by \
+                                 the role, but nothing reported it done within its {} min \
+                                 timeout; a mailbox task cannot report completion yet (#606)",
+                                task.timeout_min
+                            ),
+                        });
+                    }
+                }
+                Claim::Unknown => {}
             }
         }
         let observed = sensors.observed_sessions();
@@ -1063,28 +1089,40 @@ mod tests {
                 && reason == "pinned to big, but its brain or agent verifier runs on this machine")));
     }
 
-    /// #605: the claim-timeout fallback asks whether the assignment was
-    /// drained, and only an undrained one is spawned.
-    struct DeliverySensors(Option<bool>);
+    /// #605: the claim-timeout fallback asks how the assignment stands, and
+    /// spawns only when nobody drained it and nobody is home to.
+    struct ClaimSensors(Claim);
 
-    impl Sensors for DeliverySensors {
+    impl Sensors for ClaimSensors {
         fn last_hook_event_id(&self) -> i64 {
             0
         }
         fn observed_sessions(&self) -> Vec<ObservedSession> {
             vec![]
         }
-        fn assignment_delivered(&self, message_id: &str) -> Option<bool> {
+        fn assignment_claim(&self, message_id: &str) -> Claim {
             assert_eq!(message_id, "msg_1");
             self.0
         }
     }
 
-    fn assigned_past_timeout(conn: &Connection, bus_message_id: Option<&str>) -> String {
+    const NOBODY_HOME: Claim = Claim::Waiting {
+        recipient_live: false,
+    };
+    const SOMEONE_HOME: Claim = Claim::Waiting {
+        recipient_live: true,
+    };
+
+    fn assigned_past_timeout(
+        conn: &Connection,
+        bus_message_id: Option<&str>,
+        timeout_min: Option<u32>,
+    ) -> String {
         let id = insert_task(
             conn,
             &NewTask {
                 role: Some("backend".into()),
+                timeout_min,
                 ..task("a", &[])
             },
         )
@@ -1102,51 +1140,86 @@ mod tests {
     }
 
     #[test]
-    fn an_undrained_assignment_past_the_timeout_is_spawned() {
+    fn an_undrained_assignment_with_nobody_home_is_spawned() {
         let conn = store::open_memory();
-        let id = assigned_past_timeout(&conn, Some("msg_1"));
+        let id = assigned_past_timeout(&conn, Some("msg_1"), None);
         let actions = no_claim_wait()
-            .tick(&conn, &DeliverySensors(Some(false)))
+            .tick(&conn, &ClaimSensors(NOBODY_HOME))
+            .unwrap();
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    /// A session that answers to the role drains its inbox when its turn
+    /// ends; starting a second session beside it is the duplicate #605 is
+    /// about.
+    #[test]
+    fn an_undrained_assignment_with_someone_home_waits() {
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, Some("msg_1"), None);
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(SOMEONE_HOME))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    /// A failed fallback spawn leaves a later attempt with no message id;
+    /// the mailbox attempt's id is still the one that counts.
+    #[test]
+    fn a_failed_fallback_spawn_does_not_strand_the_task() {
+        let conn = store::open_memory();
+        let id = assigned_past_timeout(&conn, Some("msg_1"), None);
+        crate::coord::tasks::insert_attempt(&conn, &id, 2, Some("sess"), None, None).unwrap();
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(NOBODY_HOME))
             .unwrap();
         assert_eq!(spawned(&actions), vec![id]);
     }
 
     #[test]
-    fn a_drained_assignment_past_the_timeout_is_escalated_not_spawned() {
+    fn a_drained_assignment_is_escalated_only_after_the_tasks_own_timeout() {
         let conn = store::open_memory();
-        let id = assigned_past_timeout(&conn, Some("msg_1"));
+        assigned_past_timeout(&conn, Some("msg_1"), None);
         let actions = no_claim_wait()
-            .tick(&conn, &DeliverySensors(Some(true)))
+            .tick(&conn, &ClaimSensors(Claim::Drained))
+            .unwrap();
+        assert!(actions.is_empty(), "within its 45 min: {actions:?}");
+        let conn = store::open_memory();
+        let id = assigned_past_timeout(&conn, Some("msg_1"), Some(0));
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(Claim::Drained))
             .unwrap();
         assert!(spawned(&actions).is_empty(), "{actions:?}");
         assert!(
             matches!(&actions[..], [Action::EscalateHuman { task_id, cause }]
-                if *task_id == id && cause.starts_with(MAILBOX_CLAIMED) && cause.contains("#606")),
+                if *task_id == id && cause.starts_with(MAILBOX_CLAIMED)
+                    && cause.contains("0 min timeout") && cause.contains("#606")),
             "{actions:?}"
         );
     }
 
     #[test]
-    fn not_knowing_whether_it_was_drained_spawns_nothing() {
+    fn not_knowing_how_the_assignment_stands_does_nothing() {
         let conn = store::open_memory();
-        assigned_past_timeout(&conn, Some("msg_1"));
-        let actions = no_claim_wait().tick(&conn, &DeliverySensors(None)).unwrap();
-        assert!(actions.is_empty(), "{actions:?}");
-        // No message id on the attempt is the same "can't tell".
-        let conn = store::open_memory();
-        assigned_past_timeout(&conn, None);
+        assigned_past_timeout(&conn, Some("msg_1"), Some(0));
         let actions = no_claim_wait()
-            .tick(&conn, &DeliverySensors(Some(false)))
+            .tick(&conn, &ClaimSensors(Claim::Unknown))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+        // No message id on any attempt is the same "can't tell".
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, None, Some(0));
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(NOBODY_HOME))
             .unwrap();
         assert!(actions.is_empty(), "{actions:?}");
     }
 
     #[test]
-    fn an_assignment_inside_the_timeout_is_not_asked_about() {
+    fn an_assignment_inside_the_claim_timeout_is_not_asked_about() {
         let conn = store::open_memory();
-        assigned_past_timeout(&conn, Some("msg_1"));
+        assigned_past_timeout(&conn, Some("msg_1"), Some(0));
         let actions = Supervisor::with_defaults()
-            .tick(&conn, &DeliverySensors(Some(false)))
+            .tick(&conn, &ClaimSensors(NOBODY_HOME))
             .unwrap();
         assert!(actions.is_empty(), "{actions:?}");
     }

@@ -49,37 +49,53 @@ pub fn db_exists() -> bool {
     db_path().exists()
 }
 
-/// Whether the recipient has drained message `id` (#605): `Some(true)`
-/// once `read_inbox` / `bus inbox` delivered it, `Some(false)` while it
-/// waits, `None` when no such message exists (pruned, or never inserted),
-/// which a caller must not read as either.
-pub fn message_delivered(conn: &Connection, id: &str) -> Result<Option<bool>, String> {
-    conn.query_row(
-        "SELECT status FROM messages WHERE id = ?1",
-        params![id],
-        |row| row.get::<_, String>(0),
-    )
-    .optional()
-    .map(|status| status.map(|s| s == "delivered"))
-    .map_err(|e| format!("query message {id}: {e}"))
-}
-
 /// Take a pending message back (#604): the supervisor is about to start
 /// the task itself, so the role must not drain it later and start the
 /// same work beside the spawned session. `withdrawn` is neither pending
-/// (no inbox returns it) nor delivered (`message_delivered` says `false`,
-/// since nobody claimed it); `delivered_at` records when it was taken
-/// back, so `prune` ages it like a delivered one. A message already
-/// delivered stays delivered: the recipient has it.
-pub fn withdraw_message(conn: &Connection, id: &str) -> Result<(), String> {
+/// (no inbox returns it) nor delivered (`message_claim` reports it as
+/// unclaimed); `delivered_at` records when it was taken
+/// back, so `prune` ages it like a delivered one.
+///
+/// Returns whether the task is the supervisor's to start: `false` when
+/// the recipient drained the message first (it stays delivered; they have
+/// the task). A message already withdrawn, or gone, is `true`: nobody
+/// else can act on it.
+pub fn withdraw_message(conn: &Connection, id: &str) -> Result<bool, String> {
     let now = crate::logger::timestamp_now();
-    conn.execute(
-        "UPDATE messages SET status = 'withdrawn', delivered_at = ?1
-         WHERE id = ?2 AND status = 'pending'",
-        params![now, id],
+    let taken = conn
+        .execute(
+            "UPDATE messages SET status = 'withdrawn', delivered_at = ?1
+             WHERE id = ?2 AND status = 'pending'",
+            params![now, id],
+        )
+        .map_err(|e| format!("withdraw message {id}: {e}"))?;
+    if taken > 0 {
+        return Ok(true);
+    }
+    let status: Option<String> = conn
+        .query_row(
+            "SELECT status FROM messages WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("query message {id}: {e}"))?;
+    Ok(status.as_deref() != Some("delivered"))
+}
+
+/// A mailbox message's status and recipient role (#604), for the
+/// supervisor's claim check: `None` when no such message exists.
+pub fn message_claim(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<(String, Option<String>)>, String> {
+    conn.query_row(
+        "SELECT status, addressed_to FROM messages WHERE id = ?1",
+        params![id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
     )
-    .map(|_| ())
-    .map_err(|e| format!("withdraw message {id}: {e}"))
+    .optional()
+    .map_err(|e| format!("query message {id}: {e}"))
 }
 
 pub fn open_at(path: &std::path::Path) -> Result<Connection, String> {
@@ -611,6 +627,12 @@ mod tests {
 
     /// #604: a withdrawn message is out of every inbox and counts as
     /// unclaimed; a drained one counts as claimed; an unknown id is neither.
+    fn delivered(conn: &Connection, id: &str) -> Option<bool> {
+        message_claim(conn, id)
+            .unwrap()
+            .map(|(status, _)| status == "delivered")
+    }
+
     #[test]
     fn withdrawn_messages_leave_the_inbox_and_read_as_unclaimed() {
         let mut conn = open_memory();
@@ -626,11 +648,26 @@ mod tests {
             1,
         )
         .unwrap();
-        assert_eq!(message_delivered(&conn, &id).unwrap(), Some(false));
-        assert_eq!(message_delivered(&conn, "msg_nope").unwrap(), None);
-        withdraw_message(&conn, &id).unwrap();
+        assert_eq!(delivered(&conn, &id), Some(false));
+        assert_eq!(delivered(&conn, "msg_nope"), None);
+        assert!(
+            withdraw_message(&conn, &id).unwrap(),
+            "pending: ours to start"
+        );
         assert!(drain_inbox(&mut conn, "relay", None).unwrap().is_empty());
-        assert_eq!(message_delivered(&conn, &id).unwrap(), Some(false));
+        assert_eq!(delivered(&conn, &id), Some(false));
+        assert!(
+            withdraw_message(&conn, &id).unwrap(),
+            "already withdrawn: still ours"
+        );
+        assert!(
+            withdraw_message(&conn, "msg_nope").unwrap(),
+            "gone: nobody else can act"
+        );
+        assert_eq!(
+            message_claim(&conn, &id).unwrap(),
+            Some(("withdrawn".to_string(), Some("relay".to_string())))
+        );
         // A drained message is claimed, and withdrawing it changes nothing.
         let id2 = insert_message(
             &conn,
@@ -645,8 +682,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(drain_inbox(&mut conn, "relay", None).unwrap().len(), 1);
-        withdraw_message(&conn, &id2).unwrap();
-        assert_eq!(message_delivered(&conn, &id2).unwrap(), Some(true));
+        assert!(
+            !withdraw_message(&conn, &id2).unwrap(),
+            "drained first: theirs"
+        );
+        assert_eq!(delivered(&conn, &id2), Some(true));
+        assert_eq!(message_claim(&conn, "msg_nope").unwrap(), None);
     }
 
     /// Helper: insert a message with an explicit `delivered_at` so tests can

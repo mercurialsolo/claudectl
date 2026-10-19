@@ -754,17 +754,18 @@ pub fn attempt_count(conn: &Connection, task_id: &str) -> Result<u32, String> {
     Ok(n as u32)
 }
 
-/// The bus message id the most recent attempt was assigned through, if it
-/// was assigned by mailbox and the id was stamped (#605). `None` for a
-/// spawned attempt, a task with no attempt, or an attempt whose stamp
-/// never landed; the reconciler treats all three as "can't tell".
+/// The bus message id of the newest attempt that was assigned by mailbox
+/// (#605). A later spawned attempt (a fallback whose session failed to
+/// start) carries none and is skipped, so the task is not stranded in
+/// ASSIGNED behind it. `None` for a task never assigned by mailbox, or
+/// whose stamp never landed; the reconciler treats both as "can't tell".
 pub fn latest_attempt_bus_message_id(
     conn: &Connection,
     task_id: &str,
 ) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT bus_message_id FROM task_attempts
-         WHERE task_id = ?1
+         WHERE task_id = ?1 AND bus_message_id IS NOT NULL
          ORDER BY attempt_num DESC LIMIT 1",
         params![task_id],
         |row| row.get::<_, Option<String>>(0),

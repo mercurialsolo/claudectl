@@ -44,7 +44,9 @@ pub trait SideEffects: VerifierBackend {
 
     /// Take back a still-pending mailbox assignment (#604), so the role
     /// cannot drain it after the supervisor has started the task itself.
-    fn withdraw_assignment(&self, message_id: &str) -> Result<(), String>;
+    /// `false` means the recipient drained it first: the task is theirs,
+    /// start nothing.
+    fn withdraw_assignment(&self, message_id: &str) -> Result<bool, String>;
 
     /// Where `task`'s session runs: its worktree when it has a `git_ref`
     /// (created or reused), its `cwd` otherwise (#570).
@@ -139,10 +141,15 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                 // first (#604): once a session starts here, a role draining
                 // it later would start the same work beside that session.
                 // A withdrawn message still reads as unclaimed, so if the
-                // spawn below fails the next tick tries again.
+                // spawn below fails the next tick tries again. If the role
+                // drained it between the reconciler's read and now, the
+                // task is theirs: start nothing, and the next pass sees it
+                // drained.
                 if from_state == TaskState::Assigned {
                     if let Some(msg) = super::tasks::latest_attempt_bus_message_id(conn, task_id)? {
-                        fx.withdraw_assignment(&msg)?;
+                        if !fx.withdraw_assignment(&msg)? {
+                            return Ok(());
+                        }
                     }
                 }
                 // Workdir first: a failed checkout leaves nothing behind, and
@@ -686,6 +693,7 @@ mod tests {
     struct RecordingFx {
         published: std::cell::RefCell<Vec<(String, String, u32)>>,
         withdrawn: std::cell::RefCell<Vec<String>>,
+        withdraw_result: std::cell::RefCell<bool>,
         spawned: std::cell::RefCell<Vec<(std::path::PathBuf, String)>>,
         next_message_id: std::cell::RefCell<u64>,
         next_session_id: std::cell::RefCell<u64>,
@@ -714,6 +722,7 @@ mod tests {
             Self {
                 published: Default::default(),
                 withdrawn: Default::default(),
+                withdraw_result: std::cell::RefCell::new(true),
                 spawned: Default::default(),
                 next_message_id: std::cell::RefCell::new(1),
                 next_session_id: std::cell::RefCell::new(1),
@@ -779,9 +788,9 @@ mod tests {
     }
 
     impl SideEffects for RecordingFx {
-        fn withdraw_assignment(&self, message_id: &str) -> Result<(), String> {
+        fn withdraw_assignment(&self, message_id: &str) -> Result<bool, String> {
             self.withdrawn.borrow_mut().push(message_id.to_string());
-            Ok(())
+            Ok(*self.withdraw_result.borrow())
         }
         fn publish_assignment(
             &self,
@@ -1189,6 +1198,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fx.withdrawn.borrow().len(), 1);
+    }
+
+    /// #604: a drain that lands between the reconciler's read and the
+    /// actuator's withdraw means the role has the task; nothing starts.
+    #[test]
+    fn a_drain_that_beats_the_fallback_spawns_nothing() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(Some("backend"))).unwrap();
+        let fx = RecordingFx::default();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::AssignViaMailbox {
+                task_id: id.clone(),
+                role: "backend".into(),
+                cause: None,
+            },
+        )
+        .unwrap();
+        *fx.withdraw_result.borrow_mut() = false;
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Spawn {
+                task_id: id.clone(),
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+        )
+        .unwrap();
+        assert_eq!(*fx.withdrawn.borrow(), vec!["msg_test_1".to_string()]);
+        assert!(fx.spawn_requests.borrow().is_empty());
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Assigned
+        );
+        assert_eq!(attempt_count(&conn, &id).unwrap(), 1);
     }
 
     #[test]
