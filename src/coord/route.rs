@@ -3,8 +3,9 @@
 //! A task declares where it runs (`cwd`) and, optionally, the files it is
 //! about (`paths`). A role bound to a subtree *owns* the work under it
 //! (`bus::roles::owner_of_path`). This module applies that ownership to a
-//! task, pure and deterministic, so the reconciler can mail the task to the
-//! role instead of spawning a fresh session:
+//! task, so the reconciler can mail the task to the role instead of
+//! spawning a fresh session once placement has decided the task starts on
+//! this machine:
 //!
 //! 1. The *targets* are the task's `paths` under its `cwd`, or the `cwd`
 //!    itself when it names none.
@@ -18,9 +19,14 @@
 //!    the targets, is no answer.
 //!
 //! No answer means the reconciler does what it always did: spawn. A role
-//! that is not live (its pid gone and no session under its selector) is
-//! never chosen, so a task is not parked in a mailbox nobody reads; the
-//! claim-timeout fallback would catch that, minutes later.
+//! that is not live (its pid gone and no running session answering to it)
+//! is never chosen, so a task is not parked in a mailbox nobody reads.
+//!
+//! The function is pure given its inputs. The roster carries each role's
+//! selector as a canonical stem and its focus as canonical directories (the
+//! sensor's job); the task's own paths are canonicalized here through the
+//! `canon` the caller passes, `paths::canonicalize_deep` in production and
+//! the identity in tests, so `/tmp/repo` and `/private/tmp/repo` meet.
 //!
 //! Only `cwd` and declared `paths` take part. The prompt is not scanned for
 //! path-like words: a guess there would route work by accident, and the
@@ -68,21 +74,31 @@ pub fn targets(cwd: &Path, paths: &[String]) -> Vec<PathBuf> {
 
 /// The role that should take a task at `cwd` about `paths`, given the
 /// bound roles and what their sessions are doing. `None` means spawn.
-pub fn route(cwd: &Path, paths: &[String], roles: &[RoleView]) -> Option<Routed> {
+pub fn route(
+    cwd: &Path,
+    paths: &[String],
+    roles: &[RoleView],
+    canon: &dyn Fn(&Path) -> PathBuf,
+) -> Option<Routed> {
     let targets = targets(cwd, paths);
     let about = describe(cwd, &targets);
+    let canon_targets: Vec<PathBuf> = targets.iter().map(|t| canon(t)).collect();
+    let target_strs: Vec<String> = canon_targets
+        .iter()
+        .map(|t| t.to_string_lossy().into_owned())
+        .collect();
 
     // Owners: every target covered, longest selector wins.
     let mut best_len = 0usize;
     let mut owners: Vec<&RoleView> = Vec::new();
     for r in roles {
-        if !targets
+        if !target_strs
             .iter()
-            .all(|t| crate::bus::roles::selector_covers(&r.selector, t))
+            .all(|t| crate::bus::roles::stem_covers(&r.stem, r.bare, t))
         {
             continue;
         }
-        let len = crate::bus::roles::selector_stem_len(&r.selector);
+        let len = r.stem.len();
         if len > best_len {
             best_len = len;
             owners.clear();
@@ -113,8 +129,7 @@ pub fn route(cwd: &Path, paths: &[String], roles: &[RoleView]) -> Option<Routed>
             let mut chosen: Vec<(&RoleView, PathBuf)> = Vec::new();
             for r in &live {
                 for f in &r.focus {
-                    let f = normalize_lexically(f);
-                    if !targets.iter().all(|t| t.starts_with(&f)) {
+                    if !canon_targets.iter().all(|t| t.starts_with(f)) {
                         continue;
                     }
                     let depth = f.components().count();
@@ -123,7 +138,7 @@ pub fn route(cwd: &Path, paths: &[String], roles: &[RoleView]) -> Option<Routed>
                         chosen.clear();
                     }
                     if depth == best_depth && !chosen.iter().any(|(c, _)| c.name == r.name) {
-                        chosen.push((r, f));
+                        chosen.push((r, f.clone()));
                     }
                 }
             }
@@ -133,7 +148,7 @@ pub fn route(cwd: &Path, paths: &[String], roles: &[RoleView]) -> Option<Routed>
                     why: format!(
                         "{} is working in {}, which holds {about}",
                         r.name,
-                        relative(cwd, focus)
+                        relative(&canon(cwd), focus)
                     ),
                 }),
                 _ => None,
@@ -168,13 +183,23 @@ fn relative(cwd: &Path, path: &Path) -> String {
 mod tests {
     use super::*;
 
-    fn role(name: &str, selector: &str, live: bool, focus: &[&str]) -> RoleView {
+    fn role(name: &str, stem: &str, live: bool, focus: &[&str]) -> RoleView {
         RoleView {
             name: name.into(),
-            selector: selector.into(),
+            stem: stem.into(),
+            bare: false,
             live,
             focus: focus.iter().map(PathBuf::from).collect(),
         }
+    }
+
+    fn same(p: &Path) -> PathBuf {
+        p.to_path_buf()
+    }
+
+    fn pick(cwd: &str, paths: &[&str], roles: &[RoleView]) -> Option<Routed> {
+        let paths: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
+        route(Path::new(cwd), &paths, roles, &same)
     }
 
     const CWD: &str = "/work/repo";
@@ -202,13 +227,13 @@ mod tests {
     #[test]
     fn no_owner_means_spawn() {
         let roles = [role("other", "/work/elsewhere", true, &[])];
-        assert_eq!(route(Path::new(CWD), &[], &roles), None);
+        assert_eq!(pick(CWD, &[], &roles), None);
     }
 
     #[test]
     fn one_live_owner_takes_it() {
         let roles = [role("repo", CWD, true, &[])];
-        let r = route(Path::new(CWD), &[], &roles).unwrap();
+        let r = pick(CWD, &[], &roles).unwrap();
         assert_eq!(r.role, "repo");
         assert_eq!(r.why, "repo owns its cwd");
     }
@@ -216,7 +241,7 @@ mod tests {
     #[test]
     fn a_dead_owner_is_never_chosen() {
         let roles = [role("repo", CWD, false, &[])];
-        assert_eq!(route(Path::new(CWD), &[], &roles), None);
+        assert_eq!(pick(CWD, &[], &roles), None);
     }
 
     #[test]
@@ -225,12 +250,22 @@ mod tests {
             role("repo", CWD, true, &[]),
             role("relay", "/work/repo/src/relay", true, &[]),
         ];
-        let r = route(Path::new(CWD), &["src/relay/peer.rs".into()], &roles).unwrap();
+        let r = pick(CWD, &["src/relay/peer.rs"], &roles).unwrap();
         assert_eq!(r.role, "relay");
         assert_eq!(r.why, "relay owns src/relay/peer.rs");
         // Work at the root is not the relay role's.
-        let r = route(Path::new(CWD), &[], &roles).unwrap();
+        let r = pick(CWD, &[], &roles).unwrap();
         assert_eq!(r.role, "repo");
+        // A selector covers on a `/` boundary: `/work/repo` is not `/work/repo2`.
+        assert_eq!(pick("/work/repo2", &[], &roles), None);
+    }
+
+    #[test]
+    fn a_bare_prefix_selector_covers_its_siblings() {
+        let mut r = role("proj", "/work/proj-", true, &[]);
+        r.bare = true;
+        let got = pick("/work/proj-impl", &[], std::slice::from_ref(&r)).unwrap();
+        assert_eq!(got.role, "proj");
     }
 
     #[test]
@@ -240,20 +275,13 @@ mod tests {
             role("bus", "/work/repo/src/bus", true, &[]),
         ];
         // Only the root could cover both, and nobody is bound there.
-        assert_eq!(
-            route(
-                Path::new(CWD),
-                &["src/relay/a.rs".into(), "src/bus/b.rs".into()],
-                &roles
-            ),
-            None
-        );
+        assert_eq!(pick(CWD, &["src/relay/a.rs", "src/bus/b.rs"], &roles), None);
     }
 
     #[test]
     fn shared_selector_goes_to_the_only_live_one() {
         let roles = [role("a", CWD, false, &[]), role("b", CWD, true, &[])];
-        let r = route(Path::new(CWD), &[], &roles).unwrap();
+        let r = pick(CWD, &[], &roles).unwrap();
         assert_eq!(r.role, "b");
         assert_eq!(r.why, "b is the only running owner of its cwd");
     }
@@ -264,18 +292,13 @@ mod tests {
             role("a", CWD, true, &["/work/repo/src/relay"]),
             role("b", CWD, true, &["/work/repo/src/bus"]),
         ];
-        let r = route(Path::new(CWD), &["src/relay/peer.rs".into()], &roles).unwrap();
+        let r = pick(CWD, &["src/relay/peer.rs"], &roles).unwrap();
         assert_eq!(r.role, "a");
         assert_eq!(
             r.why,
             "a is working in src/relay, which holds src/relay/peer.rs"
         );
-        let r = route(
-            Path::new(CWD),
-            &["src/bus/mcp.rs".into(), "src/bus/cli.rs".into()],
-            &roles,
-        )
-        .unwrap();
+        let r = pick(CWD, &["src/bus/mcp.rs", "src/bus/cli.rs"], &roles).unwrap();
         assert_eq!(r.role, "b");
         assert_eq!(
             r.why,
@@ -289,21 +312,18 @@ mod tests {
             role("a", CWD, true, &["/work/repo"]),
             role("b", CWD, true, &["/work/repo/src"]),
         ];
-        let r = route(Path::new(CWD), &["src/x.rs".into()], &deeper).unwrap();
+        let r = pick(CWD, &["src/x.rs"], &deeper).unwrap();
         assert_eq!(r.role, "b");
         let tie = [
             role("a", CWD, true, &["/work/repo/src"]),
             role("b", CWD, true, &["/work/repo/src"]),
         ];
-        assert_eq!(route(Path::new(CWD), &["src/x.rs".into()], &tie), None);
+        assert_eq!(pick(CWD, &["src/x.rs"], &tie), None);
         let none_encloses = [
             role("a", CWD, true, &["/work/repo/docs"]),
             role("b", CWD, true, &[]),
         ];
-        assert_eq!(
-            route(Path::new(CWD), &["src/x.rs".into()], &none_encloses),
-            None
-        );
+        assert_eq!(pick(CWD, &["src/x.rs"], &none_encloses), None);
     }
 
     #[test]
@@ -313,12 +333,44 @@ mod tests {
             role("b", CWD, true, &["/work/repo"]),
         ];
         // Both paths are under `b`'s focus (the root); only one is under `a`'s.
-        let r = route(
-            Path::new(CWD),
-            &["src/relay/a.rs".into(), "src/bus/b.rs".into()],
-            &roles,
-        )
-        .unwrap();
+        let r = pick(CWD, &["src/relay/a.rs", "src/bus/b.rs"], &roles).unwrap();
         assert_eq!(r.role, "b");
+    }
+
+    /// The roster is canonical (git's toplevel, resolved selectors); the
+    /// task's paths are whatever the submitter typed. `canon` brings them
+    /// together, for coverage and for the focus tiebreak alike.
+    #[test]
+    fn the_tasks_paths_are_canonicalized_before_they_are_compared() {
+        fn private(p: &Path) -> PathBuf {
+            let s = p.to_string_lossy();
+            PathBuf::from(s.replacen("/tmp/", "/private/tmp/", 1))
+        }
+        let roles = [
+            role(
+                "a",
+                "/private/tmp/repo",
+                true,
+                &["/private/tmp/repo/src/relay"],
+            ),
+            role(
+                "b",
+                "/private/tmp/repo",
+                true,
+                &["/private/tmp/repo/src/bus"],
+            ),
+        ];
+        let paths = vec!["src/relay/peer.rs".to_string()];
+        assert_eq!(
+            route(Path::new("/tmp/repo"), &paths, &roles, &same),
+            None,
+            "without canonicalization nothing is covered"
+        );
+        let r = route(Path::new("/tmp/repo"), &paths, &roles, &private).unwrap();
+        assert_eq!(r.role, "a");
+        assert_eq!(
+            r.why,
+            "a is working in src/relay, which holds src/relay/peer.rs"
+        );
     }
 }

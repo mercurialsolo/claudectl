@@ -221,8 +221,13 @@ const ACTIVE_STATES: &[TaskState] = &[
 /// `supervisor work`: the reconcile loop on its own (#570).
 fn work(interval: u64, until_idle: bool, timeout: Option<u64>) -> io::Result<()> {
     // A policy file that doesn't parse is reported now, not as a silent
-    // drain on every pass (#571).
-    let supervisor = super::supervisor::Supervisor::from_policy_file().map_err(io::Error::other)?;
+    // drain on every pass (#571). After that it is re-read each pass, like
+    // the slot limits placement reads, so `auto_route` can be turned on
+    // without a restart; a file that stops parsing keeps the last good
+    // policy and says so once.
+    let mut supervisor =
+        super::supervisor::Supervisor::from_policy_file().map_err(io::Error::other)?;
+    let mut policy_error: Option<String> = None;
     let started = std::time::Instant::now();
     let interval = std::time::Duration::from_secs(interval.max(1));
     println!("supervisor: working (every {}s)", interval.as_secs());
@@ -230,6 +235,18 @@ fn work(interval: u64, until_idle: bool, timeout: Option<u64>) -> io::Result<()>
     let mut held: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     loop {
         let ts = crate::logger::timestamp_now();
+        match super::supervisor::Supervisor::from_policy_file() {
+            Ok(s) => {
+                supervisor = s;
+                policy_error = None;
+            }
+            Err(e) => {
+                if policy_error.as_ref() != Some(&e) {
+                    println!("[{ts}] {e}; keeping the last policy that parsed");
+                    policy_error = Some(e);
+                }
+            }
+        }
         match super::live_fx::tick_once(&supervisor) {
             Ok(r) => {
                 if r.emitted > 0 {

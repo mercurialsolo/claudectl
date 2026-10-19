@@ -186,24 +186,30 @@ pub trait Sensors {
     }
     /// Every bound bus role, with whether anyone is home and where its
     /// sessions are working (#596 follow-up). Read only when `auto_route`
-    /// is on and a task with no `role` is ready, because a focus costs a
-    /// transcript read per session; the live sensor reads focus only for
-    /// roles that share a selector with another live role, since that is
-    /// the one case it decides. Empty: nothing to route to.
+    /// is on and a task with no `role` is about to start on this machine,
+    /// because it costs a session scan and a focus costs a transcript
+    /// read; the live sensor reads focus only for roles that share a
+    /// selector with another live role, since that is the one case it
+    /// decides. Empty: nothing to route to.
     fn roles(&self) -> Vec<RoleView> {
         Vec::new()
     }
 }
 
-/// A bound bus role as the reconciler sees it (#596 follow-up).
+/// A bound bus role as the reconciler sees it (#596 follow-up). Paths are
+/// canonical, so `coord::route` compares strings and does no I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoleView {
     pub name: String,
-    /// Its `cwd_selector`: the subtree it owns.
-    pub selector: String,
-    /// Its bound pid is running, or a session's cwd is under its selector.
+    /// The subtree it owns: its `cwd_selector`'s comparable stem, from
+    /// `bus::roles::selector_stem_parts`.
+    pub stem: String,
+    /// The selector was a bare prefix (`/work/proj-*`).
+    pub bare: bool,
+    /// Its bound pid is running, or a running session answers to it (what
+    /// `whoami` inside that session would say).
     pub live: bool,
-    /// Where each of its running sessions' recent edits concentrate, as
+    /// Where each of its sessions' recent edits concentrate, as canonical
     /// absolute directories (`focus::Focus::path_under`).
     pub focus: Vec<PathBuf>,
 }
@@ -280,10 +286,9 @@ impl Supervisor {
     }
 
     /// The defaults, with what `~/.claudectl/coord/policy.toml` says about
-    /// routing (#596 follow-up). A file that doesn't parse is an error.
-    /// `supervisor work` refuses to start on it, as it does for placement;
-    /// the headless loop reports it and runs with the defaults, which is
-    /// what `placement::live_views` does on every pass with a broken file.
+    /// routing (#596 follow-up). A file that doesn't parse is an error;
+    /// callers read it every pass, like placement reads its slot limits,
+    /// and keep the last policy that parsed when it stops parsing.
     pub fn from_policy_file() -> Result<Self, String> {
         let file = super::placement::load_policy()?;
         Ok(Self::new(Policy {
@@ -350,7 +355,6 @@ impl Supervisor {
         // Where a task goes: `Some(None)` here, `Some(Some(peer))` there,
         // `None` held (and a Hold pushed saying why).
         let mut place = |task: &super::tasks::TaskRow,
-                         role: Option<&str>,
                          out: &mut Vec<Action>|
          -> Result<Option<Option<String>>, String> {
             use super::placement::{Decision, place};
@@ -387,7 +391,7 @@ impl Supervisor {
                 });
                 Ok(None)
             };
-            let here_only = if role.is_some() {
+            let here_only = if task.role.is_some() {
                 Some("it's addressed to a role on this machine")
             } else if task
                 .verifiers
@@ -463,7 +467,7 @@ impl Supervisor {
             }
         };
         for task in &retrying {
-            match place(task, task.role.as_deref(), &mut out)? {
+            match place(task, &mut out)? {
                 Some(None) => out.push(Action::Spawn {
                     task_id: task.id.clone(),
                     cwd: PathBuf::from(&task.cwd),
@@ -487,31 +491,12 @@ impl Supervisor {
             }
         }
         // The bound roles, for routing (#596 follow-up): read once per pass
-        // and only when a task needs them, since each costs transcript reads.
+        // and only when a task without a `role` is about to start here,
+        // since building them costs a session scan and transcript reads.
         #[cfg(feature = "bus")]
         let mut roster: Option<Vec<RoleView>> = None;
         for task in ready {
-            // A task that names no `role` may take the live role that owns
-            // its paths, when `auto_route` is on. The task row keeps `role`
-            // NULL: what the operator declared stays as written. If the
-            // mailbox goes unclaimed past `claim_timeout`, step 2 spawns the
-            // task, as for an addressed one. A Retrying task is always
-            // spawned (above).
-            #[cfg(feature = "bus")]
-            let routed = if self.policy.auto_route && task.role.is_none() {
-                let roles = roster.get_or_insert_with(|| sensors.roles());
-                super::route::route(std::path::Path::new(&task.cwd), &task.paths, roles)
-                    .map(|r| (r.role, r.why))
-            } else {
-                None
-            };
-            #[cfg(not(feature = "bus"))]
-            let routed: Option<(String, String)> = None;
-            let role: Option<&str> = task
-                .role
-                .as_deref()
-                .or(routed.as_ref().map(|(r, _)| r.as_str()));
-            match place(task, role, &mut out)? {
+            match place(task, &mut out)? {
                 None => continue,
                 Some(Some(peer)) => {
                     out.push(Action::Delegate {
@@ -522,13 +507,43 @@ impl Supervisor {
                 }
                 Some(None) => {}
             }
-            match role {
-                Some(role) => out.push(Action::AssignViaMailbox {
+            // Placement chose this machine. A task that names no `role` may
+            // then go to the live role that owns its paths instead of a
+            // fresh session, when `auto_route` is on. Routing comes after
+            // placement and never moves a task between machines, so `peer`
+            // and `requires` keep their meaning. The task row keeps `role`
+            // NULL: what the operator declared stays as written. Step 2
+            // spawns the task if the mailbox looks unclaimed past
+            // `claim_timeout`, as for an addressed one (#605 is what
+            // "looks unclaimed" means today). A Retrying task is always
+            // spawned (above).
+            #[cfg(feature = "bus")]
+            let routed = if self.policy.auto_route && task.role.is_none() {
+                let roles = roster.get_or_insert_with(|| sensors.roles());
+                super::route::route(
+                    std::path::Path::new(&task.cwd),
+                    &task.paths,
+                    roles,
+                    &claudectl_core::paths::canonicalize_deep,
+                )
+                .map(|r| (r.role, r.why))
+            } else {
+                None
+            };
+            #[cfg(not(feature = "bus"))]
+            let routed: Option<(String, String)> = None;
+            match (&task.role, routed) {
+                (Some(role), _) => out.push(Action::AssignViaMailbox {
                     task_id: task.id.clone(),
-                    role: role.to_string(),
-                    cause: routed.map(|(_, why)| why),
+                    role: role.clone(),
+                    cause: None,
                 }),
-                None => out.push(Action::Spawn {
+                (None, Some((role, why))) => out.push(Action::AssignViaMailbox {
+                    task_id: task.id.clone(),
+                    role,
+                    cause: Some(why),
+                }),
+                (None, None) => out.push(Action::Spawn {
                     task_id: task.id.clone(),
                     cwd: PathBuf::from(&task.cwd),
                 }),
@@ -1043,10 +1058,11 @@ mod tests {
         })
     }
 
-    fn live_owner(name: &str, selector: &str) -> RoleView {
+    fn live_owner(name: &str, stem: &str) -> RoleView {
         RoleView {
             name: name.into(),
-            selector: selector.into(),
+            stem: stem.into(),
+            bare: false,
             live: true,
             focus: vec![],
         }
@@ -1127,8 +1143,9 @@ mod tests {
         assert_eq!(spawned(&actions), vec![id]);
     }
 
-    /// A routed task is addressed to a mailbox on this machine, so placement
-    /// keeps it here even when a peer has more room.
+    /// Routing happens after placement has picked this machine, and never
+    /// changes where a task runs: a roomier peer still gets the task, and a
+    /// task pinned to a peer is delegated, not held, whoever owns its cwd.
     struct RoutedPlacedSensors(Vec<crate::coord::placement::PeerView>, Vec<RoleView>);
 
     impl Sensors for RoutedPlacedSensors {
@@ -1147,26 +1164,46 @@ mod tests {
     }
 
     #[test]
-    fn a_routed_task_stays_on_this_machine() {
+    fn routing_applies_only_where_placement_starts_the_task_here() {
         let conn = store::open_memory();
-        let routed = insert_task(&conn, &task("r", &[])).unwrap();
-        let unowned = insert_task(
+        let owned = insert_task(&conn, &task("r", &[])).unwrap();
+        let pinned = insert_task(
             &conn,
             &NewTask {
-                cwd: "/work/elsewhere".into(),
-                ..task("u", &[])
+                peer: Some("big".into()),
+                ..task("p", &[])
             },
         )
         .unwrap();
-        let sensors = RoutedPlacedSensors(
-            vec![here(1_000), peer_view("big", 64_000)],
-            vec![live_owner("x", "/work/x")],
-        );
+        let roster = vec![live_owner("x", "/work/x")];
+        // A roomier peer takes the unpinned task, owner or not; the pinned
+        // one goes where it was pinned.
+        let sensors =
+            RoutedPlacedSensors(vec![here(1_000), peer_view("big", 64_000)], roster.clone());
         let actions = routing().tick(&conn, &sensors).unwrap();
-        assert!(actions.iter().any(
-            |a| matches!(a, Action::AssignViaMailbox { task_id, role, .. } if *task_id == routed && role == "x")
-        ));
-        assert_eq!(delegated(&actions), vec![(unowned, "big".to_string())]);
+        assert_eq!(
+            delegated(&actions),
+            vec![
+                (owned.clone(), "big".to_string()),
+                (pinned.clone(), "big".to_string())
+            ]
+        );
+        assert!(held(&actions).is_empty(), "{actions:?}");
+        // This machine alone: the owned task goes to its owner's mailbox,
+        // the pinned one waits for its peer as before.
+        let sensors = RoutedPlacedSensors(vec![here(64_000)], roster);
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert!(actions.contains(&Action::AssignViaMailbox {
+            task_id: owned,
+            role: "x".into(),
+            cause: Some("x owns its cwd".into()),
+        }));
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::Hold { task_id, reason }
+            if *task_id == pinned && reason == "peer big is not connected"))
+        );
     }
 
     /// #571: a retry goes back to the peer its worktree is on, even when

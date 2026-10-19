@@ -297,85 +297,120 @@ impl Sensors for LiveSensors {
 }
 
 /// Every bound bus role with whether anyone is home and where its sessions
-/// are working (#596 follow-up). Liveness is what `bus send` checks before
-/// warning about a recipient: the bound pid runs, or a session's cwd is
-/// under the selector. A session's focus is read from its transcript, as
-/// `list_agents` does, and credited to the role that session answers to,
-/// but only for roles that share a selector with another live role: that
-/// is the one case focus decides. Read-only: the session scan sweeps
-/// nothing.
+/// are working (#596 follow-up). A role is live when its bound pid runs or
+/// a running session answers to it (`roles::resolve_for_session`); a
+/// session under a root selector that answers to a more specific role
+/// does not keep the root role alive. A session's focus is read from its
+/// transcript, as `list_agents` does, and credited to the role it answers
+/// to, but only for roles that share a selector with another live role:
+/// that is the one case focus decides. Read-only: the session scan sweeps
+/// nothing, and a machine without a bus database gets none created.
 #[cfg(feature = "bus")]
 fn live_roster() -> Vec<super::supervisor::RoleView> {
     use crate::bus::roles::{self, RoleResolution};
+    use claudectl_core::paths::canonicalize_deep;
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
-    let Ok(conn) = crate::bus::store::open() else {
+    // A machine that never used the bus has no roles to route to, and asking
+    // must not create its database.
+    if !crate::bus::store::db_exists() {
         return Vec::new();
-    };
-    let Ok(rows) = crate::bus::store::list_roles(&conn) else {
-        return Vec::new();
+    }
+    let opened = crate::bus::store::open()
+        .and_then(|conn| crate::bus::store::list_roles(&conn).map(|rows| (conn, rows)));
+    let (conn, rows) = match opened {
+        Ok(x) => x,
+        Err(e) => {
+            roster_error(Some(format!("bus roles: {e}")));
+            return Vec::new();
+        }
     };
     let mut sessions = crate::discovery::scan_sessions_readonly();
     crate::discovery::resolve_jsonl_paths(&mut sessions);
     crate::discovery::resolve_worktree_ids(&mut sessions);
+    // Which role each running session answers to, as `whoami` inside it
+    // would say. Unbound, or ambiguous between cwd-only roles on one
+    // selector, credits nobody: focus needs a pid binding to tell those
+    // apart (`/role`, `--self`, `--pid`).
+    let mut answers_to: Vec<(usize, String)> = Vec::new();
+    let mut first_error: Option<String> = None;
+    for (i, s) in sessions.iter().enumerate() {
+        match roles::resolve_for_session(&conn, s.pid, Path::new(&s.cwd)) {
+            Ok(RoleResolution::Resolved(r)) => answers_to.push((i, r.name)),
+            Ok(_) => {}
+            Err(e) => {
+                first_error.get_or_insert(format!("bus roles: resolving session {}: {e}", s.pid));
+            }
+        }
+    }
+    roster_error(first_error);
     let live: Vec<bool> = rows
         .iter()
         .map(|r| {
             r.pid.is_some_and(claudectl_core::process::pid_alive)
-                || sessions
-                    .iter()
-                    .any(|s| roles::selector_covers(&r.cwd_selector, Path::new(&s.cwd)))
+                || answers_to.iter().any(|(_, name)| *name == r.role)
         })
         .collect();
+    let parts: Vec<(String, bool)> = rows
+        .iter()
+        .map(|r| roles::selector_stem_parts(&r.cwd_selector))
+        .collect();
     // Focus only ever decides between live roles on one selector, and it
-    // costs a transcript read per session, on the daemon's tick. So it is
-    // read only for roles in such a group; a sole owner's sessions are not
-    // opened at all.
-    let mut live_per_key: HashMap<String, u32> = HashMap::new();
-    for (r, &is_live) in rows.iter().zip(&live) {
+    // costs a transcript read per session. So it is read only for roles in
+    // such a group; a sole owner's sessions are not opened at all.
+    let mut live_per_stem: HashMap<&(String, bool), u32> = HashMap::new();
+    for (p, &is_live) in parts.iter().zip(&live) {
         if is_live {
-            *live_per_key
-                .entry(roles::selector_stem_key(&r.cwd_selector))
-                .or_default() += 1;
+            *live_per_stem.entry(p).or_default() += 1;
         }
     }
     let contested: HashSet<&str> = rows
         .iter()
+        .zip(&parts)
         .zip(&live)
-        .filter(|(r, is_live)| {
-            **is_live && live_per_key[&roles::selector_stem_key(&r.cwd_selector)] > 1
-        })
-        .map(|(r, _)| r.role.as_str())
+        .filter(|((_, p), is_live)| **is_live && live_per_stem.get(p).is_some_and(|n| *n > 1))
+        .map(|((r, _), _)| r.role.as_str())
         .collect();
     let mut focus_by_role: HashMap<String, Vec<PathBuf>> = HashMap::new();
-    if !contested.is_empty() {
-        for s in &sessions {
-            let Ok(RoleResolution::Resolved(role)) =
-                roles::resolve_for_session(&conn, s.pid, Path::new(&s.cwd))
-            else {
-                continue;
-            };
-            if !contested.contains(role.name.as_str()) {
-                continue;
-            }
-            let root = Path::new(s.worktree_id.as_deref().unwrap_or(&s.cwd));
-            if let Some(f) = claudectl_core::focus::session_focus(s.jsonl_path.as_deref(), root) {
-                focus_by_role
-                    .entry(role.name)
-                    .or_default()
-                    .push(f.path_under(root));
-            }
+    for (i, name) in &answers_to {
+        if !contested.contains(name.as_str()) {
+            continue;
+        }
+        let s = &sessions[*i];
+        let root = Path::new(s.worktree_id.as_deref().unwrap_or(&s.cwd));
+        if let Some(f) = claudectl_core::focus::session_focus(s.jsonl_path.as_deref(), root) {
+            focus_by_role
+                .entry(name.clone())
+                .or_default()
+                .push(canonicalize_deep(&f.path_under(root)));
         }
     }
     rows.into_iter()
+        .zip(parts)
         .zip(live)
-        .map(|(r, live)| super::supervisor::RoleView {
+        .map(|((r, (stem, bare)), live)| super::supervisor::RoleView {
             focus: focus_by_role.remove(&r.role).unwrap_or_default(),
             name: r.role,
-            selector: r.cwd_selector,
+            stem,
+            bare,
             live,
         })
         .collect()
+}
+
+/// Say a roster problem once per distinct message, not on every pass of a
+/// daemon; `None` clears it so the next occurrence is said again.
+#[cfg(feature = "bus")]
+fn roster_error(error: Option<String>) {
+    static LAST_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    if let Ok(mut last) = LAST_ERROR.lock() {
+        if *last != error {
+            if let Some(e) = &error {
+                eprintln!("supervisor: {e}; routing nothing until it's fixed");
+            }
+            *last = error;
+        }
+    }
 }
 
 #[cfg(test)]

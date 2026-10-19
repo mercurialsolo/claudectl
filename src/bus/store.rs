@@ -43,6 +43,12 @@ pub fn open() -> Result<Connection, String> {
     open_at(&db_path())
 }
 
+/// Whether the bus has ever been used here. `open` creates the database,
+/// so a reader that only wants to know is answered by this instead.
+pub fn db_exists() -> bool {
+    db_path().exists()
+}
+
 pub fn open_at(path: &std::path::Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
