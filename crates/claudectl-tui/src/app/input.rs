@@ -343,11 +343,13 @@ impl App {
             (KeyCode::Esc, _) | (KeyCode::Char('K'), _) | (KeyCode::Char('q'), _) => {
                 self.show_skills = false;
                 self.skills_status_msg = None;
+                self.sync_hive_discovery();
                 return;
             }
             (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {
                 self.skills_tab = self.skills_tab.toggle();
                 self.skills_status_msg = None;
+                self.sync_hive_discovery();
                 return;
             }
             _ => {}
@@ -397,8 +399,12 @@ impl App {
             }
             (KeyCode::Char('r'), _) => {
                 self.refresh_hive_view();
-                self.skills_status_msg =
-                    Some(format!("Known peers: {}", self.hive_known_peers.len()));
+                self.sync_hive_discovery();
+                self.skills_status_msg = Some(format!(
+                    "Known peers: {} · nearby: {}",
+                    self.hive_known_peers.len(),
+                    self.hive_discovered.machines.len()
+                ));
             }
             _ => {}
         }

@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::app::{App, SkillsTab};
+use claudectl_core::runtime::{DiscoveredMachine, DiscoverySource, group_by_hive};
 use claudectl_core::skills::DiscoveredSkill;
 use claudectl_core::theme::Theme;
 
@@ -230,8 +231,10 @@ fn render_hive_body(frame: &mut Frame, area: Rect, app: &App) {
             let addr_str = addr.clone().unwrap_or_else(|| "(no last addr)".into());
             lines.push(Line::from(vec![
                 Span::styled("  • ", Style::default().fg(t.text_muted)),
+                // Identities run to 25 chars (`<host>-<8 hex>`), so a cell
+                // narrower than that ran into the address.
                 Span::styled(
-                    format!("{:<24}", id),
+                    format!("{:<26} ", id),
                     Style::default()
                         .fg(t.text_primary)
                         .add_modifier(Modifier::BOLD),
@@ -274,8 +277,131 @@ fn render_hive_body(frame: &mut Frame, area: Rect, app: &App) {
         ]));
     }
 
+    // Nearby: what is announcing on the LAN right now. Listening started when
+    // this tab came into view (`App::sync_hive_discovery`). Last, because the
+    // paragraph does not scroll and this is the one block that grows: the
+    // invite to copy and the join field being typed into stay above it.
+    lines.push(Line::from(""));
+    render_nearby(&mut lines, app);
+
     let para = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(para, area);
+}
+
+/// The "Nearby" section: named hives first, each with the machines announcing
+/// it, then machines relaying without a hive name. The header names the source
+/// so an empty list is diagnosable — "listening" with nothing heard means no
+/// relay is announcing, not that the tab never started.
+fn render_nearby<'a>(lines: &mut Vec<Line<'a>>, app: &'a App) {
+    let t = &app.theme;
+    let snap = &app.hive_discovered;
+    let source = match snap.source {
+        DiscoverySource::Published => "via the claudectl process listening on this machine",
+        DiscoverySource::Listener => "listening on UDP 9848",
+        DiscoverySource::BindFailed => "cannot listen: UDP 9848 is held by another program",
+        DiscoverySource::Unavailable => "relay not built",
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("Nearby ({})", snap.machines.len()),
+            Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("  · {source}"), Style::default().fg(t.text_muted)),
+    ]));
+
+    if snap.machines.is_empty() {
+        let hint = match snap.source {
+            DiscoverySource::Unavailable => "  Rebuild with --features relay to discover hives.",
+            // The problem is local, so the hint must not send the user to
+            // the other machine.
+            DiscoverySource::BindFailed => {
+                "  Free UDP 9848 here (lsof -i UDP:9848), or press h to run a relay that owns it."
+            }
+            DiscoverySource::Published | DiscoverySource::Listener => {
+                "  No relays announcing yet. On the other machine: claudectl relay serve"
+            }
+        };
+        lines.push(Line::from(Span::styled(
+            hint,
+            Style::default().fg(t.text_muted),
+        )));
+        return;
+    }
+
+    let (hives, unnamed) = group_by_hive(&snap.machines);
+    for (hive, machines) in &hives {
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!(
+                    "{:<20}",
+                    claudectl_core::helpers::truncate_cell(&hive.name, 20)
+                ),
+                Style::default()
+                    .fg(t.text_primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            // Every string here came off an unauthenticated datagram, so each
+            // is cut to its column: one oversized field must not wrap a row
+            // over the whole panel.
+            Span::styled(
+                format!(
+                    " policy {:<7} peers {:<4} units {:<5} {}",
+                    claudectl_core::helpers::truncate_cell(&hive.join_policy, 7),
+                    hive.peers,
+                    hive.units,
+                    claudectl_core::helpers::truncate_cell(&hive.id, 16)
+                ),
+                Style::default().fg(t.text_muted),
+            ),
+        ]));
+        for m in machines {
+            lines.push(machine_line(t, m));
+        }
+    }
+    if !unnamed.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                "Relaying, no hive named",
+                Style::default()
+                    .fg(t.text_primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        for m in &unnamed {
+            lines.push(machine_line(t, m));
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        "  To pair with one: i on that machine for an invite, then J here.",
+        Style::default().fg(t.text_muted),
+    )));
+}
+
+fn machine_line<'a>(t: &Theme, m: &DiscoveredMachine) -> Line<'a> {
+    let paired = if m.paired { "  (paired)" } else { "" };
+    // Identity and version are cut to their columns for the same reason as
+    // the hive fields above; `addr` is a parsed socket address, so bounded.
+    Line::from(vec![
+        Span::styled("      ", Style::default()),
+        Span::styled(
+            format!(
+                "{:<26} ",
+                claudectl_core::helpers::truncate_cell(&m.identity, 26)
+            ),
+            Style::default().fg(t.text_primary),
+        ),
+        Span::styled(
+            format!(
+                "{:<22} {}{}",
+                m.addr,
+                claudectl_core::helpers::truncate_cell(&m.version, 12),
+                paired
+            ),
+            Style::default().fg(t.text_muted),
+        ),
+    ])
 }
 
 fn kv_line<'a>(t: &'a Theme, key: &'a str, value: &'a str) -> Line<'a> {
@@ -414,5 +540,62 @@ mod tests {
         };
         let line = skill_line(&skill, &app, &app.theme);
         assert!(!line.spans.is_empty());
+    }
+
+    fn machine(identity: &str, hive: Option<(&str, u32)>) -> DiscoveredMachine {
+        DiscoveredMachine {
+            identity: identity.into(),
+            addr: "10.0.0.2:9847".into(),
+            version: "0.90.2".into(),
+            hive: hive.map(|(name, units)| claudectl_core::runtime::DiscoveredHive {
+                id: format!("hv_{name}"),
+                name: name.into(),
+                join_policy: "ask".into(),
+                peers: 1,
+                units,
+            }),
+            paired: false,
+        }
+    }
+
+    #[test]
+    fn nearby_section_names_its_source_and_lists_every_machine() {
+        let mut app = App::new();
+        app.hive_discovered = claudectl_core::runtime::DiscoverySnapshot {
+            source: DiscoverySource::Published,
+            machines: vec![machine("mini", Some(("ops", 1))), machine("lap", None)],
+        };
+        let mut lines = Vec::new();
+        render_nearby(&mut lines, &app);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        assert!(text[0].contains("Nearby (2)"));
+        assert!(text[0].contains("via the claudectl process listening on this machine"));
+        assert!(
+            text.iter()
+                .any(|l| l.contains("ops") && l.contains("policy ask"))
+        );
+        assert!(text.iter().any(|l| l.contains("mini")));
+        assert!(text.iter().any(|l| l.contains("Relaying, no hive named")));
+        assert!(text.iter().any(|l| l.contains("lap")));
+    }
+
+    #[test]
+    fn nearby_section_explains_an_empty_list() {
+        let mut app = App::new();
+        app.hive_discovered = claudectl_core::runtime::DiscoverySnapshot {
+            source: DiscoverySource::Listener,
+            machines: Vec::new(),
+        };
+        let mut lines = Vec::new();
+        render_nearby(&mut lines, &app);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        assert!(text[0].contains("listening on UDP 9848"));
+        assert!(text[1].contains("claudectl relay serve"));
     }
 }

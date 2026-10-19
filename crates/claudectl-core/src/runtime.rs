@@ -543,6 +543,147 @@ pub struct HiveViewSnapshot {
     pub peers: Vec<(String, Option<String>)>,
 }
 
+/// The hive a nearby machine advertises in its LAN announcement.
+///
+/// Mirrors the binary's `relay::lan::HiveAd` with locally redefined fields,
+/// the way `HiveViewSnapshot` mirrors its binary-side twin, so the TUI can
+/// render a discovery listing without depending on the relay module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredHive {
+    pub id: String,
+    pub name: String,
+    /// `invite`, `ask` or `open` — the effective policy the machine advertises.
+    pub join_policy: String,
+    /// Connected peers and knowledge units, as the machine last announced them.
+    pub peers: u32,
+    pub units: u32,
+}
+
+/// One machine heard announcing on the LAN.
+///
+/// An announcement is unauthenticated and carries no key, so a listing is
+/// informational: it tells the operator a relay is there and which hive it
+/// names, and pairing still goes through an invite from that machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredMachine {
+    /// The announcing machine's relay identity.
+    pub identity: String,
+    /// `ip:port` of its relay listener.
+    pub addr: String,
+    pub version: String,
+    /// `None` when the machine has not named its hive.
+    pub hive: Option<DiscoveredHive>,
+    /// Whether this machine is already paired with us (a PSK is on disk).
+    pub paired: bool,
+}
+
+/// Where a discovery snapshot came from, shown so an empty list is diagnosable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiscoverySource {
+    /// Another claudectl process on this machine — a relay, or another TUI —
+    /// holds the discovery port and publishes what it hears; the listing is
+    /// read from that rather than from a second socket beside it.
+    Published,
+    /// Nobody else is listening here, so the handle holds the port itself
+    /// (and publishes in turn, for the next process that asks).
+    Listener,
+    /// The port could not be bound: something that is not claudectl holds
+    /// UDP 9848. Retried on the next snapshot.
+    BindFailed,
+    /// Nothing can listen — the `relay` feature is compiled out, or the mock.
+    #[default]
+    Unavailable,
+}
+
+/// What the Hive tab shows as "nearby": the machines currently announcing.
+#[derive(Debug, Clone, Default)]
+pub struct DiscoverySnapshot {
+    pub source: DiscoverySource,
+    pub machines: Vec<DiscoveredMachine>,
+}
+
+/// Group a listing by hive: the named hives in first-seen order, each with
+/// the machines announcing it, then the machines that named none. Shared by
+/// the TUI's Hive tab and `hive discover`, so the two cannot disagree about a
+/// hive's counts.
+///
+/// When two machines in one hive disagree on peers or units, the higher
+/// value is kept: the counts are snapshots taken at different instants, and
+/// the larger is the more recently true.
+pub fn group_by_hive(
+    machines: &[DiscoveredMachine],
+) -> (
+    Vec<(DiscoveredHive, Vec<&DiscoveredMachine>)>,
+    Vec<&DiscoveredMachine>,
+) {
+    let mut hives: Vec<(DiscoveredHive, Vec<&DiscoveredMachine>)> = Vec::new();
+    let mut unnamed = Vec::new();
+    for m in machines {
+        let Some(h) = &m.hive else {
+            unnamed.push(m);
+            continue;
+        };
+        match hives.iter_mut().find(|(known, _)| known.id == h.id) {
+            Some((known, members)) => {
+                known.peers = known.peers.max(h.peers);
+                known.units = known.units.max(h.units);
+                members.push(m);
+            }
+            None => hives.push((h.clone(), vec![m])),
+        }
+    }
+    (hives, unnamed)
+}
+
+#[cfg(test)]
+mod group_by_hive_tests {
+    use super::*;
+
+    fn machine(identity: &str, hive: Option<(&str, u32)>) -> DiscoveredMachine {
+        DiscoveredMachine {
+            identity: identity.into(),
+            addr: "10.0.0.2:9847".into(),
+            version: "0.90.2".into(),
+            hive: hive.map(|(name, units)| DiscoveredHive {
+                id: format!("hv_{name}"),
+                name: name.into(),
+                join_policy: "ask".into(),
+                peers: 1,
+                units,
+            }),
+            paired: false,
+        }
+    }
+
+    #[test]
+    fn merges_a_hive_across_machines_and_keeps_highest_counts() {
+        let machines = vec![
+            machine("a", Some(("ops", 10))),
+            machine("b", None),
+            machine("c", Some(("ops", 40))),
+            machine("d", Some(("dev", 5))),
+        ];
+        let (hives, unnamed) = group_by_hive(&machines);
+        assert_eq!(hives.len(), 2);
+        assert_eq!(hives[0].0.name, "ops");
+        assert_eq!(hives[0].0.units, 40);
+        assert_eq!(hives[0].1.len(), 2);
+        assert_eq!(hives[1].0.name, "dev");
+        assert_eq!(unnamed.len(), 1);
+        assert_eq!(unnamed[0].identity, "b");
+    }
+}
+
+/// A running LAN discovery, alive for as long as the Hive tab is showing.
+///
+/// Handed out by [`HiveActions::start_discovery`] and owned by the TUI like
+/// `BrainDriver`, so the listener's lifetime is tied to the tab: dropping the
+/// handle stops listening. `snapshot` is cheap and non-blocking — the TUI
+/// calls it on every tick while the tab is open.
+pub trait DiscoveryListener: Send {
+    fn snapshot(&mut self) -> DiscoverySnapshot;
+}
+
 /// Hive + relay surface the TUI needs to render the Skills and Hive panels.
 ///
 /// Separate trait from `Actions` because the underlying subsystems are
@@ -561,6 +702,14 @@ pub trait HiveActions: Send + Sync {
     /// Current view of the local relay identity + known peers for the Hive
     /// tab.
     fn hive_view_snapshot(&self) -> HiveViewSnapshot;
+
+    /// Begin listening for nearby relays and the hives they name.
+    ///
+    /// Called when the Hive tab comes into view; the TUI drops the handle when
+    /// the tab goes away. `None` when nothing on this build can listen (the
+    /// `relay` feature is off), so the tab can say so instead of showing an
+    /// empty list forever.
+    fn start_discovery(&self) -> Option<Box<dyn DiscoveryListener>>;
 }
 
 // ============================================================================
@@ -760,6 +909,12 @@ pub struct MockRuntime {
     /// Paired peers `hive_view_snapshot` reports, so a test can exercise the
     /// peer picker without a relay on the machine running the suite.
     pub peers: Vec<(String, Option<String>)>,
+    /// Machines `start_discovery` reports, so a test can drive the Hive tab's
+    /// nearby listing without a network.
+    pub discovered: Vec<DiscoveredMachine>,
+    /// When set, `start_discovery` answers `None`, the way a build without
+    /// the `relay` feature does, so the tab's "cannot listen" path has a test.
+    pub discovery_unavailable: bool,
     pub actions_log: std::sync::Mutex<Vec<MockAction>>,
 }
 
@@ -953,6 +1108,29 @@ impl HiveActions for MockRuntime {
         HiveViewSnapshot {
             identity: Some("mock-local".into()),
             peers: self.peers.clone(),
+        }
+    }
+    fn start_discovery(&self) -> Option<Box<dyn DiscoveryListener>> {
+        if self.discovery_unavailable {
+            return None;
+        }
+        Some(Box::new(MockDiscovery {
+            machines: self.discovered.clone(),
+        }))
+    }
+}
+
+/// The handle `MockRuntime::start_discovery` returns: a fixed listing, with
+/// `Listener` as its source so the tab renders the real-listener wording.
+pub struct MockDiscovery {
+    pub machines: Vec<DiscoveredMachine>,
+}
+
+impl DiscoveryListener for MockDiscovery {
+    fn snapshot(&mut self) -> DiscoverySnapshot {
+        DiscoverySnapshot {
+            source: DiscoverySource::Listener,
+            machines: self.machines.clone(),
         }
     }
 }

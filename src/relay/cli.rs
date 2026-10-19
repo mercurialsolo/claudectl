@@ -595,10 +595,18 @@ fn cmd_serve(
     // `relay discover` at the right moment. Started whenever announcing is on,
     // since a machine unwilling to say where it is has no claim on others.
     let lan_seen = if relay_cfg.lan_announce {
-        Some(super::lan::start_listener(
-            identity.0.clone(),
-            Arc::clone(&lan_shutdown),
-        ))
+        match super::lan::start_listener(identity.0.clone(), true) {
+            Ok(seen) => Some(seen),
+            Err(e) => {
+                // Announcing still works without it; say so rather than
+                // serving with a listener that silently never heard anyone.
+                eprintln!(
+                    "LAN discovery: cannot listen on UDP {}: {e} — peers that move will not be re-found",
+                    super::lan::LAN_PORT
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -1014,14 +1022,11 @@ fn cmd_serve(
             // address; record it so `reconnect_peer`'s existing fallback (#484)
             // has somewhere to go. Cheap per tick — the map is small, and only
             // a genuinely new address writes anything.
+            // The listener thread publishes what it hears on its own clock, so
+            // `relay discover` reads that instead of binding beside us. See the
+            // note in lan.rs.
             if let Some(seen) = lan_seen.as_ref() {
-                relearn_moved_peers(seen);
-                // Publish what we have heard: a second process cannot bind the
-                // discovery port and expect a copy of each datagram, so
-                // `relay discover` reads this instead. See the note in lan.rs.
-                if let Ok(map) = seen.lock() {
-                    super::lan::publish_seen(&map);
-                }
+                relearn_moved_peers(&seen.peers);
             }
 
             let events = reg.tick(identity.as_str(), Some(local_feed.sessions()));
@@ -1085,6 +1090,11 @@ fn cmd_serve(
     }
 
     listener.stop();
+    // Stop the LAN listener and wait for it, so `discovered.json` is retracted
+    // before this process is gone (a quarter second at most).
+    if let Some(seen) = lan_seen {
+        seen.stop();
+    }
     // Tell the announcer to stop, then wait for it so it is not killed
     // mid-`send_to`. Its sleep is the announce interval, so this can take that
     // long — which is why it happens after `listener.stop()` rather than before.
@@ -3298,32 +3308,24 @@ fn cmd_join(input: &[String]) -> io::Result<()> {
 fn cmd_discover(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
 
-    // A relay running on this machine already holds the discovery port and has
-    // been listening continuously, so ask it rather than binding alongside it:
-    // `SO_REUSEPORT` splits datagrams between sockets instead of copying them,
-    // and a six-second window next to a long-lived listener can see nothing at
-    // all. Reading its published view is also immediate and covers longer than
-    // one window. Falls back to scanning when no relay is running.
-    let peers = match super::lan::read_seen() {
-        Some(snapshot) => {
-            println!("Peers seen by the relay running on this machine:");
-            println!();
-            snapshot
-                .peers
-                .into_iter()
-                .filter(|p| p.identity != identity.0)
-                .map(|p| super::lan::DiscoveredPeer::from_seen(&p))
-                .collect()
+    // A process on this machine that holds the discovery port publishes what
+    // it hears, and a scan bound beside it would see half the LAN
+    // (`SO_REUSEPORT` splits datagrams rather than copying them). The
+    // arbitration lives in `lan::discover_once`, shared with `hive discover`.
+    let peers = super::lan::discover_once(identity.as_str(), |published| {
+        if json_mode {
+            return;
         }
-        None => {
+        if published {
+            println!("Peers seen by the claudectl process listening on this machine:");
+        } else {
             println!(
                 "Scanning LAN for claudectl instances ({} seconds)...",
                 super::lan::SCAN_DURATION.as_secs()
             );
-            println!();
-            super::lan::scan_lan(super::lan::SCAN_DURATION, identity.as_str())
         }
-    };
+        println!();
+    });
 
     if json_mode {
         let json_peers: Vec<serde_json::Value> = peers

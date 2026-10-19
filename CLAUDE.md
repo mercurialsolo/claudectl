@@ -36,7 +36,7 @@ src/                   # the binary crate `claudectl`
                        #   subsystems via `src/runtime/`.
 ```
 
-**UI ↔ runtime contract** lives at `crates/claudectl-core/src/runtime.rs`. Eight traits — `SessionSource`, `BrainView`, `CoordView`, `BusView`, `Actions`, `BrainReviewView`, `Orchestrator`, `HiveActions`, plus the stateful `BrainDriver` — wrapped in a `Runtime` aggregate. Core-owned DTOs (`SessionSnapshot`, `DecisionSummary`, `LeaseSummary`, `HiveViewSnapshot`, etc.) so the contract doesn't drag brain / coord / bus types upward. The binary's `src/runtime/` provides `Live*` adapters that implement each trait over the real subsystem.
+**UI ↔ runtime contract** lives at `crates/claudectl-core/src/runtime.rs`. Eight traits — `SessionSource`, `BrainView`, `CoordView`, `BusView`, `Actions`, `BrainReviewView`, `Orchestrator`, `HiveActions`, plus two stateful handles the TUI owns: `BrainDriver`, and the `DiscoveryListener` that `HiveActions::start_discovery` hands out while the Hive tab is showing — wrapped in a `Runtime` aggregate. Core-owned DTOs (`SessionSnapshot`, `DecisionSummary`, `LeaseSummary`, `HiveViewSnapshot`, etc.) so the contract doesn't drag brain / coord / bus types upward. The binary's `src/runtime/` provides `Live*` adapters that implement each trait over the real subsystem.
 
 **Re-export bridge:** `src/lib.rs` and `src/main.rs` both do `pub use claudectl_core::{session, discovery, …};` and `pub use claudectl_tui::{app, demo, recorder, session_recorder, ui};` so existing `crate::session::*` / `crate::app::*` paths in the binary keep resolving without rewriting every import.
 
