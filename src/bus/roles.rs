@@ -397,6 +397,14 @@ pub fn selector_stem_len(selector: &str) -> usize {
     selector_stem(selector).0.len()
 }
 
+/// Two selectors with the same key cover the same paths: the comparable
+/// stem, with a marker for a bare-prefix (`/work/proj-*`) one. Roles that
+/// share a key are what `owner_of_path` reports as `Shared`.
+pub fn selector_stem_key(selector: &str) -> String {
+    let (stem, bare) = selector_stem(selector);
+    if bare { format!("{stem}*") } else { stem }
+}
+
 /// Whether `selector` covers `path`, by the same rule the resolvers use.
 pub fn selector_covers(selector: &str, path: &Path) -> bool {
     let (stem, bare) = selector_stem(selector);

@@ -187,7 +187,9 @@ pub trait Sensors {
     /// Every bound bus role, with whether anyone is home and where its
     /// sessions are working (#596 follow-up). Read only when `auto_route`
     /// is on and a task with no `role` is ready, because a focus costs a
-    /// transcript read per session. Empty: nothing to route to.
+    /// transcript read per session; the live sensor reads focus only for
+    /// roles that share a selector with another live role, since that is
+    /// the one case it decides. Empty: nothing to route to.
     fn roles(&self) -> Vec<RoleView> {
         Vec::new()
     }
@@ -278,8 +280,10 @@ impl Supervisor {
     }
 
     /// The defaults, with what `~/.claudectl/coord/policy.toml` says about
-    /// routing (#596 follow-up). A file that doesn't parse is an error, as
-    /// it is for placement: a typo must not quietly turn routing off.
+    /// routing (#596 follow-up). A file that doesn't parse is an error.
+    /// `supervisor work` refuses to start on it, as it does for placement;
+    /// the headless loop reports it and runs with the defaults, which is
+    /// what `placement::live_views` does on every pass with a broken file.
     pub fn from_policy_file() -> Result<Self, String> {
         let file = super::placement::load_policy()?;
         Ok(Self::new(Policy {
@@ -489,9 +493,10 @@ impl Supervisor {
         for task in ready {
             // A task that names no `role` may take the live role that owns
             // its paths, when `auto_route` is on. The task row keeps `role`
-            // NULL: what the operator declared stays as written, and the
-            // choice is re-made if the mailbox goes unclaimed and the task
-            // is spawned instead. A Retrying task is always spawned (above).
+            // NULL: what the operator declared stays as written. If the
+            // mailbox goes unclaimed past `claim_timeout`, step 2 spawns the
+            // task, as for an addressed one. A Retrying task is always
+            // spawned (above).
             #[cfg(feature = "bus")]
             let routed = if self.policy.auto_route && task.role.is_none() {
                 let roles = roster.get_or_insert_with(|| sensors.roles());

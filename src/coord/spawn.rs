@@ -299,13 +299,15 @@ impl Sensors for LiveSensors {
 /// Every bound bus role with whether anyone is home and where its sessions
 /// are working (#596 follow-up). Liveness is what `bus send` checks before
 /// warning about a recipient: the bound pid runs, or a session's cwd is
-/// under the selector. The focus of each session is read from its
-/// transcript, as `list_agents` does, and credited to the role that
-/// session answers to. Read-only: the session scan sweeps nothing.
+/// under the selector. A session's focus is read from its transcript, as
+/// `list_agents` does, and credited to the role that session answers to,
+/// but only for roles that share a selector with another live role: that
+/// is the one case focus decides. Read-only: the session scan sweeps
+/// nothing.
 #[cfg(feature = "bus")]
 fn live_roster() -> Vec<super::supervisor::RoleView> {
     use crate::bus::roles::{self, RoleResolution};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::path::Path;
     let Ok(conn) = crate::bus::store::open() else {
         return Vec::new();
@@ -316,33 +318,62 @@ fn live_roster() -> Vec<super::supervisor::RoleView> {
     let mut sessions = crate::discovery::scan_sessions_readonly();
     crate::discovery::resolve_jsonl_paths(&mut sessions);
     crate::discovery::resolve_worktree_ids(&mut sessions);
+    let live: Vec<bool> = rows
+        .iter()
+        .map(|r| {
+            r.pid.is_some_and(claudectl_core::process::pid_alive)
+                || sessions
+                    .iter()
+                    .any(|s| roles::selector_covers(&r.cwd_selector, Path::new(&s.cwd)))
+        })
+        .collect();
+    // Focus only ever decides between live roles on one selector, and it
+    // costs a transcript read per session, on the daemon's tick. So it is
+    // read only for roles in such a group; a sole owner's sessions are not
+    // opened at all.
+    let mut live_per_key: HashMap<String, u32> = HashMap::new();
+    for (r, &is_live) in rows.iter().zip(&live) {
+        if is_live {
+            *live_per_key
+                .entry(roles::selector_stem_key(&r.cwd_selector))
+                .or_default() += 1;
+        }
+    }
+    let contested: HashSet<&str> = rows
+        .iter()
+        .zip(&live)
+        .filter(|(r, is_live)| {
+            **is_live && live_per_key[&roles::selector_stem_key(&r.cwd_selector)] > 1
+        })
+        .map(|(r, _)| r.role.as_str())
+        .collect();
     let mut focus_by_role: HashMap<String, Vec<PathBuf>> = HashMap::new();
-    for s in &sessions {
-        let Ok(RoleResolution::Resolved(role)) =
-            roles::resolve_for_session(&conn, s.pid, Path::new(&s.cwd))
-        else {
-            continue;
-        };
-        let root = Path::new(s.worktree_id.as_deref().unwrap_or(&s.cwd));
-        if let Some(f) = claudectl_core::focus::session_focus(s.jsonl_path.as_deref(), root) {
-            focus_by_role
-                .entry(role.name)
-                .or_default()
-                .push(f.path_under(root));
+    if !contested.is_empty() {
+        for s in &sessions {
+            let Ok(RoleResolution::Resolved(role)) =
+                roles::resolve_for_session(&conn, s.pid, Path::new(&s.cwd))
+            else {
+                continue;
+            };
+            if !contested.contains(role.name.as_str()) {
+                continue;
+            }
+            let root = Path::new(s.worktree_id.as_deref().unwrap_or(&s.cwd));
+            if let Some(f) = claudectl_core::focus::session_focus(s.jsonl_path.as_deref(), root) {
+                focus_by_role
+                    .entry(role.name)
+                    .or_default()
+                    .push(f.path_under(root));
+            }
         }
     }
     rows.into_iter()
-        .map(|r| {
-            let live = r.pid.is_some_and(claudectl_core::process::pid_alive)
-                || sessions
-                    .iter()
-                    .any(|s| roles::selector_covers(&r.cwd_selector, Path::new(&s.cwd)));
-            super::supervisor::RoleView {
-                focus: focus_by_role.remove(&r.role).unwrap_or_default(),
-                name: r.role,
-                selector: r.cwd_selector,
-                live,
-            }
+        .zip(live)
+        .map(|(r, live)| super::supervisor::RoleView {
+            focus: focus_by_role.remove(&r.role).unwrap_or_default(),
+            name: r.role,
+            selector: r.cwd_selector,
+            live,
         })
         .collect()
 }
