@@ -289,6 +289,62 @@ impl Sensors for LiveSensors {
     fn placement(&self) -> Vec<super::placement::PeerView> {
         super::placement::live_views()
     }
+
+    #[cfg(feature = "bus")]
+    fn roles(&self) -> Vec<super::supervisor::RoleView> {
+        live_roster()
+    }
+}
+
+/// Every bound bus role with whether anyone is home and where its sessions
+/// are working (#596 follow-up). Liveness is what `bus send` checks before
+/// warning about a recipient: the bound pid runs, or a session's cwd is
+/// under the selector. The focus of each session is read from its
+/// transcript, as `list_agents` does, and credited to the role that
+/// session answers to. Read-only: the session scan sweeps nothing.
+#[cfg(feature = "bus")]
+fn live_roster() -> Vec<super::supervisor::RoleView> {
+    use crate::bus::roles::{self, RoleResolution};
+    use std::collections::HashMap;
+    use std::path::Path;
+    let Ok(conn) = crate::bus::store::open() else {
+        return Vec::new();
+    };
+    let Ok(rows) = crate::bus::store::list_roles(&conn) else {
+        return Vec::new();
+    };
+    let mut sessions = crate::discovery::scan_sessions_readonly();
+    crate::discovery::resolve_jsonl_paths(&mut sessions);
+    crate::discovery::resolve_worktree_ids(&mut sessions);
+    let mut focus_by_role: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for s in &sessions {
+        let Ok(RoleResolution::Resolved(role)) =
+            roles::resolve_for_session(&conn, s.pid, Path::new(&s.cwd))
+        else {
+            continue;
+        };
+        let root = Path::new(s.worktree_id.as_deref().unwrap_or(&s.cwd));
+        if let Some(f) = claudectl_core::focus::session_focus(s.jsonl_path.as_deref(), root) {
+            focus_by_role
+                .entry(role.name)
+                .or_default()
+                .push(f.path_under(root));
+        }
+    }
+    rows.into_iter()
+        .map(|r| {
+            let live = r.pid.is_some_and(claudectl_core::process::pid_alive)
+                || sessions
+                    .iter()
+                    .any(|s| roles::selector_covers(&r.cwd_selector, Path::new(&s.cwd)));
+            super::supervisor::RoleView {
+                focus: focus_by_role.remove(&r.role).unwrap_or_default(),
+                name: r.role,
+                selector: r.cwd_selector,
+                live,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -464,6 +520,7 @@ mod tests {
             permission_mode: None,
             requires: vec![],
             peer: None,
+            paths: vec![],
         };
         assert_eq!(prepare_workdir(&t).unwrap(), PathBuf::from("/tmp"));
         // And a task that ran in its cwd never has that cwd removed.

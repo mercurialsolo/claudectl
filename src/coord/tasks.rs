@@ -112,6 +112,11 @@ pub struct TaskRow {
     /// Run only on this peer (#571). `None`: wherever placement finds room.
     #[serde(default)]
     pub peer: Option<String>,
+    /// The files or directories the task is about, relative to `cwd`
+    /// (#596 follow-up). With no `role`, the supervisor may route the task
+    /// to the bound role that owns them; empty means the `cwd` itself.
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 /// Args for creating a task. Splitting this from the full row keeps the
@@ -134,6 +139,7 @@ pub struct NewTask {
     pub permission_mode: Option<String>,
     pub requires: Vec<String>,
     pub peer: Option<String>,
+    pub paths: Vec<String>,
 }
 
 pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
@@ -144,6 +150,11 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
         None
     } else {
         Some(serde_json::to_string(&t.requires).map_err(|e| format!("json: {e}"))?)
+    };
+    let paths = if t.paths.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&t.paths).map_err(|e| format!("json: {e}"))?)
     };
     let policy = t
         .policy
@@ -159,9 +170,9 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
         "INSERT INTO tasks (id, name, state, role, cwd, prompt, model, budget_usd,
                             max_retries, timeout_min, depends_on, policy, verifiers,
                             created_at, updated_at, git_ref, branch, permission_mode,
-                            requires, peer)
+                            requires, peer, paths)
          VALUES (?1, ?2, 'PENDING', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, ?15, ?16,
-                 ?17, ?18)",
+                 ?17, ?18, ?19)",
         params![
             id,
             t.name,
@@ -181,6 +192,7 @@ pub fn insert_task(conn: &Connection, t: &NewTask) -> Result<String, String> {
             t.permission_mode,
             requires,
             t.peer,
+            paths,
         ],
     )
     .map_err(|e| format!("insert task: {e}"))?;
@@ -200,7 +212,8 @@ pub fn get_task(conn: &Connection, id: &str) -> Result<Option<TaskRow>, String> 
     conn.query_row(
         "SELECT id, name, state, role, cwd, prompt, model, budget_usd,
                 max_retries, timeout_min, depends_on, policy, verifiers,
-                created_at, updated_at, git_ref, branch, permission_mode, requires, peer
+                created_at, updated_at, git_ref, branch, permission_mode, requires, peer,
+                paths
          FROM tasks WHERE id = ?1",
         params![id],
         row_to_task,
@@ -212,7 +225,8 @@ pub fn get_task(conn: &Connection, id: &str) -> Result<Option<TaskRow>, String> 
 pub fn list_tasks(conn: &Connection, state: Option<TaskState>) -> Result<Vec<TaskRow>, String> {
     let sql = "SELECT id, name, state, role, cwd, prompt, model, budget_usd,
                       max_retries, timeout_min, depends_on, policy, verifiers,
-                      created_at, updated_at, git_ref, branch, permission_mode, requires, peer
+                      created_at, updated_at, git_ref, branch, permission_mode, requires, peer,
+                      paths
                FROM tasks
                WHERE (?1 IS NULL OR state = ?1)
                ORDER BY created_at";
@@ -855,6 +869,10 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
         peer: row.get(19)?,
+        paths: row
+            .get::<_, Option<String>>(20)?
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -874,6 +892,46 @@ pub(crate) fn open_memory_for_tests() -> Connection {
 mod tests {
     use super::*;
 
+    /// #596 follow-up: `paths` round-trips, and a row from before the
+    /// column has none.
+    #[test]
+    fn paths_round_trip_and_default_to_empty() {
+        let conn = open_memory_for_tests();
+        let mut t = NewTask {
+            name: "t".into(),
+            role: None,
+            cwd: "/work/x".into(),
+            prompt: "p".into(),
+            model: None,
+            budget_usd: None,
+            max_retries: None,
+            timeout_min: None,
+            depends_on: vec![],
+            policy: None,
+            verifiers: vec![],
+            git_ref: None,
+            branch: None,
+            permission_mode: None,
+            requires: vec![],
+            peer: None,
+            paths: vec!["src/relay".into(), "docs/relay.md".into()],
+        };
+        let with = insert_task(&conn, &t).unwrap();
+        t.paths.clear();
+        let without = insert_task(&conn, &t).unwrap();
+        assert_eq!(
+            get_task(&conn, &with).unwrap().unwrap().paths,
+            vec!["src/relay".to_string(), "docs/relay.md".to_string()]
+        );
+        assert!(get_task(&conn, &without).unwrap().unwrap().paths.is_empty());
+        let stored: Option<String> = conn
+            .query_row("SELECT paths FROM tasks WHERE id = ?1", [&without], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, None, "no paths is NULL, like a pre-v8 row");
+    }
+
     fn sample() -> NewTask {
         NewTask {
             name: "auth-middleware".into(),
@@ -892,6 +950,7 @@ mod tests {
             permission_mode: None,
             requires: vec![],
             peer: None,
+            paths: vec![],
         }
     }
 

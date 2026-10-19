@@ -144,6 +144,32 @@ peer     = "baradas-mac-mini-508f9c0e"            # only there
 These tasks stay on the machine that submitted them:
 - **A task with a `role`**, because the mailbox is local.
 - **A task with a `brain =` or `agent =` verifier**, because those verifiers run locally.
+- **A task routed to a role** (below), for the same reason as the first.
+
+### Routing a task to the role that owns the work
+
+A task with a `role` goes to that role's mailbox; one without is spawned as a fresh session. With `auto_route = true` at the top of `policy.toml`, a task without a `role` first looks for an owner: the bound bus role whose selector most specifically covers what the task is about, the same rule as `claudectl bus owner <path>`.
+
+```toml
+auto_route = true                # top level, next to stale_after_secs
+```
+
+```toml
+[[task]]
+name   = "relay-reconnect"
+cwd    = "/work/repo"
+paths  = ["src/relay/peer.rs"]   # what the task is about, relative to cwd; omit for the cwd itself
+prompt = "Reconnect with backoff after a dropped link."
+```
+
+What decides, in order:
+- **The most specific owner.** With `relay` bound to `/work/repo/src/relay` and `repo` bound to `/work/repo`, the task above goes to `relay`; a task with no `paths` goes to `repo`. Several `paths` need one role that covers them all.
+- **Only a role that is live**: its bound pid is running, or a session's cwd is under its selector. A task is never parked in a mailbox nobody reads; with no live owner it is spawned, as before.
+- **Two live roles on the same selector** (two `/role` sessions at one repo root) are told apart by *focus*, the directory each session's recent edits concentrate in (`list_agents` shows it): the deepest focus that holds every path wins. A tie, or no focus that holds them, means spawn.
+
+The task row keeps `role` empty, so `supervisor status` shows what was declared; the transition ledger says who took it and why (`assigned-via-mailbox: relay owns src/relay/peer.rs`). If the mailbox goes unclaimed past `claim_timeout`, the task is spawned, as an addressed task would be. A `Retrying` task is always spawned. A `paths` entry must be relative and stay inside `cwd`.
+
+Off by default: `claudectl init` binds a role at every project root, and turning this on hands those sessions work that used to start headless.
 
 ### When a task waits, it says why
 

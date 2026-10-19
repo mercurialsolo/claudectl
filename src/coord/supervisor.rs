@@ -40,8 +40,15 @@ pub enum Action {
     /// Run the task on a relay peer that placement chose (#571).
     Delegate { task_id: String, peer: String },
     /// Write a `task` message to the role's mailbox. Becomes `ASSIGNED`
-    /// once the bus insert lands.
-    AssignViaMailbox { task_id: String, role: String },
+    /// once the bus insert lands. `cause` is set when the reconciler chose
+    /// the role for a task that named none (#596 follow-up): why that
+    /// owner, for the transition ledger.
+    AssignViaMailbox {
+        task_id: String,
+        role: String,
+        #[serde(default)]
+        cause: Option<String>,
+    },
     /// Spawn a Claude Code session in `cwd` with the task prompt — used
     /// when the role's mailbox went unclaimed past `claim_timeout`.
     Spawn { task_id: String, cwd: PathBuf },
@@ -83,6 +90,10 @@ pub struct Policy {
     pub tick_ms: u64,
     pub max_concurrent: u32,
     pub claim_timeout_min: u32,
+    /// Route a task with no `role` to the live bound role that owns its
+    /// paths (`coord::route`, #596 follow-up) instead of spawning. Off by
+    /// default; `auto_route = true` in `policy.toml` turns it on.
+    pub auto_route: bool,
     /// Health-check → action mapping (RFC §6). 10 shipped health
     /// checks are advisory-only by default; this map turns each into
     /// a supervisor transition trigger. Defaults match RFC §6 table.
@@ -148,6 +159,7 @@ impl Default for Policy {
             tick_ms: 2000,
             max_concurrent: 4,
             claim_timeout_min: 5,
+            auto_route: false,
             health_actions: HealthActionMap::default(),
         }
     }
@@ -172,6 +184,26 @@ pub trait Sensors {
     fn placement(&self) -> Vec<super::placement::PeerView> {
         Vec::new()
     }
+    /// Every bound bus role, with whether anyone is home and where its
+    /// sessions are working (#596 follow-up). Read only when `auto_route`
+    /// is on and a task with no `role` is ready, because a focus costs a
+    /// transcript read per session. Empty: nothing to route to.
+    fn roles(&self) -> Vec<RoleView> {
+        Vec::new()
+    }
+}
+
+/// A bound bus role as the reconciler sees it (#596 follow-up).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleView {
+    pub name: String,
+    /// Its `cwd_selector`: the subtree it owns.
+    pub selector: String,
+    /// Its bound pid is running, or a session's cwd is under its selector.
+    pub live: bool,
+    /// Where each of its running sessions' recent edits concentrate, as
+    /// absolute directories (`focus::Focus::path_under`).
+    pub focus: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -245,6 +277,17 @@ impl Supervisor {
         Self::new(Policy::default())
     }
 
+    /// The defaults, with what `~/.claudectl/coord/policy.toml` says about
+    /// routing (#596 follow-up). A file that doesn't parse is an error, as
+    /// it is for placement: a typo must not quietly turn routing off.
+    pub fn from_policy_file() -> Result<Self, String> {
+        let file = super::placement::load_policy()?;
+        Ok(Self::new(Policy {
+            auto_route: file.auto_route,
+            ..Policy::default()
+        }))
+    }
+
     /// Read coord state and decide what to actuate. Pure: every input
     /// is in `conn` or `sensors`; every output is in the returned
     /// `Vec<Action>`. The actuator is responsible for both performing
@@ -303,6 +346,7 @@ impl Supervisor {
         // Where a task goes: `Some(None)` here, `Some(Some(peer))` there,
         // `None` held (and a Hold pushed saying why).
         let mut place = |task: &super::tasks::TaskRow,
+                         role: Option<&str>,
                          out: &mut Vec<Action>|
          -> Result<Option<Option<String>>, String> {
             use super::placement::{Decision, place};
@@ -339,7 +383,7 @@ impl Supervisor {
                 });
                 Ok(None)
             };
-            let here_only = if task.role.is_some() {
+            let here_only = if role.is_some() {
                 Some("it's addressed to a role on this machine")
             } else if task
                 .verifiers
@@ -415,7 +459,7 @@ impl Supervisor {
             }
         };
         for task in &retrying {
-            match place(task, &mut out)? {
+            match place(task, task.role.as_deref(), &mut out)? {
                 Some(None) => out.push(Action::Spawn {
                     task_id: task.id.clone(),
                     cwd: PathBuf::from(&task.cwd),
@@ -438,8 +482,31 @@ impl Supervisor {
                 }),
             }
         }
+        // The bound roles, for routing (#596 follow-up): read once per pass
+        // and only when a task needs them, since each costs transcript reads.
+        #[cfg(feature = "bus")]
+        let mut roster: Option<Vec<RoleView>> = None;
         for task in ready {
-            match place(task, &mut out)? {
+            // A task that names no `role` may take the live role that owns
+            // its paths, when `auto_route` is on. The task row keeps `role`
+            // NULL: what the operator declared stays as written, and the
+            // choice is re-made if the mailbox goes unclaimed and the task
+            // is spawned instead. A Retrying task is always spawned (above).
+            #[cfg(feature = "bus")]
+            let routed = if self.policy.auto_route && task.role.is_none() {
+                let roles = roster.get_or_insert_with(|| sensors.roles());
+                super::route::route(std::path::Path::new(&task.cwd), &task.paths, roles)
+                    .map(|r| (r.role, r.why))
+            } else {
+                None
+            };
+            #[cfg(not(feature = "bus"))]
+            let routed: Option<(String, String)> = None;
+            let role: Option<&str> = task
+                .role
+                .as_deref()
+                .or(routed.as_ref().map(|(r, _)| r.as_str()));
+            match place(task, role, &mut out)? {
                 None => continue,
                 Some(Some(peer)) => {
                     out.push(Action::Delegate {
@@ -450,10 +517,11 @@ impl Supervisor {
                 }
                 Some(None) => {}
             }
-            match &task.role {
+            match role {
                 Some(role) => out.push(Action::AssignViaMailbox {
                     task_id: task.id.clone(),
-                    role: role.clone(),
+                    role: role.to_string(),
+                    cause: routed.map(|(_, why)| why),
                 }),
                 None => out.push(Action::Spawn {
                     task_id: task.id.clone(),
@@ -696,6 +764,7 @@ mod tests {
                 permission_mode: None,
                 requires: vec![],
                 peer: None,
+                paths: vec![],
             },
         )
         .unwrap();
@@ -707,9 +776,14 @@ mod tests {
         let actions = sup.tick(&conn, &sensors).unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::AssignViaMailbox { task_id, role } => {
+            Action::AssignViaMailbox {
+                task_id,
+                role,
+                cause,
+            } => {
                 assert_eq!(task_id, &id);
                 assert_eq!(role, "backend");
+                assert_eq!(*cause, None);
             }
             other => panic!("expected AssignViaMailbox, got {other:?}"),
         }
@@ -733,6 +807,7 @@ mod tests {
             permission_mode: None,
             requires: vec![],
             peer: None,
+            paths: vec![],
         }
     }
 
@@ -938,6 +1013,155 @@ mod tests {
         assert!(actions.iter().any(|a| matches!(a, Action::Hold { task_id, reason }
             if *task_id == pinned
                 && reason == "pinned to big, but its brain or agent verifier runs on this machine")));
+    }
+
+    /// #596 follow-up: with `auto_route`, a task that names no role goes
+    /// to the live role that owns its paths; without it, nothing changes.
+    struct RosterSensors(Vec<RoleView>);
+
+    impl Sensors for RosterSensors {
+        fn last_hook_event_id(&self) -> i64 {
+            0
+        }
+        fn observed_sessions(&self) -> Vec<ObservedSession> {
+            vec![]
+        }
+        fn roles(&self) -> Vec<RoleView> {
+            self.0.clone()
+        }
+    }
+
+    fn routing() -> Supervisor {
+        Supervisor::new(Policy {
+            auto_route: true,
+            ..Policy::default()
+        })
+    }
+
+    fn live_owner(name: &str, selector: &str) -> RoleView {
+        RoleView {
+            name: name.into(),
+            selector: selector.into(),
+            live: true,
+            focus: vec![],
+        }
+    }
+
+    #[test]
+    fn auto_route_off_spawns_a_roleless_task_even_with_a_live_owner() {
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        let sensors = RosterSensors(vec![live_owner("x", "/work/x")]);
+        let actions = Supervisor::with_defaults().tick(&conn, &sensors).unwrap();
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    #[test]
+    fn auto_route_assigns_a_roleless_task_to_its_live_owner_and_says_why() {
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        let sensors = RosterSensors(vec![live_owner("x", "/work/x")]);
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert_eq!(
+            actions,
+            vec![Action::AssignViaMailbox {
+                task_id: id,
+                role: "x".into(),
+                cause: Some("x owns its cwd".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn auto_route_uses_the_paths_and_leaves_a_declared_role_alone() {
+        let conn = store::open_memory();
+        let relay = insert_task(
+            &conn,
+            &NewTask {
+                paths: vec!["src/relay/peer.rs".into()],
+                ..task("relay-work", &[])
+            },
+        )
+        .unwrap();
+        let addressed = insert_task(
+            &conn,
+            &NewTask {
+                role: Some("backend".into()),
+                paths: vec!["src/relay/peer.rs".into()],
+                ..task("addressed", &[])
+            },
+        )
+        .unwrap();
+        let sensors = RosterSensors(vec![
+            live_owner("x", "/work/x"),
+            live_owner("relay", "/work/x/src/relay"),
+        ]);
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert!(actions.contains(&Action::AssignViaMailbox {
+            task_id: relay,
+            role: "relay".into(),
+            cause: Some("relay owns src/relay/peer.rs".into()),
+        }));
+        assert!(actions.contains(&Action::AssignViaMailbox {
+            task_id: addressed,
+            role: "backend".into(),
+            cause: None,
+        }));
+    }
+
+    #[test]
+    fn auto_route_spawns_when_no_live_role_owns_the_work() {
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        let dead = RoleView {
+            live: false,
+            ..live_owner("x", "/work/x")
+        };
+        let sensors = RosterSensors(vec![dead, live_owner("other", "/work/other")]);
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    /// A routed task is addressed to a mailbox on this machine, so placement
+    /// keeps it here even when a peer has more room.
+    struct RoutedPlacedSensors(Vec<crate::coord::placement::PeerView>, Vec<RoleView>);
+
+    impl Sensors for RoutedPlacedSensors {
+        fn last_hook_event_id(&self) -> i64 {
+            0
+        }
+        fn observed_sessions(&self) -> Vec<ObservedSession> {
+            vec![]
+        }
+        fn placement(&self) -> Vec<crate::coord::placement::PeerView> {
+            self.0.clone()
+        }
+        fn roles(&self) -> Vec<RoleView> {
+            self.1.clone()
+        }
+    }
+
+    #[test]
+    fn a_routed_task_stays_on_this_machine() {
+        let conn = store::open_memory();
+        let routed = insert_task(&conn, &task("r", &[])).unwrap();
+        let unowned = insert_task(
+            &conn,
+            &NewTask {
+                cwd: "/work/elsewhere".into(),
+                ..task("u", &[])
+            },
+        )
+        .unwrap();
+        let sensors = RoutedPlacedSensors(
+            vec![here(1_000), peer_view("big", 64_000)],
+            vec![live_owner("x", "/work/x")],
+        );
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert!(actions.iter().any(
+            |a| matches!(a, Action::AssignViaMailbox { task_id, role, .. } if *task_id == routed && role == "x")
+        ));
+        assert_eq!(delegated(&actions), vec![(unowned, "big".to_string())]);
     }
 
     /// #571: a retry goes back to the peer its worktree is on, even when
@@ -1156,6 +1380,7 @@ mod tests {
                 permission_mode: None,
                 requires: vec![],
                 peer: None,
+                paths: vec![],
             },
         )
         .unwrap();
@@ -1199,6 +1424,7 @@ mod tests {
                     permission_mode: None,
                     requires: vec![],
                     peer: None,
+                    paths: vec![],
                 },
             )
             .unwrap();
@@ -1250,6 +1476,7 @@ mod tests {
                 permission_mode: None,
                 requires: vec![],
                 peer: None,
+                paths: vec![],
             },
         )
         .unwrap();

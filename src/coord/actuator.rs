@@ -76,7 +76,11 @@ pub trait SideEffects: VerifierBackend {
 /// the action.
 pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Result<(), String> {
     match action {
-        Action::AssignViaMailbox { task_id, role } => {
+        Action::AssignViaMailbox {
+            task_id,
+            role,
+            cause,
+        } => {
             let task =
                 get_task(conn, task_id)?.ok_or_else(|| format!("task {task_id} not found"))?;
             if task.state != TaskState::Pending && task.state != TaskState::Ready {
@@ -97,13 +101,14 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             // `task.assigned` twice and that's a recoverable event for
             // the actuator's later retry-task path.
             stamp_attempt_bus_id(conn, &attempt_id, &message_id)?;
-            transition(
-                conn,
-                task_id,
-                task.state,
-                TaskState::Assigned,
-                "assigned-via-mailbox",
-            )?;
+            // A task the reconciler routed (no `role` of its own) records
+            // why, so the ledger says which owner took it and on what
+            // grounds; an addressed task keeps the bare cause.
+            let cause = match cause {
+                Some(why) => format!("assigned-via-mailbox: {why}"),
+                None => "assigned-via-mailbox".to_string(),
+            };
+            transition(conn, task_id, task.state, TaskState::Assigned, &cause)?;
             Ok(())
         }
         Action::Spawn { task_id, cwd } => {
@@ -842,6 +847,7 @@ mod tests {
             permission_mode: None,
             requires: vec![],
             peer: None,
+            paths: vec![],
         }
     }
 
@@ -856,6 +862,7 @@ mod tests {
             &Action::AssignViaMailbox {
                 task_id: id.clone(),
                 role: "backend".into(),
+                cause: None,
             },
         )
         .unwrap();
@@ -1086,6 +1093,34 @@ mod tests {
         assert_eq!(fx.spawn_requests.borrow().len(), 2);
     }
 
+    /// #596 follow-up: a routed assignment's ledger row says which owner
+    /// took the task and why.
+    #[test]
+    fn a_routed_assignment_records_why_in_the_transition() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(None)).unwrap();
+        let fx = RecordingFx::default();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::AssignViaMailbox {
+                task_id: id.clone(),
+                role: "relay".into(),
+                cause: Some("relay owns src/relay".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(fx.published.borrow()[0].0, "relay");
+        let hist = list_transitions(&conn, &id).unwrap();
+        let causes: Vec<_> = hist.iter().map(|(_, _, c, _)| c.as_str()).collect();
+        assert_eq!(
+            causes,
+            vec!["submitted", "assigned-via-mailbox: relay owns src/relay"]
+        );
+        // The task row keeps the role the operator gave it: none.
+        assert_eq!(get_task(&conn, &id).unwrap().unwrap().role, None);
+    }
+
     #[test]
     fn assign_is_idempotent_against_already_assigned_task() {
         let mut conn = store::open_memory();
@@ -1094,6 +1129,7 @@ mod tests {
         let action = Action::AssignViaMailbox {
             task_id: id.clone(),
             role: "backend".into(),
+            cause: None,
         };
         apply(&mut conn, &fx, &action).unwrap();
         // Second apply against an already-Assigned task is a no-op.
@@ -1309,14 +1345,17 @@ mod tests {
             Action::AssignViaMailbox {
                 task_id: id1.clone(),
                 role: "backend".into(),
+                cause: None,
             },
             Action::AssignViaMailbox {
                 task_id: id2.clone(),
                 role: "infra".into(),
+                cause: None,
             },
             Action::AssignViaMailbox {
                 task_id: id3.clone(),
                 role: "frontend".into(),
+                cause: None,
             },
         ] {
             apply(&mut conn, &fx, &action).unwrap();
@@ -1333,14 +1372,17 @@ mod tests {
             Action::AssignViaMailbox {
                 task_id: id1,
                 role: "backend".into(),
+                cause: None,
             },
             Action::AssignViaMailbox {
                 task_id: id2,
                 role: "infra".into(),
+                cause: None,
             },
             Action::AssignViaMailbox {
                 task_id: id3,
                 role: "frontend".into(),
+                cause: None,
             },
         ] {
             apply(&mut conn, &fx2, &action).unwrap();

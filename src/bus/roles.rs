@@ -390,6 +390,13 @@ fn best_owners(stems: &[(String, bool, RoleRow)], spellings: &[String]) -> Vec<R
     best
 }
 
+/// How specific `selector` is: the length of its comparable stem, which is
+/// what `owner_of_path` ranks owners by. Exposed so the supervisor's
+/// routing (`coord::route`) ranks the same way.
+pub fn selector_stem_len(selector: &str) -> usize {
+    selector_stem(selector).0.len()
+}
+
 /// Whether `selector` covers `path`, by the same rule the resolvers use.
 pub fn selector_covers(selector: &str, path: &Path) -> bool {
     let (stem, bare) = selector_stem(selector);

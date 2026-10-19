@@ -1106,7 +1106,10 @@ pub(crate) fn run_headless(
     // skeleton against the live coord DB so any panic / lock issue
     // surfaces in headless before the actuator goes hot.
     #[cfg(feature = "coord")]
-    let supervisor = crate::coord::supervisor::Supervisor::with_defaults();
+    let supervisor = crate::coord::supervisor::Supervisor::from_policy_file().unwrap_or_else(|e| {
+        eprintln!("supervisor: {e}; running with the default policy");
+        crate::coord::supervisor::Supervisor::with_defaults()
+    });
 
     loop {
         std::thread::sleep(tick_rate);

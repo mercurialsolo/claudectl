@@ -81,6 +81,11 @@ pub enum SupervisorCommand {
         /// Run only on this relay peer
         #[arg(long)]
         peer: Option<String>,
+        /// What the task is about: files or directories relative to cwd,
+        /// comma-separated. With no --role and `auto_route = true` in
+        /// policy.toml, the task goes to the bound role that owns them
+        #[arg(long, value_delimiter = ',')]
+        paths: Vec<String>,
     },
     /// Run the supervisor loop by itself: spawn queued tasks (each in its
     /// worktree when it names a git_ref), watch their sessions, and run their
@@ -157,6 +162,7 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
             permission_mode,
             requires,
             peer,
+            paths,
         } => submit_inline(
             name,
             cwd,
@@ -173,6 +179,7 @@ pub fn dispatch(cmd: &SupervisorCommand) -> io::Result<()> {
                 requires: requires.clone(),
                 peer: peer.clone(),
             },
+            paths,
         ),
         SupervisorCommand::Work {
             interval,
@@ -215,8 +222,7 @@ const ACTIVE_STATES: &[TaskState] = &[
 fn work(interval: u64, until_idle: bool, timeout: Option<u64>) -> io::Result<()> {
     // A policy file that doesn't parse is reported now, not as a silent
     // drain on every pass (#571).
-    super::placement::load_policy().map_err(io::Error::other)?;
-    let supervisor = super::supervisor::Supervisor::with_defaults();
+    let supervisor = super::supervisor::Supervisor::from_policy_file().map_err(io::Error::other)?;
     let started = std::time::Instant::now();
     let interval = std::time::Duration::from_secs(interval.max(1));
     println!("supervisor: working (every {}s)", interval.as_secs());
@@ -343,8 +349,10 @@ fn submit_inline(
     max_retries: Option<u32>,
     timeout_min: Option<u32>,
     placement: &Placement,
+    paths: &[String],
 ) -> io::Result<()> {
     placement.validate().map_err(io::Error::other)?;
+    validate_paths(paths).map_err(io::Error::other)?;
     let cwd = absolute_cwd(cwd, &std::env::current_dir()?)?;
     let conn = store::open().map_err(io::Error::other)?;
     let new_task = NewTask {
@@ -353,6 +361,7 @@ fn submit_inline(
         permission_mode: placement.permission_mode.clone(),
         requires: placement.requires.clone(),
         peer: placement.peer.clone(),
+        paths: paths.to_vec(),
         name: name.into(),
         role: role.map(String::from),
         cwd,
@@ -407,6 +416,7 @@ fn run_from_file(path: &PathBuf, dry_run: bool) -> io::Result<()> {
             permission_mode: entry.permission_mode.clone(),
             requires: entry.requires.clone().unwrap_or_default(),
             peer: entry.peer.clone(),
+            paths: entry.paths.clone().unwrap_or_default(),
             name: entry.name.clone(),
             role: entry.role.clone(),
             cwd: absolute_cwd(&entry.cwd, &base)?,
@@ -658,6 +668,8 @@ name = "example-task"
 cwd = "."
 prompt = "Describe the work this agent should do."
 # role = "backend"             # bus role to assign this task to
+# paths = ["src/relay"]        # what it's about; with no role and `auto_route = true`
+#                              # in policy.toml, it goes to the bound role that owns them
 # model = "claude-opus-4-8"    # model override for the spawned session
 # budget_usd = 5.0             # per-task spend cap
 # max_retries = 2              # retry budget (default comes from config)
@@ -732,6 +744,8 @@ fn validate_tasks(tf: &TaskFile) -> Result<(), String> {
         }
         .validate()
         .map_err(|e| format!("{label}: {e}"))?;
+        validate_paths(t.paths.as_deref().unwrap_or_default())
+            .map_err(|e| format!("{label}: {e}"))?;
         if let Some(deps) = &t.depends_on {
             for d in deps {
                 if !names.contains(&d.as_str()) {
@@ -826,6 +840,8 @@ struct TaskEntry {
     #[serde(default)]
     requires: Option<Vec<String>>,
     #[serde(default)]
+    paths: Option<Vec<String>>,
+    #[serde(default)]
     peer: Option<String>,
 }
 
@@ -897,6 +913,25 @@ fn toml_value(v: &str) -> Result<String, String> {
         }
     }
     Err(format!("unterminated string: {v}"))
+}
+
+/// A task's `paths` stay inside its `cwd`: relative, and not climbing out
+/// through `..`. Routing drops an escaping path anyway (`route::targets`);
+/// refusing it here says so at submit time instead.
+fn validate_paths(paths: &[String]) -> Result<(), String> {
+    for p in paths {
+        if p.trim().is_empty() {
+            return Err("paths: an empty path".into());
+        }
+        if std::path::Path::new(p).is_absolute() {
+            return Err(format!("paths: `{p}` is absolute; give it relative to cwd"));
+        }
+        let norm = claudectl_core::paths::normalize_lexically(std::path::Path::new(p));
+        if norm.starts_with("..") {
+            return Err(format!("paths: `{p}` leaves the task's cwd"));
+        }
+    }
+    Ok(())
 }
 
 /// `["a", "b"]` as its strings.
@@ -979,6 +1014,7 @@ fn toml_parse(input: &str) -> Result<TaskFile, String> {
                 permission_mode: None,
                 requires: None,
                 peer: None,
+                paths: None,
             });
             continue;
         }
@@ -1018,6 +1054,7 @@ fn toml_parse(input: &str) -> Result<TaskFile, String> {
             "peer" => t.peer = Some(val),
             "depends_on" => t.depends_on = Some(string_list(&val)),
             "requires" => t.requires = Some(string_list(&val)),
+            "paths" => t.paths = Some(string_list(&val)),
             other => return Err(format!("unknown key in [[task]]: {other}")),
         }
     }
@@ -1096,6 +1133,9 @@ run = "test \"$(cat ONE.txt)\" = one"
         for bad in [
             "requires = [\"a b\"]",
             "requires = [\"node>=x\"]",
+            "paths = [\"/abs/path\"]",
+            "paths = [\"../outside\"]",
+            "paths = [\"src/../../outside\"]",
             "peer = \"-x\"",
         ] {
             let tf = toml_parse(&format!(
@@ -1104,6 +1144,25 @@ run = "test \"$(cat ONE.txt)\" = one"
             .unwrap();
             assert!(validate_tasks(&tf).is_err(), "{bad}");
         }
+    }
+
+    /// #596 follow-up: `paths` says what a task is about, relative to its cwd.
+    #[test]
+    fn paths_are_read_and_must_stay_inside_the_cwd() {
+        let ok = toml_parse(
+            "[[task]]\nname = \"t\"\ncwd = \"/tmp\"\nprompt = \"p\"\npaths = [\"src/relay\", \"docs/relay.md\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            ok.task[0].paths.as_deref(),
+            Some(&["src/relay".to_string(), "docs/relay.md".to_string()][..])
+        );
+        validate_tasks(&ok).unwrap();
+        assert!(validate_paths(&["src/./relay".into(), "a/../b".into()]).is_ok());
+        assert!(validate_paths(&["".into()]).is_err());
+        assert!(validate_paths(&["/etc".into()]).is_err());
+        assert!(validate_paths(&["../x".into()]).is_err());
+        assert!(validate_paths(&["a/../../x".into()]).is_err());
     }
 
     #[test]
@@ -1185,6 +1244,7 @@ run = "test \"$(cat ONE.txt)\" = one"
                     permission_mode: None,
                     requires: vec![],
                     peer: None,
+                    paths: vec![],
                 },
             )
             .unwrap()
