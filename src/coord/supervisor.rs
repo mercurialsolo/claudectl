@@ -1037,6 +1037,9 @@ mod tests {
 
     /// #596 follow-up: with `auto_route`, a task that names no role goes
     /// to the live role that owns its paths; without it, nothing changes.
+    /// Routing itself needs the `bus` feature (the mailbox is the bus), so
+    /// the tests that expect an assignment are gated like `coord::route`;
+    /// without it a roleless task spawns, which the ungated tests cover.
     struct RosterSensors(Vec<RoleView>);
 
     impl Sensors for RosterSensors {
@@ -1077,6 +1080,7 @@ mod tests {
         assert_eq!(spawned(&actions), vec![id]);
     }
 
+    #[cfg(feature = "bus")]
     #[test]
     fn auto_route_assigns_a_roleless_task_to_its_live_owner_and_says_why() {
         let conn = store::open_memory();
@@ -1093,6 +1097,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bus")]
     #[test]
     fn auto_route_uses_the_paths_and_leaves_a_declared_role_alone() {
         let conn = store::open_memory();
@@ -1146,8 +1151,10 @@ mod tests {
     /// Routing happens after placement has picked this machine, and never
     /// changes where a task runs: a roomier peer still gets the task, and a
     /// task pinned to a peer is delegated, not held, whoever owns its cwd.
+    #[cfg(feature = "bus")]
     struct RoutedPlacedSensors(Vec<crate::coord::placement::PeerView>, Vec<RoleView>);
 
+    #[cfg(feature = "bus")]
     impl Sensors for RoutedPlacedSensors {
         fn last_hook_event_id(&self) -> i64 {
             0
@@ -1163,6 +1170,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "bus")]
     #[test]
     fn routing_applies_only_where_placement_starts_the_task_here() {
         let conn = store::open_memory();
