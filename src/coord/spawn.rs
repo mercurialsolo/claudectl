@@ -309,10 +309,9 @@ impl Sensors for LiveSensors {
 
 /// Every bound bus role with whether anyone is home and where its sessions
 /// are working (#596 follow-up). A role is live when its bound pid runs or
-/// a running session answers to it: by pid binding, else as the most
-/// specific owner of the session's cwd (`roles::owner_of_path`). A session
-/// under a root selector that a nested role owns does not keep the root
-/// role alive, and a session file whose process has exited counts for
+/// a running session answers to it the way `whoami` would inside it
+/// (`roles::resolve_for_session`), which is also what lets that session
+/// read the mailbox. A session file whose process has exited counts for
 /// nothing. A session's focus is read from its
 /// transcript, as `list_agents` does, and credited to the role it answers
 /// to, but only for roles that share a selector with another live role:
@@ -346,25 +345,19 @@ fn live_roster() -> Vec<super::supervisor::RoleView> {
         .collect();
     crate::discovery::resolve_jsonl_paths(&mut sessions);
     crate::discovery::resolve_worktree_ids(&mut sessions);
-    // Which role each running session answers to: its pid binding, else
-    // the role that owns its cwd, the most specific selector covering it
-    // (`owner_of_path`), since nesting is ownership, not ambiguity. Two
-    // roles on one selector that the session is not pid-bound to credit
-    // nobody: focus needs a pid binding to tell those apart (`/role`,
-    // `--self`, `--pid`).
+    // Which role each running session answers to, exactly as `whoami`,
+    // `read_inbox` and the stop hook resolve it inside that session: its
+    // pid binding, else the single role bound over its cwd. A session that
+    // those would call ambiguous (two roles on one selector, or a root
+    // role and a nested one, neither pid-bound) credits nobody, because it
+    // could not drain a mailbox either; `/role` in that session fixes both.
     let mut answers_to: Vec<(usize, String)> = Vec::new();
     let mut first_error: Option<String> = None;
     for (i, s) in sessions.iter().enumerate() {
         let cwd = Path::new(&s.cwd);
         let credited = match roles::resolve_for_session(&conn, s.pid, cwd) {
             Ok(RoleResolution::Resolved(r)) => Ok(Some(r.name)),
-            Ok(RoleResolution::Ambiguous { .. }) => {
-                roles::owner_of_path(&conn, cwd).map(|o| match o {
-                    roles::Ownership::Owned(r) => Some(r.name),
-                    _ => None,
-                })
-            }
-            Ok(RoleResolution::Unbound { .. }) => Ok(None),
+            Ok(_) => Ok(None),
             Err(e) => Err(e),
         };
         match credited {

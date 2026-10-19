@@ -217,6 +217,10 @@ delegate_verifiers!(LiveSideEffects);
 
 #[cfg(feature = "bus")]
 impl crate::coord::actuator::SideEffects for LiveSideEffects {
+    fn withdraw_assignment(&self, message_id: &str) -> Result<(), String> {
+        let conn = crate::bus::store::open()?;
+        crate::bus::store::withdraw_message(&conn, message_id)
+    }
     fn publish_assignment(
         &self,
         role: &str,
@@ -279,6 +283,10 @@ pub struct NoopSideEffects;
 delegate_verifiers!(NoopSideEffects);
 #[cfg(not(feature = "bus"))]
 impl crate::coord::actuator::SideEffects for NoopSideEffects {
+    fn withdraw_assignment(&self, _message_id: &str) -> Result<(), String> {
+        // No bus, so nothing was ever queued to take back.
+        Ok(())
+    }
     fn publish_assignment(
         &self,
         _role: &str,

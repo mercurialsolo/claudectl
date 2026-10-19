@@ -258,6 +258,10 @@ pub enum ObservedStatus {
 /// person (#591). With the backoff below that's about 20 minutes of trying.
 pub const MAX_UNSTARTED: usize = 10;
 
+/// Cause prefix for a mailbox assignment the role read but nothing could
+/// complete (#606).
+pub const MAILBOX_CLAIMED: &str = "mailbox_claimed_no_completion";
+
 /// The escalation cause for a task that never started.
 pub const NEVER_STARTED: &str = "never_started";
 
@@ -524,7 +528,18 @@ impl Supervisor {
             // `claim_timeout`, as for an addressed one. A Retrying task is
             // always spawned (above).
             #[cfg(feature = "bus")]
-            let routed = if self.policy.auto_route && task.role.is_none() {
+            // A mailbox carries the prompt and nothing else, so a task that
+            // asks for a worktree, a model, a permission mode, a budget or
+            // verifiers is spawned, where those are honoured (#606 for
+            // carrying them).
+            let routable = task.role.is_none()
+                && task.git_ref.is_none()
+                && task.branch.is_none()
+                && task.model.is_none()
+                && task.permission_mode.is_none()
+                && task.budget_usd.is_none()
+                && task.verifiers.is_empty();
+            let routed = if self.policy.auto_route && routable {
                 let roles = roster.get_or_insert_with(|| sensors.roles());
                 super::route::route(
                     std::path::Path::new(&task.cwd),
@@ -563,9 +578,11 @@ impl Supervisor {
         //    §4's "role mailbox unclaimed > T". Claimed means the recipient
         //    drained the message (#605): a session that read its inbox has
         //    the task, whether or not it has moved the task row yet, and
-        //    spawning beside it would put two sessions on the same files.
-        //    Not knowing (no message id, no such message, no bus) spawns
-        //    nothing: the no-actuation backstop.
+        //    spawning beside it would put two sessions on the same files;
+        //    since nothing lets that session report completion (#606), a
+        //    claimed task past the timeout is escalated instead. Not
+        //    knowing (no message id, no such message, no bus) does nothing:
+        //    the no-actuation backstop.
         for task in &assigned {
             let elapsed_min = match super::tasks::latest_attempt_age_minutes(conn, &task.id)? {
                 Some(m) => m,
@@ -578,11 +595,25 @@ impl Supervisor {
             else {
                 continue;
             };
-            if sensors.assignment_delivered(&message_id) == Some(false) {
-                out.push(Action::Spawn {
+            match sensors.assignment_delivered(&message_id) {
+                // Nobody read it: start the task here (the actuator takes
+                // the message back first, so nobody reads it later either).
+                Some(false) => out.push(Action::Spawn {
                     task_id: task.id.clone(),
                     cwd: PathBuf::from(&task.cwd),
-                });
+                }),
+                // The role read it, and nothing can report it done (#606):
+                // a person decides, rather than the task sitting in
+                // ASSIGNED for good or a second session starting beside
+                // the one that has it.
+                Some(true) => out.push(Action::EscalateHuman {
+                    task_id: task.id.clone(),
+                    cause: format!(
+                        "{MAILBOX_CLAIMED}: the role read the task {elapsed_min} min ago; \
+                         a mailbox task cannot report completion yet (#606)"
+                    ),
+                }),
+                None => {}
             }
         }
         let observed = sensors.observed_sessions();
@@ -1080,13 +1111,18 @@ mod tests {
     }
 
     #[test]
-    fn a_drained_assignment_is_left_with_its_recipient() {
+    fn a_drained_assignment_past_the_timeout_is_escalated_not_spawned() {
         let conn = store::open_memory();
-        assigned_past_timeout(&conn, Some("msg_1"));
+        let id = assigned_past_timeout(&conn, Some("msg_1"));
         let actions = no_claim_wait()
             .tick(&conn, &DeliverySensors(Some(true)))
             .unwrap();
-        assert!(actions.is_empty(), "{actions:?}");
+        assert!(spawned(&actions).is_empty(), "{actions:?}");
+        assert!(
+            matches!(&actions[..], [Action::EscalateHuman { task_id, cause }]
+                if *task_id == id && cause.starts_with(MAILBOX_CLAIMED) && cause.contains("#606")),
+            "{actions:?}"
+        );
     }
 
     #[test]
@@ -1212,6 +1248,54 @@ mod tests {
             role: "backend".into(),
             cause: None,
         }));
+    }
+
+    /// A mailbox carries only the prompt: a task with settings the spawn
+    /// path honours is spawned even when a live role owns its cwd.
+    #[test]
+    fn a_task_with_spawn_only_settings_is_never_routed() {
+        let conn = store::open_memory();
+        let base = task("t", &[]);
+        let variants = vec![
+            NewTask {
+                git_ref: Some("main".into()),
+                ..base.clone()
+            },
+            NewTask {
+                model: Some("claude-opus-4-8".into()),
+                ..base.clone()
+            },
+            NewTask {
+                permission_mode: Some("plan".into()),
+                ..base.clone()
+            },
+            NewTask {
+                budget_usd: Some(2.0),
+                ..base.clone()
+            },
+            NewTask {
+                verifiers: vec![crate::coord::verify::Verifier::Run {
+                    command: "true".into(),
+                }],
+                ..base.clone()
+            },
+        ];
+        let mut ids = Vec::new();
+        for v in &variants {
+            ids.push(insert_task(&conn, v).unwrap());
+        }
+        let sensors = RosterSensors(vec![live_owner("x", "/work/x")]);
+        let actions = Supervisor::new(Policy {
+            auto_route: true,
+            max_concurrent: 16,
+            ..Policy::default()
+        })
+        .tick(&conn, &sensors)
+        .unwrap();
+        let mut got = spawned(&actions);
+        got.sort();
+        ids.sort();
+        assert_eq!(got, ids, "{actions:?}");
     }
 
     #[test]

@@ -55,12 +55,31 @@ pub fn db_exists() -> bool {
 /// which a caller must not read as either.
 pub fn message_delivered(conn: &Connection, id: &str) -> Result<Option<bool>, String> {
     conn.query_row(
-        "SELECT delivered_at IS NOT NULL FROM messages WHERE id = ?1",
+        "SELECT status FROM messages WHERE id = ?1",
         params![id],
-        |row| row.get::<_, bool>(0),
+        |row| row.get::<_, String>(0),
     )
     .optional()
+    .map(|status| status.map(|s| s == "delivered"))
     .map_err(|e| format!("query message {id}: {e}"))
+}
+
+/// Take a pending message back (#604): the supervisor is about to start
+/// the task itself, so the role must not drain it later and start the
+/// same work beside the spawned session. `withdrawn` is neither pending
+/// (no inbox returns it) nor delivered (`message_delivered` says `false`,
+/// since nobody claimed it); `delivered_at` records when it was taken
+/// back, so `prune` ages it like a delivered one. A message already
+/// delivered stays delivered: the recipient has it.
+pub fn withdraw_message(conn: &Connection, id: &str) -> Result<(), String> {
+    let now = crate::logger::timestamp_now();
+    conn.execute(
+        "UPDATE messages SET status = 'withdrawn', delivered_at = ?1
+         WHERE id = ?2 AND status = 'pending'",
+        params![now, id],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("withdraw message {id}: {e}"))
 }
 
 pub fn open_at(path: &std::path::Path) -> Result<Connection, String> {
@@ -435,7 +454,7 @@ pub fn prune(conn: &Connection, retention_days: Option<u64>) -> Result<u64, Stri
     let cutoff = prune_cutoff(days);
     let n = conn
         .execute(
-            "DELETE FROM messages WHERE status = 'delivered' AND delivered_at IS NOT NULL AND delivered_at < ?1",
+            "DELETE FROM messages WHERE status IN ('delivered', 'withdrawn') AND delivered_at IS NOT NULL AND delivered_at < ?1",
             params![cutoff],
         )
         .map_err(|e| format!("prune messages: {e}"))?;
@@ -450,7 +469,7 @@ pub fn prune_dry_run(conn: &Connection, retention_days: Option<u64>) -> Result<u
     let cutoff = prune_cutoff(days);
     let n: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM messages WHERE status = 'delivered' AND delivered_at IS NOT NULL AND delivered_at < ?1",
+            "SELECT COUNT(*) FROM messages WHERE status IN ('delivered', 'withdrawn') AND delivered_at IS NOT NULL AND delivered_at < ?1",
             params![cutoff],
             |row| row.get(0),
         )
@@ -588,6 +607,46 @@ mod tests {
         let d = epoch / 86400;
         let (year, month, day) = crate::logger::days_to_date(d);
         format!("{year:04}-{month:02}-{day:02}T00:00:00Z")
+    }
+
+    /// #604: a withdrawn message is out of every inbox and counts as
+    /// unclaimed; a drained one counts as claimed; an unknown id is neither.
+    #[test]
+    fn withdrawn_messages_leave_the_inbox_and_read_as_unclaimed() {
+        let mut conn = open_memory();
+        let id = insert_message(
+            &conn,
+            "task.assigned.t1",
+            "task",
+            Some("supervisor"),
+            Some("relay"),
+            None,
+            "do it",
+            "normal",
+            1,
+        )
+        .unwrap();
+        assert_eq!(message_delivered(&conn, &id).unwrap(), Some(false));
+        assert_eq!(message_delivered(&conn, "msg_nope").unwrap(), None);
+        withdraw_message(&conn, &id).unwrap();
+        assert!(drain_inbox(&mut conn, "relay", None).unwrap().is_empty());
+        assert_eq!(message_delivered(&conn, &id).unwrap(), Some(false));
+        // A drained message is claimed, and withdrawing it changes nothing.
+        let id2 = insert_message(
+            &conn,
+            "task.assigned.t2",
+            "task",
+            Some("supervisor"),
+            Some("relay"),
+            None,
+            "do that",
+            "normal",
+            1,
+        )
+        .unwrap();
+        assert_eq!(drain_inbox(&mut conn, "relay", None).unwrap().len(), 1);
+        withdraw_message(&conn, &id2).unwrap();
+        assert_eq!(message_delivered(&conn, &id2).unwrap(), Some(true));
     }
 
     /// Helper: insert a message with an explicit `delivered_at` so tests can
