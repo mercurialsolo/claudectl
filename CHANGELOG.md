@@ -4,6 +4,24 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.92.1] - 2026-10-19
+
+There is no 0.92.0: its tag was pushed to the wrong commit before the release PR merged and was removed within a minute, with nothing built or published. The number is not reused.
+
+### Added
+
+- **The supervisor routes a task with no `role` to the role that owns its work (#604, the follow-up #596 left open).**
+  - Opt-in: `auto_route = true` at the top of `~/.claudectl/coord/policy.toml`, re-read every pass like the slot limits. Off by default, because `claudectl init` binds a role at every project root and turning this on hands those sessions work that used to start headless.
+  - A task says what it is about with a new `paths = ["src/relay/peer.rs"]` key in `tasks.toml` and `--paths` on `supervisor submit`, relative to `cwd`; empty means the `cwd` itself. Paths must stay inside `cwd` and are refused at validate time otherwise. Nothing is inferred from the prompt.
+  - Once placement has put the task on this machine, the live role on the most specific selector covering every path takes it by mailbox, the same rule as `claudectl bus owner <path>`. Live means the bound pid runs or a running session resolves to the role the way `whoami` would inside it. Two live roles on one selector are told apart by focus, the directory each session's recent edits concentrate in. Anything else spawns, as before. Routing never moves a task between machines.
+  - The ledger says why: `assigned-via-mailbox: relay owns src/relay/peer.rs`. The task row keeps `role` empty, so `supervisor status` shows what was declared.
+  - A task that asks for a worktree, a model, a permission mode, a budget or verifiers is always spawned: a mailbox carries only the prompt.
+  - Coord schema v8 adds `tasks.paths`; `claudectl init --upgrade` migrates. `docs/fleet-supervisor.md` has the full description.
+
+### Fixed
+
+- **A mailbox-assigned task's claim timeout now asks the bus whether the message was read, instead of a stub that counted any running spawned attempt as a claim (#605).** Past `claim_timeout`: a message nobody drained and nobody is home to read is spawned, and withdrawn from the mailbox first so the role cannot pick it up later; while a session that answers to the role is home the supervisor waits, since it reads its inbox when its turn ends; a message the role did read is left with it until the task's own `timeout_min`, then escalated as `mailbox_claimed_no_completion`, because nothing yet lets that session report completion (#606). A failed fallback spawn no longer strands the task behind an attempt with no message id.
+
 ## [0.91.1] - 2026-10-18
 
 ### Added
