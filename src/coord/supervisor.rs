@@ -527,11 +527,11 @@ impl Supervisor {
             // spawns the task if its message is still undrained past
             // `claim_timeout`, as for an addressed one. A Retrying task is
             // always spawned (above).
-            #[cfg(feature = "bus")]
             // A mailbox carries the prompt and nothing else, so a task that
             // asks for a worktree, a model, a permission mode, a budget or
             // verifiers is spawned, where those are honoured (#606 for
             // carrying them).
+            #[cfg(feature = "bus")]
             let routable = task.role.is_none()
                 && task.git_ref.is_none()
                 && task.branch.is_none()
@@ -539,6 +539,7 @@ impl Supervisor {
                 && task.permission_mode.is_none()
                 && task.budget_usd.is_none()
                 && task.verifiers.is_empty();
+            #[cfg(feature = "bus")]
             let routed = if self.policy.auto_route && routable {
                 let roles = roster.get_or_insert_with(|| sensors.roles());
                 super::route::route(
