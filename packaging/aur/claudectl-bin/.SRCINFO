@@ -1,6 +1,6 @@
 pkgbase = claudectl-bin
 	pkgdesc = Hive mind for Claude Code that learns from you once and remembers everywhere
-	pkgver = 0.90.2
+	pkgver = 0.91.1
 	pkgrel = 1
 	url = https://github.com/mercurialsolo/claudectl
 	arch = x86_64
@@ -8,9 +8,9 @@ pkgbase = claudectl-bin
 	conflicts = claudectl
 	conflicts = claudectl-git
 	provides = claudectl
-	source = claudectl-v0.90.2-x86_64-unknown-linux-musl.tar.gz::https://github.com/mercurialsolo/claudectl/releases/download/v0.90.2/claudectl-v0.90.2-x86_64-unknown-linux-musl.tar.gz
-	source = LICENSE::https://raw.githubusercontent.com/mercurialsolo/claudectl/v0.90.2/LICENSE
-	sha256sums = 22409e310b1e6f20e353dd63b2901f1c8b4512e3cb915b9b721cd91983f25f8a
+	source = claudectl-v0.91.1-x86_64-unknown-linux-musl.tar.gz::https://github.com/mercurialsolo/claudectl/releases/download/v0.91.1/claudectl-v0.91.1-x86_64-unknown-linux-musl.tar.gz
+	source = LICENSE::https://raw.githubusercontent.com/mercurialsolo/claudectl/v0.91.1/LICENSE
+	sha256sums = 8c83954de98923ce61d761b8ab3414702237313377d340365e67b219af08f49d
 	sha256sums = c7335fce47998935bbe76ef2fe9dfeb0ba7b7fb8f0edec16127a0a370f6c8b80
 
 pkgname = claudectl-bin
