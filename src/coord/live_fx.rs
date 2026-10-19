@@ -217,6 +217,10 @@ delegate_verifiers!(LiveSideEffects);
 
 #[cfg(feature = "bus")]
 impl crate::coord::actuator::SideEffects for LiveSideEffects {
+    fn withdraw_assignment(&self, message_id: &str) -> Result<bool, String> {
+        let conn = crate::bus::store::open()?;
+        crate::bus::store::withdraw_message(&conn, message_id)
+    }
     fn publish_assignment(
         &self,
         role: &str,
@@ -279,6 +283,10 @@ pub struct NoopSideEffects;
 delegate_verifiers!(NoopSideEffects);
 #[cfg(not(feature = "bus"))]
 impl crate::coord::actuator::SideEffects for NoopSideEffects {
+    fn withdraw_assignment(&self, _message_id: &str) -> Result<bool, String> {
+        // No bus, so nothing was ever queued for anyone else to take.
+        Ok(true)
+    }
     fn publish_assignment(
         &self,
         _role: &str,
@@ -336,7 +344,7 @@ pub struct TickReport {
 /// the daemon does to sessions it didn't start.
 pub fn tick_once(supervisor: &super::supervisor::Supervisor) -> Result<TickReport, String> {
     let mut conn = super::store::open()?;
-    let actions = supervisor.tick(&conn, &super::spawn::LiveSensors)?;
+    let actions = supervisor.tick(&conn, &super::spawn::LiveSensors::default())?;
     #[cfg(feature = "bus")]
     let fx = LiveSideEffects;
     #[cfg(not(feature = "bus"))]

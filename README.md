@@ -362,7 +362,7 @@ Flow guards (hop limit, per-role rate limit, reserved-role ACL) and the supervis
 
 ## Supervisor
 
-Durable, verified task lifecycles on top of the bus. Where the agent bus answers "how do I talk to the swarm?", the supervisor answers "how do I trust the swarm to run unattended overnight?" Submit a task, it lands in a SQLite ledger; the reconciler assigns it via mailbox (or spawns a session if no role is set); declared verifiers (`run` / `brain` / `agent`) gate the move to DONE; a dead session triggers Resume with a recovery prompt that carries autopsy findings forward; health-check signals (stalled, retry loop) become first-class transitions instead of dashboard warnings.
+Durable, verified task lifecycles on top of the bus. Where the agent bus answers "how do I talk to the swarm?", the supervisor answers "how do I trust the swarm to run unattended overnight?" Submit a task, it lands in a SQLite ledger; the reconciler assigns it via mailbox (or, if no role is set, routes it to the live role that owns its `paths` when `auto_route` is on, else spawns a session); declared verifiers (`run` / `brain` / `agent`) gate the move to DONE; a dead session triggers Resume with a recovery prompt that carries autopsy findings forward; health-check signals (stalled, retry loop) become first-class transitions instead of dashboard warnings.
 
 ```bash
 # One-shot inline submission

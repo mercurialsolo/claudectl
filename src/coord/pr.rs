@@ -220,6 +220,7 @@ mod tests {
             permission_mode: None,
             requires: vec![],
             peer: None,
+            paths: vec![],
             created_at: "2026-06-28T10:00:00Z".into(),
             updated_at: "2026-06-28T10:05:00Z".into(),
         }

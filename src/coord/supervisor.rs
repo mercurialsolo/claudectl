@@ -40,8 +40,15 @@ pub enum Action {
     /// Run the task on a relay peer that placement chose (#571).
     Delegate { task_id: String, peer: String },
     /// Write a `task` message to the role's mailbox. Becomes `ASSIGNED`
-    /// once the bus insert lands.
-    AssignViaMailbox { task_id: String, role: String },
+    /// once the bus insert lands. `cause` is set when the reconciler chose
+    /// the role for a task that named none (#596 follow-up): why that
+    /// owner, for the transition ledger.
+    AssignViaMailbox {
+        task_id: String,
+        role: String,
+        #[serde(default)]
+        cause: Option<String>,
+    },
     /// Spawn a Claude Code session in `cwd` with the task prompt — used
     /// when the role's mailbox went unclaimed past `claim_timeout`.
     Spawn { task_id: String, cwd: PathBuf },
@@ -83,6 +90,10 @@ pub struct Policy {
     pub tick_ms: u64,
     pub max_concurrent: u32,
     pub claim_timeout_min: u32,
+    /// Route a task with no `role` to the live bound role that owns its
+    /// paths (`coord::route`, #596 follow-up) instead of spawning. Off by
+    /// default; `auto_route = true` in `policy.toml` turns it on.
+    pub auto_route: bool,
     /// Health-check → action mapping (RFC §6). 10 shipped health
     /// checks are advisory-only by default; this map turns each into
     /// a supervisor transition trigger. Defaults match RFC §6 table.
@@ -148,6 +159,7 @@ impl Default for Policy {
             tick_ms: 2000,
             max_concurrent: 4,
             claim_timeout_min: 5,
+            auto_route: false,
             health_actions: HealthActionMap::default(),
         }
     }
@@ -172,6 +184,54 @@ pub trait Sensors {
     fn placement(&self) -> Vec<super::placement::PeerView> {
         Vec::new()
     }
+    /// Every bound bus role, with whether anyone is home and where its
+    /// sessions are working (#596 follow-up). Read only when `auto_route`
+    /// is on and a task with no `role` is about to start on this machine,
+    /// because it costs a session scan and a focus costs a transcript
+    /// read; the live sensor reads focus only for roles that share a
+    /// selector with another live role, since that is the one case it
+    /// decides. Empty: nothing to route to.
+    fn roles(&self) -> Vec<RoleView> {
+        Vec::new()
+    }
+    /// How a mailbox assignment stands (#605): drained by its recipient,
+    /// still waiting (and whether anyone who could drain it is home), or
+    /// unknown, which is the no-actuation backstop and the default, so a
+    /// sensor that doesn't know never causes a spawn.
+    fn assignment_claim(&self, _message_id: &str) -> Claim {
+        Claim::Unknown
+    }
+}
+
+/// Where a mailbox assignment stands (#605).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claim {
+    /// The recipient drained the message: it has the task.
+    Drained,
+    /// Nobody has drained it. `recipient_live` says whether a running
+    /// session answers to the recipient role, so a drain can still come
+    /// at the end of that session's turn.
+    Waiting { recipient_live: bool },
+    /// Can't tell: no such message, no bus, a store error.
+    Unknown,
+}
+
+/// A bound bus role as the reconciler sees it (#596 follow-up). Paths are
+/// canonical, so `coord::route` compares strings and does no I/O.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleView {
+    pub name: String,
+    /// The subtree it owns: its `cwd_selector`'s comparable stem, from
+    /// `bus::roles::selector_stem_parts`.
+    pub stem: String,
+    /// The selector was a bare prefix (`/work/proj-*`).
+    pub bare: bool,
+    /// Its bound pid is running, or a running session answers to it (what
+    /// `whoami` inside that session would say).
+    pub live: bool,
+    /// Where each of its sessions' recent edits concentrate, as canonical
+    /// absolute directories (`focus::Focus::path_under`).
+    pub focus: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +271,10 @@ pub enum ObservedStatus {
 /// person (#591). With the backoff below that's about 20 minutes of trying.
 pub const MAX_UNSTARTED: usize = 10;
 
+/// Cause prefix for a mailbox assignment the role read but nothing could
+/// complete (#606).
+pub const MAILBOX_CLAIMED: &str = "mailbox_claimed_no_completion";
+
 /// The escalation cause for a task that never started.
 pub const NEVER_STARTED: &str = "never_started";
 
@@ -243,6 +307,18 @@ impl Supervisor {
 
     pub fn with_defaults() -> Self {
         Self::new(Policy::default())
+    }
+
+    /// The defaults, with what `~/.claudectl/coord/policy.toml` says about
+    /// routing (#596 follow-up). A file that doesn't parse is an error;
+    /// callers read it every pass, like placement reads its slot limits,
+    /// and keep the last policy that parsed when it stops parsing.
+    pub fn from_policy_file() -> Result<Self, String> {
+        let file = super::placement::load_policy()?;
+        Ok(Self::new(Policy {
+            auto_route: file.auto_route,
+            ..Policy::default()
+        }))
     }
 
     /// Read coord state and decide what to actuate. Pure: every input
@@ -438,6 +514,11 @@ impl Supervisor {
                 }),
             }
         }
+        // The bound roles, for routing (#596 follow-up): read once per pass
+        // and only when a task without a `role` is about to start here,
+        // since building them costs a session scan and transcript reads.
+        #[cfg(feature = "bus")]
+        let mut roster: Option<Vec<RoleView>> = None;
         for task in ready {
             match place(task, &mut out)? {
                 None => continue,
@@ -450,12 +531,54 @@ impl Supervisor {
                 }
                 Some(None) => {}
             }
-            match &task.role {
-                Some(role) => out.push(Action::AssignViaMailbox {
+            // Placement chose this machine. A task that names no `role` may
+            // then go to the live role that owns its paths instead of a
+            // fresh session, when `auto_route` is on. Routing comes after
+            // placement and never moves a task between machines, so `peer`
+            // and `requires` keep their meaning. The task row keeps `role`
+            // NULL: what the operator declared stays as written. Step 2
+            // spawns the task if its message is still undrained past
+            // `claim_timeout`, as for an addressed one. A Retrying task is
+            // always spawned (above).
+            // A mailbox carries the prompt and nothing else, so a task that
+            // asks for a worktree, a model, a permission mode, a budget or
+            // verifiers is spawned, where those are honoured (#606 for
+            // carrying them).
+            #[cfg(feature = "bus")]
+            let routable = task.role.is_none()
+                && task.git_ref.is_none()
+                && task.branch.is_none()
+                && task.model.is_none()
+                && task.permission_mode.is_none()
+                && task.budget_usd.is_none()
+                && task.verifiers.is_empty();
+            #[cfg(feature = "bus")]
+            let routed = if self.policy.auto_route && routable {
+                let roles = roster.get_or_insert_with(|| sensors.roles());
+                super::route::route(
+                    std::path::Path::new(&task.cwd),
+                    &task.paths,
+                    roles,
+                    &claudectl_core::paths::canonicalize_deep,
+                )
+                .map(|r| (r.role, r.why))
+            } else {
+                None
+            };
+            #[cfg(not(feature = "bus"))]
+            let routed: Option<(String, String)> = None;
+            match (&task.role, routed) {
+                (Some(role), _) => out.push(Action::AssignViaMailbox {
                     task_id: task.id.clone(),
                     role: role.clone(),
+                    cause: None,
                 }),
-                None => out.push(Action::Spawn {
+                (None, Some((role, why))) => out.push(Action::AssignViaMailbox {
+                    task_id: task.id.clone(),
+                    role,
+                    cause: Some(why),
+                }),
+                (None, None) => out.push(Action::Spawn {
                     task_id: task.id.clone(),
                     cwd: PathBuf::from(&task.cwd),
                 }),
@@ -463,12 +586,18 @@ impl Supervisor {
         }
 
         // 2) Assigned tasks → spawn fallback after `claim_timeout`. The
-        //    actuator records `task_attempts.started_at`; here we walk
-        //    each assigned task, look at its most recent attempt's start
-        //    time, and emit `Spawn` if the role's mailbox went unclaimed.
-        //    No observable session for the role in `observed_sessions`
-        //    is the trigger — RFC §4's "role mailbox unclaimed > T".
-        let observed = sensors.observed_sessions();
+        //    actuator records `task_attempts.started_at` and the bus
+        //    message id; here we walk each assigned task past the timeout
+        //    and emit `Spawn` if the role's mailbox went unclaimed, RFC
+        //    §4's "role mailbox unclaimed > T". Unclaimed means nobody
+        //    drained the message *and* nobody is home to: a session that
+        //    answers to the role drains its inbox at the end of its turn,
+        //    and spawning beside it would put two sessions on the same
+        //    files (#605). A drained message means the role has the task;
+        //    nothing lets it report completion (#606), so once the task's
+        //    own `timeout_min` has passed a person decides. Not knowing
+        //    (no message id, no such message, no bus) does nothing: the
+        //    no-actuation backstop.
         for task in &assigned {
             let elapsed_min = match super::tasks::latest_attempt_age_minutes(conn, &task.id)? {
                 Some(m) => m,
@@ -477,21 +606,44 @@ impl Supervisor {
             if elapsed_min < self.policy.claim_timeout_min as u64 {
                 continue;
             }
-            // Has anything observably claimed this role? If a session at
-            // the task's `cwd` is Running, treat the mailbox as claimed
-            // (the recipient picked it up, just hasn't transitioned the
-            // task row yet). Unknown status is the no-actuation backstop.
-            let claimed = observed.iter().any(|s| {
-                matches!(s.status, ObservedStatus::Running | ObservedStatus::Idle)
-                    && session_cwd_matches(&s.session_id, &task.cwd)
-            });
-            if !claimed {
-                out.push(Action::Spawn {
+            let Some(message_id) = super::tasks::latest_attempt_bus_message_id(conn, &task.id)?
+            else {
+                continue;
+            };
+            match sensors.assignment_claim(&message_id) {
+                // Nobody read it and nobody is home to: start the task here
+                // (the actuator takes the message back first, so nobody
+                // reads it later either).
+                Claim::Waiting {
+                    recipient_live: false,
+                } => out.push(Action::Spawn {
                     task_id: task.id.clone(),
                     cwd: PathBuf::from(&task.cwd),
-                });
+                }),
+                // Someone is home and will read it when their turn ends.
+                Claim::Waiting {
+                    recipient_live: true,
+                } => {}
+                // The role has it. Give it the task's own timeout; then a
+                // person decides, rather than the task sitting in ASSIGNED
+                // for good (#606).
+                Claim::Drained => {
+                    if elapsed_min >= u64::from(task.timeout_min) {
+                        out.push(Action::EscalateHuman {
+                            task_id: task.id.clone(),
+                            cause: format!(
+                                "{MAILBOX_CLAIMED}: assigned {elapsed_min} min ago and read by \
+                                 the role, but nothing reported it done within its {} min \
+                                 timeout; a mailbox task cannot report completion yet (#606)",
+                                task.timeout_min
+                            ),
+                        });
+                    }
+                }
+                Claim::Unknown => {}
             }
         }
+        let observed = sensors.observed_sessions();
 
         // 3) Running tasks → resume on session death + health-check
         //    transitions (RFC §6 / §7). For each Running task, look up
@@ -600,16 +752,6 @@ impl HealthActionMap {
     }
 }
 
-/// Placeholder for the cwd-aware session matcher. The real implementation
-/// will query `discovery::scan_sessions()` and compare per-session cwd.
-/// For now we treat any session as a possible match — this preserves the
-/// invariant "no spawn when something *might* be claiming the mailbox"
-/// and errs on the side of doing nothing, which is the safe direction
-/// while the sensor layer is still stubbed.
-fn session_cwd_matches(_session_id: &str, _task_cwd: &str) -> bool {
-    true
-}
-
 /// Whether a Pending task may start, given its `depends_on` (#572).
 #[derive(Debug, PartialEq)]
 enum Gate {
@@ -696,6 +838,7 @@ mod tests {
                 permission_mode: None,
                 requires: vec![],
                 peer: None,
+                paths: vec![],
             },
         )
         .unwrap();
@@ -707,9 +850,14 @@ mod tests {
         let actions = sup.tick(&conn, &sensors).unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            Action::AssignViaMailbox { task_id, role } => {
+            Action::AssignViaMailbox {
+                task_id,
+                role,
+                cause,
+            } => {
                 assert_eq!(task_id, &id);
                 assert_eq!(role, "backend");
+                assert_eq!(*cause, None);
             }
             other => panic!("expected AssignViaMailbox, got {other:?}"),
         }
@@ -733,6 +881,7 @@ mod tests {
             permission_mode: None,
             requires: vec![],
             peer: None,
+            paths: vec![],
         }
     }
 
@@ -938,6 +1087,368 @@ mod tests {
         assert!(actions.iter().any(|a| matches!(a, Action::Hold { task_id, reason }
             if *task_id == pinned
                 && reason == "pinned to big, but its brain or agent verifier runs on this machine")));
+    }
+
+    /// #605: the claim-timeout fallback asks how the assignment stands, and
+    /// spawns only when nobody drained it and nobody is home to.
+    struct ClaimSensors(Claim);
+
+    impl Sensors for ClaimSensors {
+        fn last_hook_event_id(&self) -> i64 {
+            0
+        }
+        fn observed_sessions(&self) -> Vec<ObservedSession> {
+            vec![]
+        }
+        fn assignment_claim(&self, message_id: &str) -> Claim {
+            assert_eq!(message_id, "msg_1");
+            self.0
+        }
+    }
+
+    const NOBODY_HOME: Claim = Claim::Waiting {
+        recipient_live: false,
+    };
+    const SOMEONE_HOME: Claim = Claim::Waiting {
+        recipient_live: true,
+    };
+
+    fn assigned_past_timeout(
+        conn: &Connection,
+        bus_message_id: Option<&str>,
+        timeout_min: Option<u32>,
+    ) -> String {
+        let id = insert_task(
+            conn,
+            &NewTask {
+                role: Some("backend".into()),
+                timeout_min,
+                ..task("a", &[])
+            },
+        )
+        .unwrap();
+        crate::coord::tasks::insert_attempt(conn, &id, 1, None, bus_message_id, None).unwrap();
+        set_state(conn, &id, TaskState::Assigned);
+        id
+    }
+
+    fn no_claim_wait() -> Supervisor {
+        Supervisor::new(Policy {
+            claim_timeout_min: 0,
+            ..Policy::default()
+        })
+    }
+
+    #[test]
+    fn an_undrained_assignment_with_nobody_home_is_spawned() {
+        let conn = store::open_memory();
+        let id = assigned_past_timeout(&conn, Some("msg_1"), None);
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(NOBODY_HOME))
+            .unwrap();
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    /// A session that answers to the role drains its inbox when its turn
+    /// ends; starting a second session beside it is the duplicate #605 is
+    /// about.
+    #[test]
+    fn an_undrained_assignment_with_someone_home_waits() {
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, Some("msg_1"), None);
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(SOMEONE_HOME))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    /// A failed fallback spawn leaves a later attempt with no message id;
+    /// the mailbox attempt's id is still the one that counts.
+    #[test]
+    fn a_failed_fallback_spawn_does_not_strand_the_task() {
+        let conn = store::open_memory();
+        let id = assigned_past_timeout(&conn, Some("msg_1"), None);
+        crate::coord::tasks::insert_attempt(&conn, &id, 2, Some("sess"), None, None).unwrap();
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(NOBODY_HOME))
+            .unwrap();
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    #[test]
+    fn a_drained_assignment_is_escalated_only_after_the_tasks_own_timeout() {
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, Some("msg_1"), None);
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(Claim::Drained))
+            .unwrap();
+        assert!(actions.is_empty(), "within its 45 min: {actions:?}");
+        let conn = store::open_memory();
+        let id = assigned_past_timeout(&conn, Some("msg_1"), Some(0));
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(Claim::Drained))
+            .unwrap();
+        assert!(spawned(&actions).is_empty(), "{actions:?}");
+        assert!(
+            matches!(&actions[..], [Action::EscalateHuman { task_id, cause }]
+                if *task_id == id && cause.starts_with(MAILBOX_CLAIMED)
+                    && cause.contains("0 min timeout") && cause.contains("#606")),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn not_knowing_how_the_assignment_stands_does_nothing() {
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, Some("msg_1"), Some(0));
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(Claim::Unknown))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+        // No message id on any attempt is the same "can't tell".
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, None, Some(0));
+        let actions = no_claim_wait()
+            .tick(&conn, &ClaimSensors(NOBODY_HOME))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    #[test]
+    fn an_assignment_inside_the_claim_timeout_is_not_asked_about() {
+        let conn = store::open_memory();
+        assigned_past_timeout(&conn, Some("msg_1"), Some(0));
+        let actions = Supervisor::with_defaults()
+            .tick(&conn, &ClaimSensors(NOBODY_HOME))
+            .unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    /// #596 follow-up: with `auto_route`, a task that names no role goes
+    /// to the live role that owns its paths; without it, nothing changes.
+    /// Routing itself needs the `bus` feature (the mailbox is the bus), so
+    /// the tests that expect an assignment are gated like `coord::route`;
+    /// without it a roleless task spawns, which the ungated tests cover.
+    struct RosterSensors(Vec<RoleView>);
+
+    impl Sensors for RosterSensors {
+        fn last_hook_event_id(&self) -> i64 {
+            0
+        }
+        fn observed_sessions(&self) -> Vec<ObservedSession> {
+            vec![]
+        }
+        fn roles(&self) -> Vec<RoleView> {
+            self.0.clone()
+        }
+    }
+
+    fn routing() -> Supervisor {
+        Supervisor::new(Policy {
+            auto_route: true,
+            ..Policy::default()
+        })
+    }
+
+    fn live_owner(name: &str, stem: &str) -> RoleView {
+        RoleView {
+            name: name.into(),
+            stem: stem.into(),
+            bare: false,
+            live: true,
+            focus: vec![],
+        }
+    }
+
+    #[test]
+    fn auto_route_off_spawns_a_roleless_task_even_with_a_live_owner() {
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        let sensors = RosterSensors(vec![live_owner("x", "/work/x")]);
+        let actions = Supervisor::with_defaults().tick(&conn, &sensors).unwrap();
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    #[cfg(feature = "bus")]
+    #[test]
+    fn auto_route_assigns_a_roleless_task_to_its_live_owner_and_says_why() {
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        let sensors = RosterSensors(vec![live_owner("x", "/work/x")]);
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert_eq!(
+            actions,
+            vec![Action::AssignViaMailbox {
+                task_id: id,
+                role: "x".into(),
+                cause: Some("x owns its cwd".into()),
+            }]
+        );
+    }
+
+    #[cfg(feature = "bus")]
+    #[test]
+    fn auto_route_uses_the_paths_and_leaves_a_declared_role_alone() {
+        let conn = store::open_memory();
+        let relay = insert_task(
+            &conn,
+            &NewTask {
+                paths: vec!["src/relay/peer.rs".into()],
+                ..task("relay-work", &[])
+            },
+        )
+        .unwrap();
+        let addressed = insert_task(
+            &conn,
+            &NewTask {
+                role: Some("backend".into()),
+                paths: vec!["src/relay/peer.rs".into()],
+                ..task("addressed", &[])
+            },
+        )
+        .unwrap();
+        let sensors = RosterSensors(vec![
+            live_owner("x", "/work/x"),
+            live_owner("relay", "/work/x/src/relay"),
+        ]);
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert!(actions.contains(&Action::AssignViaMailbox {
+            task_id: relay,
+            role: "relay".into(),
+            cause: Some("relay owns src/relay/peer.rs".into()),
+        }));
+        assert!(actions.contains(&Action::AssignViaMailbox {
+            task_id: addressed,
+            role: "backend".into(),
+            cause: None,
+        }));
+    }
+
+    /// A mailbox carries only the prompt: a task with settings the spawn
+    /// path honours is spawned even when a live role owns its cwd.
+    #[test]
+    fn a_task_with_spawn_only_settings_is_never_routed() {
+        let conn = store::open_memory();
+        let base = task("t", &[]);
+        let variants = vec![
+            NewTask {
+                git_ref: Some("main".into()),
+                ..base.clone()
+            },
+            NewTask {
+                model: Some("claude-opus-4-8".into()),
+                ..base.clone()
+            },
+            NewTask {
+                permission_mode: Some("plan".into()),
+                ..base.clone()
+            },
+            NewTask {
+                budget_usd: Some(2.0),
+                ..base.clone()
+            },
+            NewTask {
+                verifiers: vec![crate::coord::verify::Verifier::Run {
+                    command: "true".into(),
+                }],
+                ..base.clone()
+            },
+        ];
+        let mut ids = Vec::new();
+        for v in &variants {
+            ids.push(insert_task(&conn, v).unwrap());
+        }
+        let sensors = RosterSensors(vec![live_owner("x", "/work/x")]);
+        let actions = Supervisor::new(Policy {
+            auto_route: true,
+            max_concurrent: 16,
+            ..Policy::default()
+        })
+        .tick(&conn, &sensors)
+        .unwrap();
+        let mut got = spawned(&actions);
+        got.sort();
+        ids.sort();
+        assert_eq!(got, ids, "{actions:?}");
+    }
+
+    #[test]
+    fn auto_route_spawns_when_no_live_role_owns_the_work() {
+        let conn = store::open_memory();
+        let id = insert_task(&conn, &task("t", &[])).unwrap();
+        let dead = RoleView {
+            live: false,
+            ..live_owner("x", "/work/x")
+        };
+        let sensors = RosterSensors(vec![dead, live_owner("other", "/work/other")]);
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert_eq!(spawned(&actions), vec![id]);
+    }
+
+    /// Routing happens after placement has picked this machine, and never
+    /// changes where a task runs: a roomier peer still gets the task, and a
+    /// task pinned to a peer is delegated, not held, whoever owns its cwd.
+    #[cfg(feature = "bus")]
+    struct RoutedPlacedSensors(Vec<crate::coord::placement::PeerView>, Vec<RoleView>);
+
+    #[cfg(feature = "bus")]
+    impl Sensors for RoutedPlacedSensors {
+        fn last_hook_event_id(&self) -> i64 {
+            0
+        }
+        fn observed_sessions(&self) -> Vec<ObservedSession> {
+            vec![]
+        }
+        fn placement(&self) -> Vec<crate::coord::placement::PeerView> {
+            self.0.clone()
+        }
+        fn roles(&self) -> Vec<RoleView> {
+            self.1.clone()
+        }
+    }
+
+    #[cfg(feature = "bus")]
+    #[test]
+    fn routing_applies_only_where_placement_starts_the_task_here() {
+        let conn = store::open_memory();
+        let owned = insert_task(&conn, &task("r", &[])).unwrap();
+        let pinned = insert_task(
+            &conn,
+            &NewTask {
+                peer: Some("big".into()),
+                ..task("p", &[])
+            },
+        )
+        .unwrap();
+        let roster = vec![live_owner("x", "/work/x")];
+        // A roomier peer takes the unpinned task, owner or not; the pinned
+        // one goes where it was pinned.
+        let sensors =
+            RoutedPlacedSensors(vec![here(1_000), peer_view("big", 64_000)], roster.clone());
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert_eq!(
+            delegated(&actions),
+            vec![
+                (owned.clone(), "big".to_string()),
+                (pinned.clone(), "big".to_string())
+            ]
+        );
+        assert!(held(&actions).is_empty(), "{actions:?}");
+        // This machine alone: the owned task goes to its owner's mailbox,
+        // the pinned one waits for its peer as before.
+        let sensors = RoutedPlacedSensors(vec![here(64_000)], roster);
+        let actions = routing().tick(&conn, &sensors).unwrap();
+        assert!(actions.contains(&Action::AssignViaMailbox {
+            task_id: owned,
+            role: "x".into(),
+            cause: Some("x owns its cwd".into()),
+        }));
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::Hold { task_id, reason }
+            if *task_id == pinned && reason == "peer big is not connected"))
+        );
     }
 
     /// #571: a retry goes back to the peer its worktree is on, even when
@@ -1156,6 +1667,7 @@ mod tests {
                 permission_mode: None,
                 requires: vec![],
                 peer: None,
+                paths: vec![],
             },
         )
         .unwrap();
@@ -1199,6 +1711,7 @@ mod tests {
                     permission_mode: None,
                     requires: vec![],
                     peer: None,
+                    paths: vec![],
                 },
             )
             .unwrap();
@@ -1250,6 +1763,7 @@ mod tests {
                 permission_mode: None,
                 requires: vec![],
                 peer: None,
+                paths: vec![],
             },
         )
         .unwrap();

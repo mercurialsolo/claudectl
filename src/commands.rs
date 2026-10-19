@@ -1105,8 +1105,14 @@ pub(crate) fn run_headless(
     // the actuator wiring lands in PR4 (#346). For now this drives the
     // skeleton against the live coord DB so any panic / lock issue
     // surfaces in headless before the actuator goes hot.
+    // `policy.toml` is re-read every pass, like the slot limits placement
+    // reads, so `auto_route` can change without a restart. A file that
+    // doesn't parse leaves the last good policy in place (the defaults, at
+    // startup) and is reported once per distinct error.
     #[cfg(feature = "coord")]
-    let supervisor = crate::coord::supervisor::Supervisor::with_defaults();
+    let mut supervisor = crate::coord::supervisor::Supervisor::with_defaults();
+    #[cfg(feature = "coord")]
+    let mut policy_error: Option<String> = None;
 
     loop {
         std::thread::sleep(tick_rate);
@@ -1171,6 +1177,23 @@ pub(crate) fn run_headless(
         // sidesteps any lifetime tangle with the App's borrows.
         // The pass itself lives in coord::live_fx (#570), shared with
         // `claudectl supervisor work`.
+        #[cfg(feature = "coord")]
+        match crate::coord::supervisor::Supervisor::from_policy_file() {
+            Ok(s) => {
+                supervisor = s;
+                policy_error = None;
+            }
+            Err(e) => {
+                if policy_error.as_ref() != Some(&e) {
+                    emit_headless_event(
+                        "supervisor_policy_error",
+                        serde_json::json!({"error": e}),
+                        json_mode,
+                    );
+                    policy_error = Some(e);
+                }
+            }
+        }
         #[cfg(feature = "coord")]
         match crate::coord::live_fx::tick_once(&supervisor) {
             Ok(report) if report.emitted > 0 => {

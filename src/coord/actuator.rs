@@ -42,6 +42,12 @@ pub trait SideEffects: VerifierBackend {
         hop_count: u32,
     ) -> Result<String, String>;
 
+    /// Take back a still-pending mailbox assignment (#604), so the role
+    /// cannot drain it after the supervisor has started the task itself.
+    /// `false` means the recipient drained it first: the task is theirs,
+    /// start nothing.
+    fn withdraw_assignment(&self, message_id: &str) -> Result<bool, String>;
+
     /// Where `task`'s session runs: its worktree when it has a `git_ref`
     /// (created or reused), its `cwd` otherwise (#570).
     fn prepare_workdir(&self, task: &super::tasks::TaskRow) -> Result<std::path::PathBuf, String>;
@@ -76,7 +82,11 @@ pub trait SideEffects: VerifierBackend {
 /// the action.
 pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Result<(), String> {
     match action {
-        Action::AssignViaMailbox { task_id, role } => {
+        Action::AssignViaMailbox {
+            task_id,
+            role,
+            cause,
+        } => {
             let task =
                 get_task(conn, task_id)?.ok_or_else(|| format!("task {task_id} not found"))?;
             if task.state != TaskState::Pending && task.state != TaskState::Ready {
@@ -97,13 +107,14 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
             // `task.assigned` twice and that's a recoverable event for
             // the actuator's later retry-task path.
             stamp_attempt_bus_id(conn, &attempt_id, &message_id)?;
-            transition(
-                conn,
-                task_id,
-                task.state,
-                TaskState::Assigned,
-                "assigned-via-mailbox",
-            )?;
+            // A task the reconciler routed (no `role` of its own) records
+            // why, so the ledger says which owner took it and on what
+            // grounds; an addressed task keeps the bare cause.
+            let cause = match cause {
+                Some(why) => format!("assigned-via-mailbox: {why}"),
+                None => "assigned-via-mailbox".to_string(),
+            };
+            transition(conn, task_id, task.state, TaskState::Assigned, &cause)?;
             Ok(())
         }
         Action::Spawn { task_id, cwd } => {
@@ -126,6 +137,21 @@ pub fn apply(conn: &mut Connection, fx: &dyn SideEffects, action: &Action) -> Re
                 .is_some_and(|a| a.pid.is_some_and(|p| fx.pid_alive(p)));
 
             if !adopted {
+                // The claim-timeout fallback takes the mailbox message back
+                // first (#604): once a session starts here, a role draining
+                // it later would start the same work beside that session.
+                // A withdrawn message still reads as unclaimed, so if the
+                // spawn below fails the next tick tries again. If the role
+                // drained it between the reconciler's read and now, the
+                // task is theirs: start nothing, and the next pass sees it
+                // drained.
+                if from_state == TaskState::Assigned {
+                    if let Some(msg) = super::tasks::latest_attempt_bus_message_id(conn, task_id)? {
+                        if !fx.withdraw_assignment(&msg)? {
+                            return Ok(());
+                        }
+                    }
+                }
                 // Workdir first: a failed checkout leaves nothing behind, and
                 // the next tick tries again.
                 let workdir = fx.prepare_workdir(&task)?;
@@ -666,6 +692,8 @@ mod tests {
     /// tests script each verifier's verdict deterministically.
     struct RecordingFx {
         published: std::cell::RefCell<Vec<(String, String, u32)>>,
+        withdrawn: std::cell::RefCell<Vec<String>>,
+        withdraw_result: std::cell::RefCell<bool>,
         spawned: std::cell::RefCell<Vec<(std::path::PathBuf, String)>>,
         next_message_id: std::cell::RefCell<u64>,
         next_session_id: std::cell::RefCell<u64>,
@@ -693,6 +721,8 @@ mod tests {
         fn default() -> Self {
             Self {
                 published: Default::default(),
+                withdrawn: Default::default(),
+                withdraw_result: std::cell::RefCell::new(true),
                 spawned: Default::default(),
                 next_message_id: std::cell::RefCell::new(1),
                 next_session_id: std::cell::RefCell::new(1),
@@ -758,6 +788,10 @@ mod tests {
     }
 
     impl SideEffects for RecordingFx {
+        fn withdraw_assignment(&self, message_id: &str) -> Result<bool, String> {
+            self.withdrawn.borrow_mut().push(message_id.to_string());
+            Ok(*self.withdraw_result.borrow())
+        }
         fn publish_assignment(
             &self,
             role: &str,
@@ -842,6 +876,7 @@ mod tests {
             permission_mode: None,
             requires: vec![],
             peer: None,
+            paths: vec![],
         }
     }
 
@@ -856,6 +891,7 @@ mod tests {
             &Action::AssignViaMailbox {
                 task_id: id.clone(),
                 role: "backend".into(),
+                cause: None,
             },
         )
         .unwrap();
@@ -1086,6 +1122,120 @@ mod tests {
         assert_eq!(fx.spawn_requests.borrow().len(), 2);
     }
 
+    /// #596 follow-up: a routed assignment's ledger row says which owner
+    /// took the task and why.
+    #[test]
+    fn a_routed_assignment_records_why_in_the_transition() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(None)).unwrap();
+        let fx = RecordingFx::default();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::AssignViaMailbox {
+                task_id: id.clone(),
+                role: "relay".into(),
+                cause: Some("relay owns src/relay".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(fx.published.borrow()[0].0, "relay");
+        let hist = list_transitions(&conn, &id).unwrap();
+        let causes: Vec<_> = hist.iter().map(|(_, _, c, _)| c.as_str()).collect();
+        assert_eq!(
+            causes,
+            vec!["submitted", "assigned-via-mailbox: relay owns src/relay"]
+        );
+        // The task row keeps the role the operator gave it: none.
+        assert_eq!(get_task(&conn, &id).unwrap().unwrap().role, None);
+    }
+
+    /// #604: the claim-timeout spawn takes the pending message back first,
+    /// so the role can't drain it and start the same work twice.
+    #[test]
+    fn the_spawn_fallback_withdraws_the_mailbox_message_first() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(Some("backend"))).unwrap();
+        let fx = RecordingFx::default();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::AssignViaMailbox {
+                task_id: id.clone(),
+                role: "backend".into(),
+                cause: None,
+            },
+        )
+        .unwrap();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Spawn {
+                task_id: id.clone(),
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+        )
+        .unwrap();
+        assert_eq!(*fx.withdrawn.borrow(), vec!["msg_test_1".to_string()]);
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Running
+        );
+        let hist = list_transitions(&conn, &id).unwrap();
+        assert_eq!(
+            hist.last().map(|(_, _, c, _)| c.as_str()),
+            Some("spawn-fallback")
+        );
+        // A plain spawn from Pending has nothing to withdraw.
+        let id2 = insert_task(&conn, &sample_with_role(None)).unwrap();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Spawn {
+                task_id: id2,
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+        )
+        .unwrap();
+        assert_eq!(fx.withdrawn.borrow().len(), 1);
+    }
+
+    /// #604: a drain that lands between the reconciler's read and the
+    /// actuator's withdraw means the role has the task; nothing starts.
+    #[test]
+    fn a_drain_that_beats_the_fallback_spawns_nothing() {
+        let mut conn = store::open_memory();
+        let id = insert_task(&conn, &sample_with_role(Some("backend"))).unwrap();
+        let fx = RecordingFx::default();
+        apply(
+            &mut conn,
+            &fx,
+            &Action::AssignViaMailbox {
+                task_id: id.clone(),
+                role: "backend".into(),
+                cause: None,
+            },
+        )
+        .unwrap();
+        *fx.withdraw_result.borrow_mut() = false;
+        apply(
+            &mut conn,
+            &fx,
+            &Action::Spawn {
+                task_id: id.clone(),
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+        )
+        .unwrap();
+        assert_eq!(*fx.withdrawn.borrow(), vec!["msg_test_1".to_string()]);
+        assert!(fx.spawn_requests.borrow().is_empty());
+        assert_eq!(
+            get_task(&conn, &id).unwrap().unwrap().state,
+            TaskState::Assigned
+        );
+        assert_eq!(attempt_count(&conn, &id).unwrap(), 1);
+    }
+
     #[test]
     fn assign_is_idempotent_against_already_assigned_task() {
         let mut conn = store::open_memory();
@@ -1094,6 +1244,7 @@ mod tests {
         let action = Action::AssignViaMailbox {
             task_id: id.clone(),
             role: "backend".into(),
+            cause: None,
         };
         apply(&mut conn, &fx, &action).unwrap();
         // Second apply against an already-Assigned task is a no-op.
@@ -1309,14 +1460,17 @@ mod tests {
             Action::AssignViaMailbox {
                 task_id: id1.clone(),
                 role: "backend".into(),
+                cause: None,
             },
             Action::AssignViaMailbox {
                 task_id: id2.clone(),
                 role: "infra".into(),
+                cause: None,
             },
             Action::AssignViaMailbox {
                 task_id: id3.clone(),
                 role: "frontend".into(),
+                cause: None,
             },
         ] {
             apply(&mut conn, &fx, &action).unwrap();
@@ -1333,14 +1487,17 @@ mod tests {
             Action::AssignViaMailbox {
                 task_id: id1,
                 role: "backend".into(),
+                cause: None,
             },
             Action::AssignViaMailbox {
                 task_id: id2,
                 role: "infra".into(),
+                cause: None,
             },
             Action::AssignViaMailbox {
                 task_id: id3,
                 role: "frontend".into(),
+                cause: None,
             },
         ] {
             apply(&mut conn, &fx2, &action).unwrap();

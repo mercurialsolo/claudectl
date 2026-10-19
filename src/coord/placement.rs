@@ -61,6 +61,11 @@ impl SlotPolicy {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacementPolicy {
     pub stale_after_secs: u64,
+    /// Route a task with no `role` to the bound role that owns its paths
+    /// (`coord::route`), when that role is live. Off by default: `init`
+    /// binds a role at every project root, and turning this on hands those
+    /// sessions work that used to start headless.
+    pub auto_route: bool,
     pub local: SlotPolicy,
     pub peer_defaults: SlotPolicy,
     pub peers: HashMap<String, SlotPolicy>,
@@ -76,6 +81,7 @@ impl Default for PlacementPolicy {
     fn default() -> Self {
         Self {
             stale_after_secs: DEFAULT_STALE_AFTER_SECS,
+            auto_route: false,
             local: SlotPolicy {
                 max_tasks: Some(DEFAULT_LOCAL_MAX_TASKS),
                 ..SlotPolicy::default()
@@ -161,6 +167,13 @@ pub fn parse_policy(text: &str) -> Result<PlacementPolicy, String> {
                         policy.stale_after_secs = value
                             .parse()
                             .map_err(|_| at(format!("{key}: not a number: {value}")))?
+                    }
+                    "auto_route" => {
+                        policy.auto_route = match value {
+                            "true" => true,
+                            "false" => false,
+                            _ => return Err(at(format!("{key}: not true or false: {value}"))),
+                        }
                     }
                     _ => return Err(at(format!("unknown key `{key}` outside a table"))),
                 }
@@ -742,6 +755,22 @@ mod tests {
         );
         assert_eq!(p.for_peer("other").max_tasks, Some(2));
         assert_eq!(parse_policy("").unwrap(), PlacementPolicy::default());
+    }
+
+    /// #596 follow-up: routing a roleless task to its owner is opt-in.
+    #[test]
+    fn auto_route_is_off_unless_the_policy_file_turns_it_on() {
+        assert!(!PlacementPolicy::default().auto_route);
+        assert!(parse_policy("auto_route = true\n").unwrap().auto_route);
+        assert!(
+            !parse_policy("auto_route = false\n[local]\nmax_tasks = 1\n")
+                .unwrap()
+                .auto_route
+        );
+        assert!(parse_policy("auto_route = yes\n").is_err());
+        assert!(parse_policy("auto_rout = true\n").is_err());
+        // It is a top-level key, not a slot limit.
+        assert!(parse_policy("[local]\nauto_route = true\n").is_err());
     }
 
     #[test]

@@ -545,6 +545,7 @@ impl BusServer {
             permission_mode: None,
             requires: vec![],
             peer: None,
+            paths: vec![],
         };
         let task_id = crate::coord::tasks::insert_task(&coord, &new_task)
             .map_err(|e| McpError::internal_error(e, None))?;

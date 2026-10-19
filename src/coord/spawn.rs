@@ -240,8 +240,13 @@ pub fn observe(
     }
 }
 
-/// The supervisor's live sensor: every RUNNING task's spawned attempt.
-pub struct LiveSensors;
+/// The supervisor's live sensor: every RUNNING task's spawned attempt, and
+/// the bus roster, built once per pass the first time anything asks.
+#[derive(Default)]
+pub struct LiveSensors {
+    #[cfg_attr(not(feature = "bus"), allow(dead_code))]
+    roster: std::cell::OnceCell<Vec<super::supervisor::RoleView>>,
+}
 
 impl Sensors for LiveSensors {
     fn last_hook_event_id(&self) -> i64 {
@@ -288,6 +293,168 @@ impl Sensors for LiveSensors {
 
     fn placement(&self) -> Vec<super::placement::PeerView> {
         super::placement::live_views()
+    }
+
+    #[cfg(feature = "bus")]
+    fn roles(&self) -> Vec<super::supervisor::RoleView> {
+        self.roster.get_or_init(live_roster).clone()
+    }
+
+    /// How the mailbox message stands (#605): drained, or waiting with
+    /// whether a running session answers to its recipient role (the
+    /// roster's liveness). No bus database, a store error or a missing
+    /// message is `Unknown`: not a reason to spawn.
+    #[cfg(feature = "bus")]
+    fn assignment_claim(&self, message_id: &str) -> super::supervisor::Claim {
+        use super::supervisor::Claim;
+        if !crate::bus::store::db_exists() {
+            return Claim::Unknown;
+        }
+        let Ok(conn) = crate::bus::store::open() else {
+            return Claim::Unknown;
+        };
+        match crate::bus::store::message_claim(&conn, message_id) {
+            Ok(Some((status, _))) if status == "delivered" => Claim::Drained,
+            Ok(Some((_, recipient))) => {
+                let roster = self.roster.get_or_init(live_roster);
+                Claim::Waiting {
+                    recipient_live: recipient
+                        .is_some_and(|r| roster.iter().any(|v| v.name == r && v.live)),
+                }
+            }
+            _ => Claim::Unknown,
+        }
+    }
+}
+
+/// Every bound bus role with whether anyone is home and where its sessions
+/// are working (#596 follow-up). A role is live when its bound pid runs or
+/// a running session answers to it the way `whoami` would inside it
+/// (`roles::resolve_for_session`), which is also what lets that session
+/// read the mailbox. A session file whose process has exited counts for
+/// nothing. A session's focus is read from its
+/// transcript, as `list_agents` does, and credited to the role it answers
+/// to, but only for roles that share a selector with another live role:
+/// that is the one case focus decides. Read-only: the session scan sweeps
+/// nothing, and a machine without a bus database gets none created.
+#[cfg(feature = "bus")]
+fn live_roster() -> Vec<super::supervisor::RoleView> {
+    use crate::bus::roles::{self, RoleResolution};
+    use claudectl_core::paths::canonicalize_deep;
+    use std::collections::{HashMap, HashSet};
+    use std::path::Path;
+    // A machine that never used the bus has no roles to route to, and asking
+    // must not create its database.
+    if !crate::bus::store::db_exists() {
+        return Vec::new();
+    }
+    let opened = crate::bus::store::open()
+        .and_then(|conn| crate::bus::store::list_roles(&conn).map(|rows| (conn, rows)));
+    let (conn, rows) = match opened {
+        Ok(x) => x,
+        Err(e) => {
+            roster_error(Some(format!("bus roles: {e}")));
+            return Vec::new();
+        }
+    };
+    // Session files outlive their process for a while; only a running
+    // session keeps a role alive or lends it a focus.
+    let mut sessions: Vec<_> = crate::discovery::scan_sessions_readonly()
+        .into_iter()
+        .filter(claudectl_core::discovery::session_running)
+        .collect();
+    crate::discovery::resolve_jsonl_paths(&mut sessions);
+    crate::discovery::resolve_worktree_ids(&mut sessions);
+    // Which role each running session answers to, exactly as `whoami`,
+    // `read_inbox` and the stop hook resolve it inside that session: its
+    // pid binding, else the single role bound over its cwd. A session that
+    // those would call ambiguous (two roles on one selector, or a root
+    // role and a nested one, neither pid-bound) credits nobody, because it
+    // could not drain a mailbox either; `/role` in that session fixes both.
+    let mut answers_to: Vec<(usize, String)> = Vec::new();
+    let mut first_error: Option<String> = None;
+    for (i, s) in sessions.iter().enumerate() {
+        let cwd = Path::new(&s.cwd);
+        let credited = match roles::resolve_for_session(&conn, s.pid, cwd) {
+            Ok(RoleResolution::Resolved(r)) => Ok(Some(r.name)),
+            Ok(_) => Ok(None),
+            Err(e) => Err(e),
+        };
+        match credited {
+            Ok(Some(name)) => answers_to.push((i, name)),
+            Ok(None) => {}
+            Err(e) => {
+                first_error.get_or_insert(format!("bus roles: resolving session {}: {e}", s.pid));
+            }
+        }
+    }
+    roster_error(first_error);
+    let live: Vec<bool> = rows
+        .iter()
+        .map(|r| {
+            r.pid.is_some_and(claudectl_core::process::pid_alive)
+                || answers_to.iter().any(|(_, name)| *name == r.role)
+        })
+        .collect();
+    let parts: Vec<(String, bool)> = rows
+        .iter()
+        .map(|r| roles::selector_stem_parts(&r.cwd_selector))
+        .collect();
+    // Focus only ever decides between live roles on one selector, and it
+    // costs a transcript read per session. So it is read only for roles in
+    // such a group; a sole owner's sessions are not opened at all.
+    let mut live_per_stem: HashMap<&(String, bool), u32> = HashMap::new();
+    for (p, &is_live) in parts.iter().zip(&live) {
+        if is_live {
+            *live_per_stem.entry(p).or_default() += 1;
+        }
+    }
+    let contested: HashSet<&str> = rows
+        .iter()
+        .zip(&parts)
+        .zip(&live)
+        .filter(|((_, p), is_live)| **is_live && live_per_stem.get(p).is_some_and(|n| *n > 1))
+        .map(|((r, _), _)| r.role.as_str())
+        .collect();
+    let mut focus_by_role: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for (i, name) in &answers_to {
+        if !contested.contains(name.as_str()) {
+            continue;
+        }
+        let s = &sessions[*i];
+        let root = Path::new(s.worktree_id.as_deref().unwrap_or(&s.cwd));
+        if let Some(f) = claudectl_core::focus::session_focus(s.jsonl_path.as_deref(), root) {
+            focus_by_role
+                .entry(name.clone())
+                .or_default()
+                .push(canonicalize_deep(&f.path_under(root)));
+        }
+    }
+    rows.into_iter()
+        .zip(parts)
+        .zip(live)
+        .map(|((r, (stem, bare)), live)| super::supervisor::RoleView {
+            focus: focus_by_role.remove(&r.role).unwrap_or_default(),
+            name: r.role,
+            stem,
+            bare,
+            live,
+        })
+        .collect()
+}
+
+/// Say a roster problem once per distinct message, not on every pass of a
+/// daemon; `None` clears it so the next occurrence is said again.
+#[cfg(feature = "bus")]
+fn roster_error(error: Option<String>) {
+    static LAST_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    if let Ok(mut last) = LAST_ERROR.lock() {
+        if *last != error {
+            if let Some(e) = &error {
+                eprintln!("supervisor: {e}; routing nothing until it's fixed");
+            }
+            *last = error;
+        }
     }
 }
 
@@ -464,6 +631,7 @@ mod tests {
             permission_mode: None,
             requires: vec![],
             peer: None,
+            paths: vec![],
         };
         assert_eq!(prepare_workdir(&t).unwrap(), PathBuf::from("/tmp"));
         // And a task that ran in its cwd never has that cwd removed.

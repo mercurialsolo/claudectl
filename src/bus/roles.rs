@@ -390,6 +390,21 @@ fn best_owners(stems: &[(String, bool, RoleRow)], spellings: &[String]) -> Vec<R
     best
 }
 
+/// A selector's comparable stem (canonical, no trailing `/`) and whether
+/// it is a bare prefix (`/work/proj-*`). Two roles with equal parts cover
+/// the same paths, which is what `owner_of_path` reports as `Shared`;
+/// the stem's length is how specific the selector is. The supervisor's
+/// roster carries these so its routing compares strings (`coord::route`).
+pub fn selector_stem_parts(selector: &str) -> (String, bool) {
+    selector_stem(selector)
+}
+
+/// Whether a stem from `selector_stem_parts` covers `path`, which must
+/// already be in canonical form.
+pub fn stem_covers(stem: &str, bare: bool, path: &str) -> bool {
+    stem_matches(stem, bare, path)
+}
+
 /// Whether `selector` covers `path`, by the same rule the resolvers use.
 pub fn selector_covers(selector: &str, path: &Path) -> bool {
     let (stem, bare) = selector_stem(selector);

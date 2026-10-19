@@ -145,6 +145,31 @@ These tasks stay on the machine that submitted them:
 - **A task with a `role`**, because the mailbox is local.
 - **A task with a `brain =` or `agent =` verifier**, because those verifiers run locally.
 
+### Routing a task to the role that owns the work
+
+A task with a `role` goes to that role's mailbox; one without is spawned as a fresh session. With `auto_route = true` at the top of `policy.toml`, a task without a `role` that placement has just put on this machine first looks for an owner: the bound bus role whose selector most specifically covers what the task is about, the same rule as `claudectl bus owner <path>`. Routing comes after placement and never moves a task between machines: a roomier peer still takes the task, and `peer` and `requires` mean what they did.
+
+```toml
+auto_route = true                # top level, next to stale_after_secs
+```
+
+```toml
+[[task]]
+name   = "relay-reconnect"
+cwd    = "/work/repo"
+paths  = ["src/relay/peer.rs"]   # what the task is about, relative to cwd; omit for the cwd itself
+prompt = "Reconnect with backoff after a dropped link."
+```
+
+What decides, in order:
+- **The most specific owner.** With `relay` bound to `/work/repo/src/relay` and `repo` bound to `/work/repo`, the task above goes to `relay`; a task with no `paths` goes to `repo`. Several `paths` need one role that covers them all.
+- **Only a role that is live**: its bound pid is running, or a running session answers to it the way `whoami` does inside that session, by pid binding or as the single role bound over its directory. That is also what lets the session read the mailbox. A session under both a root role and a nested one, neither pid-bound, answers to neither; run `/role relay` in it. A session whose process has exited keeps nothing alive. With no live owner the task is spawned, as before.
+- **Two live roles on the same selector** (two `/role` sessions at one repo root) are told apart by *focus*, the directory each session's recent edits concentrate in (`list_agents` shows it): the deepest focus that holds every path wins. A tie, or no focus that holds them, means spawn. Focus is credited to a session through its pid binding (`/role`, `--self`, `--pid`); two cwd-only roles on one selector cannot be told apart.
+
+The task row keeps `role` empty, so `supervisor status` shows what was declared; the transition ledger says who took it and why (`assigned-via-mailbox: relay owns src/relay/peer.rs`). Past `claim_timeout`: if nobody has drained the message and no running session answers to the role, the task is spawned and the message withdrawn, so the role cannot pick it up later; while a session is home the supervisor waits, since a session reads its inbox when its turn ends and a second session beside it would do the same work twice. A task the role has read but that nothing reported done by its own `timeout_min` goes to NEEDS_HUMAN as `mailbox_claimed_no_completion`, because a mailbox task has no way to report completion yet ([#606](https://github.com/mercurialsolo/claudectl/issues/606)). The same applies to a task with `role =`. A `Retrying` task is always spawned, and so is a task that asks for a worktree (`git_ref`, `branch`), a `model`, a `permission_mode`, a `budget_usd` or verifiers: a mailbox carries only the prompt. A `paths` entry must be relative and stay inside `cwd`.
+
+Off by default: `claudectl init` binds a role at every project root, and turning this on hands those sessions work that used to start headless. Like the slot limits, `auto_route` is re-read every pass, so it takes effect without a restart.
+
 ### When a task waits, it says why
 
 `supervisor work` prints a waiting task's reason when it changes, not every pass:

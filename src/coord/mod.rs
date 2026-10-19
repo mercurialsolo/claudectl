@@ -16,6 +16,8 @@ pub mod pr;
 pub mod promotion;
 pub mod remote;
 pub mod resume;
+#[cfg(feature = "bus")]
+pub mod route;
 pub mod session_policy;
 pub mod spawn;
 pub mod store;
