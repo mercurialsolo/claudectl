@@ -4,7 +4,22 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.92.2] - 2026-10-22
+
+0.92.1 was merged but never tagged or published, so this is the first release to ship its changes. Both sets of notes apply.
+
+### Added
+
+- **A `hive` skill for Claude Code (#609).** Ask Claude to start a hive, invite or join a machine, approve a join request or share a skill, and it walks through `hive identity set`, `hive invite`, `hive join`, `relay connect` and `hive requests`. It also covers what tends to be misread: `Address already in use` from a launchd relay that is already running, `0 units` / `last sync epoch 0` taken to mean a peer is disconnected, `peer-a` / `host-1` / `ku_*` entries left in `~/.claudectl/hive` by `cargo test` (#603), and an invite whose LAN address the joiner cannot reach. It never sets `join_policy = open` on its own, and it leaves approving or denying a join to the owner.
+- **The plugin installs from Claude Code (#609).** `claude plugin marketplace add mercurialsolo/claudectl`, then `claude plugin install claudectl@claudectl`. That gives you the `hive` and `session-monitoring` skills, the slash commands, the supervisor agent, the brain gate and the bus MCP server. Claude Code never loaded the copy `claudectl init` writes to `~/.claude/plugins/claudectl/`, so none of those were active before. The brain gate now runs on every Bash, Write, Edit and NotebookEdit call. With no local LLM it auto-approves calls it rates low-risk and denies the ones it rates critical; `claudectl --mode off` turns it off.
+
+### Fixed
+
+- **The plugin's `hooks.json` loads (#609).** It was missing the top-level `"hooks"` object, so Claude Code rejected it. The plugin-root paths in it are now quoted.
+
 ## [0.92.1] - 2026-10-19
+
+Never tagged or published. Its changes first ship in 0.92.2.
 
 There is no 0.92.0: its tag was pushed to the wrong commit before the release PR merged and was removed within a minute, with nothing built or published. The number is not reused.
 
