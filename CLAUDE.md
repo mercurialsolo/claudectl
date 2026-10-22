@@ -94,6 +94,7 @@ Feature flags: `coord`, `relay`, `hive` mirror the binary's same-named features 
 - `commands/` — Slash commands: `/sessions`, `/spend`, `/brain-stats`, `/brain`, `/auto-insights`
 - `agents/supervisor.md` — Session health triage agent
 - `skills/session-monitoring/` — Auto-activated session awareness skill
+- `skills/hive/` — Start, invite, join and troubleshoot a hive across machines
 
 **Brain** (`src/brain/`): Local LLM auto-pilot subsystem.
 - `engine.rs` — Main brain loop: observes sessions, evaluates rules, queries LLM, executes decisions
@@ -216,6 +217,8 @@ Coord schema is gated on `PRAGMA user_version` (`EXPECTED_COORD_SCHEMA_VERSION =
 - Plugin hook scripts must check for `claudectl` availability and exit 0 on failure — never block Claude Code.
 - Plugin commands call `claudectl` CLI modes and format output — they don't implement logic directly.
 - Plugin manifest and skill versions track the crate version. Bump
-  `claude-plugin/.claude-plugin/plugin.json` and
-  `claude-plugin/skills/session-monitoring/SKILL.md` in the release commit —
-  two tests in `src/init/plugin_assets.rs` fail if you don't.
+  `claude-plugin/.claude-plugin/plugin.json` and every
+  `claude-plugin/skills/*/SKILL.md` (`session-monitoring`, `hive`) in the
+  release commit — `plugin_manifest_version_tracks_the_crate` and
+  `skill_versions_track_the_crate` in `src/init/plugin_assets.rs` fail if you
+  don't.

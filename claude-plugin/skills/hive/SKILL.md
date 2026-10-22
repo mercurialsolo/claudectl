@@ -53,11 +53,18 @@ lsof -nP -iTCP -sTCP:LISTEN | grep claudectl
 
 ```bash
 claudectl hive join <link | relay code | word phrase>
-claudectl relay connect <host-address>:<port>    # join prints this line
 claudectl relay install-agent                     # keep this side's relay up too
 ```
 
-`hive join` records membership and exits. The joiner has to dial the host for knowledge to move, which is what `relay connect` does. `claudectl hive status` then reads `asked to join "<name>" ... awaiting owner approval` until the host approves.
+`hive join` dials the address inside the invite, pairs, records membership and exits. If it cannot reach that address it fails with `connection failed` and saves nothing, so the joiner must be able to reach the host's address as printed in the invite.
+
+The joiner then has to dial the host for knowledge to move. `join` prints the line to do it:
+
+```bash
+claudectl relay connect <host-address>:<port>
+```
+
+`relay connect` stays in the foreground to hold the link open and only stops on ctrl-c. Ask the user to run it in its own terminal, or start it as a background command. Never run it inline before other steps: it will not return. `claudectl hive status` then reads `asked to join "<name>" ... awaiting owner approval` until the host approves.
 
 To pair a machine without joining a named hive (only to delegate work or move sessions), use `claudectl relay invite` on one side and `claudectl relay join <code>` on the other.
 
@@ -90,10 +97,15 @@ Installing something a peer shared runs that peer's instructions on this machine
 ## When something looks wrong
 
 - **`Address already in use` from `relay serve`.** A relay is already listening, almost always the launchd agent. Nothing to fix. Skip `relay serve` and go on to the invite.
-- **The invite shows a LAN address and the other person is elsewhere.** A `192.168.x.x` address only works on the same network. Have them join with the code, then `claudectl relay connect` to the host's Tailscale (`100.x.y.z`) address.
+- **The invite shows a LAN address and the other person is elsewhere.** A `192.168.x.x` address only works on the same network, and the invite cannot be pointed at another address. Joining with that code fails before anything is saved, and `relay connect` to a Tailscale address afterwards finds no pairing key. Tell the user the joiner has to be on the host's network (or reach that LAN address through a VPN route) when they redeem it.
 - **A peer shows `0 units` and `last sync epoch 0`.** That means nothing has been sent yet, not that the peer is disconnected. Check `relay peers` for a recent heartbeat and `hive requests` on the host for membership. Units only exist once the brain has distilled some decisions.
 - **Names like `peer-a`, `peer-b`, `host-1`, `ku_local`, `ku_remote` or `ku_1` in `hive status`, `trust.json` or `~/.claudectl/hive/conflicts.jsonl`.** These are test fixtures written by `cargo test` into the real `~/.claudectl` (#603), not peers and not real conflicts. Tell the user. Do not delete them without asking, and back up `~/.claudectl/hive` before anyone does.
-- **A join between two of the user's own machines is silently closed while both relays run (#608).** Stop the joining machine's relay for the join, then start it again.
+- **A join between two of the user's own machines is silently closed while both relays run (#608).** Stop the joining machine's relay for the join, then start it again. On macOS the agent is `io.claudectl.relay`; ask the user before stopping it:
+  ```bash
+  launchctl bootout gui/$(id -u)/io.claudectl.relay                                # stop
+  claudectl hive join <invite>
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.claudectl.relay.plist  # start again
+  ```
 - **A command from this skill is missing.** The machine runs an older claudectl. Compare `claudectl --version` on both sides and upgrade (`brew upgrade claudectl`).
 
 Run `claudectl doctor` for a full install and runtime check.

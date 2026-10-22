@@ -87,7 +87,7 @@ claude plugin marketplace add mercurialsolo/claudectl
 claude plugin install claudectl@claudectl
 ```
 
-Then ask Claude to "start a hive" or "invite my other machine". The plugin's brain gate hook runs on every Bash, Write and Edit call; `claudectl --mode off` turns it off.
+Then ask Claude to "start a hive" or "invite my other machine". The plugin's brain gate hook runs on every Bash, Write, Edit and NotebookEdit call and answers for you: with no local LLM configured it falls back to built-in rules, auto-approving calls it rates low-risk (Claude Code does not prompt for those) and denying ones it rates critical. `claudectl --mode off` turns it off; set up a local LLM with `claudectl --brain` before relying on it for anything the rules do not cover.
 
 ## Why claudectl
 
