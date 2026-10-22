@@ -47,17 +47,24 @@ impl HiveActions for LiveHiveActions {
         #[cfg(feature = "relay")]
         {
             let identity = Some(crate::relay::load_or_create_identity().as_str().to_string());
-            let peers = crate::relay::list_known_peers()
-                .into_iter()
-                .map(|id| {
-                    let addr = crate::relay::load_peer_meta(&id).and_then(|v| {
-                        v.get("addr")
-                            .and_then(|a| a.as_str())
-                            .map(|s| s.to_string())
-                    });
-                    (id, addr)
-                })
-                .collect();
+            let now = crate::relay::epoch_ms();
+            let mut peers: Vec<claudectl_core::runtime::KnownPeer> =
+                crate::relay::list_known_peers()
+                    .into_iter()
+                    .map(|id| {
+                        let addr = crate::relay::load_peer_meta(&id).and_then(|v| {
+                            v.get("addr")
+                                .and_then(|a| a.as_str())
+                                .map(|s| s.to_string())
+                        });
+                        let liveness = crate::relay::peer_liveness(&id, now);
+                        claudectl_core::runtime::KnownPeer { id, addr, liveness }
+                    })
+                    .collect();
+            // Live first, so the send picker's `1` is a machine that's there.
+            peers.sort_by(|a, b| {
+                (!a.liveness.is_live(), &a.id).cmp(&(!b.liveness.is_live(), &b.id))
+            });
             HiveViewSnapshot { identity, peers }
         }
         #[cfg(not(feature = "relay"))]

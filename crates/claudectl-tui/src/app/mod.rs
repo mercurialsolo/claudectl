@@ -282,7 +282,7 @@ pub struct App {
     /// The paired machines on offer, in the order they are numbered on
     /// screen. Read at entry, not cached across opens.
     #[cfg(feature = "relay")]
-    pub peer_send_peers: Vec<String>,
+    pub peer_send_peers: Vec<claudectl_core::runtime::KnownPeer>,
     pub notify: bool,
     /// Minimum time between desktop notifications that share the same key.
     /// Suppresses flapping (e.g. a session oscillating in/out of NeedsInput).
@@ -390,13 +390,10 @@ pub struct App {
     // Relay peers panel (feature-gated)
     #[cfg(feature = "relay")]
     pub show_peers_panel: bool,
-    // relay_peers is populated when relay serve is active and rendered by
-    // ui::peers::render_peers_panel when show_peers_panel is true. Currently
-    // a stub — rendering integration is wired when the relay serve loop runs
-    // inside the TUI (not yet connected to the TUI render loop).
+    /// Paired peers with their liveness, for the `p` panel. Read on each
+    /// refresh while the panel shows, from the files `relay serve` keeps.
     #[cfg(feature = "relay")]
-    #[allow(dead_code)]
-    pub relay_peers: Vec<crate::ui::peers::PeerDisplayInfo>,
+    pub relay_peers: Vec<claudectl_core::runtime::KnownPeer>,
     /// Remote sessions received from connected worker peers (relay heartbeats).
     #[cfg(feature = "relay")]
     pub remote_sessions: Vec<claudectl_core::session::ClaudeSession>,
@@ -424,7 +421,7 @@ pub struct App {
     /// Local peer identity, populated when the Hive tab is opened.
     pub hive_identity: Option<String>,
     /// Known peers from the local relay state (peer id, optional last address).
-    pub hive_known_peers: Vec<(String, Option<String>)>,
+    pub hive_known_peers: Vec<claudectl_core::runtime::KnownPeer>,
     /// Last invite generated from the TUI (held in memory only).
     pub hive_last_invite: Option<HiveInvite>,
     /// When true, the overlay captures text input for a join code.
@@ -1060,11 +1057,19 @@ pub struct PeerSendTarget {
 /// `1) mac-mini-9f2a1b  2) laptop-a3f2` — the picker's one line, shared by the
 /// prompt and the "no machine 7" correction so they cannot drift apart.
 #[cfg(feature = "relay")]
-pub fn numbered_peers(peers: &[String]) -> String {
+/// The send picker's choices. A machine not heard from lately says so, since
+/// a transfer to it will most likely fail to connect.
+pub fn numbered_peers(peers: &[claudectl_core::runtime::KnownPeer]) -> String {
     peers
         .iter()
         .enumerate()
-        .map(|(i, p)| format!("{}) {p}", i + 1))
+        .map(|(i, p)| {
+            if p.liveness.is_live() {
+                format!("{}) {}", i + 1, p.id)
+            } else {
+                format!("{}) {} ({})", i + 1, p.id, p.liveness.last_heard())
+            }
+        })
         .collect::<Vec<_>>()
         .join("  ")
 }
@@ -1426,8 +1431,16 @@ mod tests {
     /// An app with two paired machines and transcripts on every session, plus
     /// the `Arc` to read back what the runtime was asked to do.
     #[cfg(feature = "relay")]
+    fn live_peer(id: &str) -> claudectl_core::runtime::KnownPeer {
+        claudectl_core::runtime::KnownPeer {
+            id: id.into(),
+            addr: None,
+            liveness: claudectl_core::runtime::PeerLiveness::Live { secs_ago: 3 },
+        }
+    }
+
     fn app_with_peers(
-        peers: Vec<(String, Option<String>)>,
+        peers: Vec<claudectl_core::runtime::KnownPeer>,
     ) -> (App, std::sync::Arc<claudectl_core::runtime::MockRuntime>) {
         let (mock, runtime) = claudectl_core::runtime::MockRuntime {
             peers,
@@ -1459,7 +1472,7 @@ mod tests {
     #[cfg(feature = "relay")]
     #[test]
     fn send_goes_to_the_session_the_picker_opened_on() {
-        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        let (mut app, mock) = app_with_peers(vec![live_peer("mac-mini")]);
         let opened_on = app
             .selected_session()
             .expect("a selection")
@@ -1495,7 +1508,7 @@ mod tests {
     #[cfg(feature = "relay")]
     #[test]
     fn the_picker_swallows_navigation_keys() {
-        let (mut app, _mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        let (mut app, _mock) = app_with_peers(vec![live_peer("mac-mini")]);
         let before = app.table_state.selected();
 
         press(&mut app, KeyCode::Char('S'));
@@ -1511,7 +1524,7 @@ mod tests {
     #[cfg(feature = "relay")]
     #[test]
     fn a_digit_with_no_machine_behind_it_sends_nothing() {
-        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        let (mut app, mock) = app_with_peers(vec![live_peer("mac-mini")]);
 
         press(&mut app, KeyCode::Char('S'));
         press(&mut app, KeyCode::Char('0'));
@@ -1524,7 +1537,7 @@ mod tests {
     #[cfg(feature = "relay")]
     #[test]
     fn esc_closes_the_picker_without_sending() {
-        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        let (mut app, mock) = app_with_peers(vec![live_peer("mac-mini")]);
 
         press(&mut app, KeyCode::Char('S'));
         press(&mut app, KeyCode::Esc);
@@ -1557,7 +1570,7 @@ mod tests {
     #[cfg(feature = "relay")]
     #[test]
     fn a_session_with_no_transcript_is_refused() {
-        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        let (mut app, mock) = app_with_peers(vec![live_peer("mac-mini")]);
         for session in &mut app.sessions {
             session.jsonl_path = None;
         }
@@ -1578,7 +1591,7 @@ mod tests {
     #[cfg(feature = "relay")]
     #[test]
     fn a_remote_session_is_refused() {
-        let (mut app, mock) = app_with_peers(vec![("mac-mini".into(), None)]);
+        let (mut app, mock) = app_with_peers(vec![live_peer("mac-mini")]);
         for session in &mut app.sessions {
             session.worker_origin = Some("other-box".into());
         }
@@ -1598,8 +1611,43 @@ mod tests {
     #[test]
     fn the_picker_numbers_machines_from_one() {
         assert_eq!(
-            numbered_peers(&["mac-mini".to_string(), "laptop".to_string()]),
+            numbered_peers(&[live_peer("mac-mini"), live_peer("laptop")]),
             "1) mac-mini  2) laptop"
+        );
+    }
+
+    #[cfg(feature = "relay")]
+    #[test]
+    fn opening_the_peers_panel_reads_paired_peers_from_the_runtime() {
+        let (mut app, _mock) = app_with_peers(vec![live_peer("mac-mini")]);
+        assert!(app.relay_peers.is_empty());
+        press(&mut app, KeyCode::Char('p'));
+        assert!(app.show_peers_panel);
+        assert_eq!(app.relay_peers, vec![live_peer("mac-mini")]);
+    }
+
+    #[cfg(feature = "relay")]
+    #[test]
+    fn the_picker_says_when_a_machine_has_gone_quiet() {
+        use claudectl_core::runtime::{KnownPeer, PeerLiveness};
+        let peers = [
+            live_peer("mac-mini"),
+            KnownPeer {
+                id: "old-laptop".into(),
+                addr: None,
+                liveness: PeerLiveness::Stale {
+                    secs_ago: 3 * 86_400,
+                },
+            },
+            KnownPeer {
+                id: "friend".into(),
+                addr: None,
+                liveness: PeerLiveness::NeverConnected,
+            },
+        ];
+        assert_eq!(
+            numbered_peers(&peers),
+            "1) mac-mini  2) old-laptop (3d ago)  3) friend (never connected)"
         );
     }
 

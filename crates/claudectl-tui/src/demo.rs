@@ -524,39 +524,36 @@ pub fn demo_discovered(tick: u32) -> claudectl_core::runtime::DiscoverySnapshot 
     }
 }
 
-/// Generate demo peer display info for the TUI peers panel.
+/// Demo peers for the TUI peers panel: one live, one that comes and goes,
+/// one paired that never connected.
 #[cfg(feature = "relay")]
-pub fn demo_peers(tick: u32) -> Vec<crate::ui::peers::PeerDisplayInfo> {
-    let mut peers = vec![
-        crate::ui::peers::PeerDisplayInfo {
-            peer_id: "ci-runner-9d1e".into(),
-            state: "connected".into(),
-            trust: 0.82,
-            units_sent: 42,
-            units_received: 18,
-            session_count: 3,
-        },
-        crate::ui::peers::PeerDisplayInfo {
-            peer_id: "alice-mbp-f3a1".into(),
-            state: if tick % 32 < 28 {
-                "connecting".into()
-            } else {
-                "connected".into()
+pub fn demo_peers(tick: u32) -> Vec<claudectl_core::runtime::KnownPeer> {
+    use claudectl_core::runtime::{KnownPeer, PeerLiveness};
+    vec![
+        KnownPeer {
+            id: "ci-runner-9d1e".into(),
+            addr: Some("100.64.0.12:9847".into()),
+            liveness: PeerLiveness::Live {
+                secs_ago: u64::from(tick % 30),
             },
-            trust: 0.53,
-            units_sent: 0,
-            units_received: if tick % 32 >= 28 { 12 } else { 0 },
-            session_count: if tick % 32 >= 28 { 2 } else { 0 },
         },
-    ];
-
-    // After tick 28, alice is connected and has received knowledge
-    if tick % 32 >= 28 {
-        peers[1].state = "connected".into();
-        peers[1].trust = 0.53 + (tick % 32 - 28) as f64 * 0.01;
-    }
-
-    peers
+        KnownPeer {
+            id: "alice-mbp-f3a1".into(),
+            addr: Some("192.168.1.40:9847".into()),
+            liveness: if tick % 32 >= 28 {
+                PeerLiveness::Live { secs_ago: 1 }
+            } else {
+                PeerLiveness::Stale {
+                    secs_ago: 3600 + u64::from(tick),
+                }
+            },
+        },
+        KnownPeer {
+            id: "old-laptop-77c0".into(),
+            addr: None,
+            liveness: PeerLiveness::NeverConnected,
+        },
+    ]
 }
 
 /// Generate demo rules for display.

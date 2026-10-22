@@ -603,6 +603,9 @@ impl App {
                 self.cancel_pending_kill();
                 self.cancel_pending_auto_approve();
                 self.show_peers_panel = !self.show_peers_panel;
+                if self.show_peers_panel {
+                    self.refresh_relay_peers();
+                }
                 self.status_msg = if self.show_peers_panel {
                     "Peers panel enabled".into()
                 } else {
@@ -795,14 +798,7 @@ impl App {
             display_name: session.display_name().to_string(),
         };
 
-        let peers: Vec<String> = self
-            .runtime
-            .hive
-            .hive_view_snapshot()
-            .peers
-            .into_iter()
-            .map(|(id, _addr)| id)
-            .collect();
+        let peers = self.runtime.hive.hive_view_snapshot().peers;
         if peers.is_empty() {
             self.status_msg = "No paired machines — run `claudectl relay invite` first".into();
             return;
@@ -843,7 +839,7 @@ impl App {
             );
             return;
         };
-        let peer = peer.clone();
+        let peer = peer.id.clone();
         let Some(target) = self.peer_send.take() else {
             return;
         };

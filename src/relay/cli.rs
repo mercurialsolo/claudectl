@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use clap::Subcommand;
+use claudectl_core::runtime::PeerLiveness;
 
 use super::crypto;
 use super::delegation::{self, DelegationContext};
@@ -108,6 +109,18 @@ pub enum RelayCommand {
     Forget {
         /// Peer ID to forget
         peer_id: String,
+    },
+
+    /// Forget paired peers that have not been heard from in a while. Lists
+    /// them unless --yes is given
+    Prune {
+        /// How long unheard before a peer goes: 30m, 12h, 7d, 2w. A peer that
+        /// never connected counts from when it was paired
+        #[arg(long, default_value = "7d")]
+        older_than: String,
+        /// Forget them. Without this, only list what would go
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Show this instance's relay identity
@@ -238,6 +251,7 @@ pub fn dispatch_command(command: &RelayCommand, json_mode: bool) -> io::Result<(
         RelayCommand::Peers => cmd_peers(json_mode),
         RelayCommand::Disconnect { peer_id } => cmd_disconnect(peer_id),
         RelayCommand::Forget { peer_id } => cmd_forget(peer_id),
+        RelayCommand::Prune { older_than, yes } => cmd_prune(older_than, *yes, json_mode),
         RelayCommand::Identity => cmd_identity(json_mode),
         RelayCommand::Delegate {
             peer,
@@ -2461,7 +2475,8 @@ fn cmd_connect(addr_str: &str) -> io::Result<()> {
 /// List known peers and their status.
 fn cmd_peers(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
-    let known = list_known_peers();
+    let now = super::epoch_ms();
+    let peers = peers_by_liveness(list_known_peers(), now);
     // #571: each peer's last advertised headroom, by peer id.
     let headroom: std::collections::HashMap<String, super::headroom::Received> =
         super::headroom::load_all()
@@ -2470,14 +2485,21 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
             .collect();
 
     if json_mode {
-        let peers: Vec<serde_json::Value> = known
+        let peers: Vec<serde_json::Value> = peers
             .iter()
-            .map(|id| {
+            .map(|(id, liveness)| {
                 let meta = load_peer_meta(id).unwrap_or(serde_json::json!({}));
                 serde_json::json!({
                     "peer_id": id,
                     "addr": meta.get("addr").and_then(|v| v.as_str()).unwrap_or("unknown"),
                     "last_seen": meta.get("last_seen").and_then(|v| v.as_u64()).unwrap_or(0),
+                    "status": liveness.status(),
+                    "last_heard_secs_ago": match liveness {
+                        PeerLiveness::Live { secs_ago } | PeerLiveness::Stale { secs_ago } => {
+                            serde_json::json!(secs_ago)
+                        }
+                        PeerLiveness::NeverConnected => serde_json::Value::Null,
+                    },
                     "has_psk": load_peer_psk(id).is_some(),
                     "headroom": headroom.get(id.as_str()),
                 })
@@ -2491,23 +2513,34 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
     } else {
         println!("Identity: {}", identity);
         println!();
-        if known.is_empty() {
+        if peers.is_empty() {
             println!("No paired peers. Run 'claudectl relay pair' to get started.");
         } else {
-            println!("{:<20} {:<24} PAIRED", "PEER", "ADDRESS");
-            println!("{}", "─".repeat(56));
-            for id in &known {
+            // Identities run to `<host>-<8 hex>`, past any fixed width.
+            let w = peers
+                .iter()
+                .map(|(id, _)| id.len())
+                .max()
+                .unwrap_or(4)
+                .max(4);
+            println!(
+                "{:<w$}  {:<6}  {:<16}  ADDRESS",
+                "PEER", "STATUS", "LAST HEARD"
+            );
+            println!("{}", "─".repeat(w + 50));
+            for (id, liveness) in &peers {
                 let meta = load_peer_meta(id).unwrap_or(serde_json::json!({}));
                 let addr = meta
                     .get("addr")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
-                let has_psk = if load_peer_psk(id).is_some() {
-                    "yes"
-                } else {
-                    "no"
-                };
-                println!("{:<20} {:<24} {}", id, addr, has_psk);
+                println!(
+                    "{:<w$}  {:<6}  {:<16}  {}",
+                    id,
+                    liveness.status(),
+                    liveness.last_heard_cell(),
+                    addr
+                );
                 // #536: what that peer says it can run. Indented under the row
                 // rather than given a column, because the manifest is long and
                 // the table is already at the width of a terminal.
@@ -2515,12 +2548,37 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
                     println!("  └ {} ({}/{})", caps.summary(), caps.os, caps.arch);
                 }
                 if let Some(h) = headroom.get(id.as_str()) {
-                    println!("  └ {}", headroom_line(h, super::epoch_ms()));
+                    println!("  └ {}", headroom_line(h, now));
                 }
+            }
+            let quiet = peers.iter().filter(|(_, l)| !l.is_live()).count();
+            if quiet > 0 {
+                println!();
+                println!(
+                    "{quiet} not heard from in {}s: the supervisor won't place work on them, \
+                     and `delegate` / `send-session` will fail to reach them.",
+                    claudectl_core::runtime::PEER_STALE_AFTER_SECS
+                );
+                println!(
+                    "`claudectl relay prune` lists the long-gone ones; `relay forget <peer>` removes one."
+                );
             }
         }
     }
     Ok(())
+}
+
+/// Paired peers with their liveness, live first, then by id.
+fn peers_by_liveness(ids: Vec<String>, now_ms: u64) -> Vec<(String, PeerLiveness)> {
+    let mut peers: Vec<(String, PeerLiveness)> = ids
+        .into_iter()
+        .map(|id| {
+            let l = super::peer_liveness(&id, now_ms);
+            (id, l)
+        })
+        .collect();
+    peers.sort_by(|a, b| (!a.1.is_live(), &a.0).cmp(&(!b.1.is_live(), &b.0)));
+    peers
 }
 
 /// One line for `relay peers`: free memory, load, disk, tasks, tags, age.
@@ -2674,6 +2732,159 @@ fn cmd_forget(peer_id: &str) -> io::Result<()> {
     }
     forget_peer(peer_id);
     println!("Forgot peer: {}", peer_id);
+    Ok(())
+}
+
+/// A paired peer `relay prune` looked at, and how long it has been quiet.
+#[derive(Debug, Clone, PartialEq)]
+struct PruneCandidate {
+    id: String,
+    liveness: PeerLiveness,
+    /// Seconds since its pairing key was written, for a peer that never
+    /// connected. `None` when the key's age can't be read.
+    paired_secs_ago: Option<u64>,
+}
+
+/// What `relay prune` would do: the peers to forget, and the quiet ones kept
+/// because the hive depends on them, with the reason. Pure, so the rule is
+/// testable without a peer store.
+fn prune_plan(
+    peers: &[PruneCandidate],
+    older_than_secs: u64,
+    protected: &std::collections::BTreeMap<String, String>,
+) -> (Vec<String>, Vec<(String, String)>) {
+    let mut forget = Vec::new();
+    let mut kept = Vec::new();
+    for p in peers {
+        let quiet_secs = match p.liveness {
+            PeerLiveness::Live { .. } => continue,
+            PeerLiveness::Stale { secs_ago } => Some(secs_ago),
+            // Never heard from: date it by the pairing. A key we can't date
+            // is left alone rather than guessed old.
+            PeerLiveness::NeverConnected => p.paired_secs_ago,
+        };
+        match quiet_secs {
+            Some(q) if q >= older_than_secs => match protected.get(&p.id) {
+                Some(why) => kept.push((p.id.clone(), why.clone())),
+                None => forget.push(p.id.clone()),
+            },
+            _ => {}
+        }
+    }
+    (forget, kept)
+}
+
+/// Peers the hive depends on, with why. Forgetting the machine you joined a
+/// hive through, or one you admitted to yours, leaves the membership record
+/// pointing at a peer this machine can no longer reach; that is `hive`'s to
+/// undo, not a side effect of tidying the relay.
+fn hive_protected_peers() -> io::Result<std::collections::BTreeMap<String, String>> {
+    let mut out = std::collections::BTreeMap::new();
+    // Unreadable membership fails the prune: guessing it empty could forget
+    // the hive's host.
+    let joined = crate::hive::membership::load_membership()
+        .map_err(|e| io::Error::other(format!("read hive membership: {e}")))?;
+    if let Some(m) = joined {
+        let name = m.name.clone().unwrap_or_else(|| m.hive_id.clone());
+        out.insert(
+            m.joined_via.clone(),
+            format!("you joined hive \"{name}\" through it"),
+        );
+    }
+    for member in crate::hive::membership::list_members() {
+        out.entry(member.peer_id)
+            .or_insert_with(|| "a member of your hive".to_string());
+    }
+    Ok(out)
+}
+
+/// Seconds since `peer_id`'s pairing key was written.
+fn paired_secs_ago(peer_id: &str) -> Option<u64> {
+    let path = super::peers_dir().join(format!("{peer_id}.key"));
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    std::time::SystemTime::now()
+        .duration_since(modified)
+        .ok()
+        .map(|d| d.as_secs())
+}
+
+/// `claudectl relay prune [--older-than 7d] [--yes]`
+fn cmd_prune(older_than: &str, yes: bool, json_mode: bool) -> io::Result<()> {
+    let older_than_secs = claudectl_core::history::parse_duration(older_than).ok_or_else(|| {
+        io::Error::other(format!(
+            "invalid --older-than {older_than:?}: use a number and s, m, h, d or w (7d)"
+        ))
+    })?;
+    let now = super::epoch_ms();
+    let candidates: Vec<PruneCandidate> = peers_by_liveness(list_known_peers(), now)
+        .into_iter()
+        .map(|(id, liveness)| PruneCandidate {
+            paired_secs_ago: paired_secs_ago(&id),
+            id,
+            liveness,
+        })
+        .collect();
+    let protected = hive_protected_peers()?;
+    let (forget, kept) = prune_plan(&candidates, older_than_secs, &protected);
+    let quiet = |id: &str| {
+        candidates
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.liveness.last_heard())
+            .unwrap_or_default()
+    };
+
+    if yes {
+        for id in &forget {
+            super::forget_peer(id);
+        }
+    }
+
+    if json_mode {
+        let out = serde_json::json!({
+            "older_than_secs": older_than_secs,
+            "forgotten": yes,
+            "prune": forget.iter().map(|id| serde_json::json!({
+                "peer_id": id, "last_heard": quiet(id),
+            })).collect::<Vec<_>>(),
+            "kept": kept.iter().map(|(id, why)| serde_json::json!({
+                "peer_id": id, "last_heard": quiet(id), "reason": why,
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return Ok(());
+    }
+
+    if forget.is_empty() && kept.is_empty() {
+        println!("No paired peer has been quiet for {older_than} or longer.");
+        return Ok(());
+    }
+    if !forget.is_empty() {
+        println!(
+            "{} {} quiet for {older_than} or longer:",
+            if yes { "Forgot" } else { "Would forget" },
+            if forget.len() == 1 {
+                "1 peer"
+            } else {
+                "these peers"
+            },
+        );
+        for id in &forget {
+            println!("  {id}  ({})", quiet(id));
+        }
+    }
+    if !kept.is_empty() {
+        println!("Kept, though quiet as long:");
+        for (id, why) in &kept {
+            println!("  {id}  ({}): {why}", quiet(id));
+        }
+    }
+    if !yes && !forget.is_empty() {
+        println!();
+        println!(
+            "Run again with --yes to forget them. A forgotten peer needs a new invite to come back."
+        );
+    }
     Ok(())
 }
 
@@ -3568,5 +3779,87 @@ mod startup_dial_targets {
     #[test]
     fn an_ipv6_address_is_dialled() {
         assert_eq!(strs(json!({"addr": "[::1]:7777"})), vec!["[::1]:7777"]);
+    }
+}
+
+#[cfg(test)]
+mod prune {
+    use super::{PruneCandidate, prune_plan};
+    use claudectl_core::runtime::PeerLiveness;
+    use std::collections::BTreeMap;
+
+    const WEEK: u64 = 7 * 86_400;
+
+    fn peer(id: &str, liveness: PeerLiveness, paired_secs_ago: Option<u64>) -> PruneCandidate {
+        PruneCandidate {
+            id: id.into(),
+            liveness,
+            paired_secs_ago,
+        }
+    }
+
+    #[test]
+    fn a_live_peer_is_never_pruned_however_old_its_pairing() {
+        let peers = [peer(
+            "mini",
+            PeerLiveness::Live { secs_ago: 5 },
+            Some(10 * WEEK),
+        )];
+        assert_eq!(prune_plan(&peers, WEEK, &BTreeMap::new()), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_peer_stale_past_the_threshold_is_pruned_and_a_recent_one_is_not() {
+        let peers = [
+            peer(
+                "gone",
+                PeerLiveness::Stale {
+                    secs_ago: 8 * 86_400,
+                },
+                None,
+            ),
+            peer("asleep", PeerLiveness::Stale { secs_ago: 3600 }, None),
+        ];
+        let (forget, kept) = prune_plan(&peers, WEEK, &BTreeMap::new());
+        assert_eq!(forget, vec!["gone".to_string()]);
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn a_never_connected_peer_is_dated_by_its_pairing() {
+        let peers = [
+            peer("old-invite", PeerLiveness::NeverConnected, Some(2 * WEEK)),
+            peer("todays-invite", PeerLiveness::NeverConnected, Some(600)),
+        ];
+        let (forget, _) = prune_plan(&peers, WEEK, &BTreeMap::new());
+        assert_eq!(forget, vec!["old-invite".to_string()]);
+    }
+
+    #[test]
+    fn a_pairing_that_cannot_be_dated_is_left_alone() {
+        let peers = [peer("unknown", PeerLiveness::NeverConnected, None)];
+        assert_eq!(prune_plan(&peers, 0, &BTreeMap::new()), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_peer_the_hive_depends_on_is_kept_with_the_reason() {
+        let peers = [peer(
+            "host",
+            PeerLiveness::Stale { secs_ago: 3 * WEEK },
+            None,
+        )];
+        let protected = BTreeMap::from([(
+            "host".to_string(),
+            "you joined hive \"homelab\" through it".to_string(),
+        )]);
+        let (forget, kept) = prune_plan(&peers, WEEK, &protected);
+        assert!(forget.is_empty());
+        assert_eq!(
+            kept,
+            vec![(
+                "host".to_string(),
+                "you joined hive \"homelab\" through it".to_string()
+            )]
+        );
     }
 }

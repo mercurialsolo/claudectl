@@ -539,8 +539,102 @@ pub struct HiveViewSnapshot {
     /// Local relay identity (peer ID string). `None` when the `relay`
     /// feature is compiled out.
     pub identity: Option<String>,
-    /// Known peers, paired with last-seen address when available.
-    pub peers: Vec<(String, Option<String>)>,
+    /// Every paired peer, live or not.
+    pub peers: Vec<KnownPeer>,
+}
+
+/// How long a paired peer can go unheard before it counts as stale: three
+/// heartbeats at the default 30 s interval, so one slow beat is not enough. The supervisor's placement uses it as its default
+/// `stale_after_secs`, and `relay peers` and the TUI use it, so all three
+/// agree on which machines are live.
+pub const PEER_STALE_AFTER_SECS: u64 = 90;
+
+/// Whether a paired peer has been heard from lately. Pairing is a stored key
+/// and outlives any connection, so this is the part that says whether the
+/// machine is actually there.
+///
+/// Read from what the relay keeps on disk, not from a live socket: a reader
+/// in another process can know when a peer was last heard, not whether a
+/// connection is open right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerLiveness {
+    /// Heard from within the stale window.
+    Live { secs_ago: u64 },
+    /// Heard from once, not lately.
+    Stale { secs_ago: u64 },
+    /// Paired, and never heard from since.
+    NeverConnected,
+}
+
+impl PeerLiveness {
+    /// `last_heard_ms` is epoch ms on this machine's clock, `None` (or 0)
+    /// when the peer has never been heard from.
+    pub fn classify(last_heard_ms: Option<u64>, now_ms: u64, stale_after_secs: u64) -> Self {
+        match last_heard_ms.filter(|&ms| ms > 0) {
+            None => Self::NeverConnected,
+            Some(ms) => {
+                let age_ms = now_ms.saturating_sub(ms);
+                let secs_ago = age_ms / 1000;
+                if age_ms > stale_after_secs.saturating_mul(1000) {
+                    Self::Stale { secs_ago }
+                } else {
+                    Self::Live { secs_ago }
+                }
+            }
+        }
+    }
+
+    pub fn is_live(&self) -> bool {
+        matches!(self, Self::Live { .. })
+    }
+
+    /// One word for a status column: `live`, `stale` or `never`.
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::Live { .. } => "live",
+            Self::Stale { .. } => "stale",
+            Self::NeverConnected => "never",
+        }
+    }
+
+    /// When the peer was last heard from: `12s ago`, `3d ago`, or
+    /// `never connected`.
+    pub fn last_heard(&self) -> String {
+        match self {
+            Self::Live { secs_ago } | Self::Stale { secs_ago } => {
+                format!("{} ago", short_age(*secs_ago))
+            }
+            Self::NeverConnected => "never connected".into(),
+        }
+    }
+
+    /// `last_heard` for a table that already has a status column: `-` for a
+    /// peer never heard from, where `never connected` would repeat `never`.
+    pub fn last_heard_cell(&self) -> String {
+        match self {
+            Self::NeverConnected => "-".into(),
+            _ => self.last_heard(),
+        }
+    }
+}
+
+/// `45s`, `12m`, `5h`, `3d`: the largest whole unit.
+fn short_age(secs: u64) -> String {
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
+/// A paired peer as the TUI shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownPeer {
+    pub id: String,
+    /// The address it was last reached at, when one is stored.
+    pub addr: Option<String>,
+    pub liveness: PeerLiveness,
 }
 
 /// The hive a nearby machine advertises in its LAN announcement.
@@ -908,7 +1002,7 @@ pub struct MockRuntime {
     pub roles: Vec<RoleBinding>,
     /// Paired peers `hive_view_snapshot` reports, so a test can exercise the
     /// peer picker without a relay on the machine running the suite.
-    pub peers: Vec<(String, Option<String>)>,
+    pub peers: Vec<KnownPeer>,
     /// Machines `start_discovery` reports, so a test can drive the Hive tab's
     /// nearby listing without a network.
     pub discovered: Vec<DiscoveredMachine>,
@@ -1252,6 +1346,67 @@ impl Actions for MockRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const NOW: u64 = 1_800_000_000_000;
+
+    #[test]
+    fn a_peer_never_heard_from_is_never_connected() {
+        assert_eq!(
+            PeerLiveness::classify(None, NOW, 90),
+            PeerLiveness::NeverConnected
+        );
+        // `.meta` writes 0 for an address that was advertised, not reached.
+        assert_eq!(
+            PeerLiveness::classify(Some(0), NOW, 90),
+            PeerLiveness::NeverConnected
+        );
+    }
+
+    #[test]
+    fn a_peer_heard_within_the_window_is_live() {
+        let l = PeerLiveness::classify(Some(NOW - 12_000), NOW, 90);
+        assert_eq!(l, PeerLiveness::Live { secs_ago: 12 });
+        assert!(l.is_live());
+    }
+
+    #[test]
+    fn the_window_edge_is_still_live_and_one_ms_past_is_stale() {
+        assert!(PeerLiveness::classify(Some(NOW - 90_000), NOW, 90).is_live());
+        assert_eq!(
+            PeerLiveness::classify(Some(NOW - 90_001), NOW, 90),
+            PeerLiveness::Stale { secs_ago: 90 }
+        );
+    }
+
+    #[test]
+    fn a_heartbeat_from_ahead_of_our_clock_reads_as_just_now() {
+        assert_eq!(
+            PeerLiveness::classify(Some(NOW + 5_000), NOW, 90),
+            PeerLiveness::Live { secs_ago: 0 }
+        );
+    }
+
+    #[test]
+    fn last_heard_uses_the_largest_whole_unit() {
+        let at = |secs: u64| PeerLiveness::classify(Some(NOW - secs * 1000), NOW, 90).last_heard();
+        assert_eq!(at(12), "12s ago");
+        assert_eq!(at(600), "10m ago");
+        assert_eq!(at(5 * 3600), "5h ago");
+        assert_eq!(at(3 * 86_400 + 7), "3d ago");
+        assert_eq!(PeerLiveness::NeverConnected.last_heard(), "never connected");
+        assert_eq!(PeerLiveness::NeverConnected.last_heard_cell(), "-");
+        assert_eq!(
+            PeerLiveness::Stale { secs_ago: 120 }.last_heard_cell(),
+            "2m ago"
+        );
+    }
+
+    #[test]
+    fn status_words_fit_a_column() {
+        assert_eq!(PeerLiveness::Live { secs_ago: 1 }.status(), "live");
+        assert_eq!(PeerLiveness::Stale { secs_ago: 1 }.status(), "stale");
+        assert_eq!(PeerLiveness::NeverConnected.status(), "never");
+    }
 
     fn sample_session(id: &str) -> SessionSnapshot {
         SessionSnapshot {

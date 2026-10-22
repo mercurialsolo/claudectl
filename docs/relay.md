@@ -880,8 +880,9 @@ address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`.
 | `relay pair` | Generate a raw PSK code |
 | `relay accept <code> <peer>` | Accept a raw PSK from a peer |
 | `relay connect <host:port>` | Connect to a remote relay |
-| `relay peers` | List known peers |
+| `relay peers` | List paired peers, live first, with status (`live`, `stale`, `never`) and when each was last heard |
 | `relay forget <peer>` | Remove a peer |
+| `relay prune [--older-than 7d] [--yes]` | List paired peers quiet for longer than that; `--yes` forgets them. Keeps any peer your hive membership depends on |
 | `relay identity` | Show this instance's relay identity |
 | `relay delegate <peer> <prompt>` | Delegate a task |
 | `relay status` | Show remote task status |

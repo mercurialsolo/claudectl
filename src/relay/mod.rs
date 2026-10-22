@@ -526,14 +526,42 @@ pub fn clear_pending_psk() {
     forget_peer(PENDING_PEER_ID);
 }
 
-/// Remove all data for a peer.
+/// Remove all data for a peer: its key, the addresses it was reached at,
+/// and what it last advertised. `.headroom` has to go too, or placement
+/// would keep offering a forgotten machine work until its last reading aged
+/// past the stale window.
 pub fn forget_peer(peer_id: &str) {
+    if !is_valid_peer_id(peer_id) {
+        return;
+    }
     if let Some(path) = peer_key_path(peer_id) {
         let _ = fs::remove_file(path);
     }
     if let Some(path) = peer_meta_path(peer_id) {
         let _ = fs::remove_file(path);
     }
+    for ext in ["caps", "headroom"] {
+        let _ = fs::remove_file(peers_dir().join(format!("{peer_id}.{ext}")));
+    }
+}
+
+/// When this machine last heard from `peer_id`, in epoch ms on our clock:
+/// the newer of its last heartbeat (`.headroom`) and its last connect
+/// (`.meta`). A peer on a build that sends no headroom only has the connect
+/// time, so it reads as stale once that ages even while connected.
+pub fn last_heard_ms(peer_id: &str) -> Option<u64> {
+    let beat = headroom::load(peer_id).map(|r| r.received_ms);
+    let connect = load_peer_meta(peer_id).and_then(|m| m.get("last_seen").and_then(|v| v.as_u64()));
+    beat.max(connect).filter(|&ms| ms > 0)
+}
+
+/// Whether `peer_id` has been heard from within the stale window.
+pub fn peer_liveness(peer_id: &str, now_ms: u64) -> claudectl_core::runtime::PeerLiveness {
+    claudectl_core::runtime::PeerLiveness::classify(
+        last_heard_ms(peer_id),
+        now_ms,
+        claudectl_core::runtime::PEER_STALE_AFTER_SECS,
+    )
 }
 
 // ────────────────────────────────────────────────────────────────────────────

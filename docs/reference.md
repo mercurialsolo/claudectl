@@ -249,7 +249,8 @@ Connect machines, delegate tasks. See the [full relay guide](relay.md).
 | `relay invite [--qr] [--words]` | Generate invite code, link, and word phrase |
 | `relay join <code>` | Connect using any invite format (code, words, or link) |
 | `relay discover` | Scan LAN for nearby claudectl instances |
-| `relay peers` | List known and connected peers, with each one's advertised capabilities, headroom (free memory, load per core, free disk, running tasks) and tags |
+| `relay peers` | List paired peers, live first: status (`live` heard within 90 s, `stale`, `never` connected), when each was last heard, advertised capabilities, headroom (free memory, load per core, free disk, running tasks) and tags |
+| `relay prune [--older-than 7d] [--yes]` | List paired peers quiet for longer than `--older-than` (a never-connected one counts from its pairing); `--yes` forgets them. A peer you joined a hive through, or one admitted to your hive, is kept with the reason |
 | `relay delegate <peer> <prompt>` | Delegate a task to a remote peer |
 | `relay identity` | Show this instance's relay identity |
 | `relay install-agent` | Install a service so the relay survives logout (launchd on macOS, `systemd --user` on Linux) |

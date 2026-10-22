@@ -1,5 +1,7 @@
-#![allow(dead_code)]
-// TUI peers panel: shows connected peers with trust levels and knowledge counts.
+// TUI peers panel: every paired peer, and whether it has been heard from
+// lately. Pairing outlives any connection, so a machine that's gone stays
+// listed until `relay forget` or `relay prune`; the status says which ones
+// are actually there.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -7,68 +9,53 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use claudectl_core::runtime::{KnownPeer, PeerLiveness};
 use claudectl_core::theme::Theme;
 
-/// Info needed to render a peer in the panel.
-#[derive(Debug, Clone)]
-pub struct PeerDisplayInfo {
-    pub peer_id: String,
-    pub state: String,
-    pub trust: f64,
-    pub units_sent: u32,
-    pub units_received: u32,
-    pub session_count: u32,
-}
-
 /// Render the peers panel in the TUI.
-pub fn render_peers_panel(frame: &mut Frame, area: Rect, peers: &[PeerDisplayInfo], theme: &Theme) {
-    let title = format!(" Peers ({}) ", peers.len());
+pub fn render_peers_panel(frame: &mut Frame, area: Rect, peers: &[KnownPeer], theme: &Theme) {
+    let live = peers.iter().filter(|p| p.liveness.is_live()).count();
+    let title = format!(" Peers ({live} live / {} paired) ", peers.len());
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border));
 
     if peers.is_empty() {
-        let text = Paragraph::new("No connected peers. Use `claudectl relay pair` to get started.")
+        let text = Paragraph::new("No paired peers. Use `claudectl relay invite` to get started.")
             .block(block)
             .style(Style::default().fg(theme.text_muted));
         frame.render_widget(text, area);
         return;
     }
 
+    let w = peers.iter().map(|p| p.id.len()).max().unwrap_or(0);
     let lines: Vec<Line> = peers
         .iter()
         .map(|p| {
-            let state_icon = match p.state.as_str() {
-                "connected" => "●",
-                "connecting" => "○",
-                _ => "○",
+            let (icon, color) = match p.liveness {
+                PeerLiveness::Live { .. } => ("●", theme.success),
+                PeerLiveness::Stale { .. } => ("○", theme.context_warning),
+                PeerLiveness::NeverConnected => ("○", theme.text_muted),
             };
-            let state_color = match p.state.as_str() {
-                "connected" => theme.success,
-                "connecting" => theme.context_warning,
-                _ => theme.text_muted,
-            };
-
             Line::from(vec![
-                Span::styled(format!(" {state_icon} "), Style::default().fg(state_color)),
+                Span::styled(format!(" {icon} "), Style::default().fg(color)),
                 Span::styled(
-                    format!("{:<16}", p.peer_id),
+                    format!("{:<w$}  ", p.id),
                     Style::default()
                         .fg(theme.text_primary)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("{:<14}", p.state), Style::default().fg(state_color)),
                 Span::styled(
-                    format!("trust:{:.1}  ", p.trust),
+                    format!("{:<6}", p.liveness.status()),
+                    Style::default().fg(color),
+                ),
+                Span::styled(
+                    format!("{:<17}", p.liveness.last_heard_cell()),
                     Style::default().fg(theme.text_primary),
                 ),
                 Span::styled(
-                    format!("{}s  ", p.session_count),
-                    Style::default().fg(theme.text_primary),
-                ),
-                Span::styled(
-                    format!("↑{} ↓{} kb", p.units_sent, p.units_received),
+                    p.addr.clone().unwrap_or_default(),
                     Style::default().fg(theme.text_muted),
                 ),
             ])
@@ -79,24 +66,4 @@ pub fn render_peers_panel(frame: &mut Frame, area: Rect, peers: &[PeerDisplayInf
         .block(block)
         .style(Style::default().fg(theme.text_primary));
     frame.render_widget(paragraph, area);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn peer_display_info_creation() {
-        let info = PeerDisplayInfo {
-            peer_id: "test-peer".into(),
-            state: "connected".into(),
-            trust: 0.8,
-            units_sent: 12,
-            units_received: 8,
-            session_count: 3,
-        };
-        assert_eq!(info.peer_id, "test-peer");
-        assert_eq!(info.trust, 0.8);
-        assert_eq!(info.session_count, 3);
-    }
 }

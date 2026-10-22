@@ -74,8 +74,9 @@ pub struct PlacementPolicy {
 /// Tasks this machine runs at once when `policy.toml` doesn't say: the old
 /// `max_concurrent` default.
 pub const DEFAULT_LOCAL_MAX_TASKS: u32 = 4;
-/// Three heartbeats at the default 30s interval.
-pub const DEFAULT_STALE_AFTER_SECS: u64 = 90;
+/// Three heartbeats at the default 30s interval. Shared with `relay peers`
+/// and the TUI, so all three agree on which machines are live.
+pub const DEFAULT_STALE_AFTER_SECS: u64 = claudectl_core::runtime::PEER_STALE_AFTER_SECS;
 
 impl Default for PlacementPolicy {
     fn default() -> Self {
@@ -481,7 +482,12 @@ fn peer_views(policy: &PlacementPolicy) -> Vec<PeerView> {
     crate::relay::headroom::load_all()
         .into_iter()
         .map(|r| PeerView {
-            stale: now.saturating_sub(r.received_ms) > policy.stale_after_secs * 1000,
+            stale: !claudectl_core::runtime::PeerLiveness::classify(
+                Some(r.received_ms),
+                now,
+                policy.stale_after_secs,
+            )
+            .is_live(),
             // The lower of what this machine allows it and what it allows
             // itself: it refuses work past its own.
             slots: {

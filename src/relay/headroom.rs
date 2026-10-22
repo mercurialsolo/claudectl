@@ -88,6 +88,14 @@ pub fn record(peer_id: &str, payload: &serde_json::Value, now_ms: u64) -> Result
     Ok(true)
 }
 
+/// One peer's last advertisement, whatever its age.
+pub fn load(peer_id: &str) -> Option<Received> {
+    let s = std::fs::read_to_string(path(peer_id)?).ok()?;
+    serde_json::from_str::<Received>(&s)
+        .ok()
+        .filter(|r| r.peer == peer_id)
+}
+
 /// Every peer's last advertisement, whatever its age. The reader decides
 /// what's too old.
 pub fn load_all() -> Vec<Received> {

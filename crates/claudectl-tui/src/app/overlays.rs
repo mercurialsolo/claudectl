@@ -53,6 +53,12 @@ impl App {
         }
     }
 
+    /// Re-read the `p` panel's peers. Cheap: a few small files per peer.
+    #[cfg(feature = "relay")]
+    pub fn refresh_relay_peers(&mut self) {
+        self.relay_peers = self.runtime.hive.hive_view_snapshot().peers;
+    }
+
     pub fn refresh_hive_view(&mut self) {
         let snapshot = self.runtime.hive.hive_view_snapshot();
         self.hive_identity = snapshot.identity;

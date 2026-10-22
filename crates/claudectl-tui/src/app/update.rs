@@ -17,6 +17,11 @@ impl App {
             return;
         }
 
+        #[cfg(feature = "relay")]
+        if self.show_peers_panel {
+            self.refresh_relay_peers();
+        }
+
         // Discover which PIDs have session files
         let scan_start = std::time::Instant::now();
         let discovered = discovery::scan_sessions();

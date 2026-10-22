@@ -227,17 +227,31 @@ fn render_hive_body(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(t.text_muted),
         )));
     } else {
-        for (id, addr) in &app.hive_known_peers {
-            let addr_str = addr.clone().unwrap_or_else(|| "(no last addr)".into());
+        // Identities run to `<host>-<8 hex>`, past any fixed width.
+        let w = app
+            .hive_known_peers
+            .iter()
+            .map(|p| p.id.len())
+            .max()
+            .unwrap_or(0);
+        for peer in &app.hive_known_peers {
+            let addr_str = peer.addr.clone().unwrap_or_else(|| "(no last addr)".into());
+            let (dot, color) = if peer.liveness.is_live() {
+                ("●", t.success)
+            } else {
+                ("○", t.text_muted)
+            };
             lines.push(Line::from(vec![
-                Span::styled("  • ", Style::default().fg(t.text_muted)),
-                // Identities run to 25 chars (`<host>-<8 hex>`), so a cell
-                // narrower than that ran into the address.
+                Span::styled(format!("  {dot} "), Style::default().fg(color)),
                 Span::styled(
-                    format!("{:<26} ", id),
+                    format!("{:<w$}  ", peer.id),
                     Style::default()
                         .fg(t.text_primary)
                         .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<17}", peer.liveness.last_heard()),
+                    Style::default().fg(color),
                 ),
                 Span::styled(addr_str, Style::default().fg(t.text_muted)),
             ]));
