@@ -2778,6 +2778,7 @@ fn prune_plan(
 /// hive through, or one you admitted to yours, leaves the membership record
 /// pointing at a peer this machine can no longer reach; that is `hive`'s to
 /// undo, not a side effect of tidying the relay.
+#[cfg(feature = "hive")]
 fn hive_protected_peers() -> io::Result<std::collections::BTreeMap<String, String>> {
     let mut out = std::collections::BTreeMap::new();
     // Unreadable membership fails the prune: guessing it empty could forget
@@ -2796,6 +2797,12 @@ fn hive_protected_peers() -> io::Result<std::collections::BTreeMap<String, Strin
             .or_insert_with(|| "a member of your hive".to_string());
     }
     Ok(out)
+}
+
+/// Without the hive there is no membership to protect.
+#[cfg(not(feature = "hive"))]
+fn hive_protected_peers() -> io::Result<std::collections::BTreeMap<String, String>> {
+    Ok(std::collections::BTreeMap::new())
 }
 
 /// Seconds since `peer_id`'s pairing key was written.

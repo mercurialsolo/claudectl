@@ -1428,8 +1428,7 @@ mod tests {
 
     // ── Peer-send hotkey (#510) ─────────────────────────────────────────
 
-    /// An app with two paired machines and transcripts on every session, plus
-    /// the `Arc` to read back what the runtime was asked to do.
+    /// A paired machine heard from a moment ago.
     #[cfg(feature = "relay")]
     fn live_peer(id: &str) -> claudectl_core::runtime::KnownPeer {
         claudectl_core::runtime::KnownPeer {
@@ -1439,6 +1438,9 @@ mod tests {
         }
     }
 
+    /// An app with two paired machines and transcripts on every session, plus
+    /// the `Arc` to read back what the runtime was asked to do.
+    #[cfg(feature = "relay")]
     fn app_with_peers(
         peers: Vec<claudectl_core::runtime::KnownPeer>,
     ) -> (App, std::sync::Arc<claudectl_core::runtime::MockRuntime>) {
