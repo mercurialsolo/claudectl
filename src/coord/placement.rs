@@ -481,6 +481,10 @@ fn peer_views(policy: &PlacementPolicy) -> Vec<PeerView> {
     let now = crate::relay::epoch_ms();
     crate::relay::headroom::load_all()
         .into_iter()
+        // A forgotten peer still connected keeps heartbeating, and the
+        // running relay rewrites its `.headroom`; without its key a
+        // delegation to it can only fail.
+        .filter(|r| crate::relay::load_peer_psk(&r.peer).is_some())
         .map(|r| PeerView {
             stale: !claudectl_core::runtime::PeerLiveness::classify(
                 Some(r.received_ms),

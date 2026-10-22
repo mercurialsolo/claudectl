@@ -54,8 +54,13 @@ impl App {
     }
 
     /// Re-read the `p` panel's peers. Cheap: a few small files per peer.
+    /// Demo mode keeps its fixtures: a recording must not show this
+    /// machine's real peers.
     #[cfg(feature = "relay")]
     pub fn refresh_relay_peers(&mut self) {
+        if self.demo_mode {
+            return;
+        }
         self.relay_peers = self.runtime.hive.hive_view_snapshot().peers;
     }
 

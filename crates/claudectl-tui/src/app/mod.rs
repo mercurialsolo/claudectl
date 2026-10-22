@@ -1644,12 +1644,12 @@ mod tests {
             KnownPeer {
                 id: "friend".into(),
                 addr: None,
-                liveness: PeerLiveness::NeverConnected,
+                liveness: PeerLiveness::NeverHeard,
             },
         ];
         assert_eq!(
             numbered_peers(&peers),
-            "1) mac-mini  2) old-laptop (3d ago)  3) friend (never connected)"
+            "1) mac-mini  2) old-laptop (3d ago)  3) friend (never heard)"
         );
     }
 

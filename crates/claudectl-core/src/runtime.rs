@@ -544,26 +544,28 @@ pub struct HiveViewSnapshot {
 }
 
 /// How long a paired peer can go unheard before it counts as stale: three
-/// heartbeats at the default 30 s interval, so one slow beat is not enough. The supervisor's placement uses it as its default
-/// `stale_after_secs`, and `relay peers` and the TUI use it, so all three
-/// agree on which machines are live.
+/// heartbeats at the default 30 s interval, so one slow beat is not enough.
+/// The default for placement's `stale_after_secs`; `relay peers` and the TUI
+/// read the same setting, so all three agree on which machines are live.
 pub const PEER_STALE_AFTER_SECS: u64 = 90;
 
 /// Whether a paired peer has been heard from lately. Pairing is a stored key
 /// and outlives any connection, so this is the part that says whether the
 /// machine is actually there.
 ///
-/// Read from what the relay keeps on disk, not from a live socket: a reader
-/// in another process can know when a peer was last heard, not whether a
-/// connection is open right now.
+/// Read from the last heartbeat the relay recorded on disk, the signal
+/// placement uses, not from a live socket: a reader in another process can
+/// know when a peer last sent one, not whether a connection is open right
+/// now. A connect or a LAN sighting is not a heartbeat and does not count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerLiveness {
     /// Heard from within the stale window.
     Live { secs_ago: u64 },
     /// Heard from once, not lately.
     Stale { secs_ago: u64 },
-    /// Paired, and never heard from since.
-    NeverConnected,
+    /// No heartbeat on record: never connected, or connected only on a
+    /// build or link that sends no headroom.
+    NeverHeard,
 }
 
 impl PeerLiveness {
@@ -571,7 +573,7 @@ impl PeerLiveness {
     /// when the peer has never been heard from.
     pub fn classify(last_heard_ms: Option<u64>, now_ms: u64, stale_after_secs: u64) -> Self {
         match last_heard_ms.filter(|&ms| ms > 0) {
-            None => Self::NeverConnected,
+            None => Self::NeverHeard,
             Some(ms) => {
                 let age_ms = now_ms.saturating_sub(ms);
                 let secs_ago = age_ms / 1000;
@@ -593,26 +595,26 @@ impl PeerLiveness {
         match self {
             Self::Live { .. } => "live",
             Self::Stale { .. } => "stale",
-            Self::NeverConnected => "never",
+            Self::NeverHeard => "never",
         }
     }
 
     /// When the peer was last heard from: `12s ago`, `3d ago`, or
-    /// `never connected`.
+    /// `never heard`.
     pub fn last_heard(&self) -> String {
         match self {
             Self::Live { secs_ago } | Self::Stale { secs_ago } => {
                 format!("{} ago", short_age(*secs_ago))
             }
-            Self::NeverConnected => "never connected".into(),
+            Self::NeverHeard => "never heard".into(),
         }
     }
 
     /// `last_heard` for a table that already has a status column: `-` for a
-    /// peer never heard from, where `never connected` would repeat `never`.
+    /// peer never heard from, where `never heard` would repeat `never`.
     pub fn last_heard_cell(&self) -> String {
         match self {
-            Self::NeverConnected => "-".into(),
+            Self::NeverHeard => "-".into(),
             _ => self.last_heard(),
         }
     }
@@ -1353,12 +1355,12 @@ mod tests {
     fn a_peer_never_heard_from_is_never_connected() {
         assert_eq!(
             PeerLiveness::classify(None, NOW, 90),
-            PeerLiveness::NeverConnected
+            PeerLiveness::NeverHeard
         );
         // `.meta` writes 0 for an address that was advertised, not reached.
         assert_eq!(
             PeerLiveness::classify(Some(0), NOW, 90),
-            PeerLiveness::NeverConnected
+            PeerLiveness::NeverHeard
         );
     }
 
@@ -1393,8 +1395,8 @@ mod tests {
         assert_eq!(at(600), "10m ago");
         assert_eq!(at(5 * 3600), "5h ago");
         assert_eq!(at(3 * 86_400 + 7), "3d ago");
-        assert_eq!(PeerLiveness::NeverConnected.last_heard(), "never connected");
-        assert_eq!(PeerLiveness::NeverConnected.last_heard_cell(), "-");
+        assert_eq!(PeerLiveness::NeverHeard.last_heard(), "never heard");
+        assert_eq!(PeerLiveness::NeverHeard.last_heard_cell(), "-");
         assert_eq!(
             PeerLiveness::Stale { secs_ago: 120 }.last_heard_cell(),
             "2m ago"
@@ -1405,7 +1407,7 @@ mod tests {
     fn status_words_fit_a_column() {
         assert_eq!(PeerLiveness::Live { secs_ago: 1 }.status(), "live");
         assert_eq!(PeerLiveness::Stale { secs_ago: 1 }.status(), "stale");
-        assert_eq!(PeerLiveness::NeverConnected.status(), "never");
+        assert_eq!(PeerLiveness::NeverHeard.status(), "never");
     }
 
     fn sample_session(id: &str) -> SessionSnapshot {

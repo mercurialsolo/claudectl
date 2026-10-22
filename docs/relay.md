@@ -882,7 +882,7 @@ address is resolved `--http-addr` first, then `http_addr`, then `127.0.0.1`.
 | `relay connect <host:port>` | Connect to a remote relay |
 | `relay peers` | List paired peers, live first, with status (`live`, `stale`, `never`) and when each was last heard |
 | `relay forget <peer>` | Remove a peer |
-| `relay prune [--older-than 7d] [--yes]` | List paired peers quiet for longer than that; `--yes` forgets them. Keeps any peer your hive membership depends on |
+| `relay prune [--older-than 7d] [--yes]` | List paired peers quiet for longer than that; `--yes` forgets them. Keeps any peer your hive depends on, and any older-build peer that connects without a heartbeat |
 | `relay identity` | Show this instance's relay identity |
 | `relay delegate <peer> <prompt>` | Delegate a task |
 | `relay status` | Show remote task status |

@@ -526,41 +526,73 @@ pub fn clear_pending_psk() {
     forget_peer(PENDING_PEER_ID);
 }
 
-/// Remove all data for a peer: its key, the addresses it was reached at,
-/// and what it last advertised. `.headroom` has to go too, or placement
-/// would keep offering a forgotten machine work until its last reading aged
-/// past the stale window.
+/// Remove all data for a peer. Best effort; [`forget_peer_checked`] says
+/// what could not be removed.
 pub fn forget_peer(peer_id: &str) {
+    let _ = forget_peer_checked(peer_id);
+}
+
+/// Remove a peer's key, the addresses it was reached at, and what it last
+/// advertised (`.caps`, `.headroom`). Every file is attempted; the error
+/// names the ones still there. A file already gone is not an error.
+pub fn forget_peer_checked(peer_id: &str) -> Result<(), String> {
     if !is_valid_peer_id(peer_id) {
-        return;
+        return Err(format!("invalid peer id: {peer_id}"));
     }
-    if let Some(path) = peer_key_path(peer_id) {
-        let _ = fs::remove_file(path);
-    }
-    if let Some(path) = peer_meta_path(peer_id) {
-        let _ = fs::remove_file(path);
-    }
-    for ext in ["caps", "headroom"] {
-        let _ = fs::remove_file(peers_dir().join(format!("{peer_id}.{ext}")));
+    let paths = [
+        peer_key_path(peer_id),
+        peer_meta_path(peer_id),
+        Some(peers_dir().join(format!("{peer_id}.caps"))),
+        Some(peers_dir().join(format!("{peer_id}.headroom"))),
+    ];
+    let failed: Vec<String> = paths
+        .into_iter()
+        .flatten()
+        .filter_map(|p| match fs::remove_file(&p) {
+            Ok(()) => None,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => Some(format!("{}: {e}", p.display())),
+        })
+        .collect();
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("could not remove {}", failed.join("; ")))
     }
 }
 
-/// When this machine last heard from `peer_id`, in epoch ms on our clock:
-/// the newer of its last heartbeat (`.headroom`) and its last connect
-/// (`.meta`). A peer on a build that sends no headroom only has the connect
-/// time, so it reads as stale once that ages even while connected.
+/// When `peer_id` last sent a heartbeat this machine recorded, in epoch ms
+/// on our clock. Only the heartbeat counts: `.meta`'s `last_seen` moves on a
+/// connect and on a LAN sighting, neither of which says the link is up.
 pub fn last_heard_ms(peer_id: &str) -> Option<u64> {
-    let beat = headroom::load(peer_id).map(|r| r.received_ms);
-    let connect = load_peer_meta(peer_id).and_then(|m| m.get("last_seen").and_then(|v| v.as_u64()));
-    beat.max(connect).filter(|&ms| ms > 0)
+    headroom::load(peer_id).map(|r| r.received_ms)
 }
 
-/// Whether `peer_id` has been heard from within the stale window.
-pub fn peer_liveness(peer_id: &str, now_ms: u64) -> claudectl_core::runtime::PeerLiveness {
+/// The window placement uses: `stale_after_secs` from `policy.toml`, or the
+/// default when there is no readable policy or no supervisor in this build.
+pub fn stale_after_secs() -> u64 {
+    #[cfg(feature = "coord")]
+    {
+        crate::coord::placement::load_policy()
+            .map(|p| p.stale_after_secs)
+            .unwrap_or(claudectl_core::runtime::PEER_STALE_AFTER_SECS)
+    }
+    #[cfg(not(feature = "coord"))]
+    {
+        claudectl_core::runtime::PEER_STALE_AFTER_SECS
+    }
+}
+
+/// Whether `peer_id` has sent a heartbeat within `stale_after_secs`.
+pub fn peer_liveness(
+    peer_id: &str,
+    now_ms: u64,
+    stale_after_secs: u64,
+) -> claudectl_core::runtime::PeerLiveness {
     claudectl_core::runtime::PeerLiveness::classify(
         last_heard_ms(peer_id),
         now_ms,
-        claudectl_core::runtime::PEER_STALE_AFTER_SECS,
+        stale_after_secs,
     )
 }
 

@@ -48,6 +48,7 @@ impl HiveActions for LiveHiveActions {
         {
             let identity = Some(crate::relay::load_or_create_identity().as_str().to_string());
             let now = crate::relay::epoch_ms();
+            let window = crate::relay::stale_after_secs();
             let mut peers: Vec<claudectl_core::runtime::KnownPeer> =
                 crate::relay::list_known_peers()
                     .into_iter()
@@ -57,7 +58,7 @@ impl HiveActions for LiveHiveActions {
                                 .and_then(|a| a.as_str())
                                 .map(|s| s.to_string())
                         });
-                        let liveness = crate::relay::peer_liveness(&id, now);
+                        let liveness = crate::relay::peer_liveness(&id, now, window);
                         claudectl_core::runtime::KnownPeer { id, addr, liveness }
                     })
                     .collect();

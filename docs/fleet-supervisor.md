@@ -98,7 +98,7 @@ baradas-mac-mini-508f9c0e  live    1s ago            100.109.212.89:9910
   └ 9874 MB free · load 0.10/core · 49690 MB disk · 0 running (1s ago)
 ```
 
-Only a `live` peer gets work. A paired peer that hasn't been heard from within `stale_after_secs` shows `stale`, and one that has never connected shows `never`; the supervisor places nothing on either.
+Only a `live` peer gets work. A paired peer whose last heartbeat is older than `stale_after_secs` shows `stale`, and one with no heartbeat on record shows `never`; the supervisor places nothing on either. `relay peers` reads the same `stale_after_secs`.
 
 From then on, `supervisor work` places each task on the machine with the most free memory that can take it, here or on a peer. On a peer, the task runs in that peer's worktree and its `run =` verifiers run there too, and the verdicts come back to the supervisor. A retry goes back to the same peer and the same worktree.
 

@@ -551,7 +551,7 @@ pub fn demo_peers(tick: u32) -> Vec<claudectl_core::runtime::KnownPeer> {
         KnownPeer {
             id: "old-laptop-77c0".into(),
             addr: None,
-            liveness: PeerLiveness::NeverConnected,
+            liveness: PeerLiveness::NeverHeard,
         },
     ]
 }

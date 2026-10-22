@@ -36,7 +36,7 @@ pub fn render_peers_panel(frame: &mut Frame, area: Rect, peers: &[KnownPeer], th
             let (icon, color) = match p.liveness {
                 PeerLiveness::Live { .. } => ("●", theme.success),
                 PeerLiveness::Stale { .. } => ("○", theme.context_warning),
-                PeerLiveness::NeverConnected => ("○", theme.text_muted),
+                PeerLiveness::NeverHeard => ("○", theme.text_muted),
             };
             Line::from(vec![
                 Span::styled(format!(" {icon} "), Style::default().fg(color)),

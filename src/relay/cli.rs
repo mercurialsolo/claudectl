@@ -13,7 +13,7 @@ use super::listener::RelayListener;
 use super::mesh::PeerRegistry;
 use super::peer::PeerConnection;
 use super::{
-    PENDING_PEER_ID, RelayMessage, clear_pending_psk, forget_peer, gen_msg_id, is_valid_peer_id,
+    PENDING_PEER_ID, RelayMessage, clear_pending_psk, gen_msg_id, is_valid_peer_id,
     list_known_peers, load_or_create_identity, load_peer_meta, load_peer_psk, load_pending_psk,
     save_peer_psk, save_pending_psk,
 };
@@ -114,8 +114,8 @@ pub enum RelayCommand {
     /// Forget paired peers that have not been heard from in a while. Lists
     /// them unless --yes is given
     Prune {
-        /// How long unheard before a peer goes: 30m, 12h, 7d, 2w. A peer that
-        /// never connected counts from when it was paired
+        /// How long unheard before a peer goes: 30m, 12h, 7d, 2w. A peer with
+        /// no heartbeat on record counts from when it was paired
         #[arg(long, default_value = "7d")]
         older_than: String,
         /// Forget them. Without this, only list what would go
@@ -2476,7 +2476,8 @@ fn cmd_connect(addr_str: &str) -> io::Result<()> {
 fn cmd_peers(json_mode: bool) -> io::Result<()> {
     let identity = load_or_create_identity();
     let now = super::epoch_ms();
-    let peers = peers_by_liveness(list_known_peers(), now);
+    let window = super::stale_after_secs();
+    let peers = peers_by_liveness(list_known_peers(), now, window);
     // #571: each peer's last advertised headroom, by peer id.
     let headroom: std::collections::HashMap<String, super::headroom::Received> =
         super::headroom::load_all()
@@ -2498,7 +2499,7 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
                         PeerLiveness::Live { secs_ago } | PeerLiveness::Stale { secs_ago } => {
                             serde_json::json!(secs_ago)
                         }
-                        PeerLiveness::NeverConnected => serde_json::Value::Null,
+                        PeerLiveness::NeverHeard => serde_json::Value::Null,
                     },
                     "has_psk": load_peer_psk(id).is_some(),
                     "headroom": headroom.get(id.as_str()),
@@ -2555,9 +2556,8 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
             if quiet > 0 {
                 println!();
                 println!(
-                    "{quiet} not heard from in {}s: the supervisor won't place work on them, \
-                     and `delegate` / `send-session` will fail to reach them.",
-                    claudectl_core::runtime::PEER_STALE_AFTER_SECS
+                    "{quiet} with no heartbeat in {window}s: the supervisor won't place work on \
+                     them, and `delegate` / `send-session` will most likely fail to reach them."
                 );
                 println!(
                     "`claudectl relay prune` lists the long-gone ones; `relay forget <peer>` removes one."
@@ -2569,11 +2569,15 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
 }
 
 /// Paired peers with their liveness, live first, then by id.
-fn peers_by_liveness(ids: Vec<String>, now_ms: u64) -> Vec<(String, PeerLiveness)> {
+fn peers_by_liveness(
+    ids: Vec<String>,
+    now_ms: u64,
+    stale_after_secs: u64,
+) -> Vec<(String, PeerLiveness)> {
     let mut peers: Vec<(String, PeerLiveness)> = ids
         .into_iter()
         .map(|id| {
-            let l = super::peer_liveness(&id, now_ms);
+            let l = super::peer_liveness(&id, now_ms, stale_after_secs);
             (id, l)
         })
         .collect();
@@ -2730,7 +2734,7 @@ fn cmd_forget(peer_id: &str) -> io::Result<()> {
         eprintln!("Unknown peer: {}", peer_id);
         return Err(io::Error::other("unknown peer"));
     }
-    forget_peer(peer_id);
+    super::forget_peer_checked(peer_id).map_err(io::Error::other)?;
     println!("Forgot peer: {}", peer_id);
     Ok(())
 }
@@ -2740,9 +2744,12 @@ fn cmd_forget(peer_id: &str) -> io::Result<()> {
 struct PruneCandidate {
     id: String,
     liveness: PeerLiveness,
-    /// Seconds since its pairing key was written, for a peer that never
-    /// connected. `None` when the key's age can't be read.
+    /// Seconds since its pairing key was written, for a peer with no
+    /// heartbeat on record. `None` when the key's age can't be read.
     paired_secs_ago: Option<u64>,
+    /// `.meta` records a connect or a sighting. A peer like that with no
+    /// heartbeat may be on a build that sends none, and up right now.
+    seen_without_heartbeat: bool,
 }
 
 /// What `relay prune` would do: the peers to forget, and the quiet ones kept
@@ -2759,15 +2766,27 @@ fn prune_plan(
         let quiet_secs = match p.liveness {
             PeerLiveness::Live { .. } => continue,
             PeerLiveness::Stale { secs_ago } => Some(secs_ago),
-            // Never heard from: date it by the pairing. A key we can't date
-            // is left alone rather than guessed old.
-            PeerLiveness::NeverConnected => p.paired_secs_ago,
+            // No heartbeat on record: date it by the pairing. A key we can't
+            // date is left alone rather than guessed old.
+            PeerLiveness::NeverHeard => p.paired_secs_ago,
         };
         match quiet_secs {
-            Some(q) if q >= older_than_secs => match protected.get(&p.id) {
-                Some(why) => kept.push((p.id.clone(), why.clone())),
-                None => forget.push(p.id.clone()),
-            },
+            Some(q) if q >= older_than_secs => {
+                if let Some(why) = protected.get(&p.id) {
+                    kept.push((p.id.clone(), why.clone()));
+                } else if p.liveness == PeerLiveness::NeverHeard && p.seen_without_heartbeat {
+                    // An older build connects and never sends headroom, so
+                    // its age says nothing about whether it is up.
+                    kept.push((
+                        p.id.clone(),
+                        "it has connected but sends no heartbeat (an older claudectl?), so \
+                         there is no telling whether it is up; `relay forget` it if it is gone"
+                            .to_string(),
+                    ));
+                } else {
+                    forget.push(p.id.clone());
+                }
+            }
             _ => {}
         }
     }
@@ -2775,14 +2794,15 @@ fn prune_plan(
 }
 
 /// Peers the hive depends on, with why. Forgetting the machine you joined a
-/// hive through, or one you admitted to yours, leaves the membership record
-/// pointing at a peer this machine can no longer reach; that is `hive`'s to
-/// undo, not a side effect of tidying the relay.
+/// hive through, one admitted to yours, or one waiting for your answer
+/// leaves the hive pointing at a peer this machine can no longer reach;
+/// that is `hive`'s to undo, not a side effect of tidying the relay.
+///
+/// Fails rather than guesses: anything it cannot read stops the prune, since
+/// reading it as empty could forget the hive's host or a member.
 #[cfg(feature = "hive")]
 fn hive_protected_peers() -> io::Result<std::collections::BTreeMap<String, String>> {
     let mut out = std::collections::BTreeMap::new();
-    // Unreadable membership fails the prune: guessing it empty could forget
-    // the hive's host.
     let joined = crate::hive::membership::load_membership()
         .map_err(|e| io::Error::other(format!("read hive membership: {e}")))?;
     if let Some(m) = joined {
@@ -2792,9 +2812,41 @@ fn hive_protected_peers() -> io::Result<std::collections::BTreeMap<String, Strin
             format!("you joined hive \"{name}\" through it"),
         );
     }
-    for member in crate::hive::membership::list_members() {
-        out.entry(member.peer_id)
-            .or_insert_with(|| "a member of your hive".to_string());
+    let roster = crate::hive::membership::Roster::local();
+    // Members by file name, not by parsing: `list_members` skips a file it
+    // can't parse, and a damaged member file still names a member.
+    match std::fs::read_dir(roster.members_dir()) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry =
+                    entry.map_err(|e| io::Error::other(format!("read hive members: {e}")))?;
+                let path = entry.path();
+                if let Some(id) = path
+                    .extension()
+                    .is_some_and(|x| x == "json")
+                    .then(|| path.file_stem())
+                    .flatten()
+                    .and_then(|s| s.to_str())
+                {
+                    out.entry(id.to_string())
+                        .or_insert_with(|| "a member of your hive".to_string());
+                }
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io::Error::other(format!("read hive members: {e}"))),
+    }
+    match std::fs::metadata(roster.requests_path()) {
+        Ok(_) => {
+            std::fs::read_to_string(roster.requests_path())
+                .map_err(|e| io::Error::other(format!("read hive join requests: {e}")))?;
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io::Error::other(format!("read hive join requests: {e}"))),
+    }
+    for request in roster.pending_requests() {
+        out.entry(request.peer_id)
+            .or_insert_with(|| "it is waiting for you to answer its join request".to_string());
     }
     Ok(out)
 }
@@ -2823,10 +2875,14 @@ fn cmd_prune(older_than: &str, yes: bool, json_mode: bool) -> io::Result<()> {
         ))
     })?;
     let now = super::epoch_ms();
-    let candidates: Vec<PruneCandidate> = peers_by_liveness(list_known_peers(), now)
+    let window = super::stale_after_secs();
+    let candidates: Vec<PruneCandidate> = peers_by_liveness(list_known_peers(), now, window)
         .into_iter()
         .map(|(id, liveness)| PruneCandidate {
             paired_secs_ago: paired_secs_ago(&id),
+            seen_without_heartbeat: load_peer_meta(&id)
+                .and_then(|m| m.get("last_seen").and_then(|v| v.as_u64()))
+                .is_some_and(|ms| ms > 0),
             id,
             liveness,
         })
@@ -2841,11 +2897,19 @@ fn cmd_prune(older_than: &str, yes: bool, json_mode: bool) -> io::Result<()> {
             .unwrap_or_default()
     };
 
+    // What could not be removed, by peer: reported, never counted as forgotten.
+    let mut failed: Vec<(String, String)> = Vec::new();
     if yes {
         for id in &forget {
-            super::forget_peer(id);
+            if let Err(e) = super::forget_peer_checked(id) {
+                failed.push((id.clone(), e));
+            }
         }
     }
+    let forgotten: Vec<&String> = forget
+        .iter()
+        .filter(|id| !failed.iter().any(|(f, _)| f == *id))
+        .collect();
 
     if json_mode {
         let out = serde_json::json!({
@@ -2854,30 +2918,44 @@ fn cmd_prune(older_than: &str, yes: bool, json_mode: bool) -> io::Result<()> {
             "prune": forget.iter().map(|id| serde_json::json!({
                 "peer_id": id, "last_heard": quiet(id),
             })).collect::<Vec<_>>(),
+            "failed": failed.iter().map(|(id, e)| serde_json::json!({
+                "peer_id": id, "error": e,
+            })).collect::<Vec<_>>(),
             "kept": kept.iter().map(|(id, why)| serde_json::json!({
                 "peer_id": id, "last_heard": quiet(id), "reason": why,
             })).collect::<Vec<_>>(),
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
-        return Ok(());
+        return prune_result(&failed);
     }
 
     if forget.is_empty() && kept.is_empty() {
         println!("No paired peer has been quiet for {older_than} or longer.");
         return Ok(());
     }
-    if !forget.is_empty() {
+    let listed: Vec<&String> = if yes {
+        forgotten
+    } else {
+        forget.iter().collect()
+    };
+    if !listed.is_empty() {
         println!(
             "{} {} quiet for {older_than} or longer:",
             if yes { "Forgot" } else { "Would forget" },
-            if forget.len() == 1 {
+            if listed.len() == 1 {
                 "1 peer"
             } else {
                 "these peers"
             },
         );
-        for id in &forget {
+        for id in &listed {
             println!("  {id}  ({})", quiet(id));
+        }
+    }
+    if !failed.is_empty() {
+        println!("Could not forget:");
+        for (id, e) in &failed {
+            println!("  {id}: {e}");
         }
     }
     if !kept.is_empty() {
@@ -2892,7 +2970,19 @@ fn cmd_prune(older_than: &str, yes: bool, json_mode: bool) -> io::Result<()> {
             "Run again with --yes to forget them. A forgotten peer needs a new invite to come back."
         );
     }
-    Ok(())
+    prune_result(&failed)
+}
+
+/// A prune that could not remove everything it meant to exits non-zero.
+fn prune_result(failed: &[(String, String)]) -> io::Result<()> {
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "could not forget {} peer(s)",
+            failed.len()
+        )))
+    }
 }
 
 /// `claudectl relay identity`
@@ -3802,7 +3892,20 @@ mod prune {
             id: id.into(),
             liveness,
             paired_secs_ago,
+            seen_without_heartbeat: false,
         }
+    }
+
+    /// The review's case: an older build that connected a week ago and is
+    /// still connected has no heartbeat on record, only a connect.
+    #[test]
+    fn a_peer_that_connected_but_never_sent_a_heartbeat_is_kept() {
+        let mut p = peer("old-build", PeerLiveness::NeverHeard, Some(2 * WEEK));
+        p.seen_without_heartbeat = true;
+        let (forget, kept) = prune_plan(&[p], WEEK, &BTreeMap::new());
+        assert!(forget.is_empty());
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].1.contains("sends no heartbeat"), "{}", kept[0].1);
     }
 
     #[test]
@@ -3835,8 +3938,8 @@ mod prune {
     #[test]
     fn a_never_connected_peer_is_dated_by_its_pairing() {
         let peers = [
-            peer("old-invite", PeerLiveness::NeverConnected, Some(2 * WEEK)),
-            peer("todays-invite", PeerLiveness::NeverConnected, Some(600)),
+            peer("old-invite", PeerLiveness::NeverHeard, Some(2 * WEEK)),
+            peer("todays-invite", PeerLiveness::NeverHeard, Some(600)),
         ];
         let (forget, _) = prune_plan(&peers, WEEK, &BTreeMap::new());
         assert_eq!(forget, vec!["old-invite".to_string()]);
@@ -3844,7 +3947,7 @@ mod prune {
 
     #[test]
     fn a_pairing_that_cannot_be_dated_is_left_alone() {
-        let peers = [peer("unknown", PeerLiveness::NeverConnected, None)];
+        let peers = [peer("unknown", PeerLiveness::NeverHeard, None)];
         assert_eq!(prune_plan(&peers, 0, &BTreeMap::new()), (vec![], vec![]));
     }
 
