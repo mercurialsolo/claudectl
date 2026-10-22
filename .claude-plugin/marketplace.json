@@ -1,0 +1,15 @@
+{
+  "name": "claudectl",
+  "description": "claudectl's Claude Code plugin: hive, session monitoring, brain and spend control",
+  "owner": {
+    "name": "mercurialsolo",
+    "url": "https://github.com/mercurialsolo"
+  },
+  "plugins": [
+    {
+      "name": "claudectl",
+      "source": "./claude-plugin",
+      "description": "Hive mind for Claude Code: start and join a hive across machines, session monitoring, local LLM brain, spend control"
+    }
+  ]
+}
