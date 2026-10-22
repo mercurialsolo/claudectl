@@ -528,8 +528,16 @@ pub fn clear_pending_psk() {
 
 /// Remove all data for a peer. Best effort; [`forget_peer_checked`] says
 /// what could not be removed.
+///
+/// Unlike the checked form, the key goes even when a side file stays:
+/// `clear_pending_psk` relies on this, since a pending key left behind would
+/// keep a used pairing code redeemable.
 pub fn forget_peer(peer_id: &str) {
-    let _ = forget_peer_checked(peer_id);
+    if forget_peer_checked(peer_id).is_err() {
+        if let Some(p) = peer_key_path(peer_id) {
+            let _ = fs::remove_file(p);
+        }
+    }
 }
 
 /// Remove a peer's key, the addresses it was reached at, and what it last
@@ -576,6 +584,11 @@ fn beat_path(peer_id: &str) -> Option<PathBuf> {
 /// every 30 s would otherwise look silent.
 pub fn record_heartbeat(peer_id: &str, now_ms: u64) -> Result<(), String> {
     let path = beat_path(peer_id).ok_or_else(|| format!("invalid peer id: {peer_id}"))?;
+    // A peer forgotten while its link stays open keeps heartbeating; writing
+    // for it would bring back a `.beat` with no key.
+    if load_peer_psk(peer_id).is_none() {
+        return Ok(());
+    }
     fs::create_dir_all(peers_dir()).map_err(|e| format!("create peers dir: {e}"))?;
     // Atomic: `relay peers` and the TUI read it while the relay writes.
     let tmp = path.with_extension("beat.tmp");

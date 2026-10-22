@@ -22,6 +22,11 @@ impl App {
     /// listener can neither outlive the tab nor miss its opening.
     pub fn sync_hive_discovery(&mut self) {
         let showing = self.show_skills && self.skills_tab == SkillsTab::Hive;
+        // The known-peers list carries liveness, which ages: re-read it on
+        // the tick while it shows, as the `p` panel does.
+        if showing && !self.demo_mode {
+            self.refresh_hive_view();
+        }
         if !showing {
             self.hive_discovery = None;
             self.hive_discovery_unavailable = false;

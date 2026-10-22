@@ -676,14 +676,18 @@ fn cmd_serve(
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(&from_peer, &msg.payload);
-                        let _ = super::record_heartbeat(from_peer.as_str(), super::epoch_ms());
-                        persist_peer_capabilities(from_peer.as_str(), &msg.payload);
-                        let _ = super::headroom::record(
-                            from_peer.as_str(),
-                            &msg.payload,
-                            super::epoch_ms(),
-                        );
-                        record_advertised_addrs(from_peer.as_str(), &msg.payload);
+                        // Forgotten while still connected: record nothing, or
+                        // its files come back without a key.
+                        if load_peer_psk(from_peer.as_str()).is_some() {
+                            note_heartbeat(from_peer.as_str());
+                            persist_peer_capabilities(from_peer.as_str(), &msg.payload);
+                            let _ = super::headroom::record(
+                                from_peer.as_str(),
+                                &msg.payload,
+                                super::epoch_ms(),
+                            );
+                            record_advertised_addrs(from_peer.as_str(), &msg.payload);
+                        }
                     }
                     super::MessageType::DelegateTask => {
                         match super::delegation::parse_delegate_message(&msg) {
@@ -1516,9 +1520,11 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(peer_id, &msg.payload);
-                        let _ = super::record_heartbeat(peer_id.as_str(), super::epoch_ms());
-                        persist_peer_capabilities(peer_id.as_str(), &msg.payload);
-                        record_advertised_addrs(peer_id.as_str(), &msg.payload);
+                        if load_peer_psk(peer_id.as_str()).is_some() {
+                            note_heartbeat(peer_id.as_str());
+                            persist_peer_capabilities(peer_id.as_str(), &msg.payload);
+                            record_advertised_addrs(peer_id.as_str(), &msg.payload);
+                        }
                     }
                     // #434: the owner of a `join_policy: ask` hive usually
                     // approves long after `hive join` exited, so this is where
@@ -2570,6 +2576,18 @@ fn cmd_peers(json_mode: bool) -> io::Result<()> {
     Ok(())
 }
 
+/// Stamp a heartbeat from `peer`. A failure is printed, not dropped: without
+/// the stamp the peer reads as quiet everywhere, and `relay prune` would
+/// count it as gone.
+fn note_heartbeat(peer: &str) {
+    if let Err(e) = super::record_heartbeat(peer, super::epoch_ms()) {
+        println!(
+            "[{}] could not record a heartbeat from {peer}: {e}",
+            crate::logger::timestamp_now()
+        );
+    }
+}
+
 /// Paired peers with their liveness, live first, then by id.
 fn peers_by_liveness(
     ids: Vec<String>,
@@ -2855,6 +2873,16 @@ fn hive_protected_peers() -> io::Result<std::collections::BTreeMap<String, Strin
     Ok(std::collections::BTreeMap::new())
 }
 
+/// Whether the relay here has stamped a heartbeat from any peer: proof it
+/// runs a build that records them.
+fn any_beat_recorded() -> bool {
+    std::fs::read_dir(super::peers_dir()).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|e| e.path().extension().is_some_and(|x| x == "beat"))
+    })
+}
+
 /// Seconds since `peer_id`'s pairing key was written.
 fn paired_secs_ago(peer_id: &str) -> Option<u64> {
     let path = super::peers_dir().join(format!("{peer_id}.key"));
@@ -2872,8 +2900,27 @@ fn cmd_prune(older_than: &str, yes: bool, json_mode: bool) -> io::Result<()> {
             "invalid --older-than {older_than:?}: use a number and s, m, h, d or w (7d)"
         ))
     })?;
-    let now = super::epoch_ms();
     let window = super::stale_after_secs();
+    // Below the stale window a peer that missed a beat, or one paired
+    // seconds ago and not yet heard, would count as gone.
+    if older_than_secs < window {
+        return Err(io::Error::other(format!(
+            "--older-than {older_than} is shorter than the stale window ({window}s); \
+             a peer that quiet may only have missed a heartbeat"
+        )));
+    }
+    // Quiet is only evidence when this machine is listening. With no relay
+    // running here, or one on a build that records no heartbeats, a peer in
+    // daily use looks exactly as quiet as one that is gone.
+    if claudectl_core::fleet::read_snapshot().is_none() {
+        return Err(io::Error::other(
+            "no relay is running on this machine, so no heartbeats are being recorded and \
+             every peer looks quiet. Start one (`claudectl relay install-agent`) and prune \
+             once it has run for a while",
+        ));
+    }
+    let now = super::epoch_ms();
+    let recording_beats = any_beat_recorded();
     let candidates: Vec<PruneCandidate> = peers_by_liveness(list_known_peers(), now, window)
         .into_iter()
         .map(|(id, liveness)| PruneCandidate {
@@ -2882,7 +2929,21 @@ fn cmd_prune(older_than: &str, yes: bool, json_mode: bool) -> io::Result<()> {
             liveness,
         })
         .collect();
-    let protected = hive_protected_peers()?;
+    let mut protected = hive_protected_peers()?;
+    if !recording_beats {
+        // The relay here runs, but has never stamped a heartbeat: a build
+        // from before `.beat`, still running after an upgrade. Peers with no
+        // heartbeat on record can't be told from ones it simply doesn't note.
+        for c in &candidates {
+            if c.liveness == PeerLiveness::NeverHeard {
+                protected.entry(c.id.clone()).or_insert_with(|| {
+                    "this machine's relay records no heartbeats yet; restart it on this \
+                     version (`launchctl kickstart -k gui/$(id -u)/io.claudectl.relay`)"
+                        .to_string()
+                });
+            }
+        }
+    }
     let (forget, kept) = prune_plan(&candidates, older_than_secs, &protected);
     let quiet = |id: &str| {
         candidates

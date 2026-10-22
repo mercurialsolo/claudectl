@@ -563,8 +563,8 @@ pub enum PeerLiveness {
     Live { secs_ago: u64 },
     /// Heard from once, not lately.
     Stale { secs_ago: u64 },
-    /// No heartbeat on record: never connected, or connected only on a
-    /// build or link that sends no headroom.
+    /// No heartbeat on record: never connected, or this machine's relay
+    /// has not recorded one since it started recording them.
     NeverHeard,
 }
 
