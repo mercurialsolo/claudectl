@@ -78,7 +78,16 @@ claudectl --brain             # Enable local LLM auto-pilot
 
 After `brew upgrade claudectl`, run **`claudectl init --upgrade`** to re-sync hook entries, plugin files, and DB migrations to the new binary. `claudectl doctor`'s `plugin version` row will tell you when this is needed.
 
-The `init` wizard walks five phases — weekly budget, local-LLM brain detection, Claude Code hook install, agent-bus role, and curated skill suggestions. Plugin files (slash commands, supervisor agent, bus MCP server registration) are embedded in the binary and written to `~/.claude/plugins/claudectl/` automatically — no repo clone. Run `claudectl doctor` to verify every piece is wired up, or `claudectl init --check` for the drift report against the onboarding marker.
+The `init` wizard walks five phases — weekly budget, local-LLM brain detection, Claude Code hook install, agent-bus role, and curated skill suggestions. Run `claudectl doctor` to verify every piece is wired up, or `claudectl init --check` for the drift report against the onboarding marker.
+
+To use claudectl from inside Claude Code (the `hive` and `session-monitoring` skills, slash commands, the supervisor agent, the brain gate and the bus MCP server), install the plugin from this repo's marketplace:
+
+```bash
+claude plugin marketplace add mercurialsolo/claudectl
+claude plugin install claudectl@claudectl
+```
+
+Then ask Claude to "start a hive" or "invite my other machine". The plugin's brain gate hook runs on every Bash, Write, Edit and NotebookEdit call and answers for you: with no local LLM configured it falls back to built-in rules, auto-approving calls it rates low-risk (Claude Code does not prompt for those) and denying ones it rates critical. `claudectl --mode off` turns it off; set up a local LLM with `claudectl --brain` before relying on it for anything the rules do not cover.
 
 ## Why claudectl
 

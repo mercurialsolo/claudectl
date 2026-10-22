@@ -3,7 +3,7 @@
 //! Every file under `claude-plugin/` is compiled into the binary via
 //! `include_str!` so `claudectl init` can write a working plugin to
 //! `~/.claude/plugins/claudectl/` without the user cloning the repo.
-//! Total embed cost: ~29 KB across 17 files — well below the binary's
+//! Total embed cost: ~35 KB across 18 files — well below the binary's
 //! 1 MB target.
 //!
 //! Source of truth stays on disk at `claude-plugin/`; this module just
@@ -97,6 +97,10 @@ pub const ASSETS: &[Asset] = &[
         rel_path: "skills/session-monitoring/SKILL.md",
         contents: include_str!("../../claude-plugin/skills/session-monitoring/SKILL.md"),
     },
+    Asset {
+        rel_path: "skills/hive/SKILL.md",
+        contents: include_str!("../../claude-plugin/skills/hive/SKILL.md"),
+    },
 ];
 
 /// Where the plugin lives by default — `~/.claude/plugins/claudectl/`.
@@ -183,21 +187,56 @@ mod tests {
         );
     }
 
-    /// Same reasoning for the skill, which drifted further still (0.48.0).
+    /// Same reasoning for the skills, which drifted further still (0.48.0).
     #[test]
-    fn skill_version_tracks_the_crate() {
-        let frontmatter_version = asset("skills/session-monitoring/SKILL.md")
-            .lines()
-            .take_while(|l| !l.starts_with("# "))
-            .find_map(|l| l.strip_prefix("version:"))
-            .expect("SKILL.md frontmatter should carry a version")
-            .trim();
-        assert_eq!(
-            frontmatter_version,
-            env!("CARGO_PKG_VERSION"),
-            "claude-plugin/skills/session-monitoring/SKILL.md is out of step \
-             with Cargo.toml — bump it in the release commit"
-        );
+    fn skill_versions_track_the_crate() {
+        let skills: Vec<&Asset> = ASSETS
+            .iter()
+            .filter(|a| a.rel_path.ends_with("/SKILL.md"))
+            .collect();
+        assert!(skills.len() >= 2, "expected session-monitoring and hive");
+        for skill in skills {
+            let frontmatter_version = skill
+                .contents
+                .lines()
+                .take_while(|l| !l.starts_with("# "))
+                .find_map(|l| l.strip_prefix("version:"))
+                .unwrap_or_else(|| panic!("{} frontmatter should carry a version", skill.rel_path))
+                .trim();
+            assert_eq!(
+                frontmatter_version,
+                env!("CARGO_PKG_VERSION"),
+                "claude-plugin/{} is out of step with Cargo.toml — bump it in the \
+                 release commit",
+                skill.rel_path
+            );
+        }
+    }
+
+    /// Every file under `claude-plugin/` has to be listed in `ASSETS`, or
+    /// `claudectl init` installs a plugin missing it.
+    #[test]
+    fn every_plugin_file_is_embedded() {
+        fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, root, out);
+                } else {
+                    let rel = path.strip_prefix(root).unwrap();
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("claude-plugin");
+        let mut on_disk = Vec::new();
+        walk(&root, &root, &mut on_disk);
+        for rel in on_disk {
+            assert!(
+                ASSETS.iter().any(|a| a.rel_path == rel),
+                "claude-plugin/{rel} is not embedded in ASSETS"
+            );
+        }
     }
 
     #[test]
