@@ -1054,11 +1054,11 @@ pub struct PeerSendTarget {
     pub display_name: String,
 }
 
-/// `1) mac-mini-9f2a1b  2) laptop-a3f2` — the picker's one line, shared by the
-/// prompt and the "no machine 7" correction so they cannot drift apart.
+/// `1) mac-mini-9f2a1b  2) laptop-a3f2 (3d ago)` — the picker's one line,
+/// shared by the prompt and the "no machine 7" correction so they cannot
+/// drift apart. A machine not heard from lately says so, since a transfer to
+/// it will most likely fail to connect.
 #[cfg(feature = "relay")]
-/// The send picker's choices. A machine not heard from lately says so, since
-/// a transfer to it will most likely fail to connect.
 pub fn numbered_peers(peers: &[claudectl_core::runtime::KnownPeer]) -> String {
     peers
         .iter()

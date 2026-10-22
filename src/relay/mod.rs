@@ -533,27 +533,32 @@ pub fn forget_peer(peer_id: &str) {
 }
 
 /// Remove a peer's key, the addresses it was reached at, and what it last
-/// advertised (`.caps`, `.headroom`). Every file is attempted; the error
-/// names the ones still there. A file already gone is not an error.
+/// advertised and sent (`.caps`, `.headroom`, `.beat`). Every file is
+/// attempted, the key last: `relay forget` and `relay prune` only find a
+/// peer by its key, so a partial failure must leave the key for a retry.
+/// The error names the files still there; one already gone is not an error.
 pub fn forget_peer_checked(peer_id: &str) -> Result<(), String> {
     if !is_valid_peer_id(peer_id) {
         return Err(format!("invalid peer id: {peer_id}"));
     }
-    let paths = [
-        peer_key_path(peer_id),
+    let remove = |p: PathBuf| match fs::remove_file(&p) {
+        Ok(()) => None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some(format!("{}: {e}", p.display())),
+    };
+    let mut failed: Vec<String> = [
         peer_meta_path(peer_id),
         Some(peers_dir().join(format!("{peer_id}.caps"))),
         Some(peers_dir().join(format!("{peer_id}.headroom"))),
-    ];
-    let failed: Vec<String> = paths
-        .into_iter()
-        .flatten()
-        .filter_map(|p| match fs::remove_file(&p) {
-            Ok(()) => None,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => Some(format!("{}: {e}", p.display())),
-        })
-        .collect();
+        beat_path(peer_id),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(remove)
+    .collect();
+    if failed.is_empty() {
+        failed.extend(peer_key_path(peer_id).and_then(remove));
+    }
     if failed.is_empty() {
         Ok(())
     } else {
@@ -561,11 +566,33 @@ pub fn forget_peer_checked(peer_id: &str) -> Result<(), String> {
     }
 }
 
+fn beat_path(peer_id: &str) -> Option<PathBuf> {
+    is_valid_peer_id(peer_id).then(|| peers_dir().join(format!("{peer_id}.beat")))
+}
+
+/// Note that `peer_id` sent a heartbeat at `now_ms` (this machine's clock).
+/// Every heartbeat, whatever it carries: `.headroom` is only written when
+/// the link agreed the `headroom` feature, so an older build heartbeating
+/// every 30 s would otherwise look silent.
+pub fn record_heartbeat(peer_id: &str, now_ms: u64) -> Result<(), String> {
+    let path = beat_path(peer_id).ok_or_else(|| format!("invalid peer id: {peer_id}"))?;
+    fs::create_dir_all(peers_dir()).map_err(|e| format!("create peers dir: {e}"))?;
+    // Atomic: `relay peers` and the TUI read it while the relay writes.
+    let tmp = path.with_extension("beat.tmp");
+    fs::write(&tmp, now_ms.to_string()).map_err(|e| format!("write heartbeat: {e}"))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("rename heartbeat: {e}"))
+}
+
 /// When `peer_id` last sent a heartbeat this machine recorded, in epoch ms
-/// on our clock. Only the heartbeat counts: `.meta`'s `last_seen` moves on a
+/// on our clock. Only heartbeats count: `.meta`'s `last_seen` moves on a
 /// connect and on a LAN sighting, neither of which says the link is up.
+/// `.headroom` covers relays that ran before `.beat` existed.
 pub fn last_heard_ms(peer_id: &str) -> Option<u64> {
-    headroom::load(peer_id).map(|r| r.received_ms)
+    let beat = beat_path(peer_id)
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| s.trim().parse::<u64>().ok());
+    let headroom = headroom::load(peer_id).map(|r| r.received_ms);
+    beat.max(headroom).filter(|&ms| ms > 0)
 }
 
 /// The window placement uses: `stale_after_secs` from `policy.toml`, or the

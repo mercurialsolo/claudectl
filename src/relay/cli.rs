@@ -676,6 +676,7 @@ fn cmd_serve(
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(&from_peer, &msg.payload);
+                        let _ = super::record_heartbeat(from_peer.as_str(), super::epoch_ms());
                         persist_peer_capabilities(from_peer.as_str(), &msg.payload);
                         let _ = super::headroom::record(
                             from_peer.as_str(),
@@ -1515,6 +1516,7 @@ fn run_connect_loop(registry: &Arc<Mutex<PeerRegistry>>, identity: &str) {
                 match msg.msg_type {
                     super::MessageType::Heartbeat => {
                         reg.handle_heartbeat(peer_id, &msg.payload);
+                        let _ = super::record_heartbeat(peer_id.as_str(), super::epoch_ms());
                         persist_peer_capabilities(peer_id.as_str(), &msg.payload);
                         record_advertised_addrs(peer_id.as_str(), &msg.payload);
                     }
@@ -2747,9 +2749,6 @@ struct PruneCandidate {
     /// Seconds since its pairing key was written, for a peer with no
     /// heartbeat on record. `None` when the key's age can't be read.
     paired_secs_ago: Option<u64>,
-    /// `.meta` records a connect or a sighting. A peer like that with no
-    /// heartbeat may be on a build that sends none, and up right now.
-    seen_without_heartbeat: bool,
 }
 
 /// What `relay prune` would do: the peers to forget, and the quiet ones kept
@@ -2771,22 +2770,10 @@ fn prune_plan(
             PeerLiveness::NeverHeard => p.paired_secs_ago,
         };
         match quiet_secs {
-            Some(q) if q >= older_than_secs => {
-                if let Some(why) = protected.get(&p.id) {
-                    kept.push((p.id.clone(), why.clone()));
-                } else if p.liveness == PeerLiveness::NeverHeard && p.seen_without_heartbeat {
-                    // An older build connects and never sends headroom, so
-                    // its age says nothing about whether it is up.
-                    kept.push((
-                        p.id.clone(),
-                        "it has connected but sends no heartbeat (an older claudectl?), so \
-                         there is no telling whether it is up; `relay forget` it if it is gone"
-                            .to_string(),
-                    ));
-                } else {
-                    forget.push(p.id.clone());
-                }
-            }
+            Some(q) if q >= older_than_secs => match protected.get(&p.id) {
+                Some(why) => kept.push((p.id.clone(), why.clone())),
+                None => forget.push(p.id.clone()),
+            },
             _ => {}
         }
     }
@@ -2836,10 +2823,21 @@ fn hive_protected_peers() -> io::Result<std::collections::BTreeMap<String, Strin
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(io::Error::other(format!("read hive members: {e}"))),
     }
-    match std::fs::metadata(roster.requests_path()) {
-        Ok(_) => {
-            std::fs::read_to_string(roster.requests_path())
-                .map_err(|e| io::Error::other(format!("read hive join requests: {e}")))?;
+    // `pending_requests` skips a line it can't parse, which would drop that
+    // peer's protection; a line that doesn't parse stops the prune instead.
+    match std::fs::read_to_string(roster.requests_path()) {
+        Ok(body) => {
+            for (n, line) in body.lines().enumerate() {
+                if !line.trim().is_empty()
+                    && serde_json::from_str::<crate::hive::membership::JoinRequest>(line).is_err()
+                {
+                    return Err(io::Error::other(format!(
+                        "{} line {} does not parse; fix or remove it before pruning",
+                        roster.requests_path().display(),
+                        n + 1
+                    )));
+                }
+            }
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(io::Error::other(format!("read hive join requests: {e}"))),
@@ -2880,9 +2878,6 @@ fn cmd_prune(older_than: &str, yes: bool, json_mode: bool) -> io::Result<()> {
         .into_iter()
         .map(|(id, liveness)| PruneCandidate {
             paired_secs_ago: paired_secs_ago(&id),
-            seen_without_heartbeat: load_peer_meta(&id)
-                .and_then(|m| m.get("last_seen").and_then(|v| v.as_u64()))
-                .is_some_and(|ms| ms > 0),
             id,
             liveness,
         })
@@ -3892,20 +3887,7 @@ mod prune {
             id: id.into(),
             liveness,
             paired_secs_ago,
-            seen_without_heartbeat: false,
         }
-    }
-
-    /// The review's case: an older build that connected a week ago and is
-    /// still connected has no heartbeat on record, only a connect.
-    #[test]
-    fn a_peer_that_connected_but_never_sent_a_heartbeat_is_kept() {
-        let mut p = peer("old-build", PeerLiveness::NeverHeard, Some(2 * WEEK));
-        p.seen_without_heartbeat = true;
-        let (forget, kept) = prune_plan(&[p], WEEK, &BTreeMap::new());
-        assert!(forget.is_empty());
-        assert_eq!(kept.len(), 1);
-        assert!(kept[0].1.contains("sends no heartbeat"), "{}", kept[0].1);
     }
 
     #[test]
