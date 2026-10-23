@@ -4,6 +4,27 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.92.3] - 2026-10-22
+
+### Added
+
+- **`relay peers` says which paired machines are actually there (#612).** A pairing is a stored key and outlives any connection, so the list used to show every machine ever paired, each `PAIRED yes`. It now has STATUS and LAST HEARD columns, live first:
+  - `live`: a heartbeat within `stale_after_secs` (90 s unless `policy.toml` says otherwise, the same window the supervisor's placement uses).
+  - `stale`: heard from once, not lately.
+  - `never`: no heartbeat on record.
+  
+  Every heartbeat is now stamped in `peers/<id>.beat`, so a peer on a link without the headroom feature reads as live too. `--json` adds `status` and `last_heard_secs_ago`.
+- **`relay prune` lists paired peers quiet for a week (`--older-than`) and `--yes` forgets them (#612).** It is a dry run by default.
+  - **It keeps:** the peer you joined a hive through, members of your hive and peers waiting on a join request, each with the reason. It stops instead of guessing when it can't read the hive's membership files.
+  - **It refuses:** when no relay is running on this machine (nothing is recording heartbeats then), and an `--older-than` shorter than the stale window.
+  - **While the running relay predates `.beat`,** peers with no heartbeat on record are kept, along with the command to restart the relay.
+  - **It is not automatic,** because a laptop shut for a week would otherwise need a new invite.
+- **The TUI's peers panel works (#612).** `p` used to show "No connected peers" outside demo mode, because nothing filled it. It now lists every paired machine with status, last heard and address. The `S` send picker lists live machines first and labels the rest (`2) old-laptop (3d ago)`), and the Hive tab shows the same status.
+
+### Fixed
+
+- **`relay forget` removes everything it knows about a peer (#612).** It used to leave `.caps` and `.headroom` behind. Heartbeats from a forgotten peer that is still connected no longer recreate its files, and placement skips peers with no key. Files it cannot remove are named and the command exits non-zero.
+
 ## [0.92.2] - 2026-10-22
 
 0.92.1 was merged but never tagged or published, so this is the first release to ship its changes. Both sets of notes apply.
