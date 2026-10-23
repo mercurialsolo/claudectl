@@ -1,0 +1,2364 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Hive mind for Claude Code - expand your consciousness with an agentic hive that learns from you once and remembers everywhere">
+      
+      
+      
+        <link rel="canonical" href="https://mercurialsolo.github.io/claudectl/cross-agent-hive/">
+      
+      
+        <link rel="prev" href="../open-cluster/">
+      
+      
+        <link rel="next" href="../AGENT_BUS/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Cross-Agent Hive - claudectl</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cross-agent-hive-design-specification" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="claudectl" class="md-header__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            claudectl
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Cross-Agent Hive
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="claudectl" class="md-nav__button md-logo" aria-label="claudectl" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    claudectl
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/mercurialsolo/claudectl" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    mercurialsolo/claudectl
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fleet-supervisor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fleet Supervisor
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent-bus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Bus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive Mind
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Capability Grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy-as-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy as Code
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../team-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Team Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terminal-support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terminal Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design specs
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design specs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../open-cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Open Cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Agent Hive
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Agent Hive
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#implementation-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Motivation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-what-already-crosses-the-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. What already crosses the boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-the-five-couplings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. The five couplings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. The five couplings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Discovery
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.1 Discovery">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#there-is-no-process-to-discover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        There is no process to discover
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#liveness-is-a-recency-window-because-there-is-no-session-end-event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Liveness is a recency window, because there is no session-end event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cost-is-absent-not-zero" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost is absent, not zero
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-type-was-not-renamed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The type was not renamed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-tool-vocabulary-the-one-that-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Tool vocabulary — the one that matters
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.2 Tool vocabulary — the one that matters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-rule-map-only-a-genuinely-identical-operation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The rule: map only a genuinely identical operation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mcp-tools-mostly-need-no-normalization-at-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MCP tools mostly need no normalization at all
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#apply_patch-splits-into-write-and-edit-and-the-signal-is-present" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        apply_patch splits into Write and Edit, and the signal is present
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Capture
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 Application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-artifact-applicability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 Artifact applicability
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-the-spine-one-vocabulary-no-agent-in-the-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. The spine: one vocabulary, no agent in the key
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-observe-adapters-that-produce-neutral-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Observe: adapters that produce neutral records
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-apply-project-a-unit-into-each-agents-native-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Apply: project a unit into each agent's native surface
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-one-bus-everyone-can-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. One bus everyone can use
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. One bus everyone can use">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-any-agent-same-machine-mostly-works-already" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Any agent, same machine — mostly works already
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-roles-need-an-agent-and-a-machine-dimension" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 Roles need an agent and a machine dimension
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-the-relay-bridge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 The relay bridge
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-phasing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Phasing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Evidence
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Evidence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-codex-session-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 Codex session layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-tool-name-histogram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 Tool-name histogram
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-skill-format-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 Skill format comparison
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#94-codex-approval-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.4 Codex approval store
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#95-other-codex-integration-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.5 Other Codex integration points
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-open-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Open questions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AGENT_BUS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Bus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay-and-hive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay & Hive
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay-protocol/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay Wire Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../relay-discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relay Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hive-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hive Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent-protocol/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#implementation-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Motivation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-what-already-crosses-the-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. What already crosses the boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-the-five-couplings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. The five couplings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. The five couplings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Discovery
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.1 Discovery">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#there-is-no-process-to-discover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        There is no process to discover
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#liveness-is-a-recency-window-because-there-is-no-session-end-event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Liveness is a recency window, because there is no session-end event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cost-is-absent-not-zero" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost is absent, not zero
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-type-was-not-renamed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The type was not renamed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-tool-vocabulary-the-one-that-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Tool vocabulary — the one that matters
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.2 Tool vocabulary — the one that matters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-rule-map-only-a-genuinely-identical-operation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The rule: map only a genuinely identical operation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mcp-tools-mostly-need-no-normalization-at-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MCP tools mostly need no normalization at all
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#apply_patch-splits-into-write-and-edit-and-the-signal-is-present" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        apply_patch splits into Write and Edit, and the signal is present
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Capture
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 Application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-artifact-applicability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 Artifact applicability
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-the-spine-one-vocabulary-no-agent-in-the-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. The spine: one vocabulary, no agent in the key
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-observe-adapters-that-produce-neutral-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Observe: adapters that produce neutral records
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-apply-project-a-unit-into-each-agents-native-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Apply: project a unit into each agent's native surface
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-one-bus-everyone-can-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. One bus everyone can use
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. One bus everyone can use">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-any-agent-same-machine-mostly-works-already" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Any agent, same machine — mostly works already
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-roles-need-an-agent-and-a-machine-dimension" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 Roles need an agent and a machine dimension
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-the-relay-bridge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 The relay bridge
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-phasing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Phasing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Evidence
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Evidence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-codex-session-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 Codex session layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-tool-name-histogram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 Tool-name histogram
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-skill-format-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 Skill format comparison
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#94-codex-approval-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.4 Codex approval store
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#95-other-codex-integration-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.5 Other Codex integration points
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-open-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Open questions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="cross-agent-hive-design-specification">Cross-Agent Hive — Design Specification</h1>
+<p><strong>Status:</strong> Epic #521, phases #522–#528. Phases 1 (PR #530), 2 (PR #531) and 3 (PR #532) shipped; the rest proposed. The adapter-registry half of phase 3 was split out as #533. Written against the code as of <code>bc61737d</code> (v0.79.0), and against Codex CLI 0.162.1 as installed on a real machine — every claim about Codex's on-disk shape in §9 was measured, not inferred.
+<strong>Scope:</strong> Let coding agents that are not Claude Code — starting with Codex — join a hive as full members: contribute what they learn, receive what others learned, and talk to every other member over one bus. Today the hive's substrate is agent-neutral but its two ends are not: capture happens through a Claude Code hook, and application happens into a Claude Code prompt.</p>
+<h2 id="implementation-status">Implementation status</h2>
+<table>
+<thead>
+<tr>
+<th>Phase (§8)</th>
+<th>Issue</th>
+<th>Status</th>
+<th>Module / artifact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. Canonical tool vocabulary</td>
+<td>#522</td>
+<td><strong>Shipped</strong> (PR #530)</td>
+<td><code>claudectl-core/src/agent/vocab.rs</code>, seam at <code>brain::preferences::canonical_tool_for</code></td>
+</tr>
+<tr>
+<td>2. Unit provenance + artifact applicability</td>
+<td>#523</td>
+<td><strong>Shipped</strong> (PR #531)</td>
+<td><code>src/hive/mod.rs</code> (<code>origin_agents</code>, <code>ArtifactRequires::agents</code>), <code>hive/distiller.rs</code> (<code>OriginIndex</code>), <code>claudectl-core/src/agent/mod.rs</code> (presence detection)</td>
+</tr>
+<tr>
+<td>3. Codex discovery + monitor</td>
+<td>#524</td>
+<td><strong>Shipped</strong> (PR #532)</td>
+<td><code>claudectl-core/src/agent/codex.rs</code>, <code>session::ClaudeSession::{from_codex_rollout,is_actionable}</code></td>
+</tr>
+<tr>
+<td>3b. Route everything through the adapter registry</td>
+<td>#533</td>
+<td><strong>Not started</strong></td>
+<td><code>src/coord/adapter*.rs</code>, or <code>claudectl-core/src/runtime.rs</code></td>
+</tr>
+<tr>
+<td>4. Hive read surface for any agent (MCP)</td>
+<td>#525</td>
+<td><strong>Not started</strong></td>
+<td><code>src/hive/mcp.rs</code> (new), mirroring <code>src/query/mcp.rs</code></td>
+</tr>
+<tr>
+<td>5. Codex write surface (AGENTS.md, rules)</td>
+<td>#526</td>
+<td><strong>Not started</strong></td>
+<td><code>src/hive/project/</code> (new)</td>
+</tr>
+<tr>
+<td>6. Bus: agent + machine dimension</td>
+<td>#527</td>
+<td><strong>Agent half shipped</strong> (Codex <code>--self</code>, <code>roles.agent</code>); machine half not started</td>
+<td><code>src/bus/{store,roles,policy}.rs</code></td>
+</tr>
+<tr>
+<td>7. Bus: relay bridge (cross-machine)</td>
+<td>#528</td>
+<td><strong>Not started</strong></td>
+<td><code>src/bus/bridge.rs</code> (new), <code>src/relay/mod.rs</code> message type</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="1-motivation">1. Motivation</h2>
+<p>The project's tagline is "learns from you once and remembers everywhere." <em>Everywhere</em> currently means every Claude Code session on every machine you have paired. It does not mean every agent you use.</p>
+<p>That gap is not academic. On the machine this spec was written against there are 671 Codex rollout transcripts and a Codex approval store with 275 entries. Every approval in that store is a preference the user expressed — the exact raw material <code>brain/preferences.rs</code> distills into a <code>KnowledgeUnit</code> — and none of it reaches the hive. In the other direction, a preference the hive has learned with high confidence from a hundred Claude sessions has no way to reach a Codex session, which will ask about the same command again.</p>
+<p>The two agents also share MCP servers, which is where this gets both worse and better than expected. Most of Codex's MCP calls already carry the exact Claude Code tool name (<code>mcp__chrome-devtools__click</code>), so those preferences would merge the moment either side contributed one — they simply never do, because Codex never contributes. The rest arrive split across two fields (<code>namespace: "mcp__cua_repl"</code>, <code>name: "js"</code>) and need one join to become the same key (§3.2). Either way it is the same tool on the same server, and the hive currently treats the two agents' experience of it as unrelated.</p>
+<p>This spec covers three questions in order of how expensive they are to get wrong:</p>
+<ol>
+<li><strong>How is knowledge represented</strong> so that the same preference learned in two different agents merges into one unit? (§4 — the spine, and the only irreversible decision here.)</li>
+<li><strong>How is knowledge captured</strong> from an agent that has no PreToolUse hook? (§5)</li>
+<li><strong>How is knowledge applied</strong> to an agent that cannot be gated? (§6)</li>
+</ol>
+<p>And one more that the user asked for directly, and that turns out to be mostly a plumbing problem rather than a design problem:</p>
+<ol>
+<li><strong>How does every agent, on every machine, reach one bus?</strong> (§7)</li>
+</ol>
+<h2 id="2-what-already-crosses-the-boundary">2. What already crosses the boundary</h2>
+<p>Most of the hive is agent-neutral, and it is worth being precise about that before describing what is not — the work here is smaller than "support another agent" sounds.</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Agent-neutral?</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hive/store.rs</code>, <code>gossip.rs</code>, <code>merger.rs</code>, <code>trust.rs</code>, <code>membership.rs</code></td>
+<td><strong>Yes</strong></td>
+<td>They move <code>KnowledgeUnit</code>s between peers. Nothing in them knows what a session is.</td>
+</tr>
+<tr>
+<td><code>KnowledgeScope</code> (<code>hive/mod.rs:384</code>)</td>
+<td><strong>Yes</strong></td>
+<td>Universal / Language / Project. No agent dimension is wanted (see §4).</td>
+</tr>
+<tr>
+<td><code>KnowledgeContent::{Pattern, Insight, Temporal, PromotedRule, ApproachOutcome, ApproachCluster}</code></td>
+<td><strong>Yes in shape</strong></td>
+<td><code>tool</code> is a free-form <code>String</code>; the rest is prose and statistics. Only the <em>vocabulary</em> is Claude-specific.</td>
+</tr>
+<tr>
+<td><code>KnowledgeContent::Skill</code></td>
+<td><strong>Yes, today</strong></td>
+<td>Codex and Claude Code use the same <code>SKILL.md</code> contract — <code>---</code>-delimited frontmatter with <code>name</code> and <code>description</code>. Verified in §9.3.</td>
+</tr>
+<tr>
+<td><code>DecisionRecord</code> (<code>brain/decisions.rs:77</code>)</td>
+<td><strong>Yes in shape</strong></td>
+<td><code>tool: Option&lt;String&gt;</code>, <code>command: Option&lt;String&gt;</code>, <code>project</code>, <code>user_action</code>. Nothing Claude-shaped.</td>
+</tr>
+<tr>
+<td><code>claudectl --brain-query --tool X --command Y --project Z</code></td>
+<td><strong>Yes</strong></td>
+<td>A shell-callable decision endpoint. Any agent that can run a subprocess can already consult the brain.</td>
+</tr>
+<tr>
+<td><code>claudectl bus stdio</code> (<code>bus/mcp.rs</code>)</td>
+<td><strong>Yes, today</strong></td>
+<td>An MCP stdio server. Codex loads MCP servers from <code>config.toml</code>, so a Codex session can already <code>publish</code> and <code>read_inbox</code>. See §7.1.</td>
+</tr>
+</tbody>
+</table>
+<p>Two things that look like cross-agent support but are not:</p>
+<ul>
+<li><strong><code>src/coord/adapter.rs</code></strong> has <code>AgentAdapter</code>, <code>AgentFamily::{ClaudeCode, Codex}</code>, and a stub <code>CodexAdapter</code>. It is the right seam and it is nearly dead: the only callers are <code>src/coord/cli.rs:1061</code> and <code>:1079</code>, both inside a <code>coord adapters</code> listing command. Nothing in discovery, monitor, brain, or hive routes through it.</li>
+<li><strong><code>src/brain/agents.rs</code></strong> (<code>AgentConfig</code>, <code>[agents.codex]</code> in config, <code>run_agent</code>) is <em>delegate-to</em> Codex: shell out with a prompt, capture stdout. That is the opposite direction from observing a Codex session you did not start, and it is a different feature. Conflating the two is the most likely way to misread this spec.</li>
+</ul>
+<h2 id="3-the-five-couplings">3. The five couplings</h2>
+<h3 id="31-discovery">3.1 Discovery</h3>
+<p><code>claudectl-core/src/discovery.rs:6</code> hardcodes <code>~/.claude/sessions/*.json</code> (PID-named) and resolves transcripts under <code>~/.claude/projects/&lt;slug&gt;/&lt;uuid&gt;.jsonl</code>. <code>scan_subagents</code> hardcodes <code>/tmp/claude-{uid}</code>. The <code>ClaudeSession</code> type name is load-bearing across both other crates.</p>
+<p>Codex's equivalent is richer than expected (§9.1): <code>~/.codex/sessions/YYYY/MM/DD/rollout-&lt;ts&gt;-&lt;uuid&gt;.jsonl</code>, with <code>session_meta</code> carrying <code>session_id</code> and <code>cwd</code>, <code>event_msg/token_count</code> carrying <code>model_context_window</code> alongside full token usage, and <code>task_started</code> / <code>task_complete</code> / <code>turn_aborted</code> as status signals.</p>
+<p>Phase 3 settled three things this section originally left open, and one of them contradicted the plan.</p>
+<h4 id="there-is-no-process-to-discover">There is no process to discover</h4>
+<p>This spec and #524 both assumed Codex discovery would find processes and read their state. Measured: the ChatGPT desktop app runs Codex as <strong>one</strong> long-lived <code>codex … app-server</code> serving every session, alongside 27 Electron helpers. Nothing distinguishes which session a process owns. A terminal <code>codex</code> is its own process, but there is no general mapping.</p>
+<p>So a Codex session is discovered from its transcript, <code>pid</code> is 0, and the session is <strong>not actionable</strong> — <code>ClaudeSession::is_actionable()</code>. This is a safety property, not a missing feature: offering "kill" on a Codex session and reaching the shared <code>app-server</code> would end every Codex session the user has open.</p>
+<h4 id="liveness-is-a-recency-window-because-there-is-no-session-end-event">Liveness is a recency window, because there is no session-end event</h4>
+<p><code>task_complete</code> ends a <em>turn</em>. A session the user closed is byte-identical to one sitting idle. <code>CODEX_SESSION_TTL_SECS</code> (30 minutes) is the whole liveness model, chosen from the measured distribution — 0 rollouts touched in the last hour, 1 in four, 25 in a week, 671 all time. It is bimodal, so the exact value barely matters. Its one cost: a session that crashed mid-turn reads as working until the window expires.</p>
+<h4 id="cost-is-absent-not-zero">Cost is absent, not zero</h4>
+<p><strong>Codex rollouts carry no USD.</strong> Codex is subscription-billed and records only tokens. <code>cost_usd</code> stays 0 with <code>usage_metrics_available</code> false and <code>has_known_cost()</code> false, so nothing can mistake "unknown" for "free". The existing cost sums are additive, so a 0 contributes nothing and no total is corrupted.</p>
+<h4 id="the-type-was-not-renamed">The type was not renamed</h4>
+<p><code>ClaudeSession</code> keeps its name (§10 question 5, now closed). It is public API across all three crates, a Codex session fills the same fields and flows through the same views, and renaming buys nothing an <code>agent_family</code> field does not. Three predicates keep the distinctions from drifting: <code>is_claude_code()</code> for "where do this session's files live", <code>is_actionable()</code> for "may I touch it", <code>is_remote()</code> unchanged for "is this from a peer".</p>
+<h3 id="32-tool-vocabulary-the-one-that-matters">3.2 Tool vocabulary — the one that matters</h3>
+<p><code>semantic_key</code> for a <code>Pattern</code> is <code>pattern:{tool}:{cmd}</code> (<code>hive/mod.rs:549-556</code>), and <code>tool</code> is literally <code>"Bash"</code>, <code>"Write"</code>, <code>"Edit"</code>. Codex names the same operations differently. The measured table (§9.2, from 15 000 tool calls across 120 rollouts):</p>
+<table>
+<thead>
+<tr>
+<th>Codex <code>name</code> (and <code>namespace</code>)</th>
+<th>Observed count</th>
+<th>Claude Code equivalent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>exec_command</code></td>
+<td>7046</td>
+<td><code>Bash</code></td>
+</tr>
+<tr>
+<td><code>exec</code></td>
+<td>3624</td>
+<td><em>none</em> — a JS sandbox, see below</td>
+</tr>
+<tr>
+<td><code>write_stdin</code></td>
+<td>1336</td>
+<td><em>none</em> — keystrokes, see below</td>
+</tr>
+<tr>
+<td><code>apply_patch</code></td>
+<td>1270</td>
+<td><code>Write</code> or <code>Edit</code> — see below</td>
+</tr>
+<tr>
+<td><code>shell_command</code></td>
+<td>671</td>
+<td><code>Bash</code></td>
+</tr>
+<tr>
+<td><code>update_plan</code></td>
+<td>60</td>
+<td><code>TodoWrite</code></td>
+</tr>
+<tr>
+<td><code>spawn_agent</code>, <code>collaboration/{spawn_agent,followup_task}</code></td>
+<td>~100</td>
+<td><code>Task</code></td>
+</tr>
+<tr>
+<td><code>collaboration/{send_message,wait_agent,list_agents}</code></td>
+<td>~140</td>
+<td><em>none</em> — messaging, not delegation</td>
+</tr>
+<tr>
+<td><code>request_user_input_async</code></td>
+<td>31</td>
+<td><code>AskUserQuestion</code></td>
+</tr>
+<tr>
+<td><code>web/run</code></td>
+<td>27</td>
+<td><code>WebSearch</code></td>
+</tr>
+<tr>
+<td><code>wait</code>, <code>clock/sleep</code></td>
+<td>251</td>
+<td><em>none</em></td>
+</tr>
+</tbody>
+</table>
+<h4 id="the-rule-map-only-a-genuinely-identical-operation">The rule: map only a genuinely identical operation</h4>
+<p>A tool is mapped only when it is the <em>same operation</em> <strong>and</strong> its command payload is <em>comparable</em>. Everything else keeps a family-prefixed name (<code>codex:exec</code>) and merges with nothing.</p>
+<p>This is deliberately conservative. A false merge corrupts a unit other machines rely on; a missed merge only leaves knowledge local, and is recoverable later by extending the table. When in doubt, do not map.</p>
+<p>Three Codex tools fail that test despite looking mappable, and reading their payloads is what settled it:</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Payload</th>
+<th>Why not mapped</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>exec_command</code></td>
+<td><code>{"cmd": "ls"}</code></td>
+<td>— mapped to <code>Bash</code>; a shell command string</td>
+</tr>
+<tr>
+<td><code>shell_command</code></td>
+<td><code>{"command": "ls", "workdir": …}</code></td>
+<td>— mapped to <code>Bash</code>; same</td>
+</tr>
+<tr>
+<td><code>exec</code></td>
+<td><code>const r = await tools.exec_command({…})</code></td>
+<td>A <strong>JavaScript sandbox</strong>, not a shell. Mapping it would file JS snippets under the same key as shell commands.</td>
+</tr>
+<tr>
+<td><code>write_stdin</code></td>
+<td><code>{"session_id": 76793, "chars": ""}</code></td>
+<td>Sends keystrokes to an already-running session. Not a command, and <code>Bash</code> has no equivalent.</td>
+</tr>
+<tr>
+<td><code>collaboration/send_message</code>, <code>wait_agent</code></td>
+<td>—</td>
+<td>Messaging and waiting, not delegation. Only <code>spawn_agent</code> and <code>followup_task</code> are what <code>Task</code> does.</td>
+</tr>
+</tbody>
+</table>
+<p><code>web/run</code> is the one deliberate imprecision: it is Codex's single web tool where Claude Code splits <code>WebSearch</code> from <code>WebFetch</code>. Search is the dominant use, and a missed merge on fetch costs less than filing fetches under search would.</p>
+<h4 id="mcp-tools-mostly-need-no-normalization-at-all">MCP tools mostly need no normalization at all</h4>
+<p>Codex emits MCP calls in <strong>two shapes</strong>, and the dominant one is already the Claude Code spelling byte-for-byte (§9.2):</p>
+<table>
+<thead>
+<tr>
+<th>Codex <code>namespace</code></th>
+<th>Codex <code>name</code></th>
+<th>Count</th>
+<th>Canonical</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>(absent)</em></td>
+<td><code>mcp__chrome-devtools__evaluate_script</code></td>
+<td>139</td>
+<td>identical — pass through</td>
+</tr>
+<tr>
+<td><code>mcp__cua_repl</code></td>
+<td><code>js</code></td>
+<td>381</td>
+<td><code>mcp__cua_repl__js</code></td>
+</tr>
+</tbody>
+</table>
+<p>So the rule is: if <code>name</code> already begins with <code>mcp__</code>, it <em>is</em> the canonical name and must pass through untouched. Otherwise, when <code>namespace</code> begins with <code>mcp__</code>, join as <code>{namespace}__{name}</code> — the namespace already carries the <code>mcp__</code> prefix, so this is a join, not a reconstruction.</p>
+<p>This matters because the Claude Code form is <strong>not</strong> reversibly splittable: a server segment may itself contain <code>_</code> and <code>-</code> (<code>mcp__chrome-devtools__new_page</code>, <code>mcp__claude_ai_Claude_Docs__batch</code>), so there is no way to recover <code>(server, tool)</code> from the joined string. Normalization therefore has to run forward from Codex's explicit fields and never attempt the inverse.</p>
+<p>The practical consequence is good: most MCP tool preferences already share a key across the two agents and will merge the moment a Codex session contributes one.</p>
+<h4 id="apply_patch-splits-into-write-and-edit-and-the-signal-is-present"><code>apply_patch</code> splits into <code>Write</code> and <code>Edit</code>, and the signal is present</h4>
+<p>Claude Code keeps <code>Write</code> (new file) and <code>Edit</code> (existing file) as distinct tool names in <code>DecisionRecord.tool</code>, so existing hives hold separate <code>pattern:Write:*</code> and <code>pattern:Edit:*</code> units. Mapping every <code>apply_patch</code> to <code>Edit</code> would silently merge Codex file-creation approvals into Edit units.</p>
+<p>It does not have to be lossy. Codex's patch envelope carries the distinction explicitly, and in the sample (§9.2) it is well populated: <code>*** Update File</code> 1934, <code>*** Add File</code> 190, <code>*** Delete File</code> 10. So:</p>
+<table>
+<thead>
+<tr>
+<th>Envelope marker</th>
+<th>Canonical</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>*** Add File</code></td>
+<td><code>Write</code></td>
+</tr>
+<tr>
+<td><code>*** Update File</code></td>
+<td><code>Edit</code></td>
+</tr>
+<tr>
+<td><code>*** Delete File</code></td>
+<td><code>codex:apply_patch_delete</code></td>
+</tr>
+</tbody>
+</table>
+<p>Deletion has no Claude Code tool analogue — it happens through <code>Bash rm</code>, which is a different operation with different risk — so it keeps a family-prefixed name and merges with nothing. That is correct rather than unfortunate.</p>
+<p>A patch touching several files can carry several markers. Where markers disagree, prefer <code>Write</code>: a batch that creates a file is the higher-privilege operation, and a preference learned about it should not be filed under the gentler name.</p>
+<p>The flow has exactly one seam, where <code>DecisionRecord.tool</code> becomes <code>PreferencePattern.tool</code> and then <code>KnowledgeContent::Pattern.tool</code>. Before phase 1 it read:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">tool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">d</span><span class="p">.</span><span class="n">tool</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">unwrap_or_else</span><span class="p">(</span><span class="o">||</span><span class="w"> </span><span class="s">"*"</span><span class="p">.</span><span class="n">to_string</span><span class="p">());</span>
+</code></pre></div>
+<p>and it is now <code>canonical_tool_for(d)</code>. Normalization runs on the <strong>read</strong> side deliberately: the decision log keeps the name the agent actually used, so the log does not lie about what happened, and a wrong table entry is fixed by re-distilling rather than being baked into every record forever.</p>
+<p>Phase 1 also showed the seam covers more than <code>Pattern</code> — removing the normalizer splits the <code>ToolAccuracy</code> key (<code>accuracy:{tool}</code>) the same way.</p>
+<h3 id="33-capture">3.3 Capture</h3>
+<p>Decisions are produced by <code>claude-plugin/hooks/scripts/brain-gate.sh</code>, a Claude Code <strong>PreToolUse</strong> hook. Codex has no pre-tool gate. Its only event hook is <code>notify</code>, which fires after the fact — on this machine, <code>notify = [&lt;client&gt;, "turn-ended"]</code>.</p>
+<p>So <strong>the hive cannot gate Codex the way it gates Claude Code.</strong> That is a property of Codex, not a gap in claudectl, and the design has to accept it rather than work around it.</p>
+<p>What Codex does have is its own approval memory: <code>~/.codex/rules/default.rules</code>, 275 entries, every one of the form</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>prefix_rule(pattern=["uv", "run", "pytest", "tests/test_prompt_schema.py"], decision="allow")
+</code></pre></div>
+<p>This is machine-written, not hand-authored — entries include full heredoc bodies and absolute-path <code>mkdir</code>s nobody types into a config file (§9.4). It is a distilled approval corpus in a format claudectl can both read and write, which makes it both a capture source and an application target.</p>
+<p><strong>Caveat, flagged because phase 5 depends on it:</strong> the file's last write on this machine was 2 Sep, and <code>state_5.sqlite</code> contains no approvals table. Current Codex may have moved approval memory somewhere else, or may simply not have had a new approval to record. Verify before building on it; phases 1–4 do not depend on it.</p>
+<h3 id="34-application">3.4 Application</h3>
+<p><code>src/brain/engine.rs:388</code> calls <code>hive::injection::build_hive_context_for_session</code> and puts the result in <code>brain_ctx.hive_context</code> — the <strong>brain's own LLM prompt</strong>, not the agent's context. The agent only ever sees the brain's verdict, delivered through the hook.</p>
+<p>For an agent with no hook, the hive has to reach it another way. Three targets, in increasing order of privilege:</p>
+<ol>
+<li><strong>An MCP server</strong> (<code>claudectl hive stdio</code>). Pull-style: the agent asks. Needs no hook, no file mutation, and works with stock Codex because Codex loads MCP servers natively. This is the right first move.</li>
+<li><strong>A managed block in <code>AGENTS.md</code>.</strong> Prose knowledge, pushed. There is already precedent for marker-delimited managed blocks in that file on this machine — <code>&lt;!-- paper-lantern:start --&gt;</code> — so the pattern is established and the convention is <code>&lt;!-- claudectl-hive:start --&gt;</code> … <code>&lt;!-- claudectl-hive:end --&gt;</code>.</li>
+<li><strong>Emitting <code>prefix_rule</code> lines into <code>~/.codex/rules/</code>.</strong> Native enforcement without a hook: a high-confidence "always approve <code>cargo test</code>" unit becomes a Codex rule and Codex stops asking. This is real privilege — claudectl would be writing another agent's approval store — and must be explicit opt-in, never a default, never silent.</li>
+</ol>
+<h3 id="35-artifact-applicability">3.5 Artifact applicability</h3>
+<p><code>KnowledgeContent::HookConfig</code> is Claude-Code-only by nature: there is no Codex PreToolUse to install into. <code>ArtifactRequires</code> (<code>hive/mod.rs:406</code>) carries <code>cli</code>, <code>os</code>, and <code>min_version</code> but no agent field, so a hook unit gossiped to a Codex-only peer has no way to declare itself inapplicable. It will arrive, fail to install, and look like a bug.</p>
+<h2 id="4-the-spine-one-vocabulary-no-agent-in-the-key">4. The spine: one vocabulary, no agent in the key</h2>
+<p>There is <strong>no version on the gossip wire.</strong> <code>hive/gossip.rs:555</code> writes <code>version: 1</code> on the <em>unit</em>, not on the protocol. And <code>semantic_key</code> is the cross-peer merge key — <code>store.rs:84</code>, <code>distiller.rs:120</code>, <code>archive.rs:147</code> and the merger all key on it. Changing how it is derived splits a hive between old and new binaries, silently, with both halves believing they are in sync.</p>
+<p>That single fact determines the design:</p>
+<blockquote>
+<p><strong>Do not add an agent dimension to <code>semantic_key</code>.</strong> Normalize foreign tool names <em>into</em> the existing vocabulary at capture time.</p>
+</blockquote>
+<p>The reason is the product, not the schema. "<code>cargo test</code> is always approved," learned in Codex, has to land in the <em>same unit</em> as the one learned in Claude Code. If the key carried the agent, the hive would hold two units, each with half the evidence, each decaying on its own clock, and "learns once, remembers everywhere" would be false in exactly the case the feature exists for.</p>
+<p>Three consequences:</p>
+<ul>
+<li><strong><code>canonical_tool(family, namespace, name, payload) -&gt; String</code> is a pure function</strong> living in <code>claudectl-core</code>, with the §3.2 tables as data. Claude Code's names are the canonical form, because they are already on the wire in every existing hive. This is not a claim that they are better names; it is that they are the incumbent ones and a rename is a migration. The <code>payload</code> argument exists only so <code>apply_patch</code> can read its envelope marker (§3.2) — every other mapping is a function of the name and namespace alone.</li>
+<li><strong>Provenance is additive, never in the key.</strong> <code>KnowledgeUnit.origin_agent: Option&lt;String&gt;</code> with <code>#[serde(default)]</code>. Old peers ignore the field; new peers can show "learned in Codex, confirmed in Claude Code," which is <em>more</em> trustworthy than either alone and should eventually raise confidence rather than merely annotate it.</li>
+<li><strong>Applicability is per-artifact, not per-unit.</strong> <code>ArtifactRequires.agents: Vec&lt;String&gt;</code> (<code>#[serde(default)]</code>, empty = any) on <code>Skill</code> / <code>Command</code> / <code>HookConfig</code> only. A hook unit declares <code>agents = ["claude-code"]</code> and a Codex-only peer skips it on arrival instead of failing to install it.</li>
+</ul>
+<p>Two details phase 2 settled that the first draft left implicit:</p>
+<p><strong>Attribution is per-approach, not per-tool.</strong> <code>origin_agents</code> is joined onto finished units from the decision log, keyed on canonical tool <em>plus</em> command keyword — the content part of a <code>Pattern</code>'s key. Keying on the tool alone would make a Codex-only <code>cargo fmt</code> approach inherit <code>claude-code</code> simply because <code>Bash</code> is a shared tool.</p>
+<p><strong>Provenance is cumulative across a merge, but only where evidence is.</strong> A replacing merge unions both units' agent lists, since "confirmed independently in two agents" is the case the field exists to record. A <em>rejected</em> unit's origins are not folded in: its evidence did not transfer, so claiming its agent would overstate where the stored knowledge came from.</p>
+<p><strong>Agent presence is detected by state directory, not by PATH.</strong> <code>~/.claude</code> and <code>~/.codex</code> existing is the better signal for what the answer is used for — a skill installs into that directory and is read from it on the agent's next run, so an agent whose binary lives somewhere unusual (a version manager, a wrapper, a GUI bundle) should still receive artifacts.</p>
+<p>An unnormalizable tool — Codex's <code>wait</code>, or any future agent's unique primitive — keeps its raw name prefixed with its family (<code>codex:wait</code>). It will not merge with anything, which is correct: it has no counterpart.</p>
+<h2 id="5-observe-adapters-that-produce-neutral-records">5. Observe: adapters that produce neutral records</h2>
+<p><code>src/coord/adapter.rs</code> already declares the trait. Two things have to change for it to carry real weight.</p>
+<p><strong>It has to move, or grow a core half.</strong> <code>ClaudeCodeAdapter</code> wraps <code>claudectl-core</code>'s <code>discovery::scan_sessions</code>. A Codex adapter needs the same: rollout parsing belongs in <code>claudectl-core/src/agent/codex/</code>, not inside <code>src/coord/adapter_codex.rs</code>, because core cannot depend on the binary and the TUI needs to render Codex sessions too. The adapter in <code>src/coord/</code> stays a thin binding.</p>
+<p><strong>It has to be on the path, not beside it.</strong> Today nothing but a listing command calls it. Discovery, monitor, the brain's observe loop, and the TUI session table all need to go through <code>all_adapters()</code> for the trait to mean anything. That is the largest mechanical change in this spec and the one most likely to want its own epic.</p>
+<p>The capability matrix already models partial support honestly (<code>AdapterCapabilities::minimal()</code>), which is what Codex needs: <code>discover_sessions</code> and <code>monitor_state</code> yes, <code>send_input</code> and <code>deliver_interrupt</code> no, until there is a mechanism for them.</p>
+<h2 id="6-apply-project-a-unit-into-each-agents-native-surface">6. Apply: project a unit into each agent's native surface</h2>
+<p>Symmetry is the wrong goal here. Each agent has a different enforcement surface, and the hive should use the best one each offers rather than the lowest common denominator.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Claude Code</th>
+<th>Codex</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gate a tool call before it runs</td>
+<td>PreToolUse hook → <code>--brain-query</code></td>
+<td><strong>not possible</strong></td>
+</tr>
+<tr>
+<td>Pull knowledge on demand</td>
+<td>—</td>
+<td><code>claudectl hive stdio</code> (MCP)</td>
+</tr>
+<tr>
+<td>Standing prose instruction</td>
+<td><code>CLAUDE.md</code></td>
+<td><code>AGENTS.md</code> managed block</td>
+</tr>
+<tr>
+<td>Standing approval</td>
+<td>brain gate + <code>session-policy</code></td>
+<td><code>rules/default.rules</code> (opt-in)</td>
+</tr>
+<tr>
+<td>Install a skill</td>
+<td><code>~/.claude/skills/</code></td>
+<td><code>~/.codex/skills/</code></td>
+</tr>
+</tbody>
+</table>
+<p>The skills row works today except for one hardwired path: <code>hive/cli/share.rs:487-490</code> (<code>default_install_dir()</code> → <code>~/.claude</code>) and the scan roots at <code>claudectl-core/src/skills.rs:79-86</code>. Widening both to a per-family set of roots makes skill sharing cross-agent with no change to the wire format, which makes it the cheapest visible win in this spec.</p>
+<h2 id="7-one-bus-everyone-can-use">7. One bus everyone can use</h2>
+<p>The bus today is single-machine and Claude-shaped in exactly one place. Both are smaller problems than they look.</p>
+<h3 id="71-any-agent-same-machine-mostly-works-already">7.1 Any agent, same machine — mostly works already</h3>
+<p><code>claudectl bus stdio</code> is an MCP server. Codex loads MCP servers from <code>config.toml</code>. A Codex session can therefore already call <code>whoami</code>, <code>list_agents</code>, <code>publish</code> and <code>read_inbox</code> with <strong>no code change</strong> — this needs documenting more than building.</p>
+<p>One thing does break. <code>bus/roles.rs:116</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">find_claude_ancestor_pid</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">u32</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="n">ancestor_pids</span><span class="p">().</span><span class="n">into_iter</span><span class="p">()</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="p">.</span><span class="n">find</span><span class="p">(</span><span class="o">|</span><span class="n">pid</span><span class="o">|</span><span class="w"> </span><span class="n">process_command_for</span><span class="p">(</span><span class="o">*</span><span class="n">pid</span><span class="p">).</span><span class="n">is_some_and</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">to_lowercase</span><span class="p">().</span><span class="n">contains</span><span class="p">(</span><span class="s">"claude"</span><span class="p">)))</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>bus role bind --self</code> walks the ancestor chain for a process whose command line contains <code>claude</code>. From a Codex session there isn't one, so the bind fails. The fix is to match a set of known agent families and return which one matched — the family is worth recording on the role anyway (§7.2).</p>
+<h3 id="72-roles-need-an-agent-and-a-machine-dimension">7.2 Roles need an agent and a machine dimension</h3>
+<p>The <code>roles</code> table (<code>bus/store.rs:69-77</code>) is keyed on <code>role</code> alone, with <code>cwd_selector</code> and a nullable <code>pid</code> for resolution. Both are machine-local concepts, so <code>supervisor</code> on a laptop and <code>supervisor</code> on a Mac mini are the same row, and a role bound on one machine resolves to nothing on the other.</p>
+<p>Three additive columns — <code>agent_family</code>, <code>origin_peer</code>, and a <code>peer_id</code>-qualified address form — let a message be addressed to <code>reviewer@mini</code> or <code>reviewer:codex</code> while leaving bare <code>reviewer</code> meaning what it means today. The migration pattern already exists in the file (<code>add_column_if_missing</code>, used for the <code>pid</code> column), and the coord schema's <code>PRAGMA user_version</code> gate is the precedent for refusing to run against a newer schema.</p>
+<h3 id="73-the-relay-bridge">7.3 The relay bridge</h3>
+<p>There is <strong>no bridging between the bus and the relay.</strong> Verified: zero <code>relay::</code> references in <code>src/bus/</code>, zero <code>bus::</code> references in <code>src/relay/</code>, and <code>relay::MessageType</code> has no bus variant. The bus is SQLite over a local file; the relay is authenticated TCP between machines. They have never met.</p>
+<p>A bridge is a new <code>MessageType::BusMessage</code> plus a forwarder, and two existing pieces do most of the hard part:</p>
+<ul>
+<li><strong>Loop prevention is already built.</strong> <code>bus/policy.rs:31</code> defines <code>DEFAULT_MAX_HOPS = 8</code> and <code>validate_hop_count</code>, and the <code>messages</code> table already carries <code>hop_count</code>. A forwarded message increments it; the cap that exists for agent-to-agent chains works unchanged for machine-to-machine ones.</li>
+<li><strong>Trust is already built.</strong> The relay's HMAC challenge-response and the hive's membership tiers decide who may forward. A bus bridge should refuse to forward from a <code>hive.read</code> member for the same reason <code>KnowledgeRejected</code> exists (#435): a reader contributing silently is worse than a reader being told no.</li>
+</ul>
+<p>What needs deciding, and should be decided before it is built: whether the bridge is <strong>replicating</strong> (every peer's SQLite converges, which means conflict resolution and a durable ordering) or <strong>forwarding</strong> (a message addressed to a remote role is relayed on demand, and the local database stays local). Forwarding is far simpler, matches how <code>send_to</code> already works, and is almost certainly right for the first version — but the reserved-role guard (<code>bus/policy.rs:41</code>, <code>supervisor</code> and <code>operator</code> cannot be bound) means a cross-machine <code>supervisor</code> address has no owner, so that interaction needs an answer either way.</p>
+<p><strong>Known trap:</strong> one-shot relay dials have no reply path — <code>send_to</code> fails by design and <code>TransientReplies</code> is the mechanism. A bus bridge that forwards a <code>publish</code> and expects an ack will hit exactly this, and it is the same shape as the still-open <code>TaskHandoff</code> instance in epic #478.</p>
+<h2 id="8-phasing">8. Phasing</h2>
+<p>Ordered by irreversibility, not by size.</p>
+<ol>
+<li><strong>Canonical tool vocabulary</strong> (§4). Pure function, table-driven, no wire change, no new dependency. Testable against real rollout fixtures. Ships alone and unblocks everything else. <strong>Do this first</strong> — it is the only decision here that is expensive to reverse.</li>
+<li><strong>Provenance and applicability</strong> (<code>origin_agent</code>, <code>ArtifactRequires.agents</code>). Both <code>#[serde(default)]</code>, so old peers ignore them. Small, and wanted before any foreign unit exists.</li>
+<li><strong>Codex discovery and monitor</strong> in <code>claudectl-core</code>, wired through the adapter trait. The largest piece; may want its own epic. Cost fields degrade to tokens-only (§3.1).</li>
+<li><strong><code>claudectl hive stdio</code></strong> — the read surface, mirroring <code>src/query/mcp.rs</code>. Lowest-risk application path, works with stock Codex.</li>
+<li><strong>Codex write surfaces</strong> — <code>AGENTS.md</code> managed block, then <code>rules/default.rules</code> emission behind explicit opt-in. Depends on verifying §3.3's caveat.</li>
+<li><strong>Bus agent/machine dimension</strong> (§7.2). Additive columns plus a resolver change. Independent of 1–5; could go first if the bus matters more than the knowledge sharing.</li>
+<li><strong>Bus relay bridge</strong> (§7.3). Decide forwarding vs replication before writing code.</li>
+</ol>
+<p>Skill-root widening (§6) is a one-file change and does not need a phase; it can ride with whatever lands first.</p>
+<p><strong>Feature gates.</strong> Adapters sit behind <code>coord</code>; the hive sits behind <code>relay</code>; the bus sits behind <code>bus</code>. Cross-agent hive lives in the intersection of all three, which no current CI job exercises together. That needs a build job before phase 3, or the gates will rot the way the ones in the #465 audit did.</p>
+<h2 id="9-evidence">9. Evidence</h2>
+<p>Everything below was measured on one machine (macOS, Codex CLI 0.162.1) on 2026-10-13. It is recorded here because the next person to touch this will otherwise re-measure it.</p>
+<h3 id="91-codex-session-layout">9.1 Codex session layout</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>~/.codex/sessions/YYYY/MM/DD/rollout-&lt;ISO-ts&gt;-&lt;uuid&gt;.jsonl     671 files
+</code></pre></div>
+<p>One JSON object per line, each with <code>timestamp</code>, <code>ordinal</code>, <code>type</code>, <code>payload</code>. Event types observed:</p>
+<table>
+<thead>
+<tr>
+<th><code>type</code> / <code>payload.type</code></th>
+<th>Carries</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>session_meta</code></td>
+<td><code>session_id</code>, <code>id</code>, <code>cwd</code>, <code>runtime_workspace_roots</code>, <code>parent_thread_id</code></td>
+</tr>
+<tr>
+<td><code>event_msg</code> / <code>token_count</code></td>
+<td><code>total_token_usage{input,cached_input,cache_write_input,output,reasoning_output,total}</code>, <code>last_token_usage</code>, <code>model_context_window</code></td>
+</tr>
+<tr>
+<td><code>event_msg</code> / <code>task_started</code>, <code>task_complete</code>, <code>turn_aborted</code></td>
+<td>status transitions</td>
+</tr>
+<tr>
+<td><code>response_item</code> / <code>function_call</code></td>
+<td><code>name</code>, <code>namespace</code>, <code>arguments</code>, <code>call_id</code></td>
+</tr>
+<tr>
+<td><code>response_item</code> / <code>custom_tool_call</code></td>
+<td><code>name</code>, <code>input</code>, <code>status</code>, <code>call_id</code></td>
+</tr>
+<tr>
+<td><code>response_item</code> / <code>message</code>, <code>reasoning</code></td>
+<td>conversation content</td>
+</tr>
+<tr>
+<td><code>token_usage_record</code></td>
+<td>per-turn usage</td>
+</tr>
+<tr>
+<td><code>turn_context</code>, <code>world_state</code></td>
+<td>turn configuration</td>
+</tr>
+</tbody>
+</table>
+<p><code>model_context_window</code> being present means context-pressure health checks work for Codex with no new signal. No field carries cost in USD.</p>
+<h3 id="92-tool-name-histogram">9.2 Tool-name histogram</h3>
+<p>120 rollout files sampled across all months, ~15 000 tool calls. Counts in the §3.2 table. Kinds: <code>function_call</code> 10 101, <code>custom_tool_call</code> 4894, <code>local_shell_call</code> 0.</p>
+<p>A second pass over 168 files recorded the <strong>raw</strong> <code>namespace</code> and <code>name</code> fields rather than a joined display string, which is what §3.2's MCP rule is built on:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>  381  namespace='mcp__cua_repl'                name='js'
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  139  namespace=None   name='mcp__chrome-devtools__evaluate_script'
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  120  namespace=None   name='mcp__chrome-devtools__take_snapshot'
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>   75  namespace=None   name='mcp__chrome-devtools__click'
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>   10  namespace=None   name='mcp__codex_apps__github_search'
+</code></pre></div>
+<p>Two shapes, and the common one is already the Claude Code spelling. An earlier pass of this measurement printed <code>mcp__context7/query_docs</code>; the <code>/</code> was the measuring script's own join separator and is <strong>not</strong> a Codex delimiter. Recorded here because the mistake is easy to repeat.</p>
+<p>The same pass counted <code>apply_patch</code> envelope markers: <code>*** Update File</code> 1934, <code>*** Add File</code> 190, <code>*** Delete File</code> 10, <code>*** Move File</code> 0.</p>
+<h3 id="93-skill-format-comparison">9.3 Skill format comparison</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>~/.codex/skills/docker-container-ops/SKILL.md
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  ---
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>  name: docker-container-ops
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>  description: Launch, manage, exec into, and listen to Docker containers. …
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>  ---
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>~/.claude/skills/braintrust/SKILL.md
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>  ---
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>  name: braintrust
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>  version: 1.0.0
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>  description: Use the Braintrust `bt` CLI for projects, traces, prompts, …
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>  ---
+</code></pre></div>
+<p>Same contract. Claude Code's optional <code>version</code> is absent in Codex skills and ignored by them, so a shared skill round-trips.</p>
+<h3 id="94-codex-approval-store">9.4 Codex approval store</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>~/.codex/rules/default.rules      275 lines, 46 KB, mtime 2 Sep
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>  275 x prefix_rule(...)
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>  275 x decision="allow"       (no deny entries)
+</code></pre></div>
+<p>No header or comment. Machine-written: entries include multi-kilobyte heredoc bodies and <code>mkdir -p /Users/&lt;user&gt;/.codex/skills/...</code> with absolute paths. <code>state_5.sqlite</code> tables are <code>threads</code>, <code>thread_sections</code>, <code>thread_attachments</code>, <code>thread_dynamic_tools</code>, <code>thread_spawn_edges</code>, <code>projects</code>, <code>project_roots</code>, <code>project_idempotency_keys</code>, <code>external_agent_config_imports</code>, <code>remote_control_enrollments</code>, <code>backfill_state</code>, <code>rollout_migration_*</code>, <code>_sqlx_migrations</code> — no approvals table, so the rules file remains the only approval store found.</p>
+<h3 id="95-other-codex-integration-points">9.5 Other Codex integration points</h3>
+<ul>
+<li><code>~/.codex/AGENTS.md</code> — standing instructions. Already contains marker-delimited managed blocks (<code>&lt;!-- paper-lantern:start --&gt;</code>), so the convention is established.</li>
+<li><code>~/.codex/config.toml</code> — <code>mcp_servers.*</code> (many configured), <code>notify = [&lt;client&gt;, "turn-ended"]</code>, <code>approvals_reviewer = "auto_review"</code>.</li>
+<li><code>~/.codex/session_index.jsonl</code> — <code>{id, thread_name, updated_at}</code> per thread. A cheap index for listing without parsing rollouts.</li>
+<li><code>~/.codex/plugins/</code>, <code>~/.codex/memories/</code> — not examined; possible later surfaces.</li>
+</ul>
+<h2 id="10-open-questions">10. Open questions</h2>
+<ol>
+<li><strong>Does current Codex still write <code>rules/default.rules</code>?</strong> §3.3's caveat. Blocks phase 5 only.</li>
+<li><strong>Forwarding or replication for the bus bridge?</strong> §7.3. Decide before writing code.</li>
+<li><strong>Who owns a cross-machine reserved role?</strong> <code>supervisor</code> and <code>operator</code> cannot be bound (<code>bus/policy.rs:41</code>), so <code>supervisor@mini</code> has no resolution story.</li>
+<li><strong>Does <code>origin_agent</code> affect confidence, or only display?</strong> A unit confirmed independently in two agents is better evidence than one confirmed twice in the same agent. Saying so in the scoring is defensible; it is also a scoring change, which is a separate kind of risk from a schema change.</li>
+<li>~~<strong>Does <code>ClaudeSession</code> get renamed?</strong>~~ <strong>Closed by #524:</strong> no. An <code>agent_family</code> field plus three predicates costs less than renaming public API across three crates, and is reversible if a rename later earns itself.</li>
+<li>~~<strong>What happens to a Codex session's cost in the fleet snapshot?</strong>~~ <strong>Closed by #524:</strong> <code>cost_usd</code> is 0 with <code>has_known_cost()</code> false. The existing sums are additive so nothing is corrupted, and anything that needs to tell "unknown" from "zero" has a predicate to ask.</li>
+<li><strong>Should the adapter registry be <code>runtime::SessionSource</code> rather than a second trait?</strong> Raised by #533. <code>SessionSource</code> already answers "where do sessions come from", is already core-owned, and is already implemented by the binary — a second registry for the same question would be the duplication #533 exists to remove.</li>
+</ol>
+<h2 id="related">Related</h2>
+<p>Epic #521 is this spec's tracking issue; phases are #522–#528.</p>
+<p>Epic #478 (work across hosts — <code>TaskHandoff</code> is still the open instance of the no-reply-path trap §7.3 describes) · epic #424 (open cluster / named hives) · #435 (read-only members, the precedent for refusing a contribution rather than dropping it) · #465 (dead-code audit — <code>coord/adapter.rs</code> carries <code>#![allow(dead_code)]</code> and is the same shape) · #506 (LAN discovery written but never started — the same "exists but not on the path" shape as the adapter trait) · #511 (a one-shot send that is never acknowledged) · <code>docs/relay-and-hive.md</code> · <code>docs/AGENT_BUS.md</code> · <code>docs/open-cluster.md</code></p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/mercurialsolo/claudectl" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
