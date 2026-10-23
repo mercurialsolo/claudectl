@@ -21,7 +21,7 @@ Run these before changing anything, and report what they say:
 claudectl --version          # both machines should run the same version
 claudectl hive identity      # "unnamed", or the hive's name and join policy
 claudectl hive status        # membership, units, gossip sync per peer
-claudectl relay peers        # paired machines, address, last heartbeat
+claudectl relay peers        # paired machines: live / stale / never, last heard, address
 ```
 
 Is a relay already listening? On macOS the background agent is `io.claudectl.relay`:
@@ -98,6 +98,7 @@ Installing something a peer shared runs that peer's instructions on this machine
 
 - **`Address already in use` from `relay serve`.** A relay is already listening, almost always the launchd agent. Nothing to fix. Skip `relay serve` and go on to the invite.
 - **The invite shows a LAN address and the other person is elsewhere.** A `192.168.x.x` address only works on the same network, and the invite cannot be pointed at another address. Joining with that code fails before anything is saved, and `relay connect` to a Tailscale address afterwards finds no pairing key. Tell the user the joiner has to be on the host's network (or reach that LAN address through a VPN route) when they redeem it.
+- **A paired peer shows `stale` or `never` in `relay peers`.** Pairing is a stored key and outlives the connection, so a machine that is off, asleep or gone stays listed. The supervisor places no work on it, and `delegate` / `send-session` to it will fail to connect. `claudectl relay prune` lists the ones quiet for a week (`--older-than` to change it); show the user the list and run `--yes` only if they agree. It never removes a peer the hive depends on.
 - **A peer shows `0 units` and `last sync epoch 0`.** That means nothing has been sent yet, not that the peer is disconnected. Check `relay peers` for a recent heartbeat and `hive requests` on the host for membership. Units only exist once the brain has distilled some decisions.
 - **Names like `peer-a`, `peer-b`, `host-1`, `ku_local`, `ku_remote` or `ku_1` in `hive status`, `trust.json` or `~/.claudectl/hive/conflicts.jsonl`.** These are test fixtures written by `cargo test` into the real `~/.claudectl` (#603), not peers and not real conflicts. Tell the user. Do not delete them without asking, and back up `~/.claudectl/hive` before anyone does.
 - **A join between two of the user's own machines is silently closed while both relays run (#608).** Stop the joining machine's relay for the join, then start it again. On macOS the agent is `io.claudectl.relay`; ask the user before stopping it:

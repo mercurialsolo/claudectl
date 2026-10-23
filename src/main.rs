@@ -1394,8 +1394,16 @@ fn run_tui<W: io::Write>(
             });
             app.hive_identity = Some("demo-mbp-a1b2".into());
             app.hive_known_peers = vec![
-                ("alice-mbp-f3a1".into(), Some("192.168.1.17:9847".into())),
-                ("ci-runner-9d1e".into(), Some("10.4.0.23:9847".into())),
+                claudectl_core::runtime::KnownPeer {
+                    id: "ci-runner-9d1e".into(),
+                    addr: Some("10.4.0.23:9847".into()),
+                    liveness: claudectl_core::runtime::PeerLiveness::Live { secs_ago: 4 },
+                },
+                claudectl_core::runtime::KnownPeer {
+                    id: "alice-mbp-f3a1".into(),
+                    addr: Some("192.168.1.17:9847".into()),
+                    liveness: claudectl_core::runtime::PeerLiveness::Stale { secs_ago: 7200 },
+                },
             ];
         }
     }

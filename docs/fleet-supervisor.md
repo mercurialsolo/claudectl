@@ -91,10 +91,14 @@ Pair two machines with the relay first: [Connect Two Machines](relay.md#quick-st
 
 ```bash
 $ claudectl relay peers
-baradas-mac-mini-508f9c0e 100.109.212.89:9910      yes
-  └ claudectl 0.90.0 · claude 2.1.301, git 2.54.0, node 22.23.3 (macos/aarch64)
+PEER                       STATUS  LAST HEARD        ADDRESS
+──────────────────────────────────────────────────────────────────────────
+baradas-mac-mini-508f9c0e  live    1s ago            100.109.212.89:9910
+  └ claudectl 0.92.2 · claude 2.1.301, git 2.54.0, node 22.23.3 (macos/aarch64)
   └ 9874 MB free · load 0.10/core · 49690 MB disk · 0 running (1s ago)
 ```
+
+A paired peer whose last heartbeat is older than `stale_after_secs` shows `stale`, and one with no heartbeat on record shows `never`; the supervisor places nothing on either. A `live` peer gets work once it has advertised its headroom, which needs both machines on 0.90 or later. `relay peers` reads the same `stale_after_secs`.
 
 From then on, `supervisor work` places each task on the machine with the most free memory that can take it, here or on a peer. On a peer, the task runs in that peer's worktree and its `run =` verifiers run there too, and the verdicts come back to the supervisor. A retry goes back to the same peer and the same worktree.
 

@@ -526,14 +526,114 @@ pub fn clear_pending_psk() {
     forget_peer(PENDING_PEER_ID);
 }
 
-/// Remove all data for a peer.
+/// Remove all data for a peer. Best effort; [`forget_peer_checked`] says
+/// what could not be removed.
+///
+/// Unlike the checked form, the key goes even when a side file stays:
+/// `clear_pending_psk` relies on this, since a pending key left behind would
+/// keep a used pairing code redeemable.
 pub fn forget_peer(peer_id: &str) {
-    if let Some(path) = peer_key_path(peer_id) {
-        let _ = fs::remove_file(path);
+    if forget_peer_checked(peer_id).is_err() {
+        if let Some(p) = peer_key_path(peer_id) {
+            let _ = fs::remove_file(p);
+        }
     }
-    if let Some(path) = peer_meta_path(peer_id) {
-        let _ = fs::remove_file(path);
+}
+
+/// Remove a peer's key, the addresses it was reached at, and what it last
+/// advertised and sent (`.caps`, `.headroom`, `.beat`). Every file is
+/// attempted, the key last: `relay forget` and `relay prune` only find a
+/// peer by its key, so a partial failure must leave the key for a retry.
+/// The error names the files still there; one already gone is not an error.
+pub fn forget_peer_checked(peer_id: &str) -> Result<(), String> {
+    if !is_valid_peer_id(peer_id) {
+        return Err(format!("invalid peer id: {peer_id}"));
     }
+    let remove = |p: PathBuf| match fs::remove_file(&p) {
+        Ok(()) => None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some(format!("{}: {e}", p.display())),
+    };
+    let mut failed: Vec<String> = [
+        peer_meta_path(peer_id),
+        Some(peers_dir().join(format!("{peer_id}.caps"))),
+        Some(peers_dir().join(format!("{peer_id}.headroom"))),
+        beat_path(peer_id),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(remove)
+    .collect();
+    if failed.is_empty() {
+        failed.extend(peer_key_path(peer_id).and_then(remove));
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("could not remove {}", failed.join("; ")))
+    }
+}
+
+fn beat_path(peer_id: &str) -> Option<PathBuf> {
+    is_valid_peer_id(peer_id).then(|| peers_dir().join(format!("{peer_id}.beat")))
+}
+
+/// Note that `peer_id` sent a heartbeat at `now_ms` (this machine's clock).
+/// Every heartbeat, whatever it carries: `.headroom` is only written when
+/// the link agreed the `headroom` feature, so an older build heartbeating
+/// every 30 s would otherwise look silent.
+pub fn record_heartbeat(peer_id: &str, now_ms: u64) -> Result<(), String> {
+    let path = beat_path(peer_id).ok_or_else(|| format!("invalid peer id: {peer_id}"))?;
+    // A peer forgotten while its link stays open keeps heartbeating; writing
+    // for it would bring back a `.beat` with no key.
+    if load_peer_psk(peer_id).is_none() {
+        return Ok(());
+    }
+    fs::create_dir_all(peers_dir()).map_err(|e| format!("create peers dir: {e}"))?;
+    // Atomic: `relay peers` and the TUI read it while the relay writes.
+    let tmp = path.with_extension("beat.tmp");
+    fs::write(&tmp, now_ms.to_string()).map_err(|e| format!("write heartbeat: {e}"))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("rename heartbeat: {e}"))
+}
+
+/// When `peer_id` last sent a heartbeat this machine recorded, in epoch ms
+/// on our clock. Only heartbeats count: `.meta`'s `last_seen` moves on a
+/// connect and on a LAN sighting, neither of which says the link is up.
+/// `.headroom` covers relays that ran before `.beat` existed.
+pub fn last_heard_ms(peer_id: &str) -> Option<u64> {
+    let beat = beat_path(peer_id)
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| s.trim().parse::<u64>().ok());
+    let headroom = headroom::load(peer_id).map(|r| r.received_ms);
+    beat.max(headroom).filter(|&ms| ms > 0)
+}
+
+/// The window placement uses: `stale_after_secs` from `policy.toml`, or the
+/// default when there is no readable policy or no supervisor in this build.
+pub fn stale_after_secs() -> u64 {
+    #[cfg(feature = "coord")]
+    {
+        crate::coord::placement::load_policy()
+            .map(|p| p.stale_after_secs)
+            .unwrap_or(claudectl_core::runtime::PEER_STALE_AFTER_SECS)
+    }
+    #[cfg(not(feature = "coord"))]
+    {
+        claudectl_core::runtime::PEER_STALE_AFTER_SECS
+    }
+}
+
+/// Whether `peer_id` has sent a heartbeat within `stale_after_secs`.
+pub fn peer_liveness(
+    peer_id: &str,
+    now_ms: u64,
+    stale_after_secs: u64,
+) -> claudectl_core::runtime::PeerLiveness {
+    claudectl_core::runtime::PeerLiveness::classify(
+        last_heard_ms(peer_id),
+        now_ms,
+        stale_after_secs,
+    )
 }
 
 // ────────────────────────────────────────────────────────────────────────────

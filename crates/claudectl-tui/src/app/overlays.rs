@@ -22,6 +22,11 @@ impl App {
     /// listener can neither outlive the tab nor miss its opening.
     pub fn sync_hive_discovery(&mut self) {
         let showing = self.show_skills && self.skills_tab == SkillsTab::Hive;
+        // The known-peers list carries liveness, which ages: re-read it on
+        // the tick while it shows, as the `p` panel does.
+        if showing && !self.demo_mode {
+            self.refresh_hive_view();
+        }
         if !showing {
             self.hive_discovery = None;
             self.hive_discovery_unavailable = false;
@@ -51,6 +56,17 @@ impl App {
         if self.skills_selected >= self.skills.len() {
             self.skills_selected = self.skills.len().saturating_sub(1);
         }
+    }
+
+    /// Re-read the `p` panel's peers. Cheap: a few small files per peer.
+    /// Demo mode keeps its fixtures: a recording must not show this
+    /// machine's real peers.
+    #[cfg(feature = "relay")]
+    pub fn refresh_relay_peers(&mut self) {
+        if self.demo_mode {
+            return;
+        }
+        self.relay_peers = self.runtime.hive.hive_view_snapshot().peers;
     }
 
     pub fn refresh_hive_view(&mut self) {
