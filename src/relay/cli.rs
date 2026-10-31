@@ -22,9 +22,9 @@ use super::{
 pub enum RelayCommand {
     /// Start relay listener
     Serve {
-        /// Port to listen on
-        #[arg(long, default_value_t = 9847)]
-        port: u16,
+        /// Port to listen on (default: [relay] listen_port, otherwise 9847)
+        #[arg(long)]
+        port: Option<u16>,
         /// HTTP API port for coordinator mode (enables /api/sessions, /api/workers, /api/heartbeat)
         #[arg(long)]
         http_port: Option<u16>,
@@ -46,8 +46,8 @@ pub enum RelayCommand {
     /// Re-run it to update the agent after changing ports or upgrading.
     InstallAgent {
         /// Port the relay should listen on
-        #[arg(long, default_value_t = 9847)]
-        port: u16,
+        #[arg(long)]
+        port: Option<u16>,
         /// Also serve the coordinator HTTP API on this port
         #[arg(long)]
         http_port: Option<u16>,
@@ -309,16 +309,22 @@ fn join_host_port(host: &str, port: u16) -> String {
     }
 }
 
+fn relay_listen_port(port: Option<u16>, configured: u16) -> u16 {
+    match port {
+        Some(9847) if configured != 9847 => configured,
+        Some(port) => port,
+        None => configured,
+    }
+}
+
 /// `claudectl relay serve [--port PORT] [--http-port PORT] [--http-addr ADDR] [--auth-token TOKEN]`
 /// Start the relay listener in the foreground.
 fn cmd_serve(
-    port: u16,
+    port: Option<u16>,
     http_port: Option<u16>,
     http_addr: Option<&str>,
     auth_token: Option<&str>,
 ) -> io::Result<()> {
-    let mut port = port;
-
     // Load config for relay/hive settings
     let cfg = crate::config::Config::load();
     let relay_cfg = cfg.relay.unwrap_or_default();
@@ -326,10 +332,13 @@ fn cmd_serve(
     let hive_cfg = cfg.hive.unwrap_or_default();
 
     let identity = load_or_create_identity();
-    // CLI --port overrides config; config overrides default
-    if port == 9847 {
-        port = relay_cfg.listen_port;
+    if port == Some(9847) && relay_cfg.listen_port != 9847 {
+        eprintln!(
+            "Ignoring legacy --port 9847 in favor of configured relay port {}",
+            relay_cfg.listen_port
+        );
     }
+    let port = relay_listen_port(port, relay_cfg.listen_port);
     let listen_addr = join_host_port(&relay_cfg.listen_addr, port);
     let addr: SocketAddr = listen_addr
         .parse()
@@ -1139,6 +1148,12 @@ fn cmd_install_agent(
 ) -> io::Result<()> {
     use super::agent::{Service, ServiceConfig};
 
+    let configured_port = crate::config::Config::load()
+        .relay
+        .unwrap_or_default()
+        .listen_port;
+    let effective_port = relay_listen_port(cfg.port, configured_port);
+
     let relay = ServiceConfig::Relay(cfg.clone());
     let path = super::agent::install(&relay).map_err(io::Error::other)?;
     let (out_log, err_log) = super::agent::log_paths(Service::Relay);
@@ -1163,7 +1178,7 @@ fn cmd_install_agent(
             "loaded": loaded,
             "plist": path.display().to_string(),
             "label": super::agent::AGENT_LABEL,
-            "port": cfg.port,
+            "port": effective_port,
             "stdout_log": out_log.display().to_string(),
             "stderr_log": err_log.display().to_string(),
         });
@@ -1194,7 +1209,7 @@ fn cmd_install_agent(
     println!();
     println!("  plist:  {}", path.display());
     println!("  label:  {}", super::agent::AGENT_LABEL);
-    println!("  port:   {}", cfg.port);
+    println!("  port:   {effective_port}");
     println!("  logs:   {}", out_log.display());
     println!("          {}", err_log.display());
     println!();
@@ -3816,8 +3831,16 @@ mod heartbeat_never_touches_coord {
 
 #[cfg(test)]
 mod tests {
-    use super::join_host_port;
+    use super::{join_host_port, relay_listen_port};
     use std::net::SocketAddr;
+
+    #[test]
+    fn port_precedence_preserves_legacy_installations() {
+        assert_eq!(relay_listen_port(None, 9910), 9910);
+        assert_eq!(relay_listen_port(Some(9847), 9910), 9910);
+        assert_eq!(relay_listen_port(Some(9847), 9847), 9847);
+        assert_eq!(relay_listen_port(Some(9920), 9910), 9920);
+    }
 
     #[test]
     fn ipv4_host_joins_plainly() {
