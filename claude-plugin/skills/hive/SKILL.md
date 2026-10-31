@@ -1,7 +1,7 @@
 ---
 name: Hive
 description: Start, grow and check a claudectl hive across machines. Use when the user wants to start a hive, invite or add a machine or person, join someone's hive, approve a join request, see which machines are connected, share a skill with the hive, or asks why a peer shows no knowledge or will not connect. Covers `claudectl relay` (the connection between machines) and `claudectl hive` (the knowledge shared over it).
-version: 0.92.3
+version: 0.92.4
 ---
 
 # claudectl Hive
