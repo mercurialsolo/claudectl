@@ -1,0 +1,5 @@
+# Checked-in text is LF. A contributor on Windows with core.autocrlf=true
+# otherwise commits CRLF, which rewrites every line of a file (PR #615).
+* text=auto eol=lf
+*.gif binary
+*.png binary
