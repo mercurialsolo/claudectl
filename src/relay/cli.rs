@@ -23,8 +23,8 @@ pub enum RelayCommand {
     /// Start relay listener
     Serve {
         /// Port to listen on
-        #[arg(long, default_value_t = 9847)]
-        port: u16,
+        #[arg(long)]
+        port: Option<u16>,
         /// HTTP API port for coordinator mode (enables /api/sessions, /api/workers, /api/heartbeat)
         #[arg(long)]
         http_port: Option<u16>,
@@ -46,8 +46,8 @@ pub enum RelayCommand {
     /// Re-run it to update the agent after changing ports or upgrading.
     InstallAgent {
         /// Port the relay should listen on
-        #[arg(long, default_value_t = 9847)]
-        port: u16,
+        #[arg(long)]
+        port: Option<u16>,
         /// Also serve the coordinator HTTP API on this port
         #[arg(long)]
         http_port: Option<u16>,
@@ -312,13 +312,11 @@ fn join_host_port(host: &str, port: u16) -> String {
 /// `claudectl relay serve [--port PORT] [--http-port PORT] [--http-addr ADDR] [--auth-token TOKEN]`
 /// Start the relay listener in the foreground.
 fn cmd_serve(
-    port: u16,
+    port: Option<u16>,
     http_port: Option<u16>,
     http_addr: Option<&str>,
     auth_token: Option<&str>,
 ) -> io::Result<()> {
-    let mut port = port;
-
     // Load config for relay/hive settings
     let cfg = crate::config::Config::load();
     let relay_cfg = cfg.relay.unwrap_or_default();
@@ -326,10 +324,9 @@ fn cmd_serve(
     let hive_cfg = cfg.hive.unwrap_or_default();
 
     let identity = load_or_create_identity();
-    // CLI --port overrides config; config overrides default
-    if port == 9847 {
-        port = relay_cfg.listen_port;
-    }
+    // An explicit CLI value overrides config; an omitted flag preserves the
+    // configured port, including an explicit 9847.
+    let port = port.unwrap_or(relay_cfg.listen_port);
     let listen_addr = join_host_port(&relay_cfg.listen_addr, port);
     let addr: SocketAddr = listen_addr
         .parse()
@@ -1194,7 +1191,12 @@ fn cmd_install_agent(
     println!();
     println!("  plist:  {}", path.display());
     println!("  label:  {}", super::agent::AGENT_LABEL);
-    println!("  port:   {}", cfg.port);
+    println!(
+        "  port:   {}",
+        cfg.port
+            .map(|port| port.to_string())
+            .unwrap_or_else(|| "config/default".to_string())
+    );
     println!("  logs:   {}", out_log.display());
     println!("          {}", err_log.display());
     println!();

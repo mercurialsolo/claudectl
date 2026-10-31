@@ -44,7 +44,7 @@ pub const AGENT_LABEL: &str = "io.claudectl.relay";
 /// Arguments the agent will run `claudectl` with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConfig {
-    pub port: u16,
+    pub port: Option<u16>,
     pub http_port: Option<u16>,
     pub http_addr: Option<String>,
     pub auth_token: Option<String>,
@@ -53,7 +53,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         AgentConfig {
-            port: 9847,
+            port: None,
             http_port: None,
             http_addr: None,
             auth_token: None,
@@ -76,9 +76,11 @@ impl AgentConfig {
             binary.display().to_string(),
             "relay".to_string(),
             "serve".to_string(),
-            "--port".to_string(),
-            self.port.to_string(),
         ];
+        if let Some(port) = self.port {
+            args.push("--port".to_string());
+            args.push(port.to_string());
+        }
         if let Some(p) = self.http_port {
             args.push("--http-port".to_string());
             args.push(p.to_string());
@@ -727,8 +729,17 @@ mod tests {
     fn argv_starts_with_the_binary_and_the_subcommand() {
         let cfg = AgentConfig::default();
         let argv = cfg.argv(Path::new("/opt/homebrew/bin/claudectl"));
+        assert_eq!(argv, vec!["/opt/homebrew/bin/claudectl", "relay", "serve"]);
+    }
+
+    #[test]
+    fn an_explicit_default_port_is_kept_in_the_agent_command() {
+        let cfg = AgentConfig {
+            port: Some(9847),
+            ..AgentConfig::default()
+        };
         assert_eq!(
-            argv,
+            cfg.argv(Path::new("/opt/homebrew/bin/claudectl")),
             vec![
                 "/opt/homebrew/bin/claudectl",
                 "relay",
@@ -742,7 +753,7 @@ mod tests {
     #[test]
     fn optional_flags_appear_only_when_set() {
         let cfg = AgentConfig {
-            port: 9000,
+            port: Some(9000),
             http_port: Some(9876),
             http_addr: Some("127.0.0.1".into()),
             auth_token: Some("secret".into()),
@@ -812,7 +823,7 @@ mod tests {
         );
         assert!(xml.contains("<string>relay</string>"), "{xml}");
         assert!(xml.contains("<string>serve</string>"), "{xml}");
-        assert!(xml.contains("<string>9847</string>"), "{xml}");
+        assert!(!xml.contains("<string>--port</string>"), "{xml}");
         // A plist launchd will actually parse.
         assert!(xml.starts_with("<?xml version=\"1.0\""), "{xml}");
         assert!(xml.trim_end().ends_with("</plist>"), "{xml}");
@@ -1033,9 +1044,10 @@ mod tests {
             assert!(unit.contains("RestartSec="), "{unit}");
             assert!(unit.contains("WantedBy=default.target"), "{unit}");
             assert!(
-                unit.contains("ExecStart=/usr/local/bin/claudectl relay serve --port 9847"),
+                unit.contains("ExecStart=/usr/local/bin/claudectl relay serve"),
                 "{unit}"
             );
+            assert!(!unit.contains("--port 9847"), "{unit}");
         }
 
         /// systemd splits `ExecStart` on whitespace, where a launchd plist takes
@@ -1056,7 +1068,7 @@ mod tests {
         #[test]
         fn optional_config_reaches_the_unit() {
             let cfg = AgentConfig {
-                port: 9900,
+                port: Some(9900),
                 http_port: Some(9876),
                 ..AgentConfig::default()
             };
