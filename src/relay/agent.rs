@@ -42,23 +42,12 @@ use std::path::{Path, PathBuf};
 pub const AGENT_LABEL: &str = "io.claudectl.relay";
 
 /// Arguments the agent will run `claudectl` with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentConfig {
     pub port: Option<u16>,
     pub http_port: Option<u16>,
     pub http_addr: Option<String>,
     pub auth_token: Option<String>,
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        AgentConfig {
-            port: None,
-            http_port: None,
-            http_addr: None,
-            auth_token: None,
-        }
-    }
 }
 
 impl AgentConfig {
