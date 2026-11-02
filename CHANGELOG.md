@@ -4,6 +4,16 @@ All notable changes to claudectl are documented here.
 
 ## [Unreleased]
 
+## [0.92.4] - 2026-10-31
+
+### Fixed
+
+- **`relay serve --port` follows the documented order: flag, then `[relay] listen_port`, then 9847 (#567).** The flag used to default to 9847 and the config port replaced it whenever it read 9847, so an explicit `--port 9847` could not be told from no flag and the config won. `--port` now has no default, and `relay install-agent` writes `--port` into the service only when it was given, so an installed relay follows the configured port.
+  - **Existing installs keep their port.** Every service file an older `install-agent` wrote carries a literal `--port 9847`. When that is the flag and config names another port, the relay stays on the configured port and prints one line at startup saying the legacy flag was ignored, so no relay moves off the address its peers recorded on upgrade. Any other explicit value wins over config.
+  - `install-agent` reports the port the relay will actually bind to, in text and `--json`, and `relay serve --help` names the fallback.
+  
+  First external contribution, by @mikemikimike (#615).
+
 ## [0.92.3] - 2026-10-22
 
 ### Added
