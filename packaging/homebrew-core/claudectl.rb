@@ -1,8 +1,8 @@
 class Claudectl < Formula
   desc "Hive mind for Claude Code that learns from you once and remembers everywhere"
   homepage "https://github.com/mercurialsolo/claudectl"
-  url "https://github.com/mercurialsolo/claudectl/archive/refs/tags/v0.91.1.tar.gz"
-  sha256 "f2c3cb83c146adf92aef572718d4d1597969cf96e5a7ec75c5d5239a981e6ba7"
+  url "https://github.com/mercurialsolo/claudectl/archive/refs/tags/v0.92.4.tar.gz"
+  sha256 "5d6429c1e8c939cd6b865568e82ce956ac1ff4d9105bfd85ef6b652087641d19"
   license "MIT"
   head "https://github.com/mercurialsolo/claudectl.git", branch: "main"
 
